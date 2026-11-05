@@ -1,10 +1,8 @@
 // One docs page (X85), laid out as docs/design/marketing-homepage-for-moonlet/pages/docs.html:
 // the docs nav, the article, and "On this page".
-import { type Doc, docsNav, neighbours, renderDoc } from "@/lib/docs";
+import { type Doc, REPO, docsNav, editUrl, neighbours, renderDoc } from "@/lib/docs";
 import { DocsBehaviour } from "./DocsBehaviour";
 import { DEFAULT_ICON, PAGE_ICONS } from "./pageIcons";
-
-const REPO = "https://github.com/1devstudio/moonlet";
 
 function Icon({ inner, size = 14 }: { inner: string; size?: number }) {
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" dangerouslySetInnerHTML={{ __html: inner }} />;
@@ -13,7 +11,7 @@ function Icon({ inner, size = 14 }: { inner: string; size?: number }) {
 const CHEVRON = '<path d="m9 18 6-6-6-6"/>';
 
 export function DocPage({ doc, docs }: { doc: Doc; docs: Doc[] }) {
-  const nav = docsNav(docs);
+  const nav = docsNav(docs, doc.slug);
   const { previous, next } = neighbours(docs, doc.slug);
   const { html, headings } = renderDoc(doc.body);
 
@@ -54,7 +52,7 @@ export function DocPage({ doc, docs }: { doc: Doc; docs: Doc[] }) {
                 <div className="settings-nav__group" key={group.title}>
                   <span className="settings-nav__title">{group.title}</span>
                   {group.pages.map((p) => {
-                    const here = p.slug === doc.slug;
+                    const here = p.current === true;
                     return (
                       <a
                         key={p.slug}
@@ -111,7 +109,7 @@ export function DocPage({ doc, docs }: { doc: Doc; docs: Doc[] }) {
           </nav>
           <div className="doc-foot">
             <span>moonlet docs · MIT or Apache-2.0</span>
-            <a href={`${REPO}/blob/main/apps/homepage/content/docs/${doc.slug}.md`}>Edit this page on GitHub</a>
+            <a href={editUrl(doc.slug)}>Edit this page on GitHub</a>
             <a href={`${REPO}/issues/new?template=bug_report.yml`}>Report a problem</a>
           </div>
         </main>

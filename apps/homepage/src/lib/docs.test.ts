@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { docLinks, docsNav, neighbours, parseDoc, renderDoc } from "./docs";
+import { allDocs } from "./content";
+import { docLinks, docsNav, editUrl, findDoc, firstDoc, neighbours, parseDoc, renderDoc } from "./docs";
 
 const ALWAYS_ON = `---
 title: Add an always-on host
@@ -63,6 +62,14 @@ describe("docsNav", () => {
       { title: "Reference", pages: [{ slug: "glossary", title: "Glossary" }] },
     ]);
   });
+
+  it("marks the page being read, and only that one", () => {
+    const current = docsNav(PAGES, "heavy-commands")
+      .flatMap((g) => g.pages)
+      .filter((p) => p.current)
+      .map((p) => p.slug);
+    expect(current).toEqual(["heavy-commands"]);
+  });
 });
 
 describe("neighbours", () => {
@@ -95,6 +102,11 @@ describe("renderDoc", () => {
     expect(html).toContain('<h2 id="before-you-start-2">Before you start</h2>');
   });
 
+  it("never gives two headings the same id, even when one's text looks like a numbered repeat", () => {
+    const { headings } = renderDoc("## Foo\n\n## Foo\n\n## Foo 2\n\n## !!!\n");
+    expect(headings.map((h) => h.id)).toEqual(["foo", "foo-2", "foo-2-2", "section"]);
+  });
+
   it("renders a blockquote that starts with Note: as the design's note, and leaves other quotes alone", () => {
     const { html } = renderDoc("> **Note:** A code works once, for five minutes.\n\n> Plain quote.\n");
     expect(html).toContain('<div role="note" class="alert-box alert-box--note alert-box--note-wide"><p>A code works once, for five minutes.</p>\n</div>');
@@ -119,14 +131,44 @@ describe("docLinks", () => {
   });
 
   it("finds only pages that exist, in every file of content/docs", () => {
-    const dir = join(__dirname, "../../content/docs");
-    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
-    const slugs = new Set(files.map((f) => f.replace(/\.md$/, "")));
-    const broken = files.flatMap((f) =>
-      docLinks(parseDoc(f, readFileSync(join(dir, f), "utf8")).body)
-        .filter((s) => !slugs.has(s))
-        .map((s) => `${f} -> /docs/${s}`),
+    const docs = allDocs();
+    const broken = docs.flatMap((d) =>
+      docLinks(d.body)
+        .filter((slug) => !findDoc(docs, slug))
+        .map((slug) => `${d.slug}.md -> /docs/${slug}`),
     );
     expect(broken).toEqual([]);
+  });
+});
+
+describe("firstDoc and findDoc", () => {
+  it("opens /docs on the first page of the first group", () => {
+    expect(firstDoc(PAGES).slug).toBe("introduction");
+  });
+
+  it("finds a page by its slug, and nothing for a slug no page has", () => {
+    expect(findDoc(PAGES, "glossary")?.title).toBe("Glossary");
+    expect(findDoc(PAGES, "nope")).toBeUndefined();
+  });
+});
+
+describe("editUrl", () => {
+  it("links a page to its Markdown file on main", () => {
+    expect(editUrl("heavy-commands")).toBe(
+      "https://github.com/1devstudio/moonlet/blob/main/apps/homepage/content/docs/heavy-commands.md",
+    );
+  });
+});
+
+describe("code highlighting", () => {
+  it("highlights sh, json and ts fences too", () => {
+    const { html } = renderDoc(
+      '```sh\nmoonlet ls # list sessions\n```\n\n```json\n{"ok": true}\n```\n\n```ts\nconst max = 3;\n```\n',
+    );
+    expect(html).toBe(
+      '<pre><code class="hljs language-sh">moonlet <span class="hljs-built_in">ls</span> <span class="hljs-comment"># list sessions</span></code></pre>\n' +
+        '<pre><code class="hljs language-json"><span class="hljs-punctuation">{</span><span class="hljs-attr">&quot;ok&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">true</span></span><span class="hljs-punctuation">}</span></code></pre>\n' +
+        '<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> max = <span class="hljs-number">3</span>;</code></pre>\n',
+    );
   });
 });

@@ -1,4 +1,5 @@
 // The homepage (X85), built from docs/design/marketing-homepage-for-moonlet/pages/index.html.
+import { REPO } from "@/lib/docs";
 import "./home.css";
 
 export default function Home() {
@@ -18,8 +19,8 @@ export default function Home() {
             <a href="/docs">Docs</a>
           </nav>
           <div className="nav__end">
-            <a className="button button--ghost" href="https://github.com/1devstudio/moonlet">GitHub</a>
-            <a className="button button--primary" href="https://github.com/1devstudio/moonlet/releases/latest">Download for macOS</a>
+            <a className="button button--ghost" href={REPO}>GitHub</a>
+            <a className="button button--primary" href={`${REPO}/releases/latest`}>Download for macOS</a>
           </div>
         </div>
       </header>
@@ -35,7 +36,7 @@ export default function Home() {
               <h1 className="h1">Your agents, on every machine you own. <em>Close the lid. They keep going.</em></h1>
               <p className="lede">moonlet links your MacBook, an always-on Mac mini or Linux box, and your iPhone into one mesh. Start a session at your desk, close the lid, and carry on from your phone. It comes back to the Mac when you type there again.</p>
               <div className="cta">
-                <a className="button button--primary" href="https://github.com/1devstudio/moonlet/releases/latest">Download for macOS</a>
+                <a className="button button--primary" href={`${REPO}/releases/latest`}>Download for macOS</a>
                 <a className="button" href="/docs/pair-your-phone">Pair your phone</a>
                 <span className="cta__note">Free · Apple Silicon · macOS 14 or later</span>
               </div>
@@ -48,31 +49,31 @@ export default function Home() {
                 <line x1="150" y1="130" x2="270" y2="430"/>
               </svg>
       
-              <div className="node node--mac node--asleep">
-                <div className="node__head">
-                  <svg className="icon node__icon" width="14" height="14" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>
-                  <span className="node__name">macbook</span>
+              <div className="machine machine--mac machine--asleep">
+                <div className="machine__head">
+                  <svg className="icon machine__icon" width="14" height="14" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>
+                  <span className="machine__name">macbook</span>
                   <span className="badge">Asleep</span>
                 </div>
                 <div className="session-row" role="button"><span className="session-row__glyph"><svg className="icon branch-icon" width="15" height="15" viewBox="0 0 24 24" strokeWidth="1.75"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span><span className="session-row__name">Checkout retries</span><span className="session-row__badge">moved</span></div>
-                <div className="node__note"><svg className="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Handed over at 18:42 when the lid closed</div>
+                <div className="machine__note"><svg className="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Handed over at 18:42 when the lid closed</div>
               </div>
       
-              <div className="node node--hub">
-                <div className="node__head">
-                  <svg className="icon node__icon" width="14" height="14" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
-                  <span className="node__name">studio-mini</span>
+              <div className="machine machine--central">
+                <div className="machine__head">
+                  <svg className="icon machine__icon" width="14" height="14" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+                  <span className="machine__name">studio-mini</span>
                   <span className="badge">Central host</span>
                 </div>
                 <div className="session-row session-row--selected" role="button" aria-current="true"><span className="session-row__glyph"><span className="state-glyph state-glyph--15"><span className="moonlet-dots"><i></i><i></i><i></i></span></span></span><span className="session-row__name">Checkout retries</span><span className="session-row__badge">+212 -30</span></div>
                 <div className="session-row" role="button"><span className="session-row__glyph"><span className="state-glyph state-glyph--15"><span className="state-glyph__dot state-glyph__dot--done"></span></span></span><span className="session-row__name">Search on the product list</span><span className="session-row__badge">+88 -4</span></div>
-                <div className="node__note"><svg className="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Continued from the last checkpoint</div>
+                <div className="machine__note"><svg className="icon" width="12" height="12" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Continued from the last checkpoint</div>
               </div>
       
-              <div className="node node--phone">
-                <div className="node__head">
-                  <svg className="icon node__icon" width="14" height="14" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>
-                  <span className="node__name">iPhone</span>
+              <div className="machine machine--phone">
+                <div className="machine__head">
+                  <svg className="icon machine__icon" width="14" height="14" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>
+                  <span className="machine__name">iPhone</span>
                   <span className="badge">On the train</span>
                 </div>
                 <div className="permission-card">
@@ -403,8 +404,8 @@ export default function Home() {
               <div className="repo__name">1devstudio/moonlet</div>
               <div className="repo__line">Rust daemon, Tauri app, iPhone app · MIT or Apache-2.0</div>
             </div>
-            <a className="button" href="https://github.com/1devstudio/moonlet/blob/main/CONTRIBUTING.md">Read the contributing guide</a>
-            <a className="button button--primary" href="https://github.com/1devstudio/moonlet">View the source</a>
+            <a className="button" href={`${REPO}/blob/main/CONTRIBUTING.md`}>Read the contributing guide</a>
+            <a className="button button--primary" href={REPO}>View the source</a>
           </div>
         </div>
       </section>
@@ -416,7 +417,7 @@ export default function Home() {
           <h2 className="h2">Start on the Mac. Carry on anywhere.</h2>
           <p className="lede">Install the app on your Mac, add an always-on machine when you want one, and pair your phone.</p>
           <div className="cta">
-            <a className="button button--primary" href="https://github.com/1devstudio/moonlet/releases/latest">Download for macOS</a>
+            <a className="button button--primary" href={`${REPO}/releases/latest`}>Download for macOS</a>
             <a className="button" href="/docs">Read the docs</a>
           </div>
           <div className="install"><span>Linux host</span><b>curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh</b></div>
@@ -428,10 +429,10 @@ export default function Home() {
       <footer className="footer">
         <div className="wrap footer__in">
           <span>moonlet · MIT or Apache-2.0</span>
-          <a href="https://github.com/1devstudio/moonlet">GitHub</a>
-          <a href="https://github.com/1devstudio/moonlet/releases">Releases</a>
-          <a href="https://github.com/1devstudio/moonlet/blob/main/docs/specs/README.md">Specs</a>
-          <a href="https://github.com/1devstudio/moonlet/blob/main/SECURITY.md">Security</a>
+          <a href={REPO}>GitHub</a>
+          <a href={`${REPO}/releases`}>Releases</a>
+          <a href={`${REPO}/blob/main/docs/specs/README.md`}>Specs</a>
+          <a href={`${REPO}/blob/main/SECURITY.md`}>Security</a>
         </div>
       </footer>
       

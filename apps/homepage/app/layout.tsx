@@ -14,8 +14,8 @@ export const viewport: Viewport = { themeColor: "#121212", colorScheme: "dark" }
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      {/* Browser extensions such as Grammarly add attributes to <body> before React
-          loads; this ignores those, and only on <body> itself, not its children. */}
+      {/* Browser extensions add attributes to <body> before React loads; this
+          ignores those, and only on <body> itself, not its children. */}
       <body suppressHydrationWarning>{children}</body>
     </html>
   );

@@ -37,6 +37,7 @@ tags: [macOS or Linux] # optional badges
 - Start with `##`; `##` and `###` headings make "On this page".
 - `> **Note:** …` is a note. Fences in `sh`, `toml`, `json` and `ts` are highlighted.
 - Link other pages as `/docs/<slug>`. The tests fail on a link to a page that does not exist.
+- Its sidebar icon comes from `src/components/pageIcons.ts`, by slug; a page without an entry gets the file icon.
 
 ## Hosting on Vercel
 

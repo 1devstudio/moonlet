@@ -52,6 +52,8 @@ export function parseDoc(file: string, source: string): Doc {
 export interface NavPage {
   slug: string;
   title: string;
+  /** The page being read: its sidebar entry is marked. */
+  current?: true;
 }
 
 export interface NavGroup {
@@ -60,24 +62,46 @@ export interface NavGroup {
 }
 
 /** The sidebar: groups in the design's order, each page by `order`, empty groups left out. */
-export function docsNav(docs: Doc[]): NavGroup[] {
+export function docsNav(docs: Doc[], current?: string): NavGroup[] {
   return GROUPS.map((title) => ({
     title,
     pages: docs
       .filter((d) => d.group === title)
       .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title))
-      .map(({ slug, title }) => ({ slug, title })),
+      .map(({ slug, title }) => (slug === current ? { slug, title, current: true as const } : { slug, title })),
   })).filter((g) => g.pages.length > 0);
 }
 
+export interface Neighbours {
+  previous?: NavPage;
+  next?: NavPage;
+}
+
 /** The pages before and after `slug` in sidebar order. */
-export function neighbours(docs: Doc[], slug: string): { previous?: NavPage; next?: NavPage } {
-  const flat = docsNav(docs).flatMap((g) => g.pages);
-  const at = flat.findIndex((p) => p.slug === slug);
-  const out: { previous?: NavPage; next?: NavPage } = {};
-  if (at > 0) out.previous = flat[at - 1];
-  if (at >= 0 && at < flat.length - 1) out.next = flat[at + 1];
-  return out;
+export function neighbours(docs: Doc[], slug: string): Neighbours {
+  const pages = docsNav(docs).flatMap((g) => g.pages);
+  const index = pages.findIndex((p) => p.slug === slug);
+  const result: Neighbours = {};
+  if (index > 0) result.previous = pages[index - 1];
+  if (index >= 0 && index < pages.length - 1) result.next = pages[index + 1];
+  return result;
+}
+
+/** The page with this slug, if there is one. */
+export function findDoc(docs: Doc[], slug: string): Doc | undefined {
+  return docs.find((d) => d.slug === slug);
+}
+
+/** The page `/docs` shows: the first page of the first group. */
+export function firstDoc(docs: Doc[]): Doc {
+  return findDoc(docs, docsNav(docs)[0].pages[0].slug)!;
+}
+
+export const REPO = "https://github.com/1devstudio/moonlet";
+
+/** Where a page's Markdown file is on GitHub, for "Edit this page". */
+export function editUrl(slug: string): string {
+  return `${REPO}/blob/main/apps/homepage/content/docs/${slug}.md`;
 }
 
 export interface Heading {
@@ -105,7 +129,14 @@ function slugify(text: string): string {
 /** A page's body as HTML, with ids on its headings and the list for "On this page". */
 export function renderDoc(body: string): { html: string; headings: Heading[] } {
   const headings: Heading[] = [];
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
+  // The first free id among `base`, `base-2`, `base-3`, …
+  const uniqueId = (base: string) => {
+    let id = base;
+    for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+    used.add(id);
+    return id;
+  };
   const marked = new Marked({
     gfm: true,
     renderer: {
@@ -113,10 +144,7 @@ export function renderDoc(body: string): { html: string; headings: Heading[] } {
         const inner = this.parser.parseInline(tokens);
         if (depth !== 2 && depth !== 3) return `<h${depth}>${inner}</h${depth}>\n`;
         const text = plainText(inner);
-        const base = slugify(text) || "section";
-        const n = (seen.get(base) ?? 0) + 1;
-        seen.set(base, n);
-        const id = n === 1 ? base : `${base}-${n}`;
+        const id = uniqueId(slugify(text) || "section");
         headings.push({ depth, text, id });
         return `<h${depth} id="${id}">${inner}</h${depth}>\n`;
       },
