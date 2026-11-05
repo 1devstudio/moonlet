@@ -50,7 +50,7 @@ import type { TaskRequestEvent } from "./tasksRelay";
 import { spawnedNotices } from "./spawned";
 import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
-import type { ChatItem, ChatState, CloneDone, CloneProgress, ReadRequest } from "./protocol";
+import type { ChatItem, ChatState, CloneDone, CloneProgress, ProjectIdentity, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
 import type { SettingsRoute } from "./settingsPage";
@@ -253,6 +253,8 @@ interface State extends UiPersist {
       }
     /** `clone`: the `<host>/<id>` of the clone the dialog shows (X59). */
     | { kind: "add-project"; host?: string; section?: string; clone?: string }
+    /** Get a project the host lacks into `section` (X70); `clone` as for add-project. */
+    | { kind: "get-project"; host: string; section: string; identity: ProjectIdentity; name: string; clone?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }
     /** New design system (X64), in a workspace. */
@@ -1178,7 +1180,7 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.repoCloneDone: {
       const d = get().dialog;
-      const watching = d?.kind === "add-project" ? (d.clone ?? null) : null;
+      const watching = d?.kind === "add-project" || d?.kind === "get-project" ? (d.clone ?? null) : null;
       const end = afterCloneDone(get().clones, host, data as CloneDone, watching);
       set({ clones: end.runs });
       if (end.remember) rememberCloneParent(end.remember.host, end.remember.parent);

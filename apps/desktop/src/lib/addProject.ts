@@ -11,6 +11,9 @@ export interface RepoRef {
   ssh?: string;
 }
 
+/** An id for a new clone, chosen by the app so its events are known before the daemon answers. */
+export const newCloneId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
 /** The owner and name of an `owner/repo`. */
 export function repoParts(repo: string): { owner: string; name: string } {
   const [owner = "", name = ""] = repo.split("/");
