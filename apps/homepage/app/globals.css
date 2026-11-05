@@ -1,0 +1,7 @@
+/* The site's base (X85): the page surface both designs share. Each page's own
+   rules are in app/home.css and app/docs/docs.css, scoped to that page. */
+html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-sans); }
+body { font-size: var(--ui-text-15); line-height: var(--leading-normal); }
+html { scroll-behavior: smooth; }
+/* The design's buttons are <button>s; the site's are links too. */
+a.button { text-decoration: none; }

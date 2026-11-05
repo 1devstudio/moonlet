@@ -1,0 +1,46 @@
+/* Base: the app shell's text and surface (apps/desktop/src/index.css) and the
+   shared animations of apps/desktop/src/styles/moonlet.css. */
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--ui-text-13-5);
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar) transparent;
+}
+@keyframes moonlet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: moonlet-spin 0.9s linear infinite;
+}
+@keyframes moonlet-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse {
+  animation: moonlet-pulse 1.4s ease-in-out infinite;
+}
+/* An inline lucide icon: stroke-only, sized by width/height attributes. */
+.icon {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* From Tailwind's preflight, which the app loads: links inherit colour and
+   decoration unless a component styles them. */
+a {
+  color: inherit;
+  text-decoration: inherit;
+}

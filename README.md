@@ -193,6 +193,7 @@ Run `moonlet --help` for the full list. The socket protocol is documented in [do
 | [`crates/moonletd`](crates/moonletd) | The daemon: socket server, tailnet listener and pairing, SSH `proxy`, live upgrade, launchd and systemd services |
 | [`crates/moonlet-cli`](crates/moonlet-cli) | The `moonlet` CLI: agent hooks, `notify`, `ls`, `session`, `rpc` |
 | [`apps/desktop`](apps/desktop) | Tauri 2 desktop app: React, xterm.js and Monaco |
+| [`apps/homepage`](apps/homepage) | The website and docs: Next.js, hosted on Vercel |
 | [`vendor/vt100`](vendor/vt100) | Patched fork of the `vt100` crate (see its [PATCHES.md](vendor/vt100/PATCHES.md)) |
 | [`docs`](docs) | Plan, protocol, feature specs, ADRs, manual checks, release guide |
 

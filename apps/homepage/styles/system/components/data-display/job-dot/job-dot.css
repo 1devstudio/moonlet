@@ -1,0 +1,66 @@
+/* Job dot (components/JobsPanel.tsx: JobDot, TONE, LINE_TONE, WorkerIcon; X62).
+   A 7px dot for a job's state, the text tones of its state lines, the tones
+   of its output lines and the worker's icon. */
+.job-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--color-error);
+}
+/* Waiting, running or bringing changes back: accent and pulsing. */
+.job-dot--going {
+  background: var(--color-accent);
+  animation: job-dot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+/* Done with exit 0. */
+.job-dot--done {
+  background: var(--color-done);
+}
+/* Stopped by the user. */
+.job-dot--stopped {
+  background: var(--color-faint);
+}
+@keyframes job-dot-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* TONE: the colour of a job's state line. */
+.job-tone--muted {
+  color: var(--color-muted);
+}
+.job-tone--accent {
+  color: var(--color-accent);
+}
+.job-tone--blocked {
+  color: var(--color-blocked);
+}
+.job-tone--error {
+  color: var(--color-error);
+}
+.job-tone--done {
+  color: var(--color-done);
+}
+
+/* LINE_TONE: moonlet's own output lines, warnings and stderr. */
+.job-line--moonlet {
+  color: var(--color-accent);
+}
+.job-line--warn,
+.job-line--stderr {
+  color: var(--color-blocked);
+}
+
+/* WorkerIcon: a 12px lucide icon for where the job runs. */
+.worker-icon {
+  flex-shrink: 0;
+}
+.worker-icon--rerun {
+  color: var(--color-blocked);
+}
+.worker-icon--ok {
+  color: var(--color-done);
+}

@@ -1,0 +1,165 @@
+/* Markdown (components/AgentView.tsx renders lib/markdown.ts into .chat-md; rules
+   from styles/moonlet.css). An agent's message: prose, lists, code fences, tables.
+   .task-md is a task's description in the Task tab (X46), smaller, with checklist boxes. */
+.chat-md {
+  color: var(--color-fg);
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-chat);
+  overflow-wrap: anywhere;
+}
+.chat-md > :first-child {
+  margin-top: 0;
+}
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+.chat-md p,
+.chat-md ul,
+.chat-md ol,
+.chat-md pre,
+.chat-md blockquote,
+.chat-md table {
+  margin: 0.55em 0;
+}
+.chat-md ul,
+.chat-md ol {
+  padding-left: 1.4em;
+}
+.chat-md ul {
+  list-style: disc;
+}
+.chat-md ol {
+  list-style: decimal;
+}
+.chat-md li {
+  margin: 0.15em 0;
+}
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4 {
+  margin: 1em 0 0.4em;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
+}
+.chat-md h1 {
+  font-size: 1.3em;
+}
+.chat-md h2 {
+  font-size: 1.15em;
+}
+.chat-md h3,
+.chat-md h4 {
+  font-size: 1em;
+}
+.chat-md a {
+  color: var(--color-accent-2);
+}
+.chat-md a:hover {
+  text-decoration: underline;
+}
+.chat-md strong {
+  color: var(--color-strong-text);
+  font-weight: var(--font-weight-semibold);
+}
+.chat-md code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  background: var(--color-raised);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+}
+.chat-md pre {
+  padding: var(--space-2-5) var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-code-block-bg);
+}
+.chat-md pre code {
+  padding: 0;
+  background: none;
+  font-size: var(--ui-text-12-5);
+  line-height: var(--leading-normal);
+}
+.chat-md blockquote {
+  padding: 0 1em;
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-muted);
+}
+.chat-md table {
+  display: block;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.chat-md th,
+.chat-md td {
+  padding: var(--space-1) var(--space-2-5);
+  border: 1px solid var(--color-border-strong);
+}
+.chat-md hr {
+  margin: 1em 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+/* A task's description (X46): the panel's smaller text, checklist items with boxes. */
+.chat-md.task-md {
+  font-size: var(--ui-text-12-5);
+}
+.chat-md li.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  margin-left: -1.4em;
+  list-style: none;
+}
+.task-check {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 0.25em;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-check);
+}
+/* The tick is a data: URL (white stroke), which cannot read a custom property. */
+.task-check.done {
+  border-color: var(--color-accent);
+  background: var(--color-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5' fill='none' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E") center / 100% no-repeat;
+}
+
+/* Code fences (highlight.js spans). */
+.chat-md :is(.hljs-keyword, .hljs-selector-tag, .hljs-built_in) {
+  color: var(--color-syntax-keyword);
+}
+.chat-md :is(.hljs-string, .hljs-attr) {
+  color: var(--color-syntax-string);
+}
+.chat-md :is(.hljs-number, .hljs-literal, .hljs-bullet) {
+  color: var(--color-syntax-number);
+}
+.chat-md .hljs-comment {
+  color: var(--color-syntax-comment);
+  font-style: italic;
+}
+.chat-md :is(.hljs-title, .hljs-function, .hljs-section) {
+  color: var(--color-syntax-title);
+}
+.chat-md :is(.hljs-type, .hljs-class) {
+  color: var(--color-syntax-type);
+}
+.chat-md :is(.hljs-variable, .hljs-template-variable) {
+  color: var(--color-syntax-variable);
+}
+.chat-md .hljs-meta {
+  color: var(--color-syntax-meta);
+}
+.chat-md .hljs-code {
+  color: var(--color-syntax-string);
+}
+.chat-md .hljs-strong {
+  font-weight: var(--font-weight-semibold);
+}
+.chat-md .hljs-emphasis {
+  font-style: italic;
+}

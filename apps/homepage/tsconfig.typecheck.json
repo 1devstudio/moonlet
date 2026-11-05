@@ -1,0 +1,6 @@
+{
+  // `pnpm typecheck` checks the site's own code. Next adds its generated
+  // .next/**/types to tsconfig.json, which fail this repo's noUnusedLocals.
+  "extends": "./tsconfig.json",
+  "include": ["app", "src", "next.config.ts", "vitest.config.ts"]
+}

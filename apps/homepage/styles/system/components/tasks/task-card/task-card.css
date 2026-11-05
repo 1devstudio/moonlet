@@ -1,0 +1,242 @@
+/* TaskGlyph (components/tasks/TasksMode.tsx): a task's column as a circle,
+   a pie for in progress / in review, a check for done. */
+.task-glyph {
+  flex-shrink: 0;
+  color: var(--color-fg);
+}
+.task-glyph--todo {
+  color: var(--color-muted);
+}
+.task-glyph--done {
+  color: var(--color-merged);
+}
+.task-glyph__ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.task-glyph--done .task-glyph__ring {
+  fill: currentColor;
+}
+.task-glyph__pie {
+  fill: currentColor;
+}
+.task-glyph__check {
+  fill: none;
+  stroke: var(--color-bg);
+  stroke-width: 1.5;
+}
+
+/* TaskCard (components/tasks/TasksMode.tsx): one task on the board. Key, type,
+   priority bars, points and assignee on top; the title; an optional line; the
+   task's sessions (or "No sessions" with Start); a drift note with its fix.
+   A column is 228px wide, so a card is too. */
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-fg);
+}
+.task-card--selected {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+  background: var(--color-selected);
+}
+.task-card--needs-you {
+  border-color: color-mix(in srgb, var(--color-blocked) 35%, transparent);
+}
+/* Someone else's issue, shown under Assignee: anyone (X50). */
+.task-card--dimmed {
+  opacity: 0.72;
+}
+.task-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.task-card__key {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.task-card__type {
+  color: var(--color-faint);
+  font-size: var(--ui-text-11);
+}
+.task-card__spacer {
+  flex: 1;
+}
+.task-card__points {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-10-5);
+}
+.task-card__assignee {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-0-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: var(--color-raised);
+  color: var(--color-muted);
+  font-size: var(--ui-text-8-5);
+  font-weight: var(--font-weight-semibold);
+}
+/* Priority as 0-3 bars (PriorityBars): three bars 4, 7 and 10px tall. */
+.task-card__priority {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+}
+.task-card__bar {
+  width: 3px;
+  border-radius: var(--radius-px);
+  background: var(--color-border-strong);
+}
+.task-card__bar--on {
+  background: var(--color-muted);
+}
+.task-card__bar:nth-child(1) {
+  height: 4px;
+}
+.task-card__bar:nth-child(2) {
+  height: 7px;
+}
+.task-card__bar:nth-child(3) {
+  height: 10px;
+}
+.task-card__title {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+  text-align: left;
+}
+.task-card__line {
+  overflow: hidden;
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.task-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-px);
+  margin: 0 calc(var(--space-1-5) * -1);
+}
+.task-card__session {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.task-card__session:hover {
+  background: var(--color-panel-2);
+}
+.task-card__session .state-glyph {
+  width: 12px;
+  height: 12px;
+}
+.task-card__session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card__session-meta {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.task-card__session-meta--blocked {
+  color: var(--color-blocked);
+}
+.task-card__session-meta--open {
+  color: var(--color-done);
+}
+.task-card__session-meta--merged {
+  color: var(--color-merged);
+}
+.task-card__session-meta--error {
+  color: var(--color-error);
+}
+.task-card__session-meta--muted {
+  color: var(--color-muted);
+}
+.task-card__note {
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+}
+.task-card__empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+}
+.task-card__start {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+.task-card__drift {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  color: var(--color-accent);
+  font-size: var(--ui-text-12);
+}
+.task-card__drift-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card__drift-fix {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+}
