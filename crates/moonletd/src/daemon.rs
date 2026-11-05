@@ -940,6 +940,11 @@ impl Daemon {
         match method {
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
+                // Only the host itself: a paired device would end every
+                // session here.
+                if conn.phone.is_some() {
+                    return Err(RpcError::new("forbidden", "stop moonletd on its own machine"));
+                }
                 // Stopping mid-handoff would drop the sessions on their way
                 // to the new daemon (X69, S3).
                 if self.upgrading.load(Ordering::SeqCst) {
@@ -953,6 +958,10 @@ impl Daemon {
                 ok(true)
             }
             m::DAEMON_UPGRADE => {
+                // Only the host itself: `binary` is any program on this machine.
+                if conn.phone.is_some() {
+                    return Err(RpcError::new("forbidden", "upgrade moonletd on its own machine"));
+                }
                 #[derive(serde::Deserialize)]
                 struct Req {
                     binary: PathBuf,
