@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Add an always-on host · moonlet docs</title>
+<link rel="stylesheet" href="../system/styles.css">
+<style>
+/* The pinned system/ has no base.css, although its components.css imports it.
+   These are the design system's base rules (base.css), until the pin includes it. */
+* { box-sizing: border-box; }
+html, body { -webkit-font-smoothing: antialiased; }
+@keyframes moonlet-spin { to { transform: rotate(360deg); } }
+.spin { animation: moonlet-spin 0.9s linear infinite; }
+@keyframes moonlet-pulse { 50% { opacity: 0.35; } }
+.pulse { animation: moonlet-pulse 1.4s ease-in-out infinite; }
+.icon { flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+a { color: inherit; text-decoration: inherit; }
+
+/* Page glue, shared with index.html: every value is a token. */
+html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-sans); }
+body { font-size: var(--ui-text-15); line-height: var(--leading-normal); }
+.wrap { width: min(calc(var(--space-12) * 25), calc(100% - var(--space-12))); margin: 0 auto; }
+
+/* Top bar, as on the homepage, with search */
+.nav { position: sticky; top: 0; z-index: 5; background: var(--color-bg); border-bottom: 1px solid var(--color-border); }
+.nav__in { display: flex; align-items: center; gap: var(--space-8); height: calc(var(--size-topbar) + var(--space-3)); }
+.brand { display: flex; align-items: center; gap: var(--space-2); font-size: var(--ui-text-16); font-weight: var(--font-weight-semibold); color: var(--color-heading-text); }
+.brand__mark { display: grid; place-items: center; width: var(--space-7); height: var(--space-7); border-radius: var(--radius-lg); background: var(--color-selected); color: var(--color-accent); }
+.brand__docs { color: var(--color-faint); font-weight: var(--font-weight-normal); }
+.nav__links { display: flex; gap: var(--space-6); color: var(--color-muted); font-size: var(--ui-text-13-5); }
+.nav__links a:hover, .nav__links .nav__here { color: var(--color-fg); }
+.nav__end { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.search { display: flex; align-items: center; gap: var(--space-2); width: calc(var(--space-12) * 5.5); height: var(--size-field); padding: 0 var(--space-2-5); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-panel-2); color: var(--color-faint); font-size: var(--ui-text-13); }
+.search span { flex: 1; }
+.menu-button { display: none; }
+
+/* Three columns: the docs nav, the article, on this page */
+.docs { display: grid; grid-template-columns: calc(var(--space-12) * 5.5) minmax(0, 1fr) calc(var(--space-12) * 4.5); gap: var(--space-12); align-items: start; }
+.docs__nav { position: sticky; top: calc(var(--size-topbar) + var(--space-3)); max-height: calc(100vh - var(--size-topbar) - var(--space-3)); overflow: auto; padding: var(--space-6) 0; }
+.docs .settings-nav { width: auto; height: auto; background: none; border: 0; }
+.docs .settings-nav__groups { padding: 0; }
+.docs .settings-nav__group + .settings-nav__group { margin-top: var(--space-5); }
+.docs__main { padding: var(--space-10) 0 calc(var(--space-12) * 2); min-width: 0; }
+.docs__toc { position: sticky; top: calc(var(--size-topbar) + var(--space-3)); padding: var(--space-10) 0; }
+
+/* Breadcrumbs above the title */
+.crumbs { display: flex; align-items: center; gap: var(--space-1-5); color: var(--color-faint); font-size: var(--ui-text-12-5); }
+.crumbs__here { color: var(--color-muted); }
+
+/* The article: chat-md's prose, set at docs size */
+.doc-title { margin: var(--space-3) 0 0; font-size: calc(var(--ui-text-18) * 2); line-height: var(--leading-tight); font-weight: var(--font-weight-semibold); letter-spacing: -0.02em; color: var(--color-strong-text); }
+.doc-lede { margin: var(--space-3) 0 0; color: var(--color-muted); font-size: var(--ui-text-18); line-height: var(--leading-relaxed); }
+.doc-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-5) 0 0; }
+.chat-md.doc-prose { margin-top: var(--space-8); font-size: var(--ui-text-15); line-height: var(--leading-relaxed); }
+.chat-md.doc-prose h2 { margin: var(--space-10) 0 var(--space-3); padding-top: var(--space-6); border-top: 1px solid var(--color-border); font-size: var(--ui-text-20); }
+.chat-md.doc-prose h3 { margin: var(--space-6) 0 var(--space-2); font-size: var(--ui-text-16); }
+.chat-md.doc-prose pre { overflow-x: auto; font-size: var(--ui-text-13); }
+.chat-md.doc-prose li + li { margin-top: var(--space-1-5); }
+.chat-md.doc-prose table { width: 100%; font-size: var(--ui-text-13-5); }
+.doc-prose .alert-box { margin: var(--space-5) 0; }
+
+/* Two platforms side by side */
+.tabs { margin: var(--space-4) 0; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-panel); overflow: hidden; }
+.tabs__bar { display: flex; gap: var(--space-1); padding: var(--space-1-5); border-bottom: 1px solid var(--color-border); }
+.tabs__tab { display: inline-flex; align-items: center; gap: var(--space-1-5); height: var(--size-control-md); padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: var(--color-muted); font: inherit; font-size: var(--ui-text-13); cursor: pointer; }
+.tabs__tab--on { background: var(--color-raised); color: var(--color-fg); }
+.tabs__panel { padding: var(--space-4) var(--space-5); }
+.tabs__panel[hidden] { display: none; }
+.tabs__panel > :first-child { margin-top: 0; }
+.tabs__panel > :last-child { margin-bottom: 0; }
+
+/* A screenshot-like strip of the Hosts settings */
+.figure { margin: var(--space-5) 0; padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-panel-2); }
+.figure .settings-card { margin: 0; }
+.figure__caption { margin-top: var(--space-2-5); color: var(--color-faint); font-size: var(--ui-text-12-5); text-align: center; }
+.host-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.host-row + .host-row { border-top: 1px solid var(--color-border); }
+.host-row__name { font-family: var(--font-mono); font-size: var(--ui-text-13); }
+.host-row__line { color: var(--color-faint); font-size: var(--ui-text-12); }
+.host-row__body { flex: 1; min-width: 0; }
+.host-row .icon { color: var(--color-muted); }
+
+/* Previous / next and the footer of the article */
+.pager { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-12); }
+.pager__link { display: block; padding: var(--space-4) var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-panel); }
+.pager__link:hover { border-color: var(--color-border-strong); }
+.pager__link--next { text-align: right; }
+.pager__dir { color: var(--color-faint); font-size: var(--ui-text-12); }
+.pager__title { margin-top: var(--space-1); font-size: var(--ui-text-15); font-weight: var(--font-weight-medium); }
+.doc-foot { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-6); color: var(--color-faint); font-size: var(--ui-text-12-5); }
+.doc-foot a { color: var(--color-muted); }
+.doc-foot span:first-child { margin-right: auto; }
+
+/* On this page */
+.toc__title { color: var(--color-faint); font-size: var(--ui-text-11-5); text-transform: uppercase; letter-spacing: var(--tracking-section-label); }
+.toc__list { margin: var(--space-3) 0 0; padding: 0; list-style: none; border-left: 1px solid var(--color-border); }
+.toc__item a { display: block; margin-left: -1px; padding: var(--space-1) var(--space-3); border-left: 1px solid transparent; color: var(--color-muted); font-size: var(--ui-text-13); }
+.toc__item--sub a { padding-left: var(--space-6); font-size: var(--ui-text-12-5); }
+.toc__item--on a { border-left-color: var(--color-accent); color: var(--color-fg); }
+.toc__help { margin-top: var(--space-8); padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-panel); }
+.toc__help-title { font-size: var(--ui-text-13); font-weight: var(--font-weight-medium); }
+.toc__help-text { margin: var(--space-1) 0 var(--space-3); color: var(--color-muted); font-size: var(--ui-text-12-5); line-height: var(--leading-snug); }
+
+/* Tablet: up to 1180px. "On this page" goes; the nav and article stay side by side. */
+@media (max-width: 1180px) {
+  .docs { grid-template-columns: calc(var(--space-12) * 5) minmax(0, 1fr); gap: var(--space-10); }
+  .docs__toc { display: none; }
+  .nav__links { display: none; }
+}
+
+/* Phone and small tablet: up to 800px. The docs nav folds behind a Menu button. */
+@media (max-width: 800px) {
+  .wrap { width: calc(100% - var(--space-10)); }
+  .nav__in { gap: var(--space-3); height: var(--size-topbar); }
+  .brand__docs { display: none; }
+  .search { width: auto; flex: 1; }
+  .search .kbd { display: none; }
+  .nav__end { flex: 1; margin-left: 0; }
+  .nav__end .button--primary { display: none; }
+  .menu-button { display: inline-flex; }
+  .docs { display: block; }
+  .docs__nav { position: static; max-height: none; padding: var(--space-4) 0; border-bottom: 1px solid var(--color-border); }
+  .docs__nav--closed .settings-nav { display: none; }
+  .docs__main { padding-top: var(--space-6); }
+  .doc-title { font-size: var(--space-7); }
+  .doc-lede { font-size: var(--ui-text-16); }
+  .chat-md.doc-prose { font-size: var(--ui-text-14); }
+  .chat-md.doc-prose pre { overflow-x: auto; font-size: var(--ui-text-12); }
+  .tabs__panel { padding: var(--space-4); }
+  .host-row { flex-wrap: wrap; }
+  .host-row__body { flex-basis: calc(100% - var(--space-8)); }
+  .host-row .badge { margin-left: calc(16px + var(--space-3)); }
+  .pager { grid-template-columns: 1fr; gap: var(--space-3); }
+}
+</style>
+</head>
+<body data-mid="m1">
+
+<header class="nav" data-mid="m2">
+  <div class="wrap nav__in" data-mid="m3">
+    <a class="brand" href="index.html" data-mid="m4"><span class="brand__mark" data-mid="m5"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" data-mid="m6"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></span>moonlet <span class="brand__docs" data-mid="m7">docs</span></a>
+    <nav class="nav__links" data-mid="m8">
+      <a href="index.html#mesh" data-mid="m9">Mesh</a>
+      <a href="index.html#design" data-mid="m10">Design</a>
+      <a href="index.html#tasks" data-mid="m11">Tasks</a>
+      <a class="nav__here" href="#" data-mid="m12">Docs</a>
+    </nav>
+    <div class="nav__end" data-mid="m13">
+      <button class="button menu-button" aria-expanded="false" aria-controls="docs-nav" data-mid="m14"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m15"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>Menu</button>
+      <label class="search" data-mid="m16"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m17"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span data-mid="m18">Search the docs</span><kbd class="kbd" data-mid="m19">⌘K</kbd></label>
+      <button class="button button--primary" data-mid="m20">Download for macOS</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap docs" data-mid="m21">
+
+  <aside class="docs__nav docs__nav--closed" id="docs-nav" data-mid="m22">
+    <nav class="settings-nav" aria-label="Docs" data-mid="m23">
+      <div class="settings-nav__groups" data-mid="m24">
+        <div class="settings-nav__group" data-mid="m25"><span class="settings-nav__title" data-mid="m26">Start here</span>
+          <button class="settings-nav__entry" data-mid="m27"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m28"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="settings-nav__label" data-mid="m29">Introduction</span></button>
+          <button class="settings-nav__entry" data-mid="m30"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m31"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg><span class="settings-nav__label" data-mid="m32">Installation</span></button>
+          <button class="settings-nav__entry" data-mid="m33"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m34"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="settings-nav__label" data-mid="m35">Your first session</span></button>
+          <button class="settings-nav__entry" data-mid="m36"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m37"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="settings-nav__label" data-mid="m38">Project config</span></button>
+        </div>
+        <div class="settings-nav__group" data-mid="m39"><span class="settings-nav__title" data-mid="m40">Mesh</span>
+          <button class="settings-nav__entry settings-nav__entry--active" aria-current="page" data-mid="m41"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m42"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><span class="settings-nav__label" data-mid="m43">Add an always-on host</span></button>
+          <button class="settings-nav__entry" data-mid="m44"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m45"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg><span class="settings-nav__label" data-mid="m46">Sessions that follow you</span></button>
+          <button class="settings-nav__entry" data-mid="m47"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m48"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg><span class="settings-nav__label" data-mid="m49">Heavy commands</span></button>
+          <button class="settings-nav__entry" data-mid="m50"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m51"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg><span class="settings-nav__label" data-mid="m52">Cloud workers</span></button>
+          <button class="settings-nav__entry" data-mid="m53"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m54"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg><span class="settings-nav__label" data-mid="m55">Pair your phone</span></button>
+        </div>
+        <div class="settings-nav__group" data-mid="m56"><span class="settings-nav__title" data-mid="m57">Work</span>
+          <button class="settings-nav__entry" data-mid="m58"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m59"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg><span class="settings-nav__label" data-mid="m60">Design mode</span></button>
+          <button class="settings-nav__entry" data-mid="m61"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m62"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg><span class="settings-nav__label" data-mid="m63">Tasks and trackers</span></button>
+          <button class="settings-nav__entry" data-mid="m64"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m65"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg><span class="settings-nav__label" data-mid="m66">Review and pull requests</span></button>
+        </div>
+        <div class="settings-nav__group" data-mid="m67"><span class="settings-nav__title" data-mid="m68">Reference</span>
+          <button class="settings-nav__entry" data-mid="m69"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m70"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><span class="settings-nav__label" data-mid="m71">Command line</span></button>
+          <button class="settings-nav__entry" data-mid="m72"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m73"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg><span class="settings-nav__label" data-mid="m74">Socket protocol</span></button>
+          <button class="settings-nav__entry" data-mid="m75"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m76"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="settings-nav__label" data-mid="m77">Glossary</span></button>
+          <button class="settings-nav__entry" data-mid="m78"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" data-mid="m79"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="m9 15 2 2 4-4"/></svg><span class="settings-nav__label" data-mid="m80">Feature specs</span></button>
+        </div>
+      </div>
+    </nav>
+  </aside>
+
+  <main class="docs__main" data-mid="m81">
+    <div class="crumbs" data-mid="m82"><span data-mid="m83">Docs</span><svg class="icon" width="11" height="11" viewBox="0 0 24 24" data-mid="m84"><path d="m9 18 6-6-6-6"/></svg><span data-mid="m85">Mesh</span><svg class="icon" width="11" height="11" viewBox="0 0 24 24" data-mid="m86"><path d="m9 18 6-6-6-6"/></svg><span class="crumbs__here" data-mid="m87">Add an always-on host</span></div>
+    <h1 class="doc-title" data-mid="m88">Add an always-on host</h1>
+    <p class="doc-lede" data-mid="m89">A Mac mini or a Linux VPS that stays on keeps a copy of every session, carries on when your MacBook sleeps, and is what your phone connects to.</p>
+    <div class="doc-meta" data-mid="m90"><span class="badge" data-mid="m91">5 minutes</span><span class="badge" data-mid="m92">macOS or Linux</span><span class="badge" data-mid="m93">Needs Tailscale</span></div>
+
+    <article class="chat-md doc-prose" data-mid="m94">
+      <h2 id="before" data-mid="m95">Before you start</h2>
+      <p data-mid="m96">Both machines need to be on the same <a href="#" data-mid="m97">Tailscale</a> tailnet. You do not need SSH keys or <code data-mid="m98">~/.ssh/config</code> entries: your Mac pairs with the host once, with a code.</p>
+      <ul data-mid="m99">
+        <li data-mid="m100">A Mac running moonlet, such as your MacBook.</li>
+        <li data-mid="m101">The host: a Mac, or a Linux machine on x86_64 or aarch64.</li>
+      </ul>
+
+      <h2 id="install" data-mid="m102">Put moonlet on the host</h2>
+      <div class="tabs" data-mid="m103">
+        <div class="tabs__bar" role="tablist" data-mid="m104">
+          <button class="tabs__tab tabs__tab--on" role="tab" aria-selected="true" data-tab="linux" data-mid="m105"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" data-mid="m106"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/></svg>Linux</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="mac" data-mid="m107"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" data-mid="m108"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>Mac</button>
+        </div>
+        <div class="tabs__panel" data-panel="linux" data-mid="m109">
+          <p data-mid="m110">Run this on the host:</p>
+          <pre data-mid="m111"><code data-mid="m112">curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh</code></pre>
+          <p data-mid="m113">The script checks the SHA-256 of <code data-mid="m114">moonletd</code> and <code data-mid="m115">moonlet</code>, installs them in <code data-mid="m116">~/.moonlet/bin</code>, runs the daemon as a systemd user service, turns on tailnet access and shows a pairing code. It never uses <code data-mid="m117">sudo</code>.</p>
+        </div>
+        <div class="tabs__panel" data-panel="mac" hidden data-mid="m118">
+          <p data-mid="m119">Install moonlet.app on the host. In <strong data-mid="m120">Settings › Machines › Hosts</strong>, turn on <strong data-mid="m121">Allow connections from my tailnet</strong>, then click <strong data-mid="m122">Let another Mac connect</strong>. The host shows a pairing code.</p>
+        </div>
+      </div>
+
+      <h2 id="pair" data-mid="m123">Pair your Mac</h2>
+      <ol data-mid="m124">
+        <li data-mid="m125">On your Mac, open <strong data-mid="m126">Settings › Machines › Hosts › Add host</strong>.</li>
+        <li data-mid="m127">Enter the code, such as <code data-mid="m128">7KQ2M-X9PDA</code>, and the host's name on your tailnet, such as <code data-mid="m129">studio-mini</code>. Or paste the pairing link.</li>
+        <li data-mid="m130">On the host's row, choose <strong data-mid="m131">Make central host</strong>.</li>
+      </ol>
+      <div role="note" class="alert-box alert-box--note alert-box--note-wide" data-mid="m132">A code works once, for five minutes. On a Linux host, <code data-mid="m133">moonletd pair</code> shows a new one.</div>
+
+      <div class="figure" data-mid="m134">
+        <div class="settings-card" data-mid="m135">
+          <div class="host-row" data-mid="m136"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" data-mid="m137"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg><div class="host-row__body" data-mid="m138"><div class="host-row__name" data-mid="m139">macbook</div><div class="host-row__line" data-mid="m140">This Mac's own daemon</div></div><span class="badge" data-mid="m141">This Mac</span></div>
+          <div class="host-row" data-mid="m142"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" data-mid="m143"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><div class="host-row__body" data-mid="m144"><div class="host-row__name" data-mid="m145">studio-mini</div><div class="host-row__line" data-mid="m146">Paired over the tailnet · connected</div></div><span class="badge" data-mid="m147">Central host</span><button class="button button--sm" data-mid="m148">Clear central host</button></div>
+        </div>
+        <div class="figure__caption" data-mid="m149">Settings › Machines › Hosts after pairing</div>
+      </div>
+
+      <h2 id="what-changes" data-mid="m150">What changes</h2>
+      <p data-mid="m151">Once your Mac has a central host, it joins your <strong data-mid="m152">account</strong>: the machines that share your workspaces.</p>
+      <ul data-mid="m153">
+        <li data-mid="m154">Every session gets a copy on the central host, checkpointed after each tool call.</li>
+        <li data-mid="m155">When your MacBook sleeps, the central host continues its sessions from the last checkpoint.</li>
+        <li data-mid="m156">Phones you pair connect to the central host, and see every session of the account.</li>
+      </ul>
+
+      <h3 id="heavy" data-mid="m157">Let it take heavy commands</h3>
+      <p data-mid="m158">List the commands a project may run elsewhere in its <code data-mid="m159">.moonlet/config.toml</code>, then approve them in <strong data-mid="m160">Project settings</strong>:</p>
+      <pre data-mid="m161"><code data-mid="m162"><span class="hljs-section" data-mid="m163">[heavy]</span>
+<span class="hljs-attr" data-mid="m164">commands</span> = [<span class="hljs-string" data-mid="m165">"pnpm test"</span>, <span class="hljs-string" data-mid="m166">"pnpm build"</span>]
+<span class="hljs-attr" data-mid="m167">outputs</span> = [<span class="hljs-string" data-mid="m168">"coverage"</span>]</code></pre>
+      <p data-mid="m169">An approved command runs on the least busy machine, and its output comes back to the agent. See <a href="#" data-mid="m170">Heavy commands</a>.</p>
+
+      <h2 id="remove" data-mid="m171">Take access back</h2>
+      <p data-mid="m172">Remove your Mac from the host's list, or the host from your Mac's. To remove moonlet from a Linux host and keep your data in <code data-mid="m173">~/.moonlet</code>:</p>
+      <pre data-mid="m174"><code data-mid="m175">curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh -s -- --uninstall</code></pre>
+
+      <h2 id="commands" data-mid="m176">Commands on the host</h2>
+      <table data-mid="m177">
+        <thead data-mid="m178"><tr data-mid="m179"><th data-mid="m180">Command</th><th data-mid="m181">What it does</th></tr></thead>
+        <tbody data-mid="m182">
+          <tr data-mid="m183"><td data-mid="m184"><code data-mid="m185">moonletd status</code></td><td data-mid="m186">Daemon info</td></tr>
+          <tr data-mid="m187"><td data-mid="m188"><code data-mid="m189">moonletd tailnet on</code></td><td data-mid="m190">Let paired Macs and phones connect over Tailscale</td></tr>
+          <tr data-mid="m191"><td data-mid="m192"><code data-mid="m193">moonletd pair</code></td><td data-mid="m194">Show a one-time pairing code</td></tr>
+          <tr data-mid="m195"><td data-mid="m196"><code data-mid="m197">moonletd upgrade</code></td><td data-mid="m198">Hand live sessions to a newer daemon</td></tr>
+        </tbody>
+      </table>
+    </article>
+
+    <nav class="pager" aria-label="More docs" data-mid="m199">
+      <a class="pager__link" href="#" data-mid="m200"><div class="pager__dir" data-mid="m201">Previous</div><div class="pager__title" data-mid="m202">Project config</div></a>
+      <a class="pager__link pager__link--next" href="#" data-mid="m203"><div class="pager__dir" data-mid="m204">Next</div><div class="pager__title" data-mid="m205">Sessions that follow you</div></a>
+    </nav>
+    <div class="doc-foot" data-mid="m206"><span data-mid="m207">Updated 5 November 2026</span><a href="#" data-mid="m208">Edit this page on GitHub</a><a href="#" data-mid="m209">Report a problem</a></div>
+  </main>
+
+  <aside class="docs__toc" data-mid="m210">
+    <div class="toc__title" data-mid="m211">On this page</div>
+    <ul class="toc__list" data-mid="m212">
+      <li class="toc__item" data-mid="m213"><a href="#before" data-mid="m214">Before you start</a></li>
+      <li class="toc__item toc__item--on" data-mid="m215"><a href="#install" data-mid="m216">Put moonlet on the host</a></li>
+      <li class="toc__item" data-mid="m217"><a href="#pair" data-mid="m218">Pair your Mac</a></li>
+      <li class="toc__item" data-mid="m219"><a href="#what-changes" data-mid="m220">What changes</a></li>
+      <li class="toc__item toc__item--sub" data-mid="m221"><a href="#heavy" data-mid="m222">Let it take heavy commands</a></li>
+      <li class="toc__item" data-mid="m223"><a href="#remove" data-mid="m224">Take access back</a></li>
+      <li class="toc__item" data-mid="m225"><a href="#commands" data-mid="m226">Commands on the host</a></li>
+    </ul>
+    <div class="toc__help" data-mid="m227">
+      <div class="toc__help-title" data-mid="m228">Stuck?</div>
+      <p class="toc__help-text" data-mid="m229">Search the issues, or open one with what you ran and what you saw.</p>
+      <button class="button button--sm" data-mid="m230">Open an issue</button>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+  // The platform tabs and the phone's Menu button.
+  document.querySelectorAll('.tabs__tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var box = tab.closest('.tabs');
+      box.querySelectorAll('.tabs__tab').forEach(function (t) {
+        var on = t === tab;
+        t.classList.toggle('tabs__tab--on', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      box.querySelectorAll('.tabs__panel').forEach(function (p) {
+        p.hidden = p.getAttribute('data-panel') !== tab.getAttribute('data-tab');
+      });
+    });
+  });
+  var menu = document.querySelector('.menu-button');
+  var nav = document.getElementById('docs-nav');
+  menu.addEventListener('click', function () {
+    var closed = nav.classList.toggle('docs__nav--closed');
+    menu.setAttribute('aria-expanded', closed ? 'false' : 'true');
+  });
+</script>
+</body>
+</html>

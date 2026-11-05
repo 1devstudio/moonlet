@@ -1,0 +1,111 @@
+/* QuestionCard (components/AgentView.tsx): Claude's AskUserQuestion. The same
+   amber card as the permission card, with one block per question: a header
+   chip, the question, its options (one pick, or several for multiSelect) and an
+   "Other…" field, then Submit and Skip. */
+.question-card {
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-ask-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-ask-bg);
+}
+.question-card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+}
+.question-card__title .icon {
+  color: var(--color-blocked);
+}
+.question-card__item {
+  margin-bottom: var(--space-3);
+}
+.question-card__prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1-5);
+}
+.question-card__header {
+  flex-shrink: 0;
+  margin-top: var(--space-px);
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--color-inset-bg);
+  color: var(--color-muted);
+  font-size: var(--ui-text-11);
+}
+.question-card__question {
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+}
+.question-card__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.question-card__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-inset-bg);
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-fast);
+}
+.question-card__option:hover {
+  background: var(--color-hover);
+}
+.question-card__option--selected {
+  border-color: var(--color-accent);
+  background: var(--color-hover);
+}
+.question-card__mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+.question-card__mark--check {
+  border-radius: var(--radius-check);
+}
+.question-card__option--selected .question-card__mark {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.question-card__mark .icon {
+  color: var(--color-bg);
+}
+.question-card__text {
+  min-width: 0;
+}
+.question-card__label {
+  display: block;
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+}
+.question-card__description {
+  display: block;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.question-card__actions {
+  display: flex;
+  gap: var(--space-1-5);
+}
+.question-card__actions .button--ghost {
+  margin-left: auto;
+}

@@ -1,0 +1,160 @@
+/* SyncMark and SyncPopover (components/SyncPopover.tsx, X60 Keep in sync): the
+   arrows after a session's name, and the popover with the copy's status, files
+   that differ and actions. The app portals the popover with position: fixed
+   (360px wide); the card places it static. */
+.sync-mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+}
+.sync-mark:hover {
+  background: var(--color-hover);
+}
+/* The copy can't sync (copying, waiting, paused). */
+.sync-mark--muted {
+  color: var(--color-faint);
+}
+/* Files differ or the branch diverged: it needs the user. */
+.sync-mark--accent {
+  color: var(--color-accent-2);
+}
+
+.sync-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 360px;
+  padding: var(--space-3);
+  overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+  color: var(--color-fg);
+}
+.sync-popover__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.sync-popover__line {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ui-text-13);
+}
+.sync-popover__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.sync-popover__note-text {
+  flex: 1;
+}
+.sync-popover__path-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.sync-popover__path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-popover__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+.sync-popover__group-title {
+  color: var(--color-accent-2);
+  font-size: var(--ui-text-12);
+  font-weight: var(--font-weight-medium);
+}
+.sync-popover__file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+}
+.sync-popover__file-path {
+  overflow: hidden;
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-popover__buttons {
+  display: flex;
+  gap: var(--space-1-5);
+}
+.sync-popover__too-big {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.sync-popover__self-start {
+  align-self: flex-start;
+}
+.sync-popover__setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+.sync-popover__setup-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.sync-popover__setup-line code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-popover__log {
+  max-height: 192px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  background: var(--color-popover-bg);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.sync-popover__footer {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+.sync-popover .sync-popover__stop {
+  color: var(--color-error);
+}

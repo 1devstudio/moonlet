@@ -1,0 +1,129 @@
+/* Update banner (components/Sidebar.tsx): ClaudeUpdateBanner above the sidebar
+   footer (spec X36, copy from lib/claudeUpdate.ts) and UpdateButton in the
+   footer (spec X35, copy from lib/updater.ts). Tones: info, progress,
+   success, error. */
+.update-banner {
+  margin: 0 var(--space-3) var(--space-1);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+.update-banner--success {
+  border-color: color-mix(in srgb, var(--color-done) 30%, transparent);
+  background: color-mix(in srgb, var(--color-done) 6%, transparent);
+}
+.update-banner--error {
+  border-color: color-mix(in srgb, var(--color-error) 30%, transparent);
+  background: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+.update-banner__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.update-banner__icon {
+  display: flex;
+  margin-top: var(--space-0-5);
+  flex-shrink: 0;
+}
+.update-banner__icon--done {
+  color: var(--color-done);
+}
+.update-banner__icon--error {
+  color: var(--color-error);
+}
+.update-banner__agent {
+  color: var(--color-accent);
+}
+.update-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+.update-banner__title {
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+  font-weight: var(--font-weight-medium);
+}
+.update-banner__detail {
+  max-height: 8rem;
+  margin-top: var(--space-0-5);
+  overflow: auto;
+  color: var(--color-muted);
+  font-size: var(--ui-text-11-5);
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.update-banner--error .update-banner__detail {
+  font-family: var(--font-mono);
+}
+.update-banner__close {
+  margin-top: calc(var(--space-1) * -1);
+  margin-right: calc(var(--space-1-5) * -1);
+}
+.update-banner__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 22px;
+  list-style: none;
+}
+.update-banner__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg);
+  font-size: var(--ui-text-11-5);
+}
+.update-banner__step--todo {
+  color: var(--color-faint);
+}
+.update-banner__step-icon {
+  flex-shrink: 0;
+}
+.update-banner__step-icon--done {
+  color: var(--color-done);
+}
+.update-banner__step-icon--active {
+  color: var(--color-accent);
+}
+/* The sweeping bar under the steps. */
+.update-banner__progress {
+  margin-top: var(--space-2-5);
+  margin-left: 22px;
+}
+.update-banner__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+  margin-top: var(--space-2);
+}
+
+/* UpdateButton: a new moonlet release in the sidebar footer (X35). */
+.update-button {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-left: auto;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: var(--ui-text-11-5);
+  cursor: pointer;
+}
+.update-button:hover {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+.update-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.update-button:disabled:hover {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+}

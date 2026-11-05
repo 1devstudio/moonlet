@@ -1,0 +1,27 @@
+/* TurnFooter (components/AgentView.tsx): response time, end time and a copy button
+   under a turn's final message (X16). */
+.turn-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1-5);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+}
+.turn-footer__copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.turn-footer__copy:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}

@@ -1,0 +1,35 @@
+/* Switch (components/settings/controls.tsx). 32x18 track, 14px knob. */
+.switch {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--space-8);
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-switch);
+  background: var(--color-switch-off);
+  cursor: pointer;
+  transition: background-color var(--duration-fast);
+}
+.switch__knob {
+  position: absolute;
+  top: var(--space-0-5);
+  left: var(--space-0-5);
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  border-radius: var(--radius-full);
+  background: var(--color-switch-knob-off);
+  transition: left var(--duration-fast);
+}
+.switch--on {
+  background: var(--color-accent);
+}
+.switch--on .switch__knob {
+  left: var(--space-4);
+  background: var(--color-switch-knob-on);
+}
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}

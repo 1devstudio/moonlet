@@ -1,0 +1,147 @@
+/* Context meter (components/ContextMeter.tsx, X34): the ring in the chat
+   footer showing how full the agent's context window is, and the card with
+   the breakdown and Compact now. The ring is always the accent colour; the
+   source has no warning thresholds. */
+.context-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 26px;
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+.context-meter:hover,
+.context-meter--open {
+  background: var(--color-hover);
+}
+/* The ring: a conic fill to `--percent`, with a hole in the page colour. */
+.context-meter__ring {
+  /* The used share; each ring sets its own inline (style="--percent:48%"). */
+  --percent: 0%;
+  display: grid;
+  place-items: center;
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  border-radius: var(--radius-full);
+  background: conic-gradient(var(--color-accent) 0 var(--percent, 0%), var(--color-border-strong) var(--percent, 0%) 100%);
+}
+.context-meter__ring::after {
+  content: "";
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+}
+.context-meter__percent {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+}
+
+/* The card, opened above the ring. */
+.context-meter__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 320px;
+  padding: var(--space-3-5) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel-2);
+  box-shadow: var(--shadow-2xl);
+}
+.context-meter__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.context-meter__title {
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+}
+.context-meter__used {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  white-space: nowrap;
+}
+/* One segment per category, widths in percent of the window. */
+.context-meter__bar {
+  display: flex;
+  gap: var(--space-px);
+  height: var(--space-1-5);
+  overflow: hidden;
+  border-radius: var(--radius-check);
+  background: var(--color-border-strong);
+}
+.context-meter__rows {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1-5) var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.context-meter__swatch {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-xs);
+}
+/* "Free": an outlined swatch. */
+.context-meter__swatch--free {
+  border: 1px solid var(--color-faint);
+  background: var(--color-border-strong);
+}
+.context-meter__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-meter__tokens {
+  font-family: var(--font-mono);
+}
+.context-meter__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-2-5);
+  border-top: 1px solid var(--color-border-strong);
+}
+.context-meter__auto {
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+  white-space: nowrap;
+}
+
+/* Category colours (lib/chat.ts CONTEXT_COLORS and OTHER_COLORS). */
+.context-meter__tone--muted {
+  background: var(--color-muted);
+}
+.context-meter__tone--mcp {
+  background: var(--color-context-mcp);
+}
+.context-meter__tone--memory {
+  background: var(--color-blocked);
+}
+.context-meter__tone--messages {
+  background: var(--color-accent);
+}
+.context-meter__tone--blue {
+  background: var(--color-context-blue);
+}
+.context-meter__tone--green {
+  background: var(--color-done);
+}
+.context-meter__tone--teal {
+  background: var(--color-context-teal);
+}
+.context-meter__tone--pink {
+  background: var(--color-context-pink);
+}

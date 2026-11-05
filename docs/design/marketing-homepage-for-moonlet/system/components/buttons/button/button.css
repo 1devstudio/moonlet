@@ -1,0 +1,73 @@
+/* Button (components/ui.tsx). Variants: subtle (default), primary, ghost,
+   danger. Sizes: md (default, h-7), sm (h-6). */
+.button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  height: var(--size-control-md);
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-raised);
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+}
+.button:hover {
+  background: var(--color-hover);
+}
+.button--sm {
+  height: var(--size-control-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--ui-text-12);
+}
+.button--primary {
+  border-color: transparent;
+  background: var(--color-fg);
+  color: var(--color-bg);
+}
+.button--primary:hover {
+  background: var(--color-white);
+}
+.button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-muted);
+}
+.button--ghost:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.button--danger {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-bg);
+  color: var(--color-error);
+}
+.button--danger:hover {
+  background: var(--color-danger-hover);
+}
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.button:disabled:hover {
+  background: var(--color-raised);
+}
+.button--primary:disabled:hover {
+  background: var(--color-fg);
+}
+.button--ghost:disabled:hover {
+  background: transparent;
+  color: var(--color-muted);
+}
+/* The confirm modal's buttons get a focus ring (ConfirmDialog `ring`). */
+.button--ring:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
