@@ -1,6 +1,8 @@
 # moonlet
 
-**An agent-first terminal for macOS.** Run Claude Code, Codex and other coding agents side by side, each in its own git worktree, and review their work without leaving the app. Sessions keep running when you quit the app, close the lid or lose the network, on your Mac and on other Macs and Linux machines you reach over your tailnet or SSH.
+**Your coding agents, on every machine you own, following you to your phone.** moonlet links your MacBook, an always-on Mac mini or Linux box, and your iPhone into one mesh. Start a session at your desk, close the lid, and carry on from your phone: the session keeps running on another machine and comes back to the Mac when you type there again.
+
+Each agent (Claude Code, Codex or your own) runs in its own git worktree, and you review its work without leaving the app. Prototype a UI against your project's own design system before any code is written, and start work straight from a Linear, Jira, ClickUp or GitHub issue.
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20(Apple%20Silicon)-lightgrey.svg)](#requirements)
@@ -8,6 +10,9 @@
 
 ## Contents
 
+- [One mesh of machines, and your phone](#one-mesh-of-machines-and-your-phone)
+- [Design systems and quick prototypes](#design-systems-and-quick-prototypes)
+- [Start from a task](#start-from-a-task)
 - [Features](#features)
 - [Project status](#project-status)
 - [Installation](#installation)
@@ -21,6 +26,36 @@
 - [Contributing](#contributing)
 - [Security](#security)
 - [License](#license)
+
+## One mesh of machines, and your phone
+
+Most agent tools tie a session to the laptop it started on. moonlet treats the machines you own as one **account**: a MacBook, an always-on Mac mini or Linux VPS that acts as the **central host**, and your iPhone. They reach each other over your [Tailscale](https://tailscale.com) tailnet and pair once, with no SSH keys or port forwarding.
+
+- **The same workspaces everywhere.** Every member of the account keeps the same workspaces, sections, design systems and designs. A change made on one machine shows up on the others within seconds.
+- **Every session has a copy.** The machine running an agent sends the central host a checkpoint of the worktree and the transcript after every tool call. Nothing lives only on the laptop.
+- **Sessions follow you.** Close the MacBook's lid and the central host carries on from the last checkpoint, including a turn that sleep cut off. Type into the session on another Mac and it moves there once the current turn ends. Choosing **Move to** a machine in the session's menu pins the session there when you want it to stay put.
+- **Switch to your phone in one step.** Pair the moonlet iPhone app by scanning a code. It lists every session of the account, wherever it runs, and answers permission prompts and plans in place. It opens any session's chat, terminal, changes (with line comments to the agent) and pull request, and starts new sessions. A message from the phone goes to whichever machine runs the session, so the phone never moves a session by itself.
+- **The parts that git ignores come along.** `.env` files, and any other patterns you list per project, are copied between members outside git. Sign-ins such as `gh auth login` open the browser on the machine you are using.
+- **Heavy work goes to free machines.** Commands you mark as heavy, such as a test suite, run on the least busy machine of the account, or on a cloud machine that moonlet creates for the job and removes when it is idle. Each run is a job you can follow from the session's **Jobs** tab.
+
+Remote machines can also be plain SSH hosts. See [Remote hosts](#remote-hosts) for setup.
+
+## Design systems and quick prototypes
+
+Work out what a screen should look like before an agent writes the code, without running the project.
+
+- **A design system from your code.** An agent reads a project's source and writes its design system as static HTML and CSS: the tokens as they are, colours, type and spacing, one card per component with every variant labelled, and whole layouts. Each card is checked by rendering it, then graded. Because the cards are plain HTML, this works with any stack. A later sync rewrites only the cards whose source changed, and proposes a change instead of overwriting a card you edited by hand.
+- **Design mode (⌃⌘D).** Describe a screen and a design agent builds it as HTML pages on one of your design systems, shown live on a canvas at the viewport you pick. Iterate by chatting, by pinning comments on elements and sending them to the agent, or by editing directly in a visual editor: move, resize, restyle, insert components and edit text. Every agent turn and every burst of hand edits is a snapshot you can go back to.
+- **From prototype to pull request.** **Build it** starts a session with the design's pages attached. Inside a session, `/moonlet-design` makes a session design in the worktree under `docs/design/`, so the prototype, its spec and the code ship in the same pull request.
+
+## Start from a task
+
+moonlet connects to the trackers your team already uses: **Linear**, **Jira Cloud**, **ClickUp** and **GitHub Issues**.
+
+- **Tasks mode** shows a tracker's board with its own columns, filters and sprint, and the sessions, worktrees and pull requests working on each issue. Drag a card to another column to move the issue in its tracker, or press `+` on a column to create one.
+- **Start a session from a task.** **Start** on a card opens the composer with the issue's title and description as the first message, the matching project picked, and a branch named after the issue. One click can also move the issue to In Progress and assign it to you.
+- **The tracker keeps in step.** A session is linked to its task by its branch, its pull request or by hand, and shows the task above the conversation. moonlet can move the issue when the session starts, when its pull request opens and when it merges, and flags a task whose state no longer matches its work. Read and post the issue's comments without leaving the app.
+- **On the phone too.** The iPhone app has the same boards: move tasks, comment, create issues and start a session from a task while you are away from the desk.
 
 ## Features
 
@@ -38,6 +73,7 @@ moonlet is in early development (version 0.1). Expect rough edges and breaking c
 
 - Builds target **Apple Silicon** Macs running **macOS 14 or later**.
 - Release builds are signed with an Apple Developer ID and notarized by Apple.
+- The mesh features (session copies, sessions that follow you, routed commands and cloud workers) are new and not yet tried between real machines. Expect rough edges there.
 - Feature status is tracked per feature in the [spec index](docs/specs/README.md), and open items are listed in the [plan](docs/plan.md).
 
 ## Installation
