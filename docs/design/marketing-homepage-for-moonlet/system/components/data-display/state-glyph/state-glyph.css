@@ -1,0 +1,54 @@
+/* StateGlyph (components/ui.tsx) and the working dots (.moonlet-dots in
+   styles/moonlet.css). A 13px box by default, 15px in the sidebar. */
+.state-glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  color: var(--color-muted);
+}
+.state-glyph--15 {
+  width: 15px;
+  height: 15px;
+}
+.state-glyph__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+}
+.state-glyph__dot--blocked {
+  background: var(--color-blocked);
+}
+.state-glyph__dot--done {
+  background: var(--color-done);
+}
+.state-glyph__dot--error {
+  background: var(--color-error);
+}
+.state-glyph__dot--idle {
+  width: 5px;
+  height: 5px;
+  background: var(--color-idle);
+}
+
+/* Working: three stacked dots that pulse in turn. */
+.moonlet-dots {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1.5px;
+}
+.moonlet-dots i {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: var(--radius-switch);
+  background: var(--color-accent);
+  animation: moonlet-pulse 1.1s ease-in-out infinite;
+}
+.moonlet-dots i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.moonlet-dots i:nth-child(3) {
+  animation-delay: 0.36s;
+}

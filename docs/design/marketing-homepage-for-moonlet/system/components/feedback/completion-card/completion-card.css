@@ -1,0 +1,97 @@
+/* Completion card (AgentCard in components/SessionView.tsx; spec X4): a 440px
+   floating card, bottom-right of the session, when an agent finishes or needs
+   input. In the app it is `absolute bottom-5 right-7`; here it is a block. */
+.completion-card {
+  width: 440px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-toast-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.completion-card__main {
+  display: block;
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  cursor: default;
+  text-align: left;
+}
+.completion-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin-bottom: var(--space-2);
+  font-size: var(--ui-text-14);
+}
+.completion-card__agent {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.completion-card__name {
+  font-weight: var(--font-weight-semibold);
+}
+.completion-card__status {
+  color: var(--color-muted);
+  font-size: var(--ui-text-13);
+}
+.completion-card__status--blocked {
+  color: var(--color-blocked);
+}
+.completion-card__status--error {
+  color: var(--color-error);
+}
+.completion-card__dismiss {
+  display: inline-flex;
+  margin-left: auto;
+  padding: var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+}
+.completion-card__dismiss:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+/* The agent's last message, clamped to three lines. */
+.completion-card__message {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--color-toast-text);
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-snug);
+}
+.completion-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+}
+.completion-card__add {
+  color: var(--color-add);
+}
+.completion-card__del {
+  color: var(--color-del);
+}
+.completion-card__preview {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-3-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--ui-text-13);
+  cursor: pointer;
+}
+.completion-card__preview:hover {
+  background: var(--color-hover);
+}

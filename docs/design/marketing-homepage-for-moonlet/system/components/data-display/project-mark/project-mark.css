@@ -1,0 +1,11 @@
+/* ProjectMark (components/Sidebar.tsx): the dotted glyph shown when a project
+   has no GitHub owner avatar. The avatar variant is an <img> of the owner's
+   GitHub avatar, 15px, rounded 3px (not drawn here). */
+.project-mark {
+  flex-shrink: 0;
+  color: var(--color-worktree-icon);
+  fill: currentColor;
+}
+.project-mark--avatar {
+  border-radius: var(--radius-check);
+}

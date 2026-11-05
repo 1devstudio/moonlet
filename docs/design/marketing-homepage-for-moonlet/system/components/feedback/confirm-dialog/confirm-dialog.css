@@ -1,0 +1,98 @@
+/* ConfirmDialog (components/ui.tsx, shown by ConfirmHost; spec X23): a
+   backdrop above every Dialog, a 440px panel with tinted header and footer,
+   one message, an optional checkbox at the footer's left, Cancel and the
+   action. In the app the backdrop is `fixed inset-0`; here it fills its cell. */
+.confirm-dialog {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 100vh;
+  padding-top: 12vh;
+  background: var(--color-backdrop);
+}
+.confirm-dialog__panel {
+  width: 440px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+}
+/* `wide`: 560px for a preview of 80 columns (X31). */
+.confirm-dialog__panel--wide {
+  width: 560px;
+}
+/* `width={520}`: the unpushed-work prompt (X55). */
+.confirm-dialog__panel--unpushed {
+  width: 520px;
+}
+.confirm-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2-5) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+}
+.confirm-dialog__title {
+  margin: 0;
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-semibold);
+}
+.confirm-dialog__body {
+  padding: var(--space-4);
+}
+.confirm-dialog__message {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+  line-height: var(--leading-code);
+  text-wrap: pretty;
+  white-space: pre-line;
+}
+/* The exact command under the message (`code`). */
+.confirm-dialog__code {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* The unpushed box under the message is an .alert-box. */
+.confirm-dialog__body .alert-box {
+  margin-top: var(--space-3);
+}
+.confirm-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+}
+.confirm-dialog__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-right: auto;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.confirm-dialog__option input {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+/* The focused button's ring (`focus:outline-2 outline-offset-2`), as a class
+   so a static cell can show which button holds the focus. */
+.confirm-dialog__focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

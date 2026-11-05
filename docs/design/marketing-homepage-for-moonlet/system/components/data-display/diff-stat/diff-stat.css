@@ -1,0 +1,32 @@
+/* DiffStat (components/ui.tsx) and the Changes panel's SummaryLine
+   (components/ChangesPanel.tsx). */
+.diff-stat {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  font-variant-numeric: tabular-nums;
+}
+.diff-stat__add {
+  color: var(--color-add);
+}
+.diff-stat__del {
+  color: var(--color-del);
+}
+
+/* Right panel summary: "5 files changed" with the counts pushed right. */
+.diff-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: var(--ui-text-14);
+}
+.diff-summary__warn {
+  color: var(--color-blocked);
+  font-size: var(--ui-text-12);
+}
+.diff-summary .diff-stat {
+  margin-left: auto;
+  font-size: var(--ui-text-12-5);
+}

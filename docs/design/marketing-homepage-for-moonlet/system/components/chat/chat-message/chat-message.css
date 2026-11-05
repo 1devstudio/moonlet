@@ -1,0 +1,176 @@
+/* ChatItemView (components/AgentView.tsx): a user's bubble, an assistant's Markdown
+   message, a centred system line. Also AgentNoteView and LaunchedCard (X42): the
+   rows that report subagents. The chat column sits on --color-bg. */
+.chat-message--user {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-1) 0;
+}
+.chat-message__bubble {
+  max-width: 85%;
+  padding: var(--space-2) var(--space-3-5);
+  border-radius: var(--radius-2xl);
+  border-bottom-right-radius: var(--radius-md);
+  background: var(--color-raised);
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.chat-message--assistant {
+  padding: var(--space-1) var(--space-2);
+}
+.chat-message--system {
+  padding: var(--space-1) 0;
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  text-align: center;
+}
+
+/* LaunchedCard: "Launched N agents", one row per Agent call. */
+.launched-card {
+  margin: var(--space-2) 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel);
+}
+.launched-card__head {
+  display: flex;
+  align-items: center;
+  height: calc(var(--space-8) + var(--space-1));
+  padding: 0 var(--space-3-5);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--ui-text-13);
+}
+.launched-card__title {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-medium);
+}
+.launched-card__link {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  cursor: pointer;
+}
+.launched-card__link:hover {
+  color: var(--color-accent-2);
+}
+.launched-card__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  height: var(--space-8);
+  padding: 0 var(--space-3-5);
+}
+.launched-card__row:hover {
+  background: var(--color-panel-2);
+}
+.launched-card .state-glyph,
+.agent-note .state-glyph {
+  width: 12px;
+  height: 12px;
+}
+.launched-card__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launched-card__state {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+}
+.launched-card__state--needs {
+  color: var(--color-blocked);
+}
+.launched-card__state--failed {
+  color: var(--color-error);
+}
+.launched-card__elapsed {
+  flex-shrink: 0;
+  width: var(--space-10);
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* AgentNoteView: a subagent that finished or failed, or a batch that ended. */
+.agent-note {
+  margin: var(--space-2) 0;
+}
+.agent-note__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  font-size: var(--ui-text-13);
+}
+.agent-note__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-note__status {
+  color: var(--color-faint);
+}
+.agent-note__status--failed {
+  color: var(--color-error);
+}
+.agent-note__time {
+  margin-left: auto;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  font-variant-numeric: tabular-nums;
+}
+.agent-note__report {
+  margin-top: var(--space-1-5);
+  margin-left: 5px;
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--color-border);
+  font-size: var(--ui-text-13);
+  line-height: var(--leading-chat);
+  user-select: text;
+}
+.agent-note__report--failed {
+  color: var(--color-error);
+}
+.agent-note--all {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  height: var(--space-10);
+  padding: 0 var(--space-3-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel);
+  font-size: var(--ui-text-13);
+}
+.agent-note__title {
+  color: var(--color-fg);
+}
+.agent-note__clock {
+  color: var(--color-faint);
+}
+.agent-note__diff {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  font-variant-numeric: tabular-nums;
+}
+.agent-note--all .button {
+  margin-left: auto;
+}

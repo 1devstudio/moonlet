@@ -1,0 +1,144 @@
+/* Right panel actions (components/RightPanel.tsx TopActions, PrIcon, StackMenu
+   and MoreMenu triggers, and the tab row). A 52px bar on --color-panel: Run,
+   the stack position, the PR button, then the more button; under it the tabs. */
+.right-panel-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--size-topbar);
+  padding: 0 var(--space-4);
+  background: var(--color-panel);
+}
+.right-panel-actions__button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-14);
+  white-space: nowrap;
+  cursor: default;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+}
+.right-panel-actions__button:hover {
+  background: var(--color-raised);
+}
+/* Run with no run command set: faint until hovered. */
+.right-panel-actions__button--faint {
+  color: var(--color-faint);
+}
+.right-panel-actions__button--faint:hover {
+  color: var(--color-fg);
+}
+/* The play triangle is filled, not stroked. */
+.right-panel-actions__play {
+  fill: currentColor;
+  stroke-width: 0;
+}
+.right-panel-actions__stack {
+  gap: var(--space-1-5);
+}
+.right-panel-actions__stack .icon {
+  color: var(--color-muted);
+}
+.right-panel-actions__stack-count {
+  font-variant-numeric: tabular-nums;
+}
+.right-panel-actions__pr-number {
+  color: var(--color-muted);
+}
+.right-panel-actions__pr-state--merged {
+  color: var(--color-merged);
+}
+.right-panel-actions__pr-state--closed {
+  color: var(--color-error);
+}
+.right-panel-actions__spacer {
+  margin-left: auto;
+}
+.right-panel-actions__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-control-md);
+  height: var(--size-control-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: default;
+}
+.right-panel-actions__more:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+
+/* PrIcon: the 13px pull request glyph, tinted by the PR's state
+   (prTone: open green, merged purple, closed red, none accent). */
+.pr-icon {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  color: var(--color-accent);
+}
+.pr-icon--open {
+  color: var(--color-done);
+}
+.pr-icon--merged {
+  color: var(--color-merged);
+}
+.pr-icon--closed {
+  color: var(--color-error);
+}
+
+/* The tab row: Task, Plan, Agents, Jobs, Files, Changes, Review, Design. */
+.right-panel-tabs {
+  display: flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  height: 38px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+.right-panel-tabs__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-13);
+  cursor: default;
+  transition: color var(--duration-fast);
+}
+.right-panel-tabs__tab:hover {
+  color: var(--color-fg);
+}
+.right-panel-tabs__tab--active {
+  color: var(--color-fg);
+  box-shadow: var(--shadow-tab-active);
+}
+/* Jobs and Design count. */
+.right-panel-tabs__count {
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  font-variant-numeric: tabular-nums;
+}
+/* Plan or Agents waits for you while another tab shows. */
+.right-panel-tabs__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-blocked);
+}

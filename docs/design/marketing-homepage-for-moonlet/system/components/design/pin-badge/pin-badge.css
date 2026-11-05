@@ -1,0 +1,42 @@
+/* PinBadge and PinLayer (components/design/Comments.tsx): a comment's number
+   in an accent badge (a dot for no number), and the pins over the page, each
+   a round button ringed in the app background; the open one ringed in text
+   colour. */
+.pin-badge {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  height: var(--space-5);
+  min-width: var(--space-5);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  border-bottom-left-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  font-weight: var(--font-weight-semibold);
+}
+.pin-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+.pin-layer__pin {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  box-shadow: 0 0 0 2px var(--color-bg), var(--shadow-md);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.pin-layer__pin--open {
+  box-shadow: 0 0 0 2px var(--color-fg), var(--shadow-md);
+}

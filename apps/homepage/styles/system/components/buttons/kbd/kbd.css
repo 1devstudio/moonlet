@@ -1,0 +1,11 @@
+/* Kbd (components/ui.tsx): a small keycap inline in text, for hints. The
+   settings Shortcuts page uses the larger Keycaps instead. */
+.kbd {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-2);
+  color: var(--color-faint);
+  font-family: var(--font-sans);
+  font-size: var(--ui-text-10-5);
+}

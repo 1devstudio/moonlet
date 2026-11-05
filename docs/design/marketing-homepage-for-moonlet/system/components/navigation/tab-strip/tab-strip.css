@@ -1,0 +1,162 @@
+/* Tab strip (TabStrip, Tab, FileTab, JobTab, AddMenu in components/SessionView.tsx):
+   the row of 172px tabs over a session, with the split "+ ⌄" add button.
+   The source strip is h-[52px] (the top-bar height); the close X shows on hover only. */
+.tab-strip {
+  display: flex;
+  height: var(--size-topbar);
+  flex-shrink: 0;
+  align-items: stretch;
+  background: var(--color-panel);
+}
+.tab-strip__tabs {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  overflow-x: auto;
+}
+.tab-strip__tab {
+  position: relative;
+  display: flex;
+  width: 172px;
+  height: 100%;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-4);
+  font-size: var(--ui-text-14);
+  color: var(--color-muted);
+  cursor: default;
+}
+.tab-strip__tab:hover {
+  color: var(--color-fg);
+}
+.tab-strip__tab--active,
+.tab-strip__tab--active:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.tab-strip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-strip__name--unread {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.tab-strip__name--mono {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-13);
+}
+.tab-strip__count,
+.tab-strip__exited {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  color: var(--color-faint);
+}
+.tab-strip__dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+}
+.tab-strip__dot--blocked {
+  background: var(--color-blocked);
+}
+.tab-strip__dot--dirty {
+  background: var(--color-fg);
+}
+.tab-strip__status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-left: auto;
+}
+.tab-strip__status--running {
+  color: var(--color-accent);
+}
+.tab-strip__status--done {
+  color: var(--color-done);
+}
+.tab-strip__status--failed {
+  color: var(--color-error);
+}
+/* Agent brand marks (AgentIcon in components/ui.tsx). */
+.tab-strip__agent {
+  flex-shrink: 0;
+}
+.tab-strip__agent--claude {
+  color: var(--color-accent);
+}
+.tab-strip__agent--codex {
+  color: var(--color-fg);
+}
+.tab-strip__agent--terminal,
+.tab-strip__file {
+  color: var(--color-muted);
+}
+.tab-strip__add {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+}
+.tab-strip__add-main,
+.tab-strip__add-more {
+  display: flex;
+  height: var(--size-field);
+  align-items: center;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+}
+.tab-strip__add-main {
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+.tab-strip__add-more {
+  padding: 0 var(--space-2) 0 var(--space-0-5);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.tab-strip__add-main:hover,
+.tab-strip__add-more:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.tab-strip__menu {
+  position: absolute;
+  /* top-9 below the 32px button, which is centred in the strip */
+  top: calc((var(--size-topbar) - var(--size-field)) / 2 + 36px);
+  left: var(--space-2);
+  z-index: 40;
+  width: 224px;
+  overflow: hidden;
+  padding: var(--space-1) 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+  box-shadow: var(--shadow-2xl);
+}
+.tab-strip__menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-1-5) var(--space-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--ui-text-13);
+  text-align: left;
+}
+.tab-strip__menu-item:hover {
+  background: var(--color-hover);
+}
+.tab-strip__menu-item .kbd {
+  margin-left: auto;
+}
+.tab-strip__menu-rule {
+  margin: var(--space-1) 0;
+  border-top: 1px solid var(--color-border);
+}

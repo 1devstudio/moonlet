@@ -1,0 +1,30 @@
+/* IconButton (components/ui.tsx): a 24px square, muted glyph, `title` is its
+   tooltip and aria-label. */
+.icon-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-control-sm);
+  height: var(--size-control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+}
+.icon-button:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.icon-button:disabled {
+  opacity: 0.4;
+}
+/* Composer attachment chips use h-5 w-5. */
+.icon-button--xs {
+  width: 20px;
+  height: 20px;
+}

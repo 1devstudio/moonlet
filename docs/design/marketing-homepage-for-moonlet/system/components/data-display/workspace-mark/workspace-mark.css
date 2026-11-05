@@ -1,0 +1,57 @@
+/* WorkspaceMark (components/WorkspaceSwitcher.tsx): the workspace's colour
+   square with its initial. The source sets width/height = size, radius =
+   round(size * .28) and font-size = round(size * .6) inline; the sizes the app
+   uses are classes here. */
+.workspace-mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-on-swatch);
+  font-weight: var(--font-weight-bold);
+}
+.workspace-mark--14 {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 8px;
+}
+.workspace-mark--18 {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.workspace-mark--26 {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 16px;
+}
+.workspace-mark--36 {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 22px;
+}
+.workspace-mark--44 {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 26px;
+}
+.workspace-mark--clay {
+  background: var(--color-workspace-clay);
+}
+.workspace-mark--blue {
+  background: var(--color-workspace-blue);
+}
+.workspace-mark--violet {
+  background: var(--color-workspace-violet);
+}
+.workspace-mark--sand {
+  background: var(--color-workspace-sand);
+}
+.workspace-mark--grey {
+  background: var(--color-workspace-grey);
+}

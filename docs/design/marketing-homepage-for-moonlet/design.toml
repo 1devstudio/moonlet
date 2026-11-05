@@ -1,0 +1,12 @@
+name = "Marketing homepage for moonlet"
+system = "moonlet"
+anchor = "e60d0d0421c9eae02411673aa3f4c22d73d4f1adcadc61e3680281c19151d1e4"
+brief = "Marketing homepage for moonlet: hero about one mesh of machines (MacBook, always-on Mac mini or Linux VPS, iPhone) and switching to the phone; sections for design systems and quick prototypes, and starting work from a task in Linear, Jira Cloud, ClickUp or GitHub Issues."
+viewport = "1440x900"
+created_at = 1793877057707
+
+[pages.index]
+label = "Homepage"
+
+[pages.docs]
+label = "Docs: Add an always-on host"

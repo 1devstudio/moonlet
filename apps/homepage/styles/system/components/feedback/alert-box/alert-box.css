@@ -1,0 +1,124 @@
+/* Alert box: the inline notice boxes repeated in Dialogs.tsx, GitPage.tsx,
+   ConfirmHost.tsx (UnpushedBox) and AddProject.tsx (TakenBox, CantSee, the
+   folder-is-a-repository status). Base: a column box, rounded-lg, px-3 py-2.5.
+   Tones: warning (text-blocked), error (text-error), clone (accent status). */
+.alert-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--color-warn-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-warn-bg);
+  color: var(--color-fg);
+}
+.alert-box--error {
+  border-color: var(--color-alert-border);
+  background: var(--color-alert-bg);
+}
+/* The folder field's "That's a GitHub repository" status (AddProject). */
+.alert-box--clone {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-2) var(--space-2-5);
+  border-color: var(--color-clone-border);
+  background: var(--color-selected);
+}
+.alert-box--clone .alert-box__text {
+  flex: 1;
+  font-size: var(--ui-text-12-5);
+}
+/* One line of warning text, no title: the Create PR dialog's uncommitted note
+   and GitPage's "Git is too old". */
+.alert-box--note {
+  display: block;
+  margin: 0;
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--color-blocked);
+  font-size: var(--ui-text-12);
+}
+.alert-box--note-wide {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--ui-text-12-5);
+}
+.alert-box--tight {
+  gap: var(--space-1);
+}
+.alert-box__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-blocked);
+  font-size: var(--ui-text-12-5);
+  font-weight: var(--font-weight-medium);
+}
+.alert-box--error .alert-box__title {
+  color: var(--color-error);
+}
+.alert-box__accent-icon {
+  flex-shrink: 0;
+  color: var(--color-accent-2);
+}
+.alert-box__body {
+  color: var(--color-fg);
+  font-size: var(--ui-text-12);
+  line-height: var(--leading-normal);
+}
+.alert-box__detail {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.alert-box__detail--muted {
+  color: var(--color-muted);
+  font-size: var(--ui-text-11);
+}
+.alert-box__mono {
+  font-family: var(--font-mono);
+}
+.alert-box__summary {
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.alert-box__files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.alert-box__file {
+  overflow: hidden;
+  white-space: pre;
+  text-overflow: ellipsis;
+}
+.alert-box__file-status--add {
+  color: var(--color-add);
+}
+.alert-box__file-status--mod {
+  color: var(--color-blocked);
+}
+.alert-box__more {
+  color: var(--color-muted);
+  font-family: var(--font-sans);
+}
+.alert-box__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.alert-box__command {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}

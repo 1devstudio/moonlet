@@ -1,0 +1,70 @@
+/* TrackerIcon, BoardTile, BoardMark (components/ui.tsx). Brand paths from
+   Simple Icons, filled by tracker colour. */
+.tracker-icon {
+  flex-shrink: 0;
+}
+.tracker-icon--linear {
+  fill: var(--color-linear);
+}
+.tracker-icon--jira {
+  fill: var(--color-jira);
+}
+.tracker-icon--clickup {
+  fill: var(--color-clickup);
+}
+
+/* The tinted tile a board's mark sits on: 26px in the board header, 16px in lists. */
+.board-tile {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.board-tile--16 {
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-sm);
+}
+.board-tile--26 {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-tile);
+}
+.board-tile--github {
+  background: var(--color-raised);
+}
+.board-tile--linear {
+  background: var(--color-tile-linear);
+}
+.board-tile--jira {
+  background: var(--color-tile-jira);
+}
+.board-tile--clickup {
+  background: var(--color-tile-clickup);
+}
+.board-tile__gh {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--ui-text-7);
+}
+.board-tile--26 .board-tile__gh {
+  font-size: var(--ui-text-10);
+}
+
+/* GitHub's text mark in a board row. */
+.board-mark {
+  flex-shrink: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-semibold);
+}
+.board-mark--12 {
+  width: var(--space-3);
+  color: var(--color-muted);
+  font-size: var(--ui-text-9);
+}
+.board-mark--14 {
+  color: var(--color-fg);
+  font-size: var(--ui-text-10-5);
+}

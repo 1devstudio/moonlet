@@ -1,0 +1,64 @@
+/* Status and Initial (components/settings/controls.tsx). Tones: done, accent,
+   blocked, error, muted (the default text colour is muted). */
+.status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.status__dot {
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-idle);
+}
+.status__text,
+.status__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status__sep {
+  color: var(--color-faint);
+}
+.status__path {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.status--done .status__dot {
+  background: var(--color-done);
+}
+.status--accent .status__dot {
+  background: var(--color-accent);
+}
+.status--blocked {
+  color: var(--color-blocked);
+}
+.status--blocked .status__dot {
+  background: var(--color-blocked);
+}
+.status--error {
+  color: var(--color-error);
+}
+.status--error .status__dot {
+  background: var(--color-error);
+}
+
+/* A small rounded square with a letter, for profiles. */
+.initial {
+  display: flex;
+  width: var(--space-8);
+  height: var(--space-8);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  background: var(--color-raised);
+  color: var(--color-muted);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-semibold);
+}
