@@ -1914,6 +1914,11 @@ impl Daemon {
                     .list()
                     .into_iter()
                     .filter(|w| w.worker.id != member && w.worker.heavy && w.worker.peer)
+                    .filter(|w| {
+                        self.workers
+                            .conn(&w.worker.id)
+                            .is_some_and(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed))
+                    })
                     .map(|w| m::WorkerStatus {
                         id: w.worker.id,
                         name: w.worker.name,
@@ -2107,7 +2112,15 @@ impl Daemon {
                     Some(m::DeviceKind::Phone) => return Err(RpcError::new("forbidden", "only a Mac or a cloud machine registers")),
                     Some(_) => {}
                 }
-                let r: m::WorkerRegister = params(p)?;
+                let mut r: m::WorkerRegister = params(p)?;
+                // Only a member of the account runs other members' commands:
+                // never a cloud machine, whatever it says (X89).
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed)
+                    || self.machines.machine_of(device).is_some()
+                    || self.mobile.kind_of(device) != Some(m::DeviceKind::Desktop);
+                if cloud {
+                    r.peer = false;
+                }
                 let id = r.id.clone();
                 let mobile = self.mobile.clone();
                 self.workers.register(conn.clone(), device, r, |owner| mobile.is_paired(owner))?;

@@ -411,6 +411,10 @@ pub struct Released {
 }
 
 pub struct LiveCopies {
+    /// The machines this host asked to prepare a routing copy of a
+    /// session, by worker id and session (X89): only those open one over
+    /// the link.
+    asked: Mutex<std::collections::HashSet<(String, String)>>,
     file: PathBuf,
     home: PathBuf,
     sessions: Arc<SessionManager>,
@@ -479,6 +483,7 @@ impl LiveCopies {
                 }
             }));
             LiveCopies {
+                asked: Mutex::default(),
                 file,
                 home,
                 sessions,
@@ -552,6 +557,12 @@ impl LiveCopies {
     /// id (X89); none for a copy of this machine's central host.
     pub fn copy_member(&self, copy: &str) -> Option<String> {
         self.kept(copy).filter(|k| k.kind == CopyKind::Run)?.peer
+    }
+
+    /// This host asks `worker` to prepare a routing copy of `session`: it
+    /// may open one now (X89).
+    pub fn expect_open(&self, worker: &str, session: &str) {
+        self.asked.lock().unwrap().insert((worker.to_string(), session.to_string()));
     }
 
     /// This member's link to its central host, when it has one (X89).
@@ -2687,6 +2698,11 @@ impl LiveCopies {
         req: SyncOpen,
     ) -> Result<SyncOpened, RpcError> {
         let worker = self.owner(conn, &req.copy)?;
+        // Over the link, the central host or another member opens a routing
+        // copy only of a session this host asked it to run a command of.
+        if !matches!(conn, Peer::Conn(_)) && !self.asked.lock().unwrap().contains(&(worker.clone(), req.session.clone())) {
+            return Err(RpcError::new("forbidden", "this host asked no command of that session"));
+        }
         if req.copy.is_empty()
             || !req
                 .copy

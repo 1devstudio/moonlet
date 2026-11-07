@@ -1044,11 +1044,18 @@ async fn the_central_host_passes_on_only_the_routing_methods() {
         refusal(&ask(&mut s, 3, "peer.call", call).await).as_deref(),
         Some("invalid_params")
     );
-    // A run nobody passed on cannot be ended.
+    // A member never asked to run a command of the MacBook's session
+    // cannot open a copy of it.
+    let call = json!({ "to": BOOK, "method": "sync.open", "params": { "copy": "c0ffee", "session": "any", "kind": "run" } });
+    assert_eq!(
+        refusal(&ask(&mut s, 7, "peer.call", call).await).as_deref(),
+        Some("forbidden")
+    );
+    // A run nobody passed on cannot be ended: the Air routed nothing to it.
     let call = json!({ "to": AIR, "method": "exec.done", "params": { "run": 1610612736u32, "copy": "c", "status": 0, "tree": "", "head": "" } });
     assert_eq!(
         refusal(&ask(&mut s, 4, "peer.call", call).await).as_deref(),
-        Some("not_found")
+        Some("forbidden")
     );
     // A member from before X89 registers without `peer`: never offered,
     // never called.

@@ -744,6 +744,7 @@ impl Runs {
             session: plan.session.clone(),
             setup: plan.setup.clone(),
         };
+        sync.expect_open(worker, &plan.session);
         let prepared: ExecPrepared = self
             .unless_stopped(
                 run,

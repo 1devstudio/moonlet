@@ -29,6 +29,10 @@ const FIRST_RELAY: u32 = 0x6000_0000;
 const TO_RUNNER: [&str; 5] = [m::EXEC_PREPARE, m::EXEC_START, m::EXEC_CANCEL, m::SYNC_UPDATE, m::SYNC_CLOSING];
 const TO_ROUTER: [&str; 4] = [m::SYNC_OPEN, m::SYNC_FETCH, m::SYNC_CLOSE, m::EXEC_DONE];
 
+/// A router and a runner it sent `exec.prepare` to: only between those
+/// do the runner's calls back go (X89).
+type Pair = (String, String);
+
 /// A run passed on: whose it is, and who runs it.
 struct Passed {
     router: ClientId,
@@ -40,6 +44,8 @@ struct Passed {
 pub struct Relay {
     next: AtomicU32,
     runs: Mutex<HashMap<u32, Passed>>,
+    /// Routers and the runners they asked to prepare a routing copy.
+    prepared: Mutex<std::collections::HashSet<Pair>>,
 }
 
 impl Relay {
@@ -47,6 +53,7 @@ impl Relay {
         Arc::new(Self {
             next: AtomicU32::new(FIRST_RELAY),
             runs: Mutex::default(),
+            prepared: Mutex::default(),
         })
     }
 
@@ -67,7 +74,15 @@ impl Relay {
             .into_iter()
             .find(|w| w.worker.id == to && w.worker.peer)
             .and_then(|_| workers.conn(&to))
+            .filter(|c| !c.cloud.load(Ordering::Relaxed))
             .ok_or_else(|| RpcError::new("unsupported", format!("{to} takes no calls from other members")))?;
+        // A runner calls back only a router that asked it to run something.
+        if !runner_side && !self.prepared.lock().unwrap().contains(&(to.clone(), from.clone())) {
+            return Err(RpcError::new("forbidden", format!("{to} routed nothing to {from}")));
+        }
+        if method == m::EXEC_PREPARE {
+            self.prepared.lock().unwrap().insert((from.clone(), to.clone()));
+        }
         let mut params = call.params;
         // The relay run an `exec.done` ends.
         let mut done = None;
