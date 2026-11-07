@@ -72,7 +72,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Picking a machine
 
-- [ ] The session's host asks its central host for `worker.list` when a command is routed. The list now has every linked member, the central host included, each with its worker settings, the slots it uses now (`used`) and its last load. A member before this spec, and a member with `heavy` off, is never a candidate. (`a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
+- [x] The session's host asks its central host for `worker.list` when a command is routed. The list now has every linked member, the central host included, each with its worker settings, the slots it uses now (`used`) and its last load. A member before this spec, and a member with `heavy` off, is never a candidate. (`a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
 - [ ] The candidates for a session on host H are:
   - every other member with `heavy` on, linked now, with a free slot and a load below busy (X62's 0.7 × cores), on the project's `os`;
   - H itself;
@@ -102,14 +102,14 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Reaching another member
 
-- [ ] The session's host talks to the central host over its link (X41). It reaches any other member through the central host, with `peer.call {to, method, params}`. The central host passes the call on over `to`'s link as `peer.call {from, method, params}`, and passes the answer back. When `to` is the central host itself, the central host answers it. (`a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`)
-- [ ] The central host sets `from` to the worker id registered on the connection the call came from. A `from` in the sender's params is refused with `invalid_params`. (`a_member_cannot_name_another_sender_through_the_relay`)
-- [ ] Only the **routing methods** go through `peer.call`. Anything else is refused with `forbidden`. (`the_central_host_passes_on_only_the_routing_methods`)
+- [x] The session's host talks to the central host over its link (X41). It reaches any other member through the central host, with `peer.call {to, method, params}`. The central host passes the call on over `to`'s link as `peer.call {from, method, params}`, and passes the answer back. When `to` is the central host itself, the central host answers it. (`a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`)
+- [x] The central host sets `from` to the worker id registered on the connection the call came from. A `from` in the sender's params is refused with `invalid_params`. (`a_member_cannot_name_another_sender_through_the_relay`)
+- [x] Only the **routing methods** go through `peer.call`. Anything else is refused with `forbidden`. (`the_central_host_passes_on_only_the_routing_methods`)
   - From the session's host to the machine that runs the command: `exec.prepare`, `exec.start`, `exec.cancel`, `sync.update` (the fence) and `sync.closing`.
   - From the machine back to the session's host: `sync.open {kind: "run"}`, `sync.fetch`, `sync.close`, `exec.done` and `session.files_fetch` (X74).
-- [ ] The session's host answers a runner's `sync.open {kind: "run"}`, `sync.fetch` and `session.files_fetch` only for a session it has routed a command of to that machine. It takes `exec.done` only from the machine that runs that run in that copy, as X62 does. (`a_runner_reads_only_the_sessions_routed_to_it`)
-- [ ] Output frames take the same path. For a run it passes on, the central host gives `exec.start`'s run a relay id of its own, apart from X72's terminal relays. It sends the runner's `Output` frames for that id to the session's host under the session's host's run id. `exec.cancel` and `exec.done` are mapped back in the same way. Each stream keeps its order. (`output_through_the_relay_reaches_moonlet_exec_in_order`)
-- [ ] A member registers with `peer: true` in `worker.register` when it serves the routing methods for other hosts. The central host passes `peer.call` only to members that did, and answers others with `unsupported`. The session's host then skips that member. (`a_member_before_this_spec_is_not_offered_other_hosts_commands`)
+- [x] The session's host answers a runner's `sync.open {kind: "run"}`, `sync.fetch` and `session.files_fetch` only for a session it has routed a command of to that machine. It takes `exec.done` only from the machine that runs that run in that copy, as X62 does. (`a_runner_reads_only_the_sessions_routed_to_it`)
+- [x] Output frames take the same path. For a run it passes on, the central host gives `exec.start`'s run a relay id of its own, apart from X72's terminal relays. It sends the runner's `Output` frames for that id to the session's host under the session's host's run id. `exec.cancel` and `exec.done` are mapped back in the same way. Each stream keeps its order. (`output_through_the_relay_reaches_moonlet_exec_in_order`)
+- [x] A member registers with `peer: true` in `worker.register` when it serves the routing methods for other hosts. The central host passes `peer.call` only to members that did, and answers others with `unsupported`. The session's host then skips that member. (`a_member_before_this_spec_is_not_offered_other_hosts_commands`)
 
 ### Routing copies
 
@@ -125,7 +125,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### When something goes away
 
-- [x] A run whose machine goes away, or whose relay stops because the central host went away, runs again on the session's host from the same fence, with the line "moonlet: devbox went away. Running again on Alex's MacBook Pro." The exit status is the second run's. The abandoned run's changes never reach the session. (`a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`)
+- [x] A run whose machine goes away, or whose relay stops because the central host went away, runs again on the session's host from the same fence, with the line "moonlet: devbox went away. Running again on Alex's MacBook Pro." The exit status is the second run's. The abandoned run's changes never reach the session. (`a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`)
 - [ ] A runner that loses the session's host mid-run, directly or through the central host, stops the command, as X62's worker does when its central host's daemon stops. (`a_runner_that_loses_the_sessions_host_stops_the_command`)
 - [x] While the session's host has no link to its central host, every command of its sessions runs on it. (`a_member_without_its_central_host_runs_its_own_commands`)
 
@@ -138,7 +138,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ### Jobs and the Workers page
 
 - [x] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
-- [ ] A host's `worker.ping` answer gains `used` and `running: [{host, session, command, started_at}]`: what it runs now, for whom. The central host's `worker.list` carries them for every member, its own row included. (`worker_list_lists_every_member_with_what_it_runs`)
+- [ ] A host's `worker.ping` answer gains `used` (done) and `running: [{host, session, command, started_at}]` (not yet): what it runs now, for whom. The central host's `worker.list` carries them for every member, its own row included. (`worker_list_lists_every_member_with_what_it_runs`)
 - [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
 - [x] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
 
@@ -241,7 +241,7 @@ Where the tests live:
 | The relay | `a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`, `a_member_cannot_name_another_sender_through_the_relay`, `the_central_host_passes_on_only_the_routing_methods`, `a_runner_reads_only_the_sessions_routed_to_it`, `output_through_the_relay_reaches_moonlet_exec_in_order` |
 | `peer` and older members | `a_member_before_this_spec_is_not_offered_other_hosts_commands`, `a_central_host_before_this_spec_leaves_members_running_their_own_commands` |
 | Routing copies | `a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
-| Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
+| Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
 | Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine` |
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
 | Saving from the app | e2e `worker-link.e2e.ts` "turning another host's heavy commands on from the Workers page saves it (X89)", `routing.e2e.ts` "a host's switch and slots on the Workers page are saved (X89)"; Vitest "says what a change of the switch or slots did" |

@@ -21,6 +21,7 @@ mod machines;
 mod mobile;
 mod notify;
 mod peer;
+mod relay;
 mod render;
 mod server;
 mod service;

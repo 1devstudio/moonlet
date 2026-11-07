@@ -22,6 +22,9 @@ pub enum Peer {
     Conn(Arc<Conn>),
     /// This member's link to its central host.
     Link(Arc<moonlet_link::Host>),
+    /// Another member, worker id `to`, reached through this member's
+    /// central host with `peer.call` (X89).
+    Relay(Arc<moonlet_link::Host>, String),
 }
 
 impl Peer {
@@ -30,7 +33,7 @@ impl Peer {
     pub fn id(&self) -> ClientId {
         match self {
             Peer::Conn(c) => c.id,
-            Peer::Link(_) => LINK_PEER,
+            Peer::Link(_) | Peer::Relay(..) => LINK_PEER,
         }
     }
 
@@ -41,6 +44,19 @@ impl Peer {
                 Ok(reply) => reply,
                 Err(_) => Err(RpcError::new("timeout", format!("{method} timed out"))),
             },
+            Peer::Relay(h, to) => {
+                let call = moonlet_proto::methods::PeerCall {
+                    to: Some(to.clone()),
+                    from: None,
+                    method: method.to_string(),
+                    params,
+                };
+                let call = serde_json::to_value(call).unwrap();
+                match tokio::time::timeout(timeout, h.request(moonlet_proto::methods::PEER_CALL, call)).await {
+                    Ok(reply) => reply,
+                    Err(_) => Err(RpcError::new("timeout", format!("{method} timed out"))),
+                }
+            }
         }
     }
 
@@ -49,21 +65,21 @@ impl Peer {
     pub async fn request_after_queue(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
         match self {
             Peer::Conn(c) => c.request_after_queue(method, params, timeout).await,
-            Peer::Link(_) => self.request(method, params, timeout).await,
+            Peer::Link(_) | Peer::Relay(..) => self.request(method, params, timeout).await,
         }
     }
 
     pub fn send_pack(&self, pack: &[u8]) -> Result<u32, RpcError> {
         match self {
             Peer::Conn(c) => c.send_pack(pack),
-            Peer::Link(h) => h.send_pack(pack),
+            Peer::Link(h) | Peer::Relay(h, _) => h.send_pack(pack),
         }
     }
 
     pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
         match self {
             Peer::Conn(c) => c.take_pack(transfer),
-            Peer::Link(h) => h.take_pack(transfer),
+            Peer::Link(h) | Peer::Relay(h, _) => h.take_pack(transfer),
         }
     }
 
@@ -71,7 +87,7 @@ impl Peer {
     pub fn send_run_output(&self, run: u32, stream: u8, data: Vec<u8>) -> bool {
         match self {
             Peer::Conn(c) => c.tx.send(Frame::RunOutput { run, stream, data }),
-            Peer::Link(h) => h.send_run_output(run, stream, data).is_ok(),
+            Peer::Link(h) | Peer::Relay(h, _) => h.send_run_output(run, stream, data).is_ok(),
         }
     }
 
@@ -79,7 +95,7 @@ impl Peer {
     pub fn is_gone(&self) -> bool {
         match self {
             Peer::Conn(c) => c.is_gone(),
-            Peer::Link(h) => !matches!(h.info().status, moonlet_link::HostStatus::Connected),
+            Peer::Link(h) | Peer::Relay(h, _) => !matches!(h.info().status, moonlet_link::HostStatus::Connected),
         }
     }
 
@@ -87,7 +103,7 @@ impl Peer {
     pub fn is_cloud(&self) -> bool {
         match self {
             Peer::Conn(c) => c.cloud.load(std::sync::atomic::Ordering::Relaxed),
-            Peer::Link(_) => false,
+            Peer::Link(_) | Peer::Relay(..) => false,
         }
     }
 }
