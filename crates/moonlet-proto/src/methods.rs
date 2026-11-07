@@ -430,6 +430,9 @@ pub const PEER_CALL: &str = "peer.call";
 /// The members a member may route a command to through its central host,
 /// with their load and slots (X89): [`WorkerStatus`]s.
 pub const WORKER_PEERS: &str = "worker.peers";
+/// A member's command found no free machine (X89): the central host starts
+/// a cloud machine of the project when its overflow is on. [`CloudOverflow`].
+pub const CLOUD_OVERFLOW: &str = "cloud.overflow";
 /// `{run}`, from the central host to a member: the member that ran run
 /// `run` for it through the central host went away (X89).
 pub const EV_EXEC_LOST: &str = "exec.lost";
@@ -2999,6 +3002,28 @@ pub struct WorkerStatus {
     /// it (`worker.peers`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<u64>,
+    /// One of the project's cloud machines (X89, X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
+}
+
+/// `worker.peers` (X89): with the project's identity, its ready cloud
+/// machines are listed too.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct WorkerPeers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::types::ProjectIdentity>,
+}
+
+/// `cloud.overflow` (X89): a member found no free machine for a command
+/// of the project with this identity.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CloudOverflow {
+    pub identity: crate::types::ProjectIdentity,
+    /// The member's session asked for the cloud: a machine starts whether
+    /// the project's overflow is on or not, and the answer names it.
+    #[serde(default)]
+    pub asked: bool,
 }
 
 /// `worker.settings.set` (X89): a field left out stays as it is.
@@ -3586,6 +3611,10 @@ pub struct ExecPrepare {
     /// asks the user before it runs a command it was not approved for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<String>,
+    /// The session's project, by identity (X89): a central host passes a
+    /// member's command on to a cloud machine of that project only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::types::ProjectIdentity>,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live

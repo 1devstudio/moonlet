@@ -17,6 +17,9 @@ use moonlet_proto::methods as m;
 use moonlet_proto::{Frame, Message, RpcError};
 use serde_json::Value;
 
+use moonlet_proto::types::ProjectIdentity;
+
+use crate::machines::Machines;
 use crate::server::Conn;
 use crate::workers::Workers;
 
@@ -59,7 +62,15 @@ impl Relay {
 
     /// `peer.call` from member `from` on `conn`: passed on to member
     /// `call.to`, and its answer back.
-    pub async fn call(&self, workers: &Workers, conn: &Arc<Conn>, from: String, call: m::PeerCall) -> Result<Value, RpcError> {
+    pub async fn call(
+        &self,
+        workers: &Workers,
+        machines: &Machines,
+        conn: &Arc<Conn>,
+        from: String,
+        from_cloud: bool,
+        call: m::PeerCall,
+    ) -> Result<Value, RpcError> {
         let to = call.to.clone().ok_or_else(|| RpcError::new("invalid_params", "to whom"))?;
         if call.from.is_some() {
             return Err(RpcError::new("invalid_params", "the central host names the sender"));
@@ -69,13 +80,33 @@ impl Relay {
         if !runner_side && !TO_ROUTER.contains(&method) {
             return Err(RpcError::new("forbidden", format!("{method} does not go between members")));
         }
-        let target = workers
-            .list()
-            .into_iter()
-            .find(|w| w.worker.id == to && w.worker.peer)
-            .and_then(|_| workers.conn(&to))
-            .filter(|c| !c.cloud.load(Ordering::Relaxed))
-            .ok_or_else(|| RpcError::new("unsupported", format!("{to} takes no calls from other members")))?;
+        // A cloud machine only answers the member whose command it runs.
+        if from_cloud && runner_side {
+            return Err(RpcError::new("forbidden", "a cloud machine routes nothing"));
+        }
+        let unsupported = || RpcError::new("unsupported", format!("{to} takes no calls from other members"));
+        let target = workers.conn(&to).ok_or_else(unsupported)?;
+        let to_cloud = target.cloud.load(Ordering::Relaxed);
+        if to_cloud {
+            // One of this host's machines, for a member's command of the
+            // machine's own project (X89, X63).
+            let key = machines.key_of_worker(&to).ok_or_else(unsupported)?;
+            if !runner_side {
+                return Err(unsupported());
+            }
+            if method == m::EXEC_PREPARE {
+                let wanted = serde_json::from_value::<ProjectIdentity>(call.params["identity"].clone())
+                    .ok()
+                    .and_then(|i| crate::heavy::key(&i));
+                if wanted.as_deref() != Some(key.as_str()) {
+                    return Err(RpcError::new("forbidden", "a cloud machine runs commands of its own project only"));
+                }
+            } else if !self.prepared.lock().unwrap().contains(&(from.clone(), to.clone())) {
+                return Err(RpcError::new("forbidden", format!("{from} routed nothing to {to}")));
+            }
+        } else if !workers.list().iter().any(|w| w.worker.id == to && w.worker.peer) {
+            return Err(unsupported());
+        }
         // A runner calls back only a router that asked it to run something.
         if !runner_side && !self.prepared.lock().unwrap().contains(&(to.clone(), from.clone())) {
             return Err(RpcError::new("forbidden", format!("{to} routed nothing to {from}")));

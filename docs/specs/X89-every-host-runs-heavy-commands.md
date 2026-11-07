@@ -131,9 +131,10 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Cloud machines
 
-- [ ] A session on any member may use the project's cloud machines, under X63's rules for the project: overflow when the project allows it, and the composer's cloud checkbox. The machines stay the central host's, made with its provider and limits. (`a_members_session_runs_on_the_projects_cloud_machine`)
-- [ ] The session's host asks its central host for them over its link: `cloud.machines` for their state, `cloud.up {identity, session}` for a session that asked for the cloud, and `cloud.overflow {identity}` when a command ran on the session's host because nothing was free. The central host finds the project by identity. (`a_members_busy_command_starts_an_overflow_machine`)
-- [ ] A cloud machine reaches the session's host through the central host with `peer.call`, for the runs it was given only. It checks the command against the approval the central host sends with the run, as X63 does, and gets copied files only when the project's **Also to cloud machines** is on (X74). (`a_members_session_runs_on_the_projects_cloud_machine`)
+- [x] A session on any member may use the project's cloud machines, under X63's rules for the project: overflow when the project allows it, and the composer's cloud checkbox. The machines stay the central host's, made with its provider and limits. (`a_members_session_runs_on_the_projects_cloud_machine`)
+- [x] The session's host asks for them with `worker.peers {identity}`: the central host adds the project's ready machines, found by identity, marked `cloud`, and the session's host ranks them as cloud machines (after itself). When nothing is free, it sends `cloud.overflow {identity}`, and the central host starts a machine when the project's overflow is on. A session that asked for the cloud sends `cloud.overflow {identity, asked: true}`: the machine on its way, or a new one, whatever the overflow setting; it then waits for it as X63 says, "waiting for moonlet-shop-m3x9 to start (0:10)", up to 20 minutes, and **Run on … now** still runs it on the session's host. (`a_members_busy_command_starts_an_overflow_machine`, `a_members_cloud_session_waits_for_the_central_hosts_machine`)
+- [x] The session's host reaches the machine through the central host with `peer.call`. The central host passes `exec.prepare` to a machine only with the identity of the machine's own project, and the other calls only once that member prepared it. A cloud machine sends only the calls back to that member. It runs what its central host passes on, as it runs the central host's own commands (X63): the central host is the one that checked the member. (`a_cloud_machine_takes_a_members_command_of_its_own_project_only`)
+- [ ] A cloud machine gets a member's copied files (X74, **Also to cloud machines**): not yet, as `session.files_fetch` does not go through the relay. A command that needs an ignored `.env` on the machine runs on a member instead.
 
 ### Jobs and the Workers page
 
@@ -167,7 +168,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 - `peer.call {to, method, params}` → the answer of `to`. Only the routing methods. Refused with `forbidden` from a phone, the CLI, or a connection that has not registered as a worker. Cloud machines may send it only for runs they were given.
 - `worker.list`: now also from a linked member, with every member and the central host itself. Each entry gains `heavy`, `slots`, `used`, `running` and `peer`.
-- `cloud.up {identity, session}` and `cloud.overflow {identity}`: a project named by identity. `cloud.machines` from a linked member lists only the machines of projects that member has.
+- `cloud.overflow {identity, asked?}`: a member's command found no free machine (`asked` false: a machine starts when the project's overflow is on), or its session asked for the cloud (`asked`: the machine on its way or a new one, answered as `{id, name}`). `worker.peers {identity}` adds the project's ready machines, with `cloud: true`.
 
 **Central host to a member:**
 
@@ -242,7 +243,7 @@ Where the tests live:
 | `peer` and older members | `a_member_before_this_spec_is_not_offered_other_hosts_commands`, `a_central_host_before_this_spec_leaves_members_running_their_own_commands` |
 | Routing copies | `a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
 | Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
-| Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine` |
+| Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine`, `a_members_cloud_session_waits_for_the_central_hosts_machine`, `a_cloud_machine_takes_a_members_command_of_its_own_project_only` |
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
 | Saving from the app | e2e `worker-link.e2e.ts` "turning another host's heavy commands on from the Workers page saves it (X89)", `routing.e2e.ts` "a host's switch and slots on the Workers page are saved (X89)"; Vitest "says what a change of the switch or slots did" |
 

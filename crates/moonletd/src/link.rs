@@ -1317,15 +1317,22 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
     let me = link.info().worker;
     // Only a member of this account, and for a runner's work, only while
     // this host takes other hosts' commands.
-    let name = link
-        .sessions
-        .member_names()
-        .remove(&from)
-        .ok_or_else(|| RpcError::new("forbidden", "not a member of this account"))?;
+    // A cloud machine has no account: it runs what its central host passes
+    // on, as it runs the central host's own commands (X63).
     let runner_side = matches!(
         method.as_str(),
         m::EXEC_PREPARE | m::EXEC_START | m::SYNC_UPDATE | m::SYNC_CLOSING
     );
+    // A cloud machine the central host offered calls back only as the
+    // runner of this member's command.
+    let name = if me.cloud || (!runner_side && sync.was_offered(&from)) {
+        from.clone()
+    } else {
+        link.sessions
+            .member_names()
+            .remove(&from)
+            .ok_or_else(|| RpcError::new("forbidden", "not a member of this account"))?
+    };
     if runner_side && method != m::SYNC_CLOSING && !me.enabled {
         return Err(RpcError::new("not_approved", "heavy commands are off here"));
     }
@@ -1344,7 +1351,7 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
         m::EXEC_START => {
             let req: m::ExecStart = serde_json::from_value(params).map_err(bad)?;
             own_copy(&req.copy)?;
-            Ok(serde_json::json!(runs.start_here(req, sync, peer, me.slots, false).await?))
+            Ok(serde_json::json!(runs.start_here(req, sync, peer, me.slots, me.cloud).await?))
         }
         m::EXEC_CANCEL => {
             let req: m::ExecCancel = serde_json::from_value(params).map_err(bad)?;

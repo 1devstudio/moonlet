@@ -307,6 +307,8 @@ pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
 /// What a cloud machine may call on its central host (X63).
 const CLOUD_METHODS: &[&str] = &[
     m::WORKER_REGISTER,
+    // Calls back the member whose command it runs (X89).
+    m::PEER_CALL,
     m::WORKER_STEP,
     m::SYNC_OPEN,
     m::SYNC_FETCH,
@@ -1803,6 +1805,10 @@ impl Daemon {
                     os: checked.os,
                     outputs: checked.outputs,
                     setup: checked.setup,
+                    identity: session
+                        .as_ref()
+                        .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))
+                        .map(|p| p.identity),
                     host: me.name,
                     slots: me.slots,
                 };
@@ -1901,37 +1907,79 @@ impl Daemon {
             }
             // A routing call from one member to another (X89).
             m::PEER_CALL => {
-                let (member, _) = self.member_on(conn)?;
+                // A member, or a cloud machine calling back the member whose
+                // command it runs (X89).
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                let from = if cloud && conn.client == crate::link::WORKER_CLIENT {
+                    self.workers
+                        .worker_on(conn.id)
+                        .ok_or_else(|| RpcError::new("forbidden", "only a member routes commands here"))?
+                } else {
+                    self.member_on(conn)?.0
+                };
                 let r: m::PeerCall = params(p)?;
-                ok(self.relay.call(&self.workers, conn, member, r).await?)
+                ok(self.relay.call(&self.workers, &self.machines, conn, from, cloud, r).await?)
             }
             // The members a member may route a command to through this
             // central host: those that take other hosts' commands (X89).
             m::WORKER_PEERS => {
                 let (member, _) = self.member_on(conn)?;
-                let peers: Vec<m::WorkerStatus> = self
+                let r: m::WorkerPeers = params(p).unwrap_or_default();
+                let status = |w: m::WorkerInfo, cloud: bool| m::WorkerStatus {
+                    id: w.worker.id,
+                    name: w.worker.name,
+                    heavy: true,
+                    os: w.worker.os,
+                    cores: w.worker.cores,
+                    load: w.load.unwrap_or(0.0),
+                    slots: w.worker.slots,
+                    used: w.used.unwrap_or(0),
+                    rtt_ms: w.rtt_ms,
+                    cloud,
+                };
+                let not_cloud = |id: &str| {
+                    self.workers
+                        .conn(id)
+                        .is_some_and(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed))
+                };
+                let mut peers: Vec<m::WorkerStatus> = self
                     .workers
                     .list()
                     .into_iter()
-                    .filter(|w| w.worker.id != member && w.worker.heavy && w.worker.peer)
-                    .filter(|w| {
-                        self.workers
-                            .conn(&w.worker.id)
-                            .is_some_and(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed))
-                    })
-                    .map(|w| m::WorkerStatus {
-                        id: w.worker.id,
-                        name: w.worker.name,
-                        heavy: true,
-                        os: w.worker.os,
-                        cores: w.worker.cores,
-                        load: w.load.unwrap_or(0.0),
-                        slots: w.worker.slots,
-                        used: w.used.unwrap_or(0),
-                        rtt_ms: w.rtt_ms,
-                    })
+                    .filter(|w| w.worker.id != member && w.worker.heavy && w.worker.peer && not_cloud(&w.worker.id))
+                    .map(|w| status(w, false))
                     .collect();
+                // The project's ready cloud machines, under its own rules
+                // (X63), for a member's session as for this host's own.
+                if let Some(project) = r.identity.as_ref().and_then(|i| self.machines.project_with(i)) {
+                    let ready = self.machines.workers_for(&project);
+                    peers.extend(
+                        self.workers
+                            .list()
+                            .into_iter()
+                            .filter(|w| ready.contains(&w.worker.id))
+                            .map(|w| status(w, true)),
+                    );
+                }
                 ok(peers)
+            }
+            // A member's command found no free machine: the project's
+            // cloud machine starts when its overflow is on (X89, X63).
+            m::CLOUD_OVERFLOW => {
+                self.member_on(conn)?;
+                let r: m::CloudOverflow = params(p)?;
+                let project = self.machines.project_with(&r.identity);
+                if r.asked {
+                    // The member's session asked for the cloud (X63's
+                    // composer checkbox): the machine on its way, or a new one.
+                    let project = project.ok_or_else(|| RpcError::new("not_found", "this host does not have the project"))?;
+                    let (id, name) = self.machines.for_member(&project)?;
+                    return ok(serde_json::json!({ "id": id, "name": name }));
+                }
+                if let Some(project) = project {
+                    self.machines.overflow(&project);
+                }
+                ok(true)
             }
             // A member asks whether this central host takes its heavy
             // commands, then has it run one in a routing copy of its

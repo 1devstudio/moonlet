@@ -2551,3 +2551,228 @@ async fn turning_the_switch_off_takes_the_copied_files_off_the_cloud_machine() {
         .await;
     until_true(".env still on the cloud machine", || !copy.join(".env").exists()).await;
 }
+
+/// X89: a member linked to the central host `c`, with a clone of `shop`
+/// whose heavy commands it approved, and session `Fix cart`. Its own load
+/// is past busy, so nothing runs on it while another machine is free.
+async fn busy_member(c: &Cloud) -> (Daemon, Value) {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        r#"{ "central": null, "worker": { "id": "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", "name": "Alex's MacBook Pro", "enabled": false } }"#,
+    )
+    .unwrap();
+    let book = Daemon::start(
+        home,
+        &[
+            ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
+            ("MOONLET_TEST_LOAD", "100"),
+            ("SHELL", "/bin/sh"),
+        ],
+    )
+    .await;
+    // The same repository, so the same project identity.
+    let checkout = book.home.path().join("src/shop");
+    std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+    git(
+        checkout.parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            c.d.home.path().join("src/shop").to_str().unwrap(),
+            "shop",
+        ],
+    );
+    git(&checkout, &["remote", "remove", "origin"]);
+    std::fs::write(
+        checkout.join(".moonlet/config.toml"),
+        "[heavy]\ncommands = [\"sh -c\"]\n",
+    )
+    .unwrap();
+    let project: Value = book.call("project.add", json!({ "path": checkout })).await;
+    let _: Value = book
+        .call(
+            "heavy.approve",
+            json!({ "project": project["id"], "commands": ["sh -c"], "env": [] }),
+        )
+        .await;
+    let token = pair(&c.d, &c.addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let _: Value = book
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [c.addr], "token": token } }),
+        )
+        .await;
+    for _ in 0..200 {
+        let list: Value = c.d.call("worker.list", json!({})).await;
+        if list
+            .as_array()
+            .is_some_and(|l| l.iter().any(|w| w["name"] == "Alex's MacBook Pro"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let session: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "Fix cart", "agent": "none" }),
+        )
+        .await;
+    (book, session)
+}
+
+/// `exec.run` of `argv` in `session` on `d`; gives stdout, stderr, status.
+async fn run_in(d: &Daemon, session: &Value, argv: &[&str]) -> (String, String, i64) {
+    let mut c = d.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": argv, "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run = started["run"].as_u64().unwrap();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(90), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .unwrap();
+        match frame {
+            Frame::RunOutput {
+                run: r,
+                stream,
+                data,
+            } if u64::from(r) == run => {
+                if stream == 1 {
+                    out.extend(data)
+                } else {
+                    err.extend(data)
+                }
+            }
+            Frame::Json(Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run) =>
+            {
+                return (
+                    String::from_utf8_lossy(&out).into(),
+                    String::from_utf8_lossy(&err).into(),
+                    data["status"].as_i64().unwrap(),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_members_session_runs_on_the_projects_cloud_machine() {
+    let c = cloud().await;
+    let machine = c.ready().await;
+    let (book, session) = busy_member(&c).await;
+    let (out, err, status) = run_in(
+        &book,
+        &session,
+        &["sh", "-c", "echo hi > out.txt; echo done"],
+    )
+    .await;
+    assert_eq!((out.as_str(), status), ("done\n", 0), "{err}");
+    let name = machine["name"].as_str().unwrap();
+    assert!(
+        err.starts_with(&format!("moonlet: running on {name}\n")),
+        "{err}"
+    );
+    let worktree = PathBuf::from(session["path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("out.txt")).unwrap(),
+        "hi\n"
+    );
+}
+
+#[tokio::test]
+async fn a_cloud_machine_takes_a_members_command_of_its_own_project_only() {
+    let c = cloud().await;
+    let machine = c.ready().await;
+    let worker = machine["worker"].as_str().unwrap().to_string();
+    // A member's daemon, by hand.
+    let token = pair(&c.d, &c.addr, "Maya's Mac", DeviceKind::Desktop).await;
+    let mut s = worker_link(&c.addr, &token).await;
+    let other = json!({ "origin": null, "root": "0123456789abcdef0123456789abcdef01234567" });
+    for (id, identity) in [(2, other), (3, Value::Null)] {
+        let call = json!({ "to": worker, "method": "exec.prepare", "params": { "session": "s", "identity": identity } });
+        assert_eq!(
+            ask_link(&mut s, id, "peer.call", call)
+                .await
+                .map(|(code, _)| code),
+            Some("forbidden".to_string())
+        );
+    }
+    // Nor anything but preparing first.
+    let call = json!({ "to": worker, "method": "exec.start", "params": { "run": 1 } });
+    assert_eq!(
+        ask_link(&mut s, 4, "peer.call", call)
+            .await
+            .map(|(code, _)| code),
+        Some("forbidden".to_string())
+    );
+}
+
+#[tokio::test]
+async fn a_members_busy_command_starts_an_overflow_machine() {
+    let c = cloud().await;
+    let _: Value = c
+        .d
+        .call(
+            "cloud.set",
+            json!({ "projects": { c.key.clone(): { "overflow": true, "provider": "fake", "type": "small", "location": "here", "image": "none" } } }),
+        )
+        .await;
+    let (book, session) = busy_member(&c).await;
+    // No machine yet: it runs on the busy MacBook, and one starts.
+    let (_, err, status) = run_in(&book, &session, &["sh", "-c", "true"]).await;
+    assert_eq!(
+        (err.as_str(), status),
+        ("moonlet: running on Alex's MacBook Pro\n", 0)
+    );
+    for _ in 0..100 {
+        if c.machines().await["machines"]
+            .as_array()
+            .is_some_and(|m| !m.is_empty())
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no overflow machine started: {}", c.machines().await);
+}
+
+#[tokio::test]
+async fn a_members_cloud_session_waits_for_the_central_hosts_machine() {
+    let c = cloud().await;
+    let (book, plain) = busy_member(&c).await;
+    // A session made with Run heavy commands in the cloud.
+    let projects: Value = book.call("project.list", json!({})).await;
+    let session: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": projects[0]["id"], "name": "big-refactor", "agent": "none", "cloud": true }),
+        )
+        .await;
+    let _ = plain;
+    let (out, err, status) = run_in(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!((out.as_str(), status), ("done\n", 0), "{err}");
+    let machines = c.machines().await;
+    let name = machines["machines"][0]["name"].as_str().unwrap();
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!("moonlet: waiting for {name} to start (0:00)"),
+        "{err}"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some(format!("moonlet: running on {name}").as_str()),
+        "{err}"
+    );
+}

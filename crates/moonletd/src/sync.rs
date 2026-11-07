@@ -411,6 +411,9 @@ pub struct Released {
 }
 
 pub struct LiveCopies {
+    /// Cloud machines of this member's central host that it offered for a
+    /// command, reached through it (X89).
+    offered: Mutex<std::collections::HashSet<String>>,
     /// The machines this host asked to prepare a routing copy of a
     /// session, by worker id and session (X89): only those open one over
     /// the link.
@@ -483,6 +486,7 @@ impl LiveCopies {
                 }
             }));
             LiveCopies {
+                offered: Mutex::default(),
                 asked: Mutex::default(),
                 file,
                 home,
@@ -559,6 +563,16 @@ impl LiveCopies {
         self.kept(copy).filter(|k| k.kind == CopyKind::Run)?.peer
     }
 
+    /// The central host offered cloud machine `worker` for a command (X89).
+    pub fn offered(&self, worker: &str) {
+        self.offered.lock().unwrap().insert(worker.to_string());
+    }
+
+    /// Whether the central host offered cloud machine `worker` (X89).
+    pub fn was_offered(&self, worker: &str) -> bool {
+        self.offered.lock().unwrap().contains(worker)
+    }
+
     /// This host asks `worker` to prepare a routing copy of `session`: it
     /// may open one now (X89).
     pub fn expect_open(&self, worker: &str, session: &str) {
@@ -582,13 +596,19 @@ impl LiveCopies {
         if self.sessions.central_account().as_deref() == Some(worker) {
             return Some(Peer::Link(host));
         }
-        // Another member of the account, through the central host (X89).
-        self.is_member(worker).then(|| Peer::Relay(host, worker.to_string()))
+        // Another member of the account, or a cloud machine the central host
+        // offered, through the central host (X89).
+        (self.is_member(worker) || self.offered.lock().unwrap().contains(worker))
+            .then(|| Peer::Relay(host, worker.to_string()))
     }
 
     /// Whether worker id `worker` is another member of this machine's
-    /// account (X89).
+    /// account (X89); on a cloud machine, any member its central host
+    /// passes a command on from.
     fn is_member(&self, worker: &str) -> bool {
+        if self.link.info().worker.cloud {
+            return true;
+        }
         self.sessions.has_account() && self.sessions.member_names().contains_key(worker)
     }
 
