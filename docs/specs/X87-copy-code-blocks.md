@@ -1,13 +1,13 @@
-# X87: Copy a code block in agent messages
+# X87 — Copy a code block in agent messages
 
-- **Status:** implemented (2026-11-07): unit tests pass, and click, Enter and Space copied the block in the e2e app. The e2e driver sets no `:hover`, so the hover reveal was checked by forcing it visible, not with a real pointer.
-- **Priority / phase:** P1 · phase 3
-- **PRD refs:** goal 2
-- **Related:** [X6](X6-structured-agent-view.md) (structured agent view), [X9](X9-chat-links.md) (open and copy links), [X46](X46-tasks-in-sessions.md) (task descriptions)
+- **Status:** implemented (2026-11-07). The e2e driver sets no `:hover`, so the hover reveal was checked by forcing the icon visible, not with a real pointer.
+- **Priority / phase:** P1 · phase 3 (extends [X6](X6-structured-agent-view.md), next to [X9](X9-chat-links.md)'s link Copy and [X46](X46-tasks-in-sessions.md)'s task descriptions)
+- **PRD refs:** none (user request, 2026-11-07)
+- **Related ADRs:** none
 
 ## Summary
 
-Agents answer with commands, snippets and config in fenced code blocks, and the user's next step is often to paste one somewhere. Selecting a block by hand catches too much or too little, and a long block scrolls. X87 adds a copy icon to the top-right corner of every fenced code block that chat Markdown renders. A click copies exactly the block's code.
+Agents answer with commands, snippets and config in code blocks, and the user's next step is often to paste one somewhere. Selecting a block by hand catches too much or too little, and a long block scrolls. X87 adds a copy icon to the top-right corner of every fenced or indented code block that chat Markdown renders. A click copies exactly the block's code.
 
 ## User journey
 
@@ -17,16 +17,16 @@ Agents answer with commands, snippets and config in fenced code blocks, and the 
 
 ## Behaviour and acceptance criteria
 
-- [x] Every fenced or indented code block in chat Markdown has a copy control labelled "Copy code": agent replies, plans, subagent reports, side-question answers and task descriptions (X46). Inline code has none.
+- [x] Every fenced or indented code block in chat Markdown has a copy control labelled "Copy code". Chat Markdown is agent replies, plans, subagent reports, side-question answers, task descriptions (X46) and comments, and the bodies of attachments in the composer, on the desktop and the phone. Inline code has none.
 - [x] The control copies the block's code as the agent wrote it: highlighting removed, inner blank lines and indentation kept, and without the newline that ends the fence.
 - [x] A click on the code itself copies nothing, so selecting text still works.
+- [x] Enter or Space on the focused control copies too; other keys do nothing.
+- [x] Copying shows a "Copied code" toast on the desktop; a failure shows an error toast. The phone copies without a toast, as its other copy buttons do.
 - [x] The icon shows while the pointer is over the block, or while the control has keyboard focus. On a touch screen (the phone app) it is always shown.
-- [x] Copying shows a "Copied code" toast on the desktop; a failure shows an error toast.
-- [x] Enter or Space on the focused control copies too.
 
 ## UI
 
-A 22 px square icon button (the app's Copy icon) in the top-right corner of the block, over the code, on the block's background so code underneath stays legible. It fades in on hover and turns brighter under the pointer, as the link toolbar's buttons do.
+A 22 px square icon button (the app's Copy icon) in the top-right corner of the block, over the code, on the block's background so code underneath stays legible. It fades in on hover and turns brighter under the pointer, as the link toolbar's buttons do. Each control is a Tab stop.
 
 ## Protocol and RPCs
 
@@ -47,8 +47,16 @@ Agent output is untrusted. The control is plain markup the renderer adds around 
 
 ## Test plan
 
-- Unit (`src/lib/markdown.test.ts`): each fenced block gets one "Copy code" control and inline code none; `codeToCopy` returns the block's code without highlighting or the final newline, and nothing for a click on the code.
-- Manual: hover a code block in an agent reply, click the icon, paste; Tab to the control and press Enter. Screenshot with `e2e/snap.ts`.
+- Vitest, `src/lib/markdown.test.ts`, "copying a code block (X87)":
+  - "copies a fenced block's code, without highlighting or the fence's final newline"
+  - "gives each block, fenced or indented, its own control, and inline code none"
+  - "puts the control on code blocks in a task's description too"
+  - "copies nothing for a click on the code itself"
+  - "copies for Enter or Space on the control, and for no other key"
+- e2e, `e2e/specs/copy-code-blocks.e2e.ts`, with a fake `claude` that answers with a fenced block:
+  - "copies the block's code on a click and says so" (the "Copied code" toast and the clipboard)
+  - "copies the block's code on Enter or Space on the focused control"
+- Manual: the hover and focus reveal is CSS. A screenshot from `e2e/snap.ts` with the icon shown checked its place and look. Hovering with a real pointer is left to a manual check.
 
 ## Open questions
 
