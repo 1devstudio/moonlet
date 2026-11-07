@@ -39,6 +39,16 @@ const SESSION: RecordKind = RecordKind::Session;
 const PROJECT_FILES: RecordKind = RecordKind::ProjectFiles;
 /// A sign-in of Settings › Machines › Sign-ins (X75).
 const SIGN_IN: RecordKind = RecordKind::SignIn;
+/// A member's worker settings, by worker id (X89).
+const WORKER: RecordKind = RecordKind::Worker;
+
+/// A member's worker settings as the account holds them (X89): each `None`
+/// until set, which reads as off and 2 slots.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkerSettings {
+    pub heavy: Option<bool>,
+    pub slots: Option<u32>,
+}
 
 /// The sign-ins in `log` (X75), in their order: the records, and each
 /// default that was never edited nor removed.
@@ -413,6 +423,71 @@ impl SessionManager {
                 .into_iter()
                 .filter(|(field, value)| now.get(*field) != Some(value))
                 .map(|(field, value)| log.set(now_ms(), PROJECT_FILES, &key, field, value))
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
+    /// Every member's worker settings (X89), by worker id.
+    pub fn worker_settings(&self) -> Map<String, WorkerSettings> {
+        self.with_log(|log| {
+            log.records(WORKER)
+                .into_iter()
+                .map(|(id, r)| {
+                    let settings = WorkerSettings {
+                        heavy: r.get("heavy").and_then(Value::as_bool),
+                        slots: r.get("slots").and_then(Value::as_u64).map(|n| n as u32),
+                    };
+                    (id, settings)
+                })
+                .collect()
+        })
+    }
+
+    /// Sets member `worker`'s settings as this member's change (X89), and
+    /// sends it on. A field given as `None` stays as it is.
+    pub fn set_worker_settings(&self, worker: &str, set: WorkerSettings) -> Result<()> {
+        self.change_worker_settings(worker, set, false)
+    }
+
+    /// Writes `worker`'s settings, as it kept them before X89, with the
+    /// oldest stamp: only the fields the account has no value for, and
+    /// giving way to any change another member made (X89).
+    pub fn seed_worker_settings(&self, worker: &str, set: WorkerSettings) -> Result<()> {
+        self.change_worker_settings(worker, set, true)
+    }
+
+    fn change_worker_settings(&self, worker: &str, set: WorkerSettings, oldest: bool) -> Result<()> {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("worker settings are kept in the account: pair a Mac first")?;
+            let now = a.log.records(WORKER).remove(worker).unwrap_or_default();
+            let mut log = a.log.clone();
+            let fields = [("heavy", set.heavy.map(|h| json!(h))), ("slots", set.slots.map(|n| json!(n)))];
+            let changes: Vec<Change> = fields
+                .into_iter()
+                .filter_map(|(field, value)| Some((field, value?)))
+                .filter(|(field, value)| {
+                    if oldest {
+                        !now.contains_key(*field)
+                    } else {
+                        now.get(*field) != Some(value)
+                    }
+                })
+                .map(|(field, value)| {
+                    if oldest {
+                        log.set_oldest(WORKER, worker, field, value)
+                    } else {
+                        log.set(now_ms(), WORKER, worker, field, value)
+                    }
+                })
                 .collect();
             if changes.is_empty() {
                 return Ok(());
@@ -1412,6 +1487,40 @@ mod tests {
 
     fn sign_in(id: &str, name: &str, login: &str, check: &str) -> moonlet_proto::types::SignIn {
         moonlet_proto::types::SignIn { id: id.into(), name: name.into(), login: login.into(), check: check.into() }
+    }
+
+    fn settings(heavy: Option<bool>, slots: Option<u32>) -> WorkerSettings {
+        WorkerSettings { heavy, slots }
+    }
+
+    #[tokio::test]
+    async fn worker_settings_set_on_one_member_read_the_same_on_another() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.worker_settings().get("air"), Some(&settings(Some(true), Some(4))));
+        // A field left out stays as it was.
+        mini.set_worker_settings("air", settings(None, Some(1))).unwrap();
+        sync(&book, &mini);
+        assert_eq!(book.worker_settings().get("air"), Some(&settings(Some(true), Some(1))));
+    }
+
+    #[tokio::test]
+    async fn seeded_settings_give_way_to_any_set_on_another_member() {
+        let (_a, book) = member("book").await;
+        let (_b, air) = member("air").await;
+        book.set_worker_settings("air", settings(None, Some(5))).unwrap();
+        // Later in wall time, the Air brings what its link.json said.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        air.seed_worker_settings("air", settings(Some(true), Some(3))).unwrap();
+        sync(&book, &air);
+        for m in [&book, &air] {
+            assert_eq!(m.worker_settings().get("air"), Some(&settings(Some(true), Some(5))));
+        }
+        // Seeding again, once the account has values, changes nothing.
+        air.seed_worker_settings("air", settings(Some(false), Some(2))).unwrap();
+        assert_eq!(air.worker_settings().get("air"), Some(&settings(Some(true), Some(5))));
     }
 
     #[tokio::test]

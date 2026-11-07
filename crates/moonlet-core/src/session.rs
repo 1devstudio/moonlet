@@ -25,6 +25,7 @@ use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
 mod account;
+pub use account::WorkerSettings;
 
 const STATE_VERSION: u32 = 3;
 /// The workspace every install starts with, and that X5's workspaces are

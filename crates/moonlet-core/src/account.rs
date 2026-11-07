@@ -33,6 +33,9 @@ pub enum RecordKind {
     /// A sign-in of Settings › Machines › Sign-ins (X75): its `name`,
     /// `login`, `check` and `order`.
     SignIn,
+    /// A member's worker settings (X89), by worker id: `heavy` (whether it
+    /// takes other hosts' heavy commands) and `slots`.
+    Worker,
 }
 
 impl RecordKind {
@@ -46,6 +49,7 @@ impl RecordKind {
             RecordKind::Session => "session",
             RecordKind::ProjectFiles => "project_files",
             RecordKind::SignIn => "signin",
+            RecordKind::Worker => "worker",
         }
     }
 }
@@ -199,6 +203,30 @@ impl Log {
                 value,
             },
         )
+    }
+
+    /// Sets a field of a record here with the oldest stamp there is, so any
+    /// change another member made to it, at any time, wins: for values a
+    /// member brings from before they were kept in the account (X89).
+    pub fn set_oldest(&mut self, kind: RecordKind, id: &str, field: &str, value: Value) -> Change {
+        self.seq = self.seq.saturating_add(1);
+        let c = Change {
+            stamp: Stamp {
+                ms: 0,
+                n: 0,
+                member: self.member.clone(),
+            },
+            seq: self.seq,
+            kind: kind.as_str().into(),
+            id: id.into(),
+            op: ChangeOp::Set {
+                field: field.into(),
+                value,
+            },
+        };
+        self.changes
+            .insert((self.member.clone(), self.seq), c.clone());
+        c
     }
 
     /// Deletes a record here, at wall time `now_ms`.

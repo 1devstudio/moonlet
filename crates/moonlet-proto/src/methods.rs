@@ -423,6 +423,14 @@ pub const WORKER_REGISTER: &str = "worker.register";
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
 pub const WORKER_PING: &str = "worker.ping";
+/// Every member's worker settings, as this member holds them (X89):
+/// [`WorkerSettingsEntry`]s.
+pub const WORKER_SETTINGS: &str = "worker.settings";
+/// Changes a member's worker settings (X89): [`WorkerSettingsSet`] →
+/// `true`. Only an app or a paired desktop.
+pub const WORKER_SETTINGS_SET: &str = "worker.settings.set";
+/// [`WorkerSettingsEntry`]s, when any member's settings change (X89).
+pub const EV_WORKER_SETTINGS_CHANGED: &str = "worker.settings_changed";
 /// [`LinkInfo`], on every change of the link's settings or state.
 pub const EV_LINK_CHANGED: &str = "link.changed";
 /// [`WorkerInfo`]s, when a worker registers or goes away.
@@ -2944,6 +2952,26 @@ pub struct LinkSet {
     pub central: Option<Option<LinkCentral>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<LinkWorkerSet>,
+}
+
+/// `worker.settings.set` (X89): a field left out stays as it is.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct WorkerSettingsSet {
+    pub worker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<u32>,
+}
+
+/// A member's worker settings (X89): whether it takes other hosts' heavy
+/// commands, and how many routed commands it runs at once.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct WorkerSettingsEntry {
+    pub worker: String,
+    pub name: String,
+    pub heavy: bool,
+    pub slots: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
