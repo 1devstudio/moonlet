@@ -59,8 +59,8 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Which commands are routed
 
-- [ ] The Bash calls of Claude Code agents in sessions on **any member** are routed, under X62's rules as X90 changes them: the hook, the session's worktree, plan mode, the approved list read from the session's host's main checkout, and the user's Claude Code deny and ask rules. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
-- [ ] The session's host does the routing: its `exec.run` picks the machine, fences the routing copy, starts the command, streams the output to `moonlet exec`, applies the run's changes, and keeps the job. Every X62 rule that says "the central host" for these steps now means the session's host. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
+- [x] The Bash calls of Claude Code agents in sessions on **any member** are routed, under X62's rules as X90 changes them: the hook, the session's worktree, plan mode, the approved list read from the session's host's main checkout, and the user's Claude Code deny and ask rules. (`a_members_session_runs_its_heavy_command_on_the_central_host`, `a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
+- [x] The session's host does the routing: its `exec.run` picks the machine, fences the routing copy, starts the command, streams the output to `moonlet exec`, applies the run's changes, and keeps the job. Every X62 rule that says "the central host" for these steps now means the session's host. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
 
 ### Approval for the whole account
 
@@ -77,7 +77,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
   - every other member with `heavy` on, linked now, with a free slot and a load below busy (X62's 0.7 × cores), on the project's `os`;
   - H itself;
   - the project's ready cloud machines (X63).
-- [ ] Order:
+- [x] Order:
   1. other members, by lowest load per core, then lowest round trip, then worker id;
   2. H;
   3. ready cloud machines, by lowest load per core.
@@ -95,8 +95,8 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
   | MacBook 21.3/10, studio-mini 8.0/10 on (busy), no cloud machine | MacBook anyway |
 
   (`picks_as_in_the_mesh_order_table`)
-- [ ] The central host's own sessions pick in the same order. For them, the central host is H. The order of X62's table is unchanged: a linked member with `heavy` on comes before the central host. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
-- [ ] A command never waits for a slot. When no candidate is free, it runs on H, and a project that allows cloud overflow gets a machine for the next command (X63).
+- [x] The central host's own sessions pick in the same order. For them, the central host is H. The order of X62's table is unchanged: a linked member with `heavy` on comes before the central host. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
+- [x] A command never waits for a slot. When no candidate is free, it runs on H, and a project that allows cloud overflow gets a machine for the next command (X63).
 - [ ] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy`, and the session's host tries the next candidate. It never refuses its own sessions' commands, as they have nowhere else to go. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`)
 - [ ] Two sessions' hosts may pick the same member at once. The member takes what its slots allow, refuses the rest with `busy`, and each session's host goes on to its next candidate. (`two_hosts_picking_one_slot_run_one_there_and_one_elsewhere`)
 
@@ -114,7 +114,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ### Routing copies
 
 - [ ] A host keeps a routing copy of another host's session at `$MOONLET_HOME/runs/<the session's host>/<project>/<session>/`, as X62 does for its central host. It is made, fenced and brought back as X62 says, with the session's host in the central host's place. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
-- [ ] Setup in a routing copy follows X62: on a Mac, the user approves the exact setup command once per project and session's host. Until then the Mac refuses with `setup_pending`. (`a_routing_copy_for_another_member_waits_for_setup_approval`)
+- [x] Setup in a routing copy follows X62: on a Mac, the user approves the exact setup command once per project and session's host. Until then the Mac refuses with `setup_pending`. The command is the one in the session's host's main checkout (X90), sent with `exec.prepare` as `setup`, since a copy made from git may have no `.moonlet/config.toml`; a copy falls back to its own config's when none is sent. (`a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`)
 - [ ] A routing copy for another host is removed:
   - when that session is archived: the session's host sends `sync.closing` to each machine it routed the session to;
   - when this host turns `heavy` off;
@@ -125,9 +125,9 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### When something goes away
 
-- [ ] A run whose machine goes away, or whose relay stops because the central host went away, runs again on the session's host from the same fence, with the line "moonlet: devbox went away. Running again on Alex's MacBook Pro." The exit status is the second run's. The abandoned run's changes never reach the session. (`a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`)
+- [x] A run whose machine goes away, or whose relay stops because the central host went away, runs again on the session's host from the same fence, with the line "moonlet: devbox went away. Running again on Alex's MacBook Pro." The exit status is the second run's. The abandoned run's changes never reach the session. (`a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`)
 - [ ] A runner that loses the session's host mid-run, directly or through the central host, stops the command, as X62's worker does when its central host's daemon stops. (`a_runner_that_loses_the_sessions_host_stops_the_command`)
-- [ ] While the session's host has no link to its central host, every command of its sessions runs on it. (`a_member_without_its_central_host_runs_its_own_commands`)
+- [x] While the session's host has no link to its central host, every command of its sessions runs on it. (`a_member_without_its_central_host_runs_its_own_commands`)
 
 ### Cloud machines
 
@@ -137,7 +137,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Jobs and the Workers page
 
-- [ ] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
+- [x] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
 - [ ] A host's `worker.ping` answer gains `used` and `running: [{host, session, command, started_at}]`: what it runs now, for whom. The central host's `worker.list` carries them for every member, its own row included. (`worker_list_lists_every_member_with_what_it_runs`)
 - [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
 - [x] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
@@ -240,7 +240,7 @@ Where the tests live:
 | Slots across hosts | `a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`, `two_hosts_picking_one_slot_run_one_there_and_one_elsewhere` |
 | The relay | `a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`, `a_member_cannot_name_another_sender_through_the_relay`, `the_central_host_passes_on_only_the_routing_methods`, `a_runner_reads_only_the_sessions_routed_to_it`, `output_through_the_relay_reaches_moonlet_exec_in_order` |
 | `peer` and older members | `a_member_before_this_spec_is_not_offered_other_hosts_commands`, `a_central_host_before_this_spec_leaves_members_running_their_own_commands` |
-| Routing copies | `a_routing_copy_for_another_member_waits_for_setup_approval`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
+| Routing copies | `a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
 | Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
 | Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine` |
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |

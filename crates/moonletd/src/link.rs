@@ -754,6 +754,14 @@ impl WorkerLink {
                     tokio::runtime::Handle::current(),
                 );
                 h.set_requests(Arc::new(WorkerRequests(Arc::downgrade(self))));
+                // Output of commands the central host runs for this member
+                // goes to their `moonlet exec` (X89).
+                let me = Arc::downgrade(self);
+                h.set_run_output(Arc::new(move |run, stream, data| {
+                    if let Some(runs) = me.upgrade().and_then(|l| l.runs()) {
+                        runs.forward(crate::peer::LINK_PEER, run, stream, data);
+                    }
+                }));
                 // Before the link can carry a relay (X72): what an earlier
                 // link relayed has no client any more, and input for the
                 // new link's relays has somewhere to go from its first frame.
@@ -1101,7 +1109,7 @@ impl Requests for WorkerRequests {
                         return Err(RpcError::new("not_approved", "heavy commands are off here"));
                     }
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
-                    Ok(serde_json::to_value(sync.prepare_run(req.session).await?).unwrap())
+                    Ok(serde_json::to_value(sync.prepare_run(req.session, None, req.setup).await?).unwrap())
                 }
                 m::EXEC_START => {
                     let req: m::ExecStart = serde_json::from_value(params)
@@ -1114,14 +1122,47 @@ impl Requests for WorkerRequests {
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
                     let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
-                    Ok(serde_json::json!(runs.start_here(req, sync, host, info.worker.slots, info.worker.cloud).await?))
+                    let peer = crate::peer::Peer::Link(host);
+                    Ok(serde_json::json!(runs.start_here(req, sync, peer, info.worker.slots, info.worker.cloud).await?))
                 }
                 m::EXEC_CANCEL => {
                     let req: m::ExecCancel = serde_json::from_value(params)
                         .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                     let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
-                    Ok(serde_json::json!(runs.cancel_here(req.run)))
+                    Ok(serde_json::json!(runs.cancel_here(crate::peer::LINK_PEER, req.run)))
+                }
+                // The central host makes and ends its routing copy of this
+                // member's session, which it runs a command of (X89).
+                m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_CLOSE | m::EXEC_DONE => {
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let peer = crate::peer::Peer::Link(host);
+                    let bad = |e: serde_json::Error| RpcError::new("invalid_params", e.to_string());
+                    match method.as_str() {
+                        m::SYNC_OPEN => {
+                            let req: m::SyncOpen = serde_json::from_value(params).map_err(bad)?;
+                            if req.kind != m::CopyKind::Run {
+                                return Err(RpcError::new("forbidden", "the central host keeps no live copy of a member's session"));
+                            }
+                            Ok(serde_json::to_value(sync.open(&peer, req).await?).unwrap())
+                        }
+                        m::SYNC_FETCH => {
+                            let req: m::SyncFetch = serde_json::from_value(params).map_err(bad)?;
+                            Ok(serde_json::to_value(sync.fetch(&peer, req).await?).unwrap())
+                        }
+                        m::SYNC_CLOSE => {
+                            let req: m::CopyRef = serde_json::from_value(params).map_err(bad)?;
+                            Ok(serde_json::json!(sync.close(&peer, &req.copy).await?))
+                        }
+                        _ => {
+                            let req: m::ExecDone = serde_json::from_value(params).map_err(bad)?;
+                            let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
+                            let name = link.info().worker.name;
+                            Ok(serde_json::to_value(runs.take_done(&sync, &peer, req, &name).await?).unwrap())
+                        }
+                    }
                 }
                 m::SESSION_RELAY => {
                     let req: m::SessionRelay = serde_json::from_value(params)

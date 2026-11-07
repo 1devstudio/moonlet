@@ -742,6 +742,44 @@ mod tests {
         }
     }
 
+    /// X89's order table, for a session on the MacBook: the session's host
+    /// is the fallback, so `None` runs it there.
+    #[test]
+    fn picks_as_in_the_mesh_order_table() {
+        let host = |load: f64| Candidate {
+            kind: Kind::Central,
+            rtt_ms: None,
+            ..mac("macbook", load, 10, 0)
+        };
+        let mini = |load: f64, used: u32| mac("studio-mini", load, 10, used);
+        let devbox = Candidate {
+            os: "linux".into(),
+            slots: 4,
+            ..mac("devbox", 1.0, 16, 0)
+        };
+        let rows: [(Vec<Candidate>, Option<&str>); 7] = [
+            (vec![host(21.3), mini(2.6, 0)], Some("studio-mini")),
+            // studio-mini's switch is off: it is no candidate.
+            (vec![host(21.3)], None),
+            (vec![host(1.0), mini(2.6, 0)], Some("studio-mini")),
+            (vec![host(21.3), mini(2.6, 2), devbox.clone()], Some("devbox")),
+            (vec![host(21.3), mini(3.0, 0), devbox.clone()], Some("devbox")),
+            (
+                vec![host(21.3), mini(8.0, 0), cloud("moonlet-shop-7k2q", 0.1, 8, 0)],
+                Some("moonlet-shop-7k2q"),
+            ),
+            (vec![host(21.3), mini(8.0, 0)], None),
+        ];
+        for (i, (candidates, want)) in rows.into_iter().enumerate() {
+            assert_eq!(
+                pick(&candidates, HeavyOs::Any, false).map(|c| c.id.as_str()),
+                want,
+                "row {}",
+                i + 1
+            );
+        }
+    }
+
     /// X62's order table: load / cores, slots used of 2.
     #[test]
     fn picks_as_in_the_order_table() {

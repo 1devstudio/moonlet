@@ -802,6 +802,25 @@ impl Daemon {
         Ok(())
     }
 
+    /// The member linked on `conn`, by worker id and name (X89): a paired
+    /// Mac's daemon registered as a worker, never a cloud machine, a phone
+    /// or an agent's CLI.
+    fn member_on(&self, conn: &Conn) -> Result<(String, String), RpcError> {
+        let refused = || RpcError::new("forbidden", "only a member routes commands here");
+        if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(refused());
+        }
+        let id = self.workers.worker_on(conn.id).ok_or_else(refused)?;
+        let name = self
+            .workers
+            .list()
+            .into_iter()
+            .find(|w| w.worker.id == id)
+            .map(|w| w.worker.name)
+            .ok_or_else(refused)?;
+        Ok((id, name))
+    }
+
     /// Every member's worker settings, this host's first (X89): off and 2
     /// slots until set.
     pub fn worker_settings(&self) -> Vec<m::WorkerSettingsEntry> {
@@ -1769,6 +1788,7 @@ impl Daemon {
                     local: crate::exec::Command { argv: r.argv, cwd: checked.cwd, env },
                     os: checked.os,
                     outputs: checked.outputs,
+                    setup: checked.setup,
                     host: me.name,
                     slots: me.slots,
                 };
@@ -1859,7 +1879,49 @@ impl Daemon {
             }
             m::EXEC_CANCEL => {
                 let r: m::ExecCancel = params(p)?;
+                // A member stops a command this central host runs for it (X89).
+                if conn.client == crate::link::WORKER_CLIENT {
+                    return ok(self.runs.cancel_here(conn.id, r.run));
+                }
                 ok(self.runs.cancel(conn.id, r.run).await)
+            }
+            // A member asks whether this central host takes its heavy
+            // commands, then has it run one in a routing copy of its
+            // session (X89).
+            m::WORKER_STATUS => {
+                self.member_on(conn)?;
+                ok(self.runs.status_for_members(&self.link.info().worker))
+            }
+            m::EXEC_PREPARE => {
+                let member = self.member_on(conn)?;
+                if !self.link.info().worker.enabled {
+                    return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                }
+                let r: m::ExecPrepare = params(p)?;
+                ok(self.sync.prepare_run(r.session, Some(member), r.setup).await?)
+            }
+            m::EXEC_START | m::SYNC_UPDATE => {
+                let (member, _) = self.member_on(conn)?;
+                let me = self.link.info().worker;
+                if !me.enabled {
+                    return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                }
+                let copy = p["copy"].as_str().unwrap_or_default().to_string();
+                // Only a routing copy this member's commands run in.
+                if self.sync.copy_member(&copy).as_deref() != Some(member.as_str()) {
+                    return Err(RpcError::new("not_found", "no such routing copy"));
+                }
+                if method == m::EXEC_START {
+                    let r: m::ExecStart = params(p)?;
+                    let peer = crate::peer::Peer::Conn(conn.clone());
+                    return ok(self.runs.clone().start_here(r, self.sync.clone(), peer, me.slots, false).await?);
+                }
+                let r: m::SyncUpdate = params(p)?;
+                let pack = match r.pack {
+                    Some(t) => Some(conn.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
+                    None => None,
+                };
+                ok(self.sync.update(r, pack).await?)
             }
             // A worker's run ended: its changes come into the session
             // before `moonlet exec` hears the exit status (X62).
@@ -1868,32 +1930,8 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only a worker ends a run"));
                 }
                 let r: m::ExecDone = params(p)?;
-                let Some(outputs) = self.runs.runs_on(conn.id, r.run, &r.copy) else {
-                    return Err(RpcError::new("not_found", "no such run"));
-                };
                 let host = self.link.info().worker.name;
-                let began = std::time::Instant::now();
-                let brought = match r.pack {
-                    Some(t) => conn
-                        .take_pack(t)
-                        .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive")),
-                    None => Ok(Vec::new()),
-                };
-                let brought = match brought {
-                    Ok(pack) => {
-                        let pack = r.pack.map(|_| pack);
-                        self.sync.run_back(conn, &r, pack, &host, &outputs).await
-                    }
-                    Err(e) => Err(e),
-                };
-                let back_ms = began.elapsed().as_millis() as u64;
-                // The run ends either way: its client is told what was lost.
-                let ended = brought.clone().unwrap_or_else(|e| m::ExecBrought {
-                    notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
-                    ..Default::default()
-                });
-                self.runs.done(conn.id, r.run, r.status, ended, back_ms);
-                ok(brought?)
+                ok(self.runs.take_done(&self.sync, &crate::peer::Peer::Conn(conn.clone()), r, &host).await?)
             }
             m::JOB_LIST => {
                 jobs_reader(conn)?;
@@ -2104,12 +2142,12 @@ impl Daemon {
                             }
                             None => {}
                         }
-                        ok(self.sync.open(conn, r).await?)
+                        ok(self.sync.open(&crate::peer::Peer::Conn(conn.clone()), r).await?)
                     }
-                    m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
+                    m::SYNC_FETCH => ok(self.sync.fetch(&crate::peer::Peer::Conn(conn.clone()), params(p)?).await?),
                     m::SYNC_CLOSE => {
                         let r: m::CopyRef = params(p)?;
-                        ok(self.sync.close(conn, &r.copy).await?)
+                        ok(self.sync.close(&crate::peer::Peer::Conn(conn.clone()), &r.copy).await?)
                     }
                     _ => {
                         let r: m::SyncOffer = params(p)?;
@@ -2119,7 +2157,7 @@ impl Daemon {
                             })?),
                             None => None,
                         };
-                        ok(self.sync.reconcile_offer(conn, r, pack).await?)
+                        ok(self.sync.reconcile_offer(&crate::peer::Peer::Conn(conn.clone()), r, pack).await?)
                     }
                 }
             }

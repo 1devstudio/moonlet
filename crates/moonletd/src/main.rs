@@ -20,6 +20,7 @@ mod link;
 mod machines;
 mod mobile;
 mod notify;
+mod peer;
 mod render;
 mod server;
 mod service;

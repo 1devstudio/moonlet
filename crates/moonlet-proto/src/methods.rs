@@ -423,6 +423,9 @@ pub const WORKER_REGISTER: &str = "worker.register";
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
 pub const WORKER_PING: &str = "worker.ping";
+/// A member asks its central host whether it takes the member's heavy
+/// commands now (X89): [`WorkerStatus`].
+pub const WORKER_STATUS: &str = "worker.status";
 /// Every member's worker settings, as this member holds them (X89):
 /// [`WorkerSettingsEntry`]s.
 pub const WORKER_SETTINGS: &str = "worker.settings";
@@ -2956,6 +2959,22 @@ pub struct LinkSet {
     pub worker: Option<LinkWorkerSet>,
 }
 
+/// `worker.status` (X89): a central host as a candidate for a member's
+/// routed command.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct WorkerStatus {
+    pub id: String,
+    pub name: String,
+    /// It takes other hosts' heavy commands.
+    pub heavy: bool,
+    pub os: String,
+    pub cores: u32,
+    pub load: f64,
+    pub slots: u32,
+    /// Routed commands it runs now, for anyone.
+    pub used: u32,
+}
+
 /// `worker.settings.set` (X89): a field left out stays as it is.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct WorkerSettingsSet {
@@ -3527,6 +3546,12 @@ pub struct ExecExited {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecPrepare {
     pub session: String,
+    /// The project's setup command, from the main checkout of the host
+    /// that routes the command (X90, X89): a routing copy made from git
+    /// may have no `.moonlet/config.toml` of its own. The runner still
+    /// asks the user before it runs a command it was not approved for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live
