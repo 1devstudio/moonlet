@@ -48,7 +48,7 @@ import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import type { TaskRequestEvent } from "./tasksRelay";
 import { spawnedNotices } from "./spawned";
-import { copyEntries } from "./centralCopies";
+import { copyEntries, copyView } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
 import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
@@ -720,6 +720,8 @@ export function selectSession(host: string, id: string, keepMode = false) {
   doneBursts.seen(sesKey(host, id));
   updateBadge();
   void refreshGit(host, id);
+  // Another member's session, through its copy here (X86).
+  if (parseCopyHost(host)) void loadCopy(host);
 }
 
 /** Every host's workspaces, local first, as the switcher lists them (X32). */
@@ -758,11 +760,39 @@ export async function loadCopies() {
   if (run !== copiesRun) return;
   const entries = copyEntries(list, get().accounts.local);
   set((s) => {
-    const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([h]) => parseCopyHost(h)?.host !== "local"));
-    const accounts = Object.fromEntries(Object.entries(s.accounts).filter(([h]) => parseCopyHost(h)?.host !== "local"));
-    for (const h of Object.keys(entries)) if (s.accounts.local) accounts[h] = s.accounts.local;
-    return { sessions: { ...sessions, ...entries }, accounts };
+    const mine = ([h]: [string, unknown]) => parseCopyHost(h)?.host !== "local";
+    const sessions = Object.fromEntries(Object.entries(s.sessions).filter(mine));
+    const accounts = Object.fromEntries(Object.entries(s.accounts).filter(mine));
+    const projects = Object.fromEntries(Object.entries(s.projects).filter(mine));
+    for (const [h, [copy]] of Object.entries(entries)) {
+      // An opened copy keeps the terminals it was shown with until reloaded.
+      sessions[h] = [{ ...copy, terminals: s.sessions[h]?.[0]?.terminals ?? copy.terminals }];
+      if (s.accounts.local) accounts[h] = s.accounts.local;
+      projects[h] = s.projects.local ?? [];
+    }
+    return { sessions, accounts, projects };
   });
+  // The copy open now follows its member, as it comes and goes.
+  const open = get().selected?.host;
+  if (open && entries[open]) void loadCopy(open);
+}
+
+/** Loads what copy host `host` shows (X86): its member's terminals and the
+ * chats in them, through this Mac's daemon. */
+export async function loadCopy(host: string) {
+  const [terminals, chats] = await Promise.all([
+    rpc<TerminalInfo[]>(host, M.terminalList).catch(() => []),
+    rpc<{ id: number }[]>(host, M.chatSummaries).catch(() => []),
+  ]);
+  const copy = get().sessions[host]?.[0];
+  if (!copy) return;
+  const view = copyView(copy, terminals, chats.map((c) => c.id));
+  set((s) => ({
+    sessions: { ...s.sessions, [host]: [view.session] },
+    terminals: { ...s.terminals, [host]: Object.fromEntries(view.terminals.map((t) => [t.id, t])) },
+  }));
+  syncLayout(host, view.session);
+  void reloadChats(host, view.terminals.filter((t) => t.chat).map((t) => t.id));
 }
 
 function onAccount(host: string, info: AccountInfo) {

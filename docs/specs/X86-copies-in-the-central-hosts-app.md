@@ -36,11 +36,11 @@ With this spec, the app on the central host lists those sessions and opens them 
 
 ### Opening one
 
-- [ ] A copy opens under its copy host, `local#copy:<session>`, so every call goes through `session.forward` and `session.attach` to the owner (X72).
-- [ ] The session shows its chats and terminals as the owner lists them (`terminal.list` and `chat.summaries` through the copy host). Its chat follows `session.event` live.
-- [ ] A message typed in its chat goes to the owner's agent (`chat.send` through the copy host). Answering a permission, a plan or a question does too. Nothing moves.
+- [x] A copy opens under its copy host, `local#copy:<session>`, so every call goes through `session.forward` and `session.attach` to the owner (X72). (`apps/desktop/src/lib/centralCopiesStore.test.ts` › opens one with the terminals its member lists; `copyHost.test.ts`)
+- [x] The session shows its chats and terminals as the owner lists them (`terminal.list` and `chat.summaries` through the copy host), with a stand-in for each chat while the owner lists none. Its chat follows `session.event` live, and the open copy is read again whenever the copies are. (`centralCopies.test.ts` › what a copy shows when opened; `centralCopiesStore.test.ts`; `copyHost.test.ts` for `session.event`)
+- [x] A message typed in its chat goes to the owner's agent (`chat.send` through the copy host). Answering a permission, a plan or a question does too. Nothing moves. (`copyHost.test.ts` routes every chat call as `session.forward`)
 - [ ] What the owner refuses through the central host is not offered: the Files panel, opening a new terminal or agent tab, the project's config, Processes, and renaming.
-- [ ] Git status and diffs come from the owner (`git.*` through the copy host), never from the copy's folder on this Mac.
+- [x] Git status and diffs come from the owner (`git.*` through the copy host), never from the copy's folder on this Mac. (`copyHost.test.ts`)
 
 ### While the owner is unreachable
 

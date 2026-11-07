@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyEntries } from "./centralCopies";
+import { copyEntries, copyView } from "./centralCopies";
 import type { Session } from "./protocol";
 
 const s = (id: string, extra: Partial<Session> = {}): Session => ({
@@ -35,5 +35,51 @@ describe("the copies the central host's app lists (X86)", () => {
 
   it("never lists this Mac's own sessions as copies", () => {
     expect(copyEntries([s("s8", { owner: { ...book, worker: "mini-id", name: "studio-mini" } })], { account: "mini-id", central: null })).toEqual({});
+  });
+});
+
+describe("what a copy shows when opened (X86)", () => {
+  const copy = s("s7", { owner: book, created_at: 1700 });
+  const chat = {
+    id: 3,
+    kind: "agent" as const,
+    title: "Claude",
+    cwd: "/Users/alex/w/s7",
+    command: ["claude"],
+    session_id: "s7",
+    agent_state: "working" as const,
+    cols: 120,
+    rows: 40,
+    pid: 4242,
+    chat: true,
+    created_at: 1800,
+    last_output_at: 1900,
+  };
+
+  it("holds the terminals its member lists", () => {
+    expect(copyView(copy, [chat], [3])).toEqual({ session: { ...copy, terminals: [3] }, terminals: [chat] });
+  });
+
+  it("stands each chat the copy holds in for its terminal while the member is away", () => {
+    expect(copyView(copy, [], [3])).toEqual({
+      session: { ...copy, terminals: [3] },
+      terminals: [
+        {
+          id: 3,
+          kind: "agent",
+          title: "Claude",
+          cwd: "/Users/me/.moonlet/copies/MacBook/shop/s7",
+          command: [],
+          session_id: "s7",
+          agent_state: "idle",
+          cols: 80,
+          rows: 24,
+          pid: null,
+          chat: true,
+          created_at: 1700,
+          last_output_at: 0,
+        },
+      ],
+    });
   });
 });
