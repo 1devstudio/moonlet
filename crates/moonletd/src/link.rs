@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use moonlet_core::paths::now_ms;
-use moonlet_core::session::SessionManager;
+use moonlet_core::session::{SessionManager, WorkerSettings};
 use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{BoxFuture, Events, Host, HostInfo, HostOptions, HostStatus, Requests};
 use moonlet_proto::methods::{
@@ -472,7 +472,22 @@ impl WorkerLink {
             .worker
             .as_ref()
             .is_some_and(|w| w.name.is_some() || w.slots.is_some() || w.enabled.is_some());
+        let settings = req.worker.as_ref().map(|w| WorkerSettings {
+            heavy: w.enabled,
+            slots: w.slots,
+        });
         self.store.lock().unwrap().set_at(req, own, revision)?;
+        // The account keeps every member's worker settings, so any app
+        // shows and changes them (X89). Without an account, link.json
+        // alone keeps them.
+        if let Some(settings) = settings.filter(|s| s.heavy.is_some() || s.slots.is_some())
+            && self.sessions.has_account()
+            && let Err(e) = self
+                .sessions
+                .set_worker_settings(&self.info().worker.id, settings)
+        {
+            tracing::warn!("cannot keep this host's worker settings in the account: {e:#}");
+        }
         // Routing copies go with heavy commands, and with the central host
         // they were made for (X62).
         if let Some(sync) = self.sync() {
@@ -509,6 +524,35 @@ impl WorkerLink {
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
+    }
+
+    /// Takes this host's worker settings from the account, when another
+    /// member changed them (X89): as `link.set` would, so routing copies
+    /// go when heavy commands are turned off, and the central host learns
+    /// the new values.
+    pub fn follow_settings(self: &Arc<Self>) {
+        let info = self.info();
+        let Some(s) = self.sessions.worker_settings().remove(&info.worker.id) else {
+            return;
+        };
+        let enabled = s.heavy.filter(|h| *h != info.worker.enabled);
+        let slots = s
+            .slots
+            .filter(|n| *n != info.worker.slots && (1..=64).contains(n));
+        if enabled.is_none() && slots.is_none() {
+            return;
+        }
+        let req = LinkSet {
+            central: None,
+            worker: Some(m::LinkWorkerSet {
+                enabled,
+                slots,
+                name: None,
+            }),
+        };
+        if let Err(e) = self.set(req, &[]) {
+            tracing::warn!("cannot take this host's worker settings from the account: {e}");
+        }
     }
 
     /// Tells the central host this worker's details again, now, when the
@@ -1157,6 +1201,28 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         return;
     }
     daemon.sessions.name_member(&worker.name);
+    // Worker settings kept in link.json before X89 become the account's,
+    // giving way to any change another member made meanwhile; then this
+    // host follows the account's (X89).
+    let seed = WorkerSettings {
+        heavy: Some(worker.enabled),
+        slots: Some(worker.slots),
+    };
+    if let Err(e) = daemon.sessions.seed_worker_settings(&worker.id, seed) {
+        tracing::warn!("cannot keep this host's worker settings in the account: {e:#}");
+    }
+    daemon.link.follow_settings();
+    let d = Arc::downgrade(daemon);
+    let me = worker.id.clone();
+    daemon.sessions.on_account_applied(move |changes| {
+        let Some(d) = d.upgrade() else { return };
+        if changes.iter().any(|c| c.kind == "worker") {
+            if changes.iter().any(|c| c.kind == "worker" && c.id == me) {
+                d.link.follow_settings();
+            }
+            d.worker_settings_changed();
+        }
+    });
     let workers = Arc::downgrade(&daemon.workers);
     let link = Arc::downgrade(&daemon.link);
     daemon.sessions.on_account_change(move |changes| {

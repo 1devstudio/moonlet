@@ -96,6 +96,26 @@ describe("worker link", () => {
     });
   });
 
+  it("turning another host's heavy commands on from the Workers page saves it (X89)", async () => {
+    const enabled = async () => (await centralRpc<{ worker: { enabled: boolean } }>("link.get")).worker.enabled;
+    expect(await enabled()).toBe(false);
+    await $(sel.navEntry("Workers")).click();
+    await expect($(sel.navEntry("Workers", true))).toBeExisting();
+    // The central host's row, set from this Mac's app.
+    const central = '//*[starts-with(@data-setting, "worker-")][.//span[normalize-space()="Central host"]]';
+    const toggle = `${central}//*[starts-with(@data-setting, "worker-settings-")]//button[@role="switch"]`;
+    await $(toggle).waitForExist({ timeout: 10000 });
+    await $(toggle).click();
+    await browser.waitUntil(enabled, { timeout: 10000, timeoutMsg: "the central host never took heavy commands" });
+    await expect($('//*[contains(normalize-space(), " takes heavy commands from your other hosts")]')).toBeDisplayed();
+    await expect($(toggle)).toHaveAttribute("aria-checked", "true");
+    // Back off, so the specs after this one find it as it was.
+    await $(toggle).click();
+    await browser.waitUntil(async () => !(await enabled()), { timeout: 10000, timeoutMsg: "the central host kept heavy commands" });
+    await $(sel.navEntry("Hosts")).click();
+    await expect($(sel.navEntry("Hosts", true))).toBeExisting();
+  });
+
   it("Clear central host clears it, and the link goes", async () => {
     await $(`${row()}//button[normalize-space()="Clear central host"]`).click();
     await expect($(`${row()}//button[normalize-space()="Make central host"]`)).toBeDisplayed();
