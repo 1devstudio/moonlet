@@ -55,6 +55,7 @@ import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCoun
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
+import { ArchivedSessions } from "./ArchivedSessions";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
@@ -290,6 +291,7 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
           </button>
         </div>
       )}
+      <ArchivedSessions sessions={card.archived} host={host} onOpen={openSession} className="-mx-1.5 -mt-1 px-1.5" />
       {card.drift && (
         <div className="flex items-center gap-2 rounded-md bg-accent/[0.08] px-2 py-1 ui-text-12 text-accent">
           <span className="min-w-0 flex-1 truncate">{card.drift.text}</span>
@@ -418,6 +420,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
             </div>
           );
         })}
+        <ArchivedSessions sessions={card.archived} host={host} onOpen={openSession} className="mt-2" />
         {card.orphans.length > 0 && <div className="mt-4 ui-text-11.5 font-medium text-faint">Worktrees without a session {card.orphans.length}</div>}
         {card.orphans.map((w) => (
           <div key={w.path} className="mt-2 flex items-center gap-2 ui-text-12.5 text-muted">
@@ -950,6 +953,7 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
                           </button>
                         </div>
                       ))}
+                      <ArchivedSessions sessions={c.archived} host={host} onOpen={openSession} />
                       {c.rows.length === 0 && c.orphans.length === 0 && (
                         <button className="self-start text-accent hover:underline ui-text-12.5" onClick={() => startSession(host, workspaceId, c)}>
                           Start a session for {c.task.key}

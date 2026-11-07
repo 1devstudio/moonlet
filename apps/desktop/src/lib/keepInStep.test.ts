@@ -34,6 +34,7 @@ const card = (t: Task, drift: Card["drift"], sessions: BoardSession[] = [], orph
   task: t,
   column: "in_review",
   rows: sessions.map((s) => ({ session: s, meta: { text: "", tone: "faint" } })),
+  archived: [],
   needsYou: false,
   orphans,
   empty: null,

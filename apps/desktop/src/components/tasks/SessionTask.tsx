@@ -10,7 +10,8 @@ import type { Session } from "../../lib/protocol";
 import { hostWorkspaces, selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
-import type { Card } from "../../lib/tasksBoard";
+import { type Card, cardOfSession } from "../../lib/tasksBoard";
+import { ArchivedSessions } from "./ArchivedSessions";
 import { ensureTasks, linkTask, lookUpPasted, originRepoOf, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
@@ -41,9 +42,9 @@ export function useSessionTask(host: string, ws: Session): SessionTask | null {
   }, [ref, ws.task, ws.task_unlinked]);
   const { board } = useWorkspaceBoard(ref);
   return useMemo(() => {
-    const card = board ? Object.values(board).flat().find((c) => c.rows.some((r) => r.session.id === ws.id)) : undefined;
+    const card = board && ref ? cardOfSession(board, ref.host, { host, id: ws.id }) : undefined;
     return card && ref ? { card, board: ref } : null;
-  }, [board, ref, ws.id]);
+  }, [board, ref, host, ws.id]);
 }
 
 /** Above the conversation: the task, its state and its other sessions. */
@@ -139,6 +140,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
             )}
           </div>
         ))}
+        <ArchivedSessions sessions={card.archived} host={host} onOpen={selectSession} className="-mx-1.5 mt-1.5" />
         {card.orphans.map((w) => (
           <div key={w.path} className="mt-1.5 flex items-center gap-2 ui-text-12.5 text-muted">
             <GitBranch size={13} />

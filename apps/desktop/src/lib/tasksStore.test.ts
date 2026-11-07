@@ -7,6 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { answerTaskRequest, createIssue, pairedPhones, setColumnShow, shareTasks, workspacesToPoll } from "./tasksStore";
+import { tasksBoard } from "./tasksBoard";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -319,7 +320,7 @@ describe("a linked task changed outside moonlet (X44 Sync)", () => {
     const t = useTasks.getState().data["local/personal"].tasks[0];
     const merged = { kind: "merged" as const, text: "#70 merged", fix: "Close the issue" };
     // fixDrift's own refresh still sees the issue open (GitHub lags)…
-    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], needsYou: false, orphans: [], empty: null, drift: merged });
+    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift: merged });
     // …and the next one sees it closed.
     answers["gh.tasks"] = () => [{ ...issue, closed: true, state_reason: "completed" }];
     await refreshTasks("local", "personal", 3_000);
@@ -778,7 +779,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     updatedMs: 0,
     tracker: { id: "issue-1", state: "In Progress", source: "MOON" },
   };
-  const card = (drift: { kind: "pr_open" | "merged"; text: string; fix: string }) => ({ task: hosts, column: "in_progress" as const, rows: [], needsYou: false, orphans: [], empty: null, drift });
+  const card = (drift: { kind: "pr_open" | "merged"; text: string; fix: string }) => ({ task: hosts, column: "in_progress" as const, rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift });
 
   it("sends the move a chip's fix asks for", async () => {
     sent.length = 0;
@@ -811,7 +812,7 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     const pr = { number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null };
     const t = { ...hosts, key: "MOON-170", column: "in_review" as const };
     const row = { session: { id: "s9", name: "Hosts", branch: "moon-170", path: "/w/moon-170", archived: false, task: null, task_unlinked: false, state: "idle" as const, pr, additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } };
-    const board = { todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows: [row], needsYou: false, orphans: [], empty: null, drift: null }], done: [] };
+    const board = { todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows: [row], archived: [], needsYou: false, orphans: [], empty: null, drift: null }], done: [] };
     const off = () => ({ ...DEFAULT_RULES, pr_comment: "off" as const });
     await runAutoFixes("local", "personal", board, off, 7_000);
     await runAutoFixes("local", "personal", board, off, 8_000);
@@ -1194,7 +1195,7 @@ describe("Retry on a chip's fix (X46)", () => {
     answers["project.worktrees"] = () => [];
     const t = { connection: "linear:acme", key: "MOON-142", title: "Hosts", url: "", column: "in_progress" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-1", state: "In Progress", source: "MOON" } };
     failNext.push({ message: "Linear is not answering" });
-    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open", text: "#131 open", fix: "Move to In Review" } });
+    await fixDrift("local", "personal", { task: t, column: "in_progress", rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open", text: "#131 open", fix: "Move to In Review" } });
     expect(failureOf(t)).toBe("Linear is not answering");
     // Meanwhile someone moved it to In Review in Linear.
     useTasks.setState({ data: { "local/personal": { tasks: [{ ...t, column: "in_review" }], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 2, error: null } } });
@@ -1356,7 +1357,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
   it("keeps a failed move's error when the PR-link comment after it works", async () => {
     sent.length = 0;
     const t = lt("MOON-201", "in_progress");
-    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s201")], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s201")], archived: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
     failNext.push({ message: "Linear is not answering" });
     await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
     expect(failureOf(t)).toBe("Linear is not answering");
@@ -1365,7 +1366,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
   it("when the fix and its PR-link comment both fail, Retry sends both", async () => {
     sent.length = 0;
     const t = lt("MOON-204", "in_progress");
-    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s204")], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [row("s204")], archived: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
     failNext.push({ message: "Linear is not answering" }, { message: "Linear is not answering" });
     await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
     expect(sent).toEqual([]);
@@ -1377,7 +1378,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
   it("does not try a failed automatic fix again by itself after a restart", async () => {
     sent.length = 0;
     const t = lt("MOON-202", "in_progress");
-    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
+    const board = { todo: [], in_progress: [{ task: t, column: "in_progress" as const, rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift: { kind: "pr_open" as const, text: "#131 open", fix: "Move to In Review" } }], in_review: [], done: [] };
     failNext.push({ message: "Linear is not answering" });
     await runAutoFixes("local", "personal", board, () => DEFAULT_RULES, 1_000);
     vi.resetModules();
@@ -1394,7 +1395,7 @@ describe("automatic fixes and failures, second review round (X46)", () => {
     useStore.setState({ sessions: { local: [{ id: "s203", project_id: "web", name: "x", branch: "x", base: "main", path: "/w/x", agent: null, archived: false, created_at: 1, workspace_id: "personal", terminals: [], layout: null, task: { connection: "linear:acme", key: "MOON-203", url: "" } }] } });
     useTasks.setState({ data: { "local/personal": { tasks: [t], worktrees: [], sources: ["linear:acme"], repos: {}, sourceProjects: {}, syncedAt: 1, error: null } } });
     failNext.push({ message: "Linear is not answering" });
-    await fixDrift("local", "personal", { task: t, column: "todo", rows: [], needsYou: false, orphans: [], empty: null, drift: { kind: "started", text: "Session open", fix: "In Progress" } });
+    await fixDrift("local", "personal", { task: t, column: "todo", rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift: { kind: "started", text: "Session open", fix: "In Progress" } });
     setKeepInStep(t, false);
     await retryTask(t);
     expect(sent).toEqual([]);
@@ -1422,7 +1423,7 @@ describe("open spec lines: Activity, comments, drafts and toasts (X45, X46)", ()
   const lt = (key: string, column: "todo" | "in_progress" | "in_review") => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: `i-${key}`, state: "x", source: "MOON" } });
   const pr = (o: object = {}) => ({ number: 131, url: "https://github.com/acme/app/pull/131", state: "open", title: "Hosts", checks: [], review_decision: null, ...o });
   const rowWith = (id: string, p: object) => ({ session: { id, name: id, branch: id, path: `/w/${id}`, archived: false, task: null, task_unlinked: false, state: "idle" as const, pr: pr(p), additions: 0, subagents: 0, originRepo: null }, meta: { text: "#131", tone: "open" as const } });
-  const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
+  const boardOf = (t: ReturnType<typeof lt>, rows: ReturnType<typeof rowWith>[]) => ({ todo: [], in_progress: [], in_review: [{ task: t, column: "in_review" as const, rows, archived: [], needsYou: false, orphans: [], empty: null, drift: null }], done: [] });
   const start = (key: string) => ({ ref: { connection: "linear:acme", key, url: "" }, kind: "linear" as const, key, title: key, description: "", projects: [], tracker: { id: `i-${key}`, source: "MOON" } });
 
   it("records that a session started from the task, and moves and assigns it only when asked", async () => {
@@ -1623,7 +1624,7 @@ describe("a GitHub Project's board (X50 Sync)", () => {
     expect(moves).toEqual([]);
     // A fix that moves to the next column sets that option.
     const drift = { kind: "pr_open" as const, text: "#31 open", fix: "Move to In Progress", to: { column: "In Progress", category: "in_progress" as const, statuses: ["o2"] } };
-    await fixDrift("local", "personal", { task, column: "todo", rows: [], needsYou: false, orphans: [], empty: null, drift });
+    await fixDrift("local", "personal", { task, column: "todo", rows: [], archived: [], needsYou: false, orphans: [], empty: null, drift });
     expect(moves).toEqual([{ project: "PVT_1", item: "PVTI_10", field: "F", option: "o2" }]);
     useTasks.setState({ config: null });
   });
@@ -1873,6 +1874,19 @@ describe("errors as the user reads them", () => {
     setColumnShow("moon", "Todo", "fold");
     await vi.waitFor(() => expect(useStore.getState().toasts.at(-1)?.text).toBe("Could not write trackers.toml: permission denied"));
     useTasks.setState({ config: null });
+  });
+});
+
+describe("an archived session's pull request (X86)", () => {
+  const identity = { origin: "github.com/acme/web", root: "r1" };
+  const issue = { connection: "github:github.com", key: "acme/web#9", title: "Saved carts", url: "", column: "open" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, github: { repo: "acme/web", number: 9, closingPrs: [131] } };
+  const data: TasksData = { tasks: [issue], worktrees: [], sources: [], repos: { p1: "acme/web" }, syncedAt: null, error: null };
+  const old: Session = { id: "s1", project_id: "p1", name: "Carts", branch: "carts", base: "main", path: "/w/s1", agent: null, archived: true, created_at: 0, workspace_id: "W", terminals: [], layout: null, pr: 131 };
+
+  it("links an archived session to the issue its stored PR closes, though its PR is no longer polled", () => {
+    const state = { ...useStore.getState(), prs: {}, sessions: { local: [old] }, projects: { local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }] } };
+    const card = tasksBoard(boardInput(state, "local", "W", data, DEFAULT_CONFIG)).todo[0];
+    expect([card.task.key, card.archived.map((s) => [s.name, s.pr?.number])]).toEqual(["acme/web#9", [["Carts", 131]]]);
   });
 });
 

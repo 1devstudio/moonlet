@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PullRequest } from "./protocol";
 import type { Task } from "./tasks";
-import { type BoardSession, outOfSync, sessionsWithoutTask, tasksBoard } from "./tasksBoard";
+import { type BoardSession, cardOfSession, outOfSync, sessionsWithoutTask, tasksBoard } from "./tasksBoard";
 
 const task = (key: string, column: Task["column"], extra: Partial<Task> = {}): Task => ({
   connection: "linear:acme",
@@ -175,6 +175,57 @@ describe("out of sync (X45)", () => {
     expect(only(task("MOON-131", "done"), [], "auto", orphan).drift?.text).toBe("1 worktree");
     expect(only(task("MOON-131", "done"), left, "auto", orphan).drift?.text).toBe("1 session, 2 worktrees");
     expect(only(task("MOON-131", "done"), []).drift).toBe(null);
+  });
+});
+
+describe("archived sessions on their task (X86)", () => {
+  const linked = { connection: "linear:acme", key: "MOON-142", url: "" };
+  const board = (tasks: Task[], sessions: BoardSession[]) => tasksBoard({ tasks, sessions, worktrees: [], sessionStartRule: "suggest" });
+
+  it("lists a task's archived sessions apart, by its stored link or its branch, leaving an unlinked one out", () => {
+    const b = board(
+      [task("MOON-142", "in_progress")],
+      [
+        session("Live", "moon-142-live"),
+        session("Linked", "spike", { archived: true, task: linked }),
+        session("By branch", "moon-142-first-try", { archived: true }),
+        session("Unlinked", "moon-142-other", { archived: true, task_unlinked: true }),
+      ],
+    );
+    const c = b.in_progress[0];
+    expect(c.rows.map((r) => r.session.name)).toEqual(["Live"]);
+    expect(c.archived.map((s) => s.name)).toEqual(["Linked", "By branch"]);
+  });
+
+  it("finds the card of a session, live or archived, by its host and id", () => {
+    const b = board(
+      [task("MOON-7", "todo"), task("MOON-8", "in_progress")],
+      [session("Live", "moon-8-a"), session("Old", "moon-7-a", { archived: true }), session("Away", "moon-8-b", { id: "s9", host: "studio-mini" })],
+    );
+    expect([
+      cardOfSession(b, "local", { host: "local", id: "Live" })?.task.key,
+      cardOfSession(b, "local", { host: "local", id: "Old" })?.task.key,
+      cardOfSession(b, "local", { host: "studio-mini", id: "s9" })?.task.key,
+      // Ids are unique per host only: the same id on another host is not it.
+      cardOfSession(b, "local", { host: "studio-mini", id: "Live" }),
+      cardOfSession(b, "local", { host: "local", id: "s9" }),
+      cardOfSession(b, "local", { host: "local", id: "Gone" }),
+    ]).toEqual(["MOON-8", "MOON-7", "MOON-8", undefined, undefined, undefined]);
+  });
+
+  it("counts no archived session as the task's: no column, chip, empty line or clean-up of their own", () => {
+    const b = board(
+      [task("MOON-7", "todo"), task("MOON-8", "done"), gh(9)],
+      [
+        session("Was todo", "moon-7-a", { archived: true }),
+        session("Was done", "moon-8-a", { archived: true, state: "blocked" }),
+        session("Was open", "9-a", { archived: true, pr: pr(90, "open") }),
+      ],
+    );
+    expect([keysIn(b.todo), keysIn(b.done)]).toEqual([["MOON-7", "acme/web#9"], ["MOON-8"]]);
+    for (const c of [...b.todo, ...b.done]) {
+      expect([c.drift, c.needsYou, c.empty, c.archived.length]).toEqual([null, false, "No sessions", 1]);
+    }
   });
 });
 

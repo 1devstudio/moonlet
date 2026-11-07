@@ -69,6 +69,19 @@ export interface ToolCall {
   diff?: string | null;
 }
 
+/** A chat an archived session had, kept with its transcript (X86). */
+export interface ArchivedChat {
+  id: number;
+  title: string;
+  agent: string;
+  items: ChatItem[];
+}
+
+/** The result of `session.history` (X86). */
+export interface SessionHistory {
+  chats: ArchivedChat[];
+}
+
 export interface ChatItem {
   id: string;
   kind: ChatKind;
@@ -645,6 +658,12 @@ export interface Session {
   agent: string | null;
   archived: boolean;
   created_at: number;
+  /** When it was archived (X86); absent on sessions archived before X86. */
+  archived_at?: number | null;
+  /** Its tabs when it was archived, started again by Restore (X86). */
+  archived_restore?: { kind: string; title: string; agent: string | null }[];
+  /** Its pull request's number, kept by the daemon. */
+  pr?: number | null;
   /** The workspace the session belongs to (X32). */
   workspace_id?: string | null;
   model?: string | null;
@@ -1399,6 +1418,8 @@ export const M = {
   sessionReady: "session.ready",
   sessionArchive: "session.archive",
   sessionUnarchive: "session.unarchive",
+  /** An archived session's kept chats, with their transcripts (X86). */
+  sessionHistory: "session.history",
   sessionUpdate: "session.update",
   sessionRun: "session.run",
   /** X83: what a session's terminals and agents run, and what was left in its worktree. */
