@@ -19,7 +19,9 @@ const w = world();
 const home = join(w.root, "copies-book-home");
 // A short path: a Unix socket's must stay under ~104 bytes.
 const sock = join(w.root, "book.sock");
-const env = { ...w.env, MOONLET_HOME: home, MOONLET_SOCK: sock, MOONLET_MOBILE_ADDRS: "::1" };
+// It takes this Node for its app, as the daemon's own tests do, so the spec
+// can manage its link as the MacBook's app would (X75).
+const env = { ...w.env, MOONLET_HOME: home, MOONLET_SOCK: sock, MOONLET_MOBILE_ADDRS: "::1", MOONLET_TEST_APP_EXE: process.execPath };
 const clone = join(w.root, "book", "repo");
 const SESSION = "Fix cart";
 const row = sel.sessionRow(SESSION);

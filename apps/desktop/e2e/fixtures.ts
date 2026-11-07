@@ -177,10 +177,12 @@ export function jsonFrame(msg: object): Buffer {
  *  client may send it. `env` points `moonletd status` at that daemon.
  *  With `appToken`, the daemon's own app credential (X75, from
  *  `<its MOONLET_HOME>/run/app-token`), the request comes as that Mac's
- *  app, as for what only the app manages, such as its link. */
+ *  app, as for what only the app manages, such as its link. The daemon
+ *  takes it so only when it was started with `MOONLET_TEST_APP_EXE`
+ *  naming this Node, the seam the daemon's own tests use. */
 export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: string, params: object = {}, appToken?: string): Promise<T> {
   const { protocol } = JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number };
-  const hello = { t: "hello", protocol, client: "e2e", ...(appToken && { app_token: appToken }) };
+  const hello = appToken ? { t: "hello", protocol, client: "moonlet-app", app_token: appToken } : { t: "hello", protocol, client: "e2e" };
   return new Promise((resolve, reject) => {
     const s = connect(sock, () => s.write(Buffer.concat([jsonFrame(hello), jsonFrame({ t: "request", id: 1, method, params })])));
     let buf = Buffer.alloc(0);
