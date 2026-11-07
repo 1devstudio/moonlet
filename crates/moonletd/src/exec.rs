@@ -41,6 +41,9 @@ const DRAIN: Duration = Duration::from_secs(1);
 const MAX_QUEUED: usize = 4 * 1024 * 1024;
 /// How long a worker has to make its routing copy.
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a member's session waits for its central host's cloud machine
+/// (X89).
+const CENTRAL_CLOUD_WAIT: Duration = Duration::from_secs(20 * 60);
 /// How long the host that routed a run has to take its changes.
 const DONE_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -145,6 +148,9 @@ pub struct Plan {
     /// The project's setup command, from its main checkout, for a routing
     /// copy that has none of its own (X89).
     pub setup: Option<String>,
+    /// The project's identity, for the central host's cloud machines of
+    /// it (X89).
+    pub identity: Option<moonlet_proto::types::ProjectIdentity>,
 }
 
 /// How waiting for a cloud machine ended.
@@ -315,10 +321,24 @@ impl Runs {
         let mut rerun = false;
         // A member's own central host, and the other members reached
         // through it, when they take the member's heavy commands (X89).
-        let linked = self.link_candidates(sync).await;
+        let mut linked = self.link_candidates(sync, plan).await;
         // A session that asked for the cloud waits for its machine (X63).
         let mut wait_note = None;
+        // A member's session takes its central host's ready machine (X89).
+        let cloud_ready = linked.iter().any(|(c, _)| c.kind == Kind::Cloud);
+        // A member's session that asked for the cloud waits for its central
+        // host's machine of the project (X89).
         if plan.cloud
+            && !cloud_ready
+            && let (Some(central @ Peer::Link(_)), Some(identity)) = (sync.central_peer(), plan.identity.clone())
+        {
+            match self.wait_for_central_cloud(run, job, client, plan, sync, &central, identity).await {
+                CloudWait::Ready => linked = self.link_candidates(sync, plan).await,
+                CloudWait::Stopped(status) => return status,
+                CloudWait::Here(note) => wait_note = Some(note),
+            }
+        } else if plan.cloud
+            && !cloud_ready
             && let Some(m) = self.machines()
             && m.workers_for(&plan.project_id).is_empty()
         {
@@ -350,6 +370,18 @@ impl Runs {
                         if all_busy && let Some(m) = self.machines() {
                             m.overflow(&plan.project_id);
                         }
+                        // A member asks its central host, whose machines
+                        // they are (X89).
+                        if all_busy
+                            && let (Some(peer @ Peer::Link(_)), Some(identity)) = (sync.central_peer(), plan.identity.clone())
+                        {
+                            tokio::spawn(async move {
+                                let ask = m::CloudOverflow { identity, asked: false };
+                                let _ = peer
+                                    .request(m::CLOUD_OVERFLOW, serde_json::to_value(ask).unwrap(), Duration::from_secs(10))
+                                    .await;
+                            });
+                        }
                         break;
                     };
                     claims.insert(run, (chosen.id.clone(), plan.session.clone()));
@@ -362,9 +394,12 @@ impl Runs {
                     .map(|w| w.worker.name)
                     .or_else(|| linked.iter().find(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
                     .unwrap_or_else(|| chosen.id.clone());
+                // This host's own machine; a member's session reaches its
+                // central host's through it (X89), which keeps their count.
                 let machines = (chosen.kind == Kind::Cloud)
                     .then(|| self.machines())
-                    .flatten();
+                    .flatten()
+                    .filter(|m| m.cloud_workers().contains(&chosen.id));
                 if let Some(m) = &machines {
                     m.run_started(&chosen.id);
                     // Its first command of the session copies the session there.
@@ -568,6 +603,68 @@ impl Runs {
         outcome
     }
 
+    /// Waits for the central host's cloud machine of the session's project,
+    /// which it starts if none is on its way, saying so every 10 s (X89),
+    /// as [`Runs::wait_for_cloud`] does for this host's own machines.
+    #[allow(clippy::too_many_arguments)]
+    async fn wait_for_central_cloud(
+        &self,
+        run: u32,
+        job: &str,
+        client: &Arc<Conn>,
+        plan: &Plan,
+        sync: &LiveCopies,
+        central: &Peer,
+        identity: moonlet_proto::types::ProjectIdentity,
+    ) -> CloudWait {
+        let say = |text: String| {
+            self.emit(run, job, client, 2, format!("moonlet: {text}\n").into_bytes())
+        };
+        let ask = m::CloudOverflow { identity, asked: true };
+        let name = match central
+            .request(m::CLOUD_OVERFLOW, serde_json::to_value(ask).unwrap(), Duration::from_secs(30))
+            .await
+        {
+            Ok(v) => v["name"].as_str().unwrap_or("a cloud machine").to_string(),
+            Err(e) => return CloudWait::Here(format!("no cloud machine ({}). Running on {}.", e.message, plan.host)),
+        };
+        self.jobs.update(job, |j| {
+            j.state = JobState::Waiting { r#for: name.clone() }
+        });
+        let started = std::time::Instant::now();
+        let mut said = None;
+        let mut checked = std::time::Instant::now();
+        loop {
+            if let Some(status) = self.stopped(run, client) {
+                return CloudWait::Stopped(status);
+            }
+            if self.here_now.lock().unwrap().remove(&run) {
+                return CloudWait::Here(format!(
+                    "running on {} instead, as asked from the Jobs panel",
+                    plan.host
+                ));
+            }
+            let waited = started.elapsed().as_secs();
+            if said.is_none_or(|s: u64| waited >= s + 10) {
+                said = Some(waited - waited % 10);
+                say(format!("waiting for {name} to start ({})", clock(waited)));
+            }
+            if checked.elapsed() >= Duration::from_secs(1) {
+                checked = std::time::Instant::now();
+                if self.link_candidates(sync, plan).await.iter().any(|(c, _)| c.kind == Kind::Cloud) {
+                    self.jobs.update(job, |j| {
+                        j.state = JobState::Running { worker: name.clone() }
+                    });
+                    return CloudWait::Ready;
+                }
+            }
+            if started.elapsed() > CENTRAL_CLOUD_WAIT {
+                return CloudWait::Here(format!("no cloud machine ({name} did not start). Running on {}.", plan.host));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     /// `job.run_here`: job `job`, waiting for a cloud machine, runs on the
     /// central host now (X63).
     pub fn run_here(&self, job: &str) -> Result<bool, RpcError> {
@@ -601,19 +698,24 @@ impl Runs {
     /// through it (`worker.peers`), as candidates with their names (X89):
     /// those that take other hosts' heavy commands. None on a central host,
     /// and from one before X89.
-    async fn link_candidates(&self, sync: &LiveCopies) -> Vec<(Candidate, String)> {
+    async fn link_candidates(&self, sync: &LiveCopies, plan: &Plan) -> Vec<(Candidate, String)> {
         let Some(peer @ Peer::Link(_)) = sync.central_peer() else {
             return Vec::new();
         };
-        let ask = |method: &'static str| {
+        let ask = |method: &'static str, params: serde_json::Value| {
             let peer = peer.clone();
             async move {
-                peer.request(method, serde_json::json!({}), Duration::from_secs(2))
+                peer.request(method, params, Duration::from_secs(2))
                     .await
                     .ok()
             }
         };
-        let (central, others) = tokio::join!(ask(m::WORKER_STATUS), ask(m::WORKER_PEERS));
+        // With the project's identity: its ready cloud machines too.
+        let peers = serde_json::to_value(m::WorkerPeers { identity: plan.identity.clone() }).unwrap();
+        let (central, others) = tokio::join!(
+            ask(m::WORKER_STATUS, serde_json::json!({})),
+            ask(m::WORKER_PEERS, peers)
+        );
         let central = central.and_then(|v| serde_json::from_value::<m::WorkerStatus>(v).ok());
         let others = others
             .and_then(|v| serde_json::from_value::<Vec<m::WorkerStatus>>(v).ok())
@@ -623,9 +725,12 @@ impl Runs {
             .chain(others)
             .filter(|s| s.heavy)
             .map(|s| {
+                if s.cloud {
+                    sync.offered(&s.id);
+                }
                 let c = Candidate {
                     id: s.id,
-                    kind: Kind::Linked,
+                    kind: if s.cloud { Kind::Cloud } else { Kind::Linked },
                     os: s.os,
                     cores: s.cores,
                     load: s.load,
@@ -651,6 +756,7 @@ impl Runs {
             slots: me.slots,
             used: self.used_here(),
             rtt_ms: None,
+            cloud: false,
         }
     }
 
@@ -743,6 +849,7 @@ impl Runs {
         let prepare = m::ExecPrepare {
             session: plan.session.clone(),
             setup: plan.setup.clone(),
+            identity: plan.identity.clone(),
         };
         sync.expect_open(worker, &plan.session);
         let prepared: ExecPrepared = self

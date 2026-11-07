@@ -17,12 +17,19 @@ use moonlet_proto::methods as m;
 use moonlet_proto::{Frame, Message, RpcError};
 use serde_json::Value;
 
+use moonlet_proto::types::ProjectIdentity;
+
+use crate::machines::Machines;
 use crate::server::Conn;
 use crate::workers::Workers;
 
 /// Relay ids start here, far from this host's own run ids, which a member
 /// that is also this host's worker keys by the same link.
 const FIRST_RELAY: u32 = 0x6000_0000;
+
+/// How long after `exec.prepare` a runner may call its router back without
+/// a run going on: a routing copy is made within the prepare's 10 minutes.
+const PREPARED_FOR: Duration = Duration::from_secs(15 * 60);
 
 /// What a router may ask a runner, and a runner its router: the routing
 /// methods of X62, nothing else.
@@ -44,8 +51,10 @@ struct Passed {
 pub struct Relay {
     next: AtomicU32,
     runs: Mutex<HashMap<u32, Passed>>,
-    /// Routers and the runners they asked to prepare a routing copy.
-    prepared: Mutex<std::collections::HashSet<Pair>>,
+    /// Routers and the runners they last asked to prepare a routing copy,
+    /// with when: a runner calls its router back only while that is recent
+    /// or a run of that router's goes on there.
+    prepared: Mutex<HashMap<Pair, std::time::Instant>>,
 }
 
 impl Relay {
@@ -59,7 +68,15 @@ impl Relay {
 
     /// `peer.call` from member `from` on `conn`: passed on to member
     /// `call.to`, and its answer back.
-    pub async fn call(&self, workers: &Workers, conn: &Arc<Conn>, from: String, call: m::PeerCall) -> Result<Value, RpcError> {
+    pub async fn call(
+        &self,
+        workers: &Workers,
+        machines: &Machines,
+        conn: &Arc<Conn>,
+        from: String,
+        from_cloud: bool,
+        call: m::PeerCall,
+    ) -> Result<Value, RpcError> {
         let to = call.to.clone().ok_or_else(|| RpcError::new("invalid_params", "to whom"))?;
         if call.from.is_some() {
             return Err(RpcError::new("invalid_params", "the central host names the sender"));
@@ -69,19 +86,42 @@ impl Relay {
         if !runner_side && !TO_ROUTER.contains(&method) {
             return Err(RpcError::new("forbidden", format!("{method} does not go between members")));
         }
-        let target = workers
-            .list()
-            .into_iter()
-            .find(|w| w.worker.id == to && w.worker.peer)
-            .and_then(|_| workers.conn(&to))
-            .filter(|c| !c.cloud.load(Ordering::Relaxed))
-            .ok_or_else(|| RpcError::new("unsupported", format!("{to} takes no calls from other members")))?;
+        // A cloud machine only answers the member whose command it runs.
+        if from_cloud && runner_side {
+            return Err(RpcError::new("forbidden", "a cloud machine routes nothing"));
+        }
+        let unsupported = || RpcError::new("unsupported", format!("{to} takes no calls from other members"));
+        let target = workers.conn(&to).ok_or_else(unsupported)?;
+        let to_cloud = target.cloud.load(Ordering::Relaxed);
+        if to_cloud {
+            // One of this host's machines, for a member's command of the
+            // machine's own project (X89, X63).
+            let key = machines.key_of_worker(&to).ok_or_else(unsupported)?;
+            if !runner_side {
+                return Err(unsupported());
+            }
+            if method == m::EXEC_PREPARE {
+                let wanted = serde_json::from_value::<ProjectIdentity>(call.params["identity"].clone())
+                    .ok()
+                    .and_then(|i| crate::heavy::key(&i));
+                if wanted.as_deref() != Some(key.as_str()) {
+                    return Err(RpcError::new("forbidden", "a cloud machine runs commands of its own project only"));
+                }
+            } else if !self.prepared_lately(&from, &to) {
+                return Err(RpcError::new("forbidden", format!("{from} routed nothing to {to}")));
+            }
+        } else if !workers.list().iter().any(|w| w.worker.id == to && w.worker.peer) {
+            return Err(unsupported());
+        }
         // A runner calls back only a router that asked it to run something.
-        if !runner_side && !self.prepared.lock().unwrap().contains(&(to.clone(), from.clone())) {
+        if !runner_side && !self.prepared_lately(&to, &from) && !self.runs_for(&to, &from) {
             return Err(RpcError::new("forbidden", format!("{to} routed nothing to {from}")));
         }
         if method == m::EXEC_PREPARE {
-            self.prepared.lock().unwrap().insert((from.clone(), to.clone()));
+            self.prepared
+                .lock()
+                .unwrap()
+                .insert((from.clone(), to.clone()), std::time::Instant::now());
         }
         let mut params = call.params;
         // The relay run an `exec.done` ends.
@@ -162,6 +202,23 @@ impl Relay {
             reply["pack"] = Value::from(conn.send_pack(&pack)?);
         }
         Ok(reply)
+    }
+
+    /// Whether `router` asked `runner` to prepare a copy in the last
+    /// [`PREPARED_FOR`]; older entries go.
+    fn prepared_lately(&self, router: &str, runner: &str) -> bool {
+        let mut prepared = self.prepared.lock().unwrap();
+        prepared.retain(|_, at| at.elapsed() < PREPARED_FOR);
+        prepared.contains_key(&(router.to_string(), runner.to_string()))
+    }
+
+    /// Whether a run of `router`'s goes on on `runner` now.
+    fn runs_for(&self, router: &str, runner: &str) -> bool {
+        self.runs
+            .lock()
+            .unwrap()
+            .values()
+            .any(|p| p.router_id == router && p.runner == runner)
     }
 
     /// Output of relay run `id` from the member that runs it, on `from`:

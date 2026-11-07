@@ -1209,6 +1209,26 @@ impl Machines {
             .collect()
     }
 
+    /// The project key of the machine whose worker is `worker` (X89).
+    pub fn key_of_worker(&self, worker: &str) -> Option<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.worker.as_deref() == Some(worker))
+            .map(|r| r.shown.project_key.clone())
+    }
+
+    /// This host's project with identity `identity`, by id (X89).
+    pub fn project_with(&self, identity: &moonlet_proto::types::ProjectIdentity) -> Option<String> {
+        let key = crate::heavy::key(identity)?;
+        self.sessions
+            .list_projects()
+            .into_iter()
+            .find(|p| crate::heavy::key(&p.identity).as_deref() == Some(key.as_str()))
+            .map(|p| p.id)
+    }
+
     /// The worker ids of project `project`'s ready cloud machines.
     pub fn workers_for(&self, project: &str) -> Vec<String> {
         let Some(key) = self.project_key(project) else {
@@ -1291,6 +1311,30 @@ impl Machines {
             None => self
                 .up(project, Some(session.to_string()))
                 .map(|m| (m.id, m.name)),
+        }
+    }
+
+    /// The machine a member's cloud session's command waits for (X89): the
+    /// project's machine on its way, or a new one.
+    pub fn for_member(&self, project: &str) -> Result<(String, String), RpcError> {
+        let key = self
+            .project_key(project)
+            .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit"))?;
+        let _one = self.choosing.lock().unwrap();
+        let coming = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r.shown.project_key == key
+                    && matches!(r.shown.state.as_str(), "creating" | "starting" | "ready")
+                    && r.down_after.is_none()
+            })
+            .map(|r| (r.shown.id.clone(), r.shown.name.clone()));
+        match coming {
+            Some(found) => Ok(found),
+            None => self.up(project, None).map(|m| (m.id, m.name)),
         }
     }
 
