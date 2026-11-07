@@ -125,6 +125,9 @@ struct Central {
     session: String,
     /// The session's worktree.
     worktree: PathBuf,
+    /// The project's main checkout, whose `.moonlet/config.toml` lists the
+    /// heavy commands (X90).
+    checkout: PathBuf,
 }
 
 async fn central_with(config: &str, env: &[(&str, &str)]) -> Central {
@@ -174,6 +177,7 @@ async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)])
         project: project["id"].as_str().unwrap().into(),
         session: session["id"].as_str().unwrap().into(),
         worktree: PathBuf::from(session["path"].as_str().unwrap()),
+        checkout: repo,
     }
 }
 
@@ -229,9 +233,10 @@ async fn an_unapproved_entry_is_not_routed() {
     );
 }
 
-/// Edits the session's own `.moonlet/config.toml`, as an agent would.
+/// Edits the project's `.moonlet/config.toml` in its main checkout, the
+/// list routing reads (X90).
 fn edit_config(c: &Central, text: &str) {
-    write(&c.worktree.join(".moonlet/config.toml"), text);
+    write(&c.checkout.join(".moonlet/config.toml"), text);
 }
 
 #[tokio::test]
@@ -384,6 +389,44 @@ async fn a_deny_rule_in_the_worktree_keeps_the_command_here() {
         json!({ "route": false, "reason": "claude_rule" })
     );
     assert_eq!(c.route("pnpm test").await["route"], json!(true));
+}
+
+#[tokio::test]
+async fn a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    // A project that keeps `.moonlet/` out of git: a worktree made from git
+    // has none.
+    std::fs::remove_dir_all(c.worktree.join(".moonlet")).unwrap();
+    assert_eq!(
+        c.route("pnpm test").await,
+        json!({ "route": true, "reason": null })
+    );
+}
+
+#[tokio::test]
+async fn an_entry_only_the_worktree_lists_is_not_routed() {
+    let c = central_with("[heavy]\ncommands = [\"pnpm test\", \"pnpm lint\"]\n", &[]).await;
+    c.approve(&["pnpm test", "pnpm lint"], &[]).await;
+    // Taken off the main checkout's list, which needs no approval; the
+    // worktree still lists it.
+    edit_config(&c, "[heavy]\ncommands = [\"pnpm test\"]\n");
+    assert_eq!(
+        c.route("pnpm lint").await,
+        json!({ "route": false, "reason": "not_heavy" })
+    );
+    assert_eq!(c.route("pnpm test").await["route"], json!(true));
+}
+
+#[tokio::test]
+async fn an_unreadable_main_checkout_config_routes_nothing() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    edit_config(&c, "[heavy\n");
+    assert_eq!(
+        c.route("pnpm test").await,
+        json!({ "route": false, "reason": "invalid_config" })
+    );
 }
 
 /// The central host with tailnet access on, listening on 127.0.0.1 as its
@@ -1192,6 +1235,29 @@ async fn outputs_bring_back_an_ignored_coverage_folder() {
     assert!(!c.worktree.join("coverage/old.txt").exists());
     // Ignored, so nothing of it shows as a change in the session.
     assert_eq!(git(&c.worktree, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn outputs_come_from_the_main_checkouts_list() {
+    let (c, _mac) = linked().await;
+    // The worktree's own list has no `outputs`; the main checkout's has
+    // `coverage`.
+    write(
+        &c.worktree.join(".moonlet/config.toml"),
+        "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\", \"shop-tool\"]\nenv = [\"CI\"]\n",
+    );
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "mkdir -p coverage && echo 87 > coverage/index.txt",
+        ])
+        .await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("coverage/index.txt")).unwrap(),
+        "87\n"
+    );
 }
 
 #[tokio::test]

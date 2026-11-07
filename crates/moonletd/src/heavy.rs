@@ -158,13 +158,16 @@ impl Heavy {
             tool_use_id: None,
         };
         self.why_not(&ask)?;
-        let worktree = self
+        let s = self.sessions.session(session).map_err(|_| "no_session")?;
+        let worktree = std::fs::canonicalize(&s.path).map_err(|_| "no_session")?;
+        let project = self
             .sessions
-            .session(session)
-            .ok()
-            .and_then(|s| std::fs::canonicalize(s.path).ok())
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == s.project_id)
             .ok_or("no_session")?;
-        let config = project_config::load(&worktree, String::new());
+        // The main checkout's list, as `why_not` read it (X90).
+        let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         let os = config.config.heavy.os;
         let outputs = config.config.heavy.outputs.clone();
         let names = config.config.heavy.env;
@@ -179,15 +182,8 @@ impl Heavy {
             .map_err(|_| "outside_worktree")?
             .display()
             .to_string();
-        let project = self
-            .sessions
-            .session(session)
-            .ok()
-            .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))
-            .map(|p| p.name)
-            .unwrap_or_default();
         Ok(Checked {
-            project,
+            project: project.name,
             worktree: worktree.clone(),
             cwd,
             cwd_rel,
@@ -215,8 +211,9 @@ impl Heavy {
             .into_iter()
             .find(|p| p.id == session.project_id)
             .ok_or("no_session")?;
-        // The worktree's own config: an agent's edit there counts.
-        let config = project_config::load(&worktree, project.base_branch.clone());
+        // The main checkout's config, the list the user approved (X90): a
+        // worktree made from git may have no `.moonlet/` at all.
+        let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         if config.error.is_some() || heavy::check(&config.config.heavy).is_err() {
             return Err("invalid_config");
         }
