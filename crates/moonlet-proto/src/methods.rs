@@ -105,6 +105,8 @@ pub const SESSION_CREATE: &str = "session.create";
 pub const SESSION_LIST: &str = "session.list";
 pub const SESSION_ARCHIVE: &str = "session.archive";
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
+/// An archived session's kept chats, with their transcripts (X86).
+pub const SESSION_HISTORY: &str = "session.history";
 pub const SESSION_UPDATE: &str = "session.update";
 pub const SESSION_RUN: &str = "session.run";
 /// The processes a session's terminals and agents run, and those left in its
@@ -1723,6 +1725,12 @@ pub struct SessionReady {
 pub struct SessionList {
     #[serde(default)]
     pub copies: bool,
+}
+
+/// The result of `session.history` (X86).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionHistory {
+    pub chats: Vec<crate::types::ArchivedChat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

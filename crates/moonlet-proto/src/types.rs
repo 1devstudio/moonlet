@@ -658,6 +658,13 @@ pub struct Session {
     /// Commands to restart after a daemon restart (S4).
     #[serde(default)]
     pub restore: Vec<RestoreEntry>,
+    /// When it was archived (ms since the epoch, X86); none while it is
+    /// not, and on sessions archived before X86.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<u64>,
+    /// Its tabs when it was archived, restarted by Restore (X86).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_restore: Vec<RestoreEntry>,
     /// The member that runs this session's agent, for a session another
     /// member owns (X72); none for this host's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1387,6 +1394,15 @@ pub struct SubagentTool {
     pub added: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<u32>,
+}
+
+/// A chat an archived session had, kept with its transcript (X86).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchivedChat {
+    pub id: TerminalId,
+    pub title: String,
+    pub agent: String,
+    pub items: Vec<ChatItem>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -3357,6 +3357,8 @@ impl Daemon {
                 terminals: Vec::new(),
                 layout: Value::Null,
                 restore: Vec::new(),
+                archived_at: None,
+                archived_restore: Vec::new(),
                 owner: None,
                 pinned: None,
             })
@@ -3626,6 +3628,8 @@ impl Daemon {
                 terminals: Vec::new(),
                 layout: Value::Null,
                 restore: Vec::new(),
+                archived_at: None,
+                archived_restore: Vec::new(),
                 owner: None,
                 pinned: None,
             })
@@ -5185,6 +5189,8 @@ impl Daemon {
                     terminals: Vec::new(),
                     layout: Value::Null,
                     restore: Vec::new(),
+                    archived_at: None,
+                    archived_restore: Vec::new(),
                     pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
                     owner: Some(SessionOwner {
                         name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
@@ -5561,6 +5567,10 @@ impl Daemon {
             m::SESSION_UNARCHIVE => {
                 let r: m::IdRef = params(p)?;
                 ok(w.unarchive(&r.id).await.map_err(internal)?)
+            }
+            m::SESSION_HISTORY => {
+                let r: m::IdRef = params(p)?;
+                ok(m::SessionHistory { chats: w.history(&r.id).map_err(internal)? })
             }
             m::SESSION_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
             m::SESSION_PROCESSES => {

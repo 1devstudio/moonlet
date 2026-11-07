@@ -860,6 +860,7 @@ impl SessionManager {
     /// section holds is removed from moonlet, which needs its sessions
     /// archived first.
     pub fn section_remove_project(&self, id: &str, project_id: &str) -> Result<()> {
+        let held = self.sessions_of_project(project_id);
         let dropped = self.mutate(|st| {
             let wi = st.workspace_of_section(id).context("no such section")?;
             let ws = st.workspaces[wi].id.clone();
@@ -888,9 +889,25 @@ impl SessionManager {
         })?;
         self.emit_sections();
         if dropped {
+            self.forget_kept_chats(&held);
             self.emit_projects();
         }
         Ok(())
+    }
+
+    /// The ids of project `id`'s sessions.
+    fn sessions_of_project(&self, id: &str) -> Vec<String> {
+        self.state.lock().unwrap().sessions.iter().filter(|s| s.project_id == id).map(|s| s.id.clone()).collect()
+    }
+
+    /// Deletes the kept chats (X86) of those of `ids` that are gone.
+    fn forget_kept_chats(&self, ids: &[String]) {
+        let Some(chats) = self.chats.get() else { return };
+        for id in ids {
+            if self.session(id).is_err() {
+                chats.forget_archived(id);
+            }
+        }
     }
 
     /// X41: projects saved before identities existed, or with a field that
@@ -1006,7 +1023,9 @@ impl SessionManager {
     }
 
     pub fn remove_project(&self, id: &str) -> Result<()> {
+        let held = self.sessions_of_project(id);
         self.mutate(|st| st.drop_project(id))?;
+        self.forget_kept_chats(&held);
         self.terminals.emit(Message::event(
             methods::EV_PROJECTS_CHANGED,
             self.list_projects(),
@@ -1709,6 +1728,8 @@ impl SessionManager {
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
+            archived_at: None,
+            archived_restore: Vec::new(),
             owner: None,
             pinned: None,
         };
@@ -1909,25 +1930,52 @@ impl SessionManager {
         }
         for s in self.terminals.list() {
             if s.session_id.as_deref() == Some(ws.id.as_str()) {
+                // Its chats are kept, for its history and Restore (X86).
+                if s.chat
+                    && let Some(chats) = self.chats.get()
+                {
+                    chats.archive(s.id, &ws.id);
+                }
                 let _ = self.terminals.kill(s.id, true);
             }
         }
-        if req.remove_worktree {
-            git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
-        }
         let mut done = SessionArchived::default();
-        // The project's base branch is never deleted (X55), whoever asks.
-        if req.delete_branch && ws.branch != repo.base_branch {
-            git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
-            if req.delete_remote
-                && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await
-            {
-                done.remote_error = Some(format!("{e:#}"));
+        let git_steps = async {
+            if req.remove_worktree {
+                git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
             }
+            // The project's base branch is never deleted (X55), whoever asks.
+            if req.delete_branch && ws.branch != repo.base_branch {
+                git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
+                if req.delete_remote
+                    && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await
+                {
+                    done.remote_error = Some(format!("{e:#}"));
+                }
+            }
+            anyhow::Ok(())
+        };
+        if let Err(e) = git_steps.await {
+            // Still live: its kept chats come back to it (X86).
+            let back = self.chats.get().map(|c| c.unarchive(&ws.id)).unwrap_or_default();
+            if !back.is_empty() {
+                let _ = self.mutate(|st| {
+                    if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
+                        w.terminals.extend(&back);
+                    }
+                    Ok(())
+                });
+                self.emit_sessions();
+            }
+            return Err(e);
         }
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                 w.archived = true;
+                w.archived_at = Some(crate::paths::now_ms());
+                // Its tabs as they were before they ended, which also
+                // drops them from `restore`, for Restore to start again (X86).
+                w.archived_restore = ws.restore.clone();
                 w.terminals.clear();
                 w.restore.clear();
             }
@@ -1935,6 +1983,15 @@ impl SessionManager {
         })?;
         self.emit_sessions();
         Ok(done)
+    }
+
+    /// The chats archived session `id` had, with their transcripts (X86).
+    pub fn history(&self, id: &str) -> Result<Vec<moonlet_proto::types::ArchivedChat>> {
+        let s = self.session(id)?;
+        if !s.archived {
+            bail!("the session is not archived");
+        }
+        Ok(self.chats.get().map(|c| c.archived(&s.id)).unwrap_or_default())
     }
 
     /// The lock a session's terminals starting and its archive share (X65):
@@ -1963,14 +2020,37 @@ impl SessionManager {
                 tracing::warn!("cannot copy {}'s copied files into {}: {e:#}", repo.name, ws.path);
             }
         }
+        let mut tabs = Vec::new();
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == id) {
                 w.archived = false;
+                w.archived_at = None;
+                tabs = std::mem::take(&mut w.archived_restore);
             }
             Ok(())
         })?;
         let ws = self.session(id)?;
-        self.spawn_in(&ws, TerminalCreate::default())?;
+        // Its tabs as they were when archived, its agents continuing (X86);
+        // a session archived before X86 kept none, and gets one tab.
+        let chats = self.chats.get().map(|c| c.unarchive(id)).unwrap_or_default();
+        let mut started = chats.len();
+        if !chats.is_empty() {
+            self.mutate(|st| {
+                if let Some(w) = st.sessions.iter_mut().find(|w| w.id == id) {
+                    w.terminals.extend(&chats);
+                }
+                Ok(())
+            })?;
+        }
+        for entry in &tabs {
+            match self.spawn_in(&ws, self.restore_request(&ws, &repo, entry)) {
+                Ok(_) => started += 1,
+                Err(e) => tracing::warn!(session = %ws.id, "restoring a tab failed: {e:#}"),
+            }
+        }
+        if started == 0 {
+            self.spawn_in(&ws, TerminalCreate::default())?;
+        }
         self.session(id)
     }
 
@@ -2102,33 +2182,7 @@ impl SessionManager {
                 Ok(())
             });
             for entry in dead {
-                let known = |a: &str| {
-                    builtin_agent(a, true).is_some()
-                        || read_config(Path::new(&repo.path)).agents.contains_key(a)
-                };
-                let req = match (&entry.kind, &entry.agent) {
-                    (TerminalKind::Agent, Some(agent)) if known(agent) => {
-                        // A Claude conversation is in the profile it ran in
-                        // (X33); other agents keep their history elsewhere.
-                        let resume = agent != "claude" || entry.config_dir == self.config_dir(&ws.id);
-                        let mut r = self.agent_session(&ws, &repo, agent, None, resume, 120, 32);
-                        r.title = Some(entry.title.clone());
-                        r
-                    }
-                    _ => TerminalCreate {
-                        cwd: entry.cwd.clone(),
-                        command: match entry.command.as_slice() {
-                            // An agent tab run through the login shell: its
-                            // export names the profile it started with.
-                            [shell, flag, cmd] if flag == "-lic" => vec![shell.clone(), flag.clone(), with_profile(cmd, self.config_dir(&ws.id).as_deref())],
-                            other => other.to_vec(),
-                        },
-                        title: Some(entry.title.clone()),
-                        kind: entry.kind,
-                        agent: entry.agent.clone(),
-                        ..Default::default()
-                    },
-                };
+                let req = self.restore_request(&ws, &repo, &entry);
                 match self.spawn_in(&ws, req) {
                     Ok(_) => restored += 1,
                     Err(e) => tracing::warn!(workspace = %ws.id, "restore failed: {e:#}"),
@@ -2136,6 +2190,36 @@ impl SessionManager {
             }
         }
         restored
+    }
+
+    /// The tab `entry` describes, started again (S4, X86): a known agent
+    /// resumes its conversation, a Claude one only in the profile it ran in
+    /// (X33); anything else runs its command again in its folder.
+    fn restore_request(&self, ws: &Session, repo: &Project, entry: &RestoreEntry) -> TerminalCreate {
+        let known = |a: &str| builtin_agent(a, true).is_some() || read_config(Path::new(&repo.path)).agents.contains_key(a);
+        match (&entry.kind, &entry.agent) {
+            (TerminalKind::Agent, Some(agent)) if known(agent) => {
+                // A Claude conversation is in the profile it ran in
+                // (X33); other agents keep their history elsewhere.
+                let resume = agent != "claude" || entry.config_dir == self.config_dir(&ws.id);
+                let mut r = self.agent_session(ws, repo, agent, None, resume, 120, 32);
+                r.title = Some(entry.title.clone());
+                r
+            }
+            _ => TerminalCreate {
+                cwd: entry.cwd.clone(),
+                command: match entry.command.as_slice() {
+                    // An agent tab run through the login shell: its
+                    // export names the profile it started with.
+                    [shell, flag, cmd] if flag == "-lic" => vec![shell.clone(), flag.clone(), with_profile(cmd, self.config_dir(&ws.id).as_deref())],
+                    other => other.to_vec(),
+                },
+                title: Some(entry.title.clone()),
+                kind: entry.kind,
+                agent: entry.agent.clone(),
+                ..Default::default()
+            },
+        }
     }
 
     /// `removed`: the tab was closed. Otherwise the process exited while the
@@ -3093,6 +3177,55 @@ mod tests {
         move |sock: &str| SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), TerminalManager::new(home.path().join(sock), env.clone()))
     }
 
+    /// X86: Restore brings back an archived session's tabs, and its Claude
+    /// tab continues its conversation in the recreated worktree.
+    #[tokio::test]
+    async fn restoring_an_archived_session_continues_its_claude_tab() {
+        let repo = crate::git::tests::repo().await;
+        let home = tempfile::tempdir().unwrap();
+        let mgr = fake_agents(&home)("s1.sock");
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = None;
+        req.tui = true;
+        let s = mgr.create_session(req).await.unwrap();
+        let args = Path::new(&s.path).join("claude-args");
+        assert!(!nth_line(&args, 1).await.contains("--continue"));
+
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+        assert!(!Path::new(&s.path).exists());
+        let back = mgr.unarchive(&s.id).await.unwrap();
+
+        assert!(nth_line(&args, 1).await.contains("--continue"));
+        assert_eq!(back.terminals.len(), 1);
+        let tab = mgr.terminals.get(back.terminals[0]).unwrap().info();
+        assert_eq!((tab.kind, tab.agent.as_deref()), (TerminalKind::Agent, Some("claude")));
+    }
+
+    /// X86: a session archived with no tabs, as every session archived
+    /// before X86 was, comes back with one; and it says when it was archived.
+    #[tokio::test]
+    async fn a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived() {
+        let repo = crate::git::tests::repo().await;
+        let home = tempfile::tempdir().unwrap();
+        let mgr = fake_agents(&home)("s1.sock");
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        for t in mgr.session(&s.id).unwrap().terminals {
+            mgr.terminals.kill(t, true).unwrap();
+        }
+        wait_until("its tabs never closed", || mgr.session(&s.id).unwrap().terminals.is_empty()).await;
+
+        let before = crate::paths::now_ms();
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: false, delete_branch: false, delete_remote: false }).await.unwrap();
+        let archived = mgr.session(&s.id).unwrap();
+        assert!(archived.archived_at.is_some_and(|at| at >= before), "{:?}", archived.archived_at);
+
+        let back = mgr.unarchive(&s.id).await.unwrap();
+        assert_eq!((back.terminals.len(), back.archived_at), (1, None));
+    }
+
     /// X33: after a daemon restart, a Claude tab continues its conversation
     /// only while the workspace still uses the profile it ran in.
     #[tokio::test]
@@ -3242,6 +3375,58 @@ mod tests {
         let mgr = SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), terminals);
         mgr.set_chats(chats.clone());
         (repo, home, mgr, chats)
+    }
+
+    /// X86: an archived session's chat is kept for its history, and Restore
+    /// brings it back with its transcript instead of starting a new tab.
+    /// Removing its project deletes what was kept.
+    #[tokio::test]
+    async fn an_archived_sessions_chat_is_its_history_and_comes_back_on_restore() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = Some("hi".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let chat = s.terminals[0];
+        wait_until("the first turn never ended", || chats.state(chat).is_ok_and(|st| st.status == "done")).await;
+        assert!(mgr.history(&s.id).is_err(), "a live session has no history");
+
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+        assert!(!chats.is_chat(chat));
+        let history = mgr.history(&s.id).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].items.iter().any(|i| i.kind == "user" && i.text == "hi"), "{:?}", history[0].items);
+
+        let back = mgr.unarchive(&s.id).await.unwrap();
+        assert_eq!(back.terminals, vec![chat]);
+        assert!(chats.state(chat).unwrap().items.iter().any(|i| i.kind == "user" && i.text == "hi"));
+
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+        assert_eq!(chats.archived(&s.id).len(), 1);
+        mgr.remove_project(&r.id).unwrap();
+        assert!(chats.archived(&s.id).is_empty());
+    }
+
+    /// X86: an archive that fails after its chats were kept, here deleting
+    /// a branch git refuses to delete, leaves the session live with them.
+    #[tokio::test]
+    async fn a_failed_archive_gives_the_session_its_chats_back() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = Some("hi".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let chat = s.terminals[0];
+        wait_until("the first turn never ended", || chats.state(chat).is_ok_and(|st| st.status == "done")).await;
+
+        // The branch is still checked out in the kept worktree.
+        assert!(mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: false, delete_branch: true, delete_remote: false }).await.is_err());
+        let now = mgr.session(&s.id).unwrap();
+        assert!(!now.archived);
+        assert!(chats.archived(&s.id).is_empty());
+        wait_until("the chat never came back", || mgr.session(&s.id).unwrap().terminals.iter().any(|t| chats.state(*t).is_ok_and(|st| st.items.iter().any(|i| i.kind == "user" && i.text == "hi")))).await;
     }
 
     /// The session's terminals in creation order, as (agent, structured).
@@ -4240,6 +4425,8 @@ mod tests {
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
+            archived_at: None,
+            archived_restore: Vec::new(),
             owner: None,
             pinned: None,
         };
