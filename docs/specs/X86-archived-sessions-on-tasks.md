@@ -1,6 +1,6 @@
 # X86 — Archived sessions stay on their task
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3 (extends [X45](X45-tasks-mode.md), [X46](X46-tasks-in-sessions.md) and [S4](S4-restore-after-restart.md))
 - **PRD refs:** none (user request, 2026-11-07)
 - **Related ADRs:** none
@@ -34,51 +34,51 @@ agents continue their conversations.
 
 ### On the task
 
-- [ ] An archived session belongs to a task the same way a live one does: by
+- [x] An archived session belongs to a task the same way a live one does: by
       its stored link, or (unless unlinked) by its branch name or its PR (X44
-      link rules).
-- [ ] A card lists its archived sessions apart from its live ones. They do not
+      link rules). (`tasksBoard.test.ts` lists a task's archived sessions apart)
+- [x] A card lists its archived sessions apart from its live ones. They do not
       count as the task's sessions: they move no GitHub issue to In Progress or
       In Review, raise no out-of-sync chip ("Session open", "Done, N sessions"
       with Clean up), never make the card need the user, and are not archived
-      again by Clean up.
-- [ ] A card with only archived sessions still says "No sessions" with its
-      Start button, and the list row's summary counts only live sessions.
-- [ ] The board card, the list row's detail and the task detail show
+      again by Clean up. (`tasksBoard.test.ts` counts no archived session as the task's)
+- [x] A card with only archived sessions still says "No sessions" with its
+      Start button, and the list row's summary counts only live sessions. (`tasksBoard.test.ts` counts no archived session as the task's)
+- [x] The board card, the list row's detail and the task detail show
       `N archived`, folded; unfolded, each archived session is a row with its
-      name, an archive mark and its branch.
-- [ ] The session's Task tab lists the task's archived sessions after the live
+      name, an archive mark and its branch. (`archivedSession.test.ts` counts them for the folded line, `tasks-mode.e2e.ts` X86)
+- [x] The session's Task tab lists the task's archived sessions after the live
       ones; "Session N of M" and "Sessions on this task N" count only live
-      ones.
+      ones. (`tasksBoard.test.ts` finds the card of a session, live or archived; UI only, no test of the tab's rows)
 
 ### The archived session's page
 
-- [ ] Selecting an archived session (from a task, or from History) shows its
-      read-only page instead of the home screen.
-- [ ] The header shows its name, `Archived` and a **Restore** button.
-- [ ] The page shows the task it belongs to, `project/branch`, its PR when
+- [x] Selecting an archived session (from a task, or from History) shows its
+      read-only page instead of the home screen. (`tasks-mode.e2e.ts` X86, from a task)
+- [x] The header shows its name, `Archived` and a **Restore** button. (`tasks-mode.e2e.ts` X86)
+- [x] The page shows the task it belongs to, `project/branch`, its PR when
       known, when it was created and when it was archived (sessions archived
-      before X86 have no archive time and show none).
-- [ ] The page shows each chat transcript the session had when it was
+      before X86 have no archive time and show none). (`archivedSession.test.ts`, `tasks-mode.e2e.ts` X86; archive time: `a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived`)
+- [x] The page shows each chat transcript the session had when it was
       archived, oldest tab first, read only: no input, no permission answers.
-      A session with no chat transcripts says so.
-- [ ] **Restore** restores the session (as History's Restore does) and shows its
-      normal view.
+      A session with no chat transcripts says so. (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`, `an_archived_sessions_history_is_read_over_rpc`, `archivedSession.test.ts` says when it kept no chat; the rendered transcript is UI only)
+- [x] **Restore** restores the session (as History's Restore does) and shows its
+      normal view. (`actions.test.ts` restoreSession, `tasks-mode.e2e.ts` X86)
 
 ### Archive and restore keep the conversation
 
-- [ ] Archiving a session keeps its chats' transcripts (they leave the live
-      chat list) and remembers the tabs it had (S4 restore entries).
-- [ ] Restoring brings back each kept chat with its transcript, and each
+- [x] Archiving a session keeps its chats' transcripts (they leave the live
+      chat list) and remembers the tabs it had (S4 restore entries). (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
+- [x] Restoring brings back each kept chat with its transcript, and each
       remembered tab: a Claude tab continues its conversation (`--continue`)
       when the workspace's Claude profile is the one it ran in (X33), other
-      agents resume as after a restart, shells start again in their folder.
-- [ ] Restoring a session archived before X86 (nothing kept) starts one tab, as
-      before.
-- [ ] A kept chat is not restored after a daemon restart while its session is
-      archived, and never counts as a live terminal.
-- [ ] Removing a project from moonlet, which forgets its archived sessions,
-      deletes their kept chats.
+      agents resume as after a restart, shells start again in their folder. (`restoring_an_archived_session_continues_its_claude_tab`, `an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`; the profile rule is S4's own `restore_request`, tested by `a_restored_claude_tab_continues_only_in_the_same_profile`)
+- [x] Restoring a session archived before X86 (nothing kept) starts one tab, as
+      before. (`a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived`)
+- [x] A kept chat is not restored after a daemon restart while its session is
+      archived, and never counts as a live terminal. (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
+- [x] Removing a project from moonlet, which forgets its archived sessions,
+      deletes their kept chats. (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`, `forgetting_an_archived_sessions_chats_deletes_them`)
 
 ## UI
 
