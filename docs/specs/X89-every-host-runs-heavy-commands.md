@@ -67,12 +67,12 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 - [x] A project's approval is kept in the account state, keyed by project identity: the exact `commands` and the exact `env` names, as X62 keeps them in `heavy.json`. `heavy.approve {project, commands, env}` on any member writes it, so every member holds it. X62's rules stand: the lists must be the config's as it is now on the member that approves, approving replaces the previous lists, and only an app or a paired desktop approves. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
 - [x] The session's host routes a command when it matches an entry that is both in its own main checkout's list and in the account's approval, and when every `env` name of its list is approved. These are X62's rules, applied to the account's record. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
 - [x] A host that runs a command for another host checks it again: it runs only a command that matches an entry of the account's approval for the project's identity, with only approved `env` names. Otherwise it refuses with `not_approved`. (`a_worker_runs_what_the_account_approved_without_approving_itself`; X62's `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`, now with a worker from before X89, which keeps only its own approval)
-- [x] A member's main checkout whose list differs from the approved one shows the difference on its project page, as X62 does ("pnpm build was added since you approved the list"). Approving there replaces the account's approval with that member's list, and the other members' project pages show the new approval at once, keeping any edits not saved yet (`heavy.approval_changed`). (`approving_on_a_member_with_another_list_replaces_the_accounts`; Vitest "keeps the page's list and takes another member's approval (X89)")
+- [x] A member's main checkout whose list differs from the approved one shows the difference on its project page, as X62 does ("pnpm build was added since you approved the list"). Approving there replaces the account's approval with that member's list, and the other members' project pages show the new approval at once, keeping any edits not saved yet (`heavy.approval_changed`). (`approving_on_a_member_with_another_list_replaces_the_accounts`; Vitest `heavyCommands.test.ts` "keeps the page's list and takes another member's approval (X89)")
 - [x] The first time a member starts with this spec, each approval in its `heavy.json` with no approval in the account for that identity is written into the account, stamped as old as can be. The per-worker approvals in `sync/projects.json` (`approved_heavy`) are no longer read. (`approvals_from_heavy_json_reach_the_account_at_first_start`)
 
 ### Picking a machine
 
-- [x] The session's host asks its central host for `worker.list` when a command is routed. The list now has every linked member, the central host included, each with its worker settings, the slots it uses now (`used`) and its last load. A member before this spec, and a member with `heavy` off, is never a candidate. (`a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
+- [x] The session's host asks its central host when a command is routed: `worker.status` for the central host itself, and `worker.peers` for the other members that take other hosts' commands, each with its slots, the slots it uses now (`used`) and its last load. A member before this spec, and a member with `heavy` off, is never a candidate. (`a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
 - [x] The candidates for a session on host H are:
   - every other member with `heavy` on, linked now, with a free slot and a load below busy (X62's 0.7 × cores), on the project's `os`;
   - H itself;
@@ -102,7 +102,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Reaching another member
 
-- [x] The session's host talks to the central host over its link (X41). It reaches any other member through the central host, with `peer.call {to, method, params}`. The central host passes the call on over `to`'s link as `peer.call {from, method, params}`, and passes the answer back. When `to` is the central host itself, the central host answers it. (`a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`)
+- [x] The session's host talks to the central host over its link (X41). It reaches any other member through the central host, with `peer.call {to, method, params}`. The central host passes the call on over `to`'s link as `peer.call {from, method, params}`, and passes the answer back. The central host itself is called directly, with the same methods, never through `peer.call`. (`a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`)
 - [x] The central host sets `from` to the worker id registered on the connection the call came from. A `from` in the sender's params is refused with `invalid_params`. (`the_central_host_passes_on_only_the_routing_methods`)
 - [x] Only the **routing methods** go through `peer.call`. Anything else is refused with `forbidden`. (`the_central_host_passes_on_only_the_routing_methods`)
   - From the session's host to the machine that runs the command: `exec.prepare`, `exec.start`, `exec.cancel`, `sync.update` (the fence) and `sync.closing`.
@@ -118,7 +118,6 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 - [x] A routing copy for another host is removed:
   - when that session is archived: the session's host sends `sync.closing` to each machine it routed the session to;
   - when this host turns `heavy` off;
-  - when the session's host leaves the account;
   - after 7 days unused, as in X62.
 
   (`archiving_a_members_session_removes_its_routing_copies_on_other_hosts`)
@@ -140,7 +139,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 - [x] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
 - [x] A host's `worker.ping` answer gains `used` and `running: [{host, session, command, started_at}]`: what it runs now for other hosts, for whom. The central host's `worker.list` carries them for every member; its own, for members, are `exec.status`'s `serving`. (`worker_list_lists_every_member_with_what_it_runs`)
-- [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
+- [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from the central host, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
 - [x] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
 
 ### Older daemons
@@ -167,24 +166,25 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 **Member to its central host (over the link):**
 
 - `peer.call {to, method, params}` → the answer of `to`. Only the routing methods. Refused with `forbidden` from a phone, the CLI, or a connection that has not registered as a worker. Cloud machines may send it only for runs they were given.
-- `worker.list`: now also from a linked member, with every member and the central host itself. Each entry gains `heavy`, `slots`, `used`, `running` and `peer`.
+- `worker.status` → `{id, name, heavy, os, cores, load, slots, used}`: the central host as a candidate. `worker.peers {identity?}` → the same for every other member that takes other hosts' commands, with `rtt_ms` from the central host, and the project's ready cloud machines with `cloud: true`. A central host before X89 answers both with `unknown_method`, and the member runs its own commands. `worker.list`'s entries gain `used` and `running` (what each runs for other hosts).
 - `cloud.overflow {identity, asked?}`: a member's command found no free machine (`asked` false: a machine starts when the project's overflow is on), or its session asked for the cloud (`asked`: the machine on its way or a new one, answered as `{id, name}`). `worker.peers {identity}` adds the project's ready machines, with `cloud: true`.
 
 **Central host to a member:**
 
 - `peer.call {from, method, params}`: a routing method from another member, or from the central host itself when it runs a member's command (then `from` is the central host's worker id).
 - `Output` frames of a passed-on run, under the session's host's run id.
+- The event `exec.lost {run}`: the member that ran run `run` through the central host went away.
 
 **Any member, from an app or a paired desktop:**
 
 - `worker.settings.set {worker, heavy?, slots?}` → `true`. Errors: `invalid_params`, `forbidden`, `not_found` (no member with that id).
 - `worker.settings` → `[{worker, name, heavy, slots}]`, every member's settings as this member holds them.
-- `heavy.approve {project, commands, env}` writes the account's approval. The `identity` form X62 gave workers is no longer used: the account carries the approval to every member.
+- `heavy.approve {project, commands, env}` writes the account's approval. The `identity` form X62 gave workers keeps only that worker's own approval, which a worker from before X89 runs by; the Workers page's **Approve** uses the project form when the approval is the account's.
 
 **Changed:**
 
 - `worker.register` gains `peer: bool`.
-- The `worker.ping` answer gains `used` and `running`.
+- The `worker.ping` answer gains `used` and `running`; `exec.status` gains `serving`, what this host runs for other hosts; `exec.start` gains `session_name`; `exec.prepare` gains `setup` (X90's main checkout) and `identity`.
 - `link.get`/`link.set`'s `worker.enabled` and `worker.slots` read and write the account's settings for this host.
 - `docs/protocol.md` gets the methods and the relay's frames.
 
@@ -205,7 +205,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 - **Any member changes any member's settings.** ADR 0014 already trusts every member with the account. Only an app or a paired desktop writes the settings through the RPC. A member's daemon sends only its own changes to the account log (X68).
 - **The relay.** The central host fills in `from` from the authenticated connection, passes on only the routing methods, and passes a cloud machine's calls only for its runs. A session's host serves files only for sessions it routed to the caller. The central host sees every relayed byte, as it already holds a copy of every session (X72).
 - **Cloud machines and members.** A cloud machine runs what its central host passes on without an approval of its own (X63), so the central host checks a member's command against the account's approval of the machine's own project before passing it on, and gives the machine its own project's setup command, never a member's. A member names the project in `exec.prepare`; any member with the repository could, so the approval is what bounds it: the machine runs only that project's approved commands. Routing copies of different members' sessions on one machine run as one user, as all of one central host's routing copies do (X62): a member's command can read the others' copies there, which ADR 0014's trust in every member of the account covers. (`the_central_host_checks_a_members_command_for_a_cloud_machine_against_the_accounts_approval`)
-- **Calls back.** A runner calls its router back only while that router's run goes on there, or within 15 minutes of the router's `exec.prepare`.
+- **Calls back.** Through the central host, a runner calls its router back only while that router's run goes on there, or within 15 minutes of the router's `exec.prepare`. Over a member's own link, the member serves `sync.open` only for a session it asked that machine to run. When a member goes away, the central host cancels the runs it routed; when a runner goes away, or its link is replaced by a new connection, its routers hear `exec.lost`. A start that timed out is cancelled before the command runs elsewhere, so it never runs twice.
 - **Environment.** Only the approved `[heavy] env` names cross, to whichever machine runs the command, as in X62.
 
 ## Out of scope
@@ -222,7 +222,7 @@ Every acceptance criterion maps to at least one test below. Expected values are 
 Where the tests live:
 
 - **Rust unit:** `crates/moonlet-core/src/heavy.rs` (picking), the account log's record kinds in `moonlet-core`.
-- **Daemon end-to-end:** `crates/moonletd/tests/mesh.rs`, with a central host and two member `TestDaemon`s linked as in `tests/link.rs`, a test-only load setting, and approvals made through the account. The cloud cases are in `tests/cloud.rs` with X63's fake provider.
+- **Daemon end-to-end:** `crates/moonletd/tests/mesh.rs` (a central host from before X89 is a test daemon with `MOONLET_TEST_BEFORE_X89`, which answers the new methods with `unknown_method`), with a central host and two member `TestDaemon`s linked as in `tests/link.rs`, a test-only load setting, and approvals made through the account. The cloud cases are in `tests/cloud.rs` with X63's fake provider.
 - **Vitest:** `apps/desktop/src/lib/workers.test.ts`, `workerLink.test.ts`, `heavyApproval.test.ts`.
 - **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts`. Saving settings is a crucial feature.
 
@@ -232,7 +232,7 @@ Where the tests live:
 | Set from any member, offline members | `worker_settings_set_on_one_member_reach_the_host_they_name`, `settings_set_for_an_offline_member_apply_when_it_links` |
 | Who changes them | `only_an_app_or_a_paired_mac_changes_worker_settings` |
 | Slots range | `slots_outside_one_to_sixty_four_are_refused` |
-| `link.set` and the Hosts page | `link_set_writes_the_hosts_own_worker_settings`; Vitest "the Hosts page switch and the Workers page agree" |
+| `link.set` and the Hosts page | `link_set_writes_the_hosts_own_worker_settings`; Vitest `workerLink.test.ts` "the central host's row gets its own switch, set on it directly (X89)", `settingsSearch.test.ts` "finds Takes heavy commands from other hosts on Hosts, also as the central host" |
 | From `link.json` | `link_json_settings_become_the_accounts_at_first_start` |
 | Turning off, lowering slots | `turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish` |
 | Own sessions always run at home | `a_host_runs_its_own_sessions_commands_when_no_other_is_free` |
@@ -249,7 +249,7 @@ Where the tests live:
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`, `exec_status_lists_what_a_host_runs_for_other_hosts`; Vitest "lists what each host runs for other hosts, and for whom", Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
 | Saving from the app | e2e `worker-link.e2e.ts` "turning another host's heavy commands on from the Workers page saves it (X89)", `routing.e2e.ts` "a host's switch and slots on the Workers page are saved (X89)"; Vitest "says what a change of the switch or slots did" |
 
-**Manual, before the status says implemented:** with the real central host and MacBook, a session on the MacBook routes `pnpm check` to the central host with the central host's switch turned on from the MacBook. Then a third member gets a command through the central host.
+**Manual, still to do (the status says "untried between real machines" until then):** with the real central host and MacBook, a session on the MacBook routes `pnpm check` to the central host with the central host's switch turned on from the MacBook. Then a third member gets a command through the central host.
 
 ## Open questions
 
