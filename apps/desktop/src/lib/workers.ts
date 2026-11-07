@@ -116,7 +116,7 @@ export function workersPage(input: WorkersInput): WorkersPageView {
       badges: w.id === input.me ? ["This Mac"] : [],
       line,
       load: load(w.load, w.cores),
-      slots: `${running.length} of ${w.slots}`,
+      slots: `${Math.max(running.length, w.used ?? 0)} of ${w.slots}`,
       rtt: w.rtt_ms == null ? "–" : `${w.rtt_ms} ms`,
       running,
       approve: skip?.reason === "not_approved" ? { project: skip.project } : null,

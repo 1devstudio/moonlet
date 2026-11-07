@@ -160,6 +160,7 @@ function index(c: SearchContext): Entry[] {
     app("hosts", "Machines › Hosts", "heavy-commands", "Takes heavy commands from other hosts", "", "central host worker link use this mac"),
     app("hosts", "Machines › Hosts", "heavy-slots", "Run at most", "", "slots at once routed"),
     app("workers", "Machines › Workers", undefined, "Workers", "", "central host load slots routed running"),
+    app("workers", "Machines › Workers", undefined, "Every host's switch and slots", "", "takes other hosts run at most member worker settings"),
     app("cloud", "Machines › Cloud workers", undefined, "Cloud workers", "", "cloud provider Hetzner Google Cloud GCP Compute Engine token service account key rent machines"),
     app("cloud", "Machines › Cloud workers", "cloud-tailscale", "Tailscale OAuth client", "", "tag policy auth key"),
     app("cloud", "Machines › Cloud workers", "cloud-idle", "Remove a machine after", "", "cloud idle minutes"),

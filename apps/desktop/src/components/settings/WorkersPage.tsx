@@ -14,7 +14,7 @@ import { centralHostId, clampSlots } from "../../lib/workerLink";
 import { settingsToast, workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
 import { cloudSummary } from "../../lib/cloudMachines";
 import { retryRemoval, useCloud } from "../../lib/cloudStore";
-import { readLinks } from "../../lib/heavyApproval";
+import { readLinks, workerRowApproval } from "../../lib/heavyApproval";
 import { Button, IconButton, cx } from "../ui";
 import { Card, PageHeading, Section, Switch } from "./controls";
 
@@ -223,14 +223,22 @@ export function WorkersPage() {
   const approve = async (projectName: string, row: WorkerRow) => {
     const project = (projects ?? []).find((p: Project) => p.name === projectName);
     if (!project) return void toast(`${projectName} is not a project of ${name}`, "error");
-    // The host whose own link is this worker, among those the app reaches.
-    const worker = workerHost(row.id, await readLinks(Object.values(hosts)));
-    if (!worker) return void toast(`Approve ${projectName}'s heavy commands from moonlet on ${row.name}.`, "error");
     try {
       const info = await rpc<HeavyInfo>(target, M.heavyGet, { project: project.id });
+      const lists = { commands: info.config.commands, env: info.config.env };
+      // The account's approval (X89): the project's, on the central host,
+      // with the lists checked against its config there.
+      if (workerRowApproval(info) === "project") {
+        if (!(await askConfirm(workerApproval(projectName, row.name, info)))) return;
+        await rpc(target, M.heavyApprove, { project: project.id, ...lists });
+        return void toast(`Approved ${projectName}'s heavy commands on every host of your account`);
+      }
+      // The host whose own link is this worker, among those the app reaches.
+      const worker = workerHost(row.id, await readLinks(Object.values(hosts)));
+      if (!worker) return void toast(`Approve ${projectName}'s heavy commands from moonlet on ${row.name}.`, "error");
       // The exact lists, seen before they are approved.
       if (!(await askConfirm(workerApproval(projectName, row.name, info)))) return;
-      await rpc(worker, M.heavyApprove, { identity: project.identity, commands: info.config.commands, env: info.config.env });
+      await rpc(worker, M.heavyApprove, { identity: project.identity, ...lists });
       toast(`Approved ${projectName}'s heavy commands on ${row.name}`);
     } catch (e) {
       errorToast(e);

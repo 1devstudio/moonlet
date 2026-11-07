@@ -471,6 +471,8 @@ export interface WorkerInfo {
   load?: number | null;
   /** What it runs for other hosts, from its last ping (X89). */
   running?: Serving[];
+  /** Routed commands it runs now, for any host, from its last ping (X89). */
+  used?: number | null;
 }
 
 /** A member's worker settings (X89), from `worker.settings`: whether it

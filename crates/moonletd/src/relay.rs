@@ -31,9 +31,12 @@ const FIRST_RELAY: u32 = 0x6000_0000;
 /// a run going on: a routing copy is made within the prepare's 10 minutes.
 const PREPARED_FOR: Duration = Duration::from_secs(15 * 60);
 
+/// Output queued for a router before a relay run's output is dropped.
+const MAX_QUEUED: usize = 16 * 1024 * 1024;
+
 /// What a router may ask a runner, and a runner its router: the routing
 /// methods of X62, nothing else.
-const TO_RUNNER: [&str; 5] = [m::EXEC_PREPARE, m::EXEC_START, m::EXEC_CANCEL, m::SYNC_UPDATE, m::SYNC_CLOSING];
+pub(crate) const TO_RUNNER: [&str; 5] = [m::EXEC_PREPARE, m::EXEC_START, m::EXEC_CANCEL, m::SYNC_UPDATE, m::SYNC_CLOSING];
 const TO_ROUTER: [&str; 5] = [m::SYNC_OPEN, m::SYNC_FETCH, m::SYNC_CLOSE, m::EXEC_DONE, m::SESSION_FILES_FETCH];
 
 /// A router and a runner it sent `exec.prepare` to: only between those
@@ -42,7 +45,6 @@ type Pair = (String, String);
 
 /// A run passed on: whose it is, and who runs it.
 struct Passed {
-    router: ClientId,
     router_id: String,
     run: u32,
     runner: String,
@@ -51,6 +53,8 @@ struct Passed {
 pub struct Relay {
     next: AtomicU32,
     runs: Mutex<HashMap<u32, Passed>>,
+    /// Relay runs whose output is being dropped for a slow router.
+    dropping: Mutex<std::collections::HashSet<u32>>,
     /// Routers and the runners they last asked to prepare a routing copy,
     /// with when: a runner calls its router back only while that is recent
     /// or a run of that router's goes on there.
@@ -63,6 +67,7 @@ impl Relay {
             next: AtomicU32::new(FIRST_RELAY),
             runs: Mutex::default(),
             prepared: Mutex::default(),
+            dropping: Mutex::default(),
         })
     }
 
@@ -124,8 +129,10 @@ impl Relay {
                 .insert((from.clone(), to.clone()), std::time::Instant::now());
         }
         let mut params = call.params;
-        // The relay run an `exec.done` ends.
+        // The relay run an `exec.done` ends, and the one an `exec.start`
+        // makes.
         let mut done = None;
+        let mut started = None;
         match method {
             m::EXEC_START => {
                 let run = params["run"].as_u64().ok_or_else(|| RpcError::new("invalid_params", "no run"))? as u32;
@@ -133,12 +140,12 @@ impl Relay {
                 self.runs.lock().unwrap().insert(
                     id,
                     Passed {
-                        router: conn.id,
                         router_id: from.clone(),
                         run,
                         runner: to.clone(),
                     },
                 );
+                started = Some(id);
                 params["run"] = Value::from(id);
             }
             m::EXEC_CANCEL => {
@@ -148,7 +155,7 @@ impl Relay {
                     .lock()
                     .unwrap()
                     .iter()
-                    .find(|(_, p)| p.router == conn.id && p.run == run && p.runner == to)
+                    .find(|(_, p)| p.router_id == from && p.run == run && p.runner == to)
                     .map(|(id, _)| *id)
                     .ok_or_else(|| RpcError::new("not_found", "no such run"))?;
                 params["run"] = Value::from(id);
@@ -159,7 +166,7 @@ impl Relay {
                     let runs = self.runs.lock().unwrap();
                     let p = runs
                         .get(&id)
-                        .filter(|p| p.runner == from && p.router_id == to && p.router == target.id)
+                        .filter(|p| p.runner == from && p.router_id == to)
                         .ok_or_else(|| RpcError::new("not_found", "no such run"))?;
                     p.run
                 };
@@ -185,9 +192,17 @@ impl Relay {
             method: method.to_string(),
             params,
         };
-        let mut reply = target
+        let reply = target
             .request_after_queue(m::PEER_CALL, serde_json::to_value(passed).unwrap(), timeout)
-            .await?;
+            .await;
+        // A start the runner refused leaves nothing behind; one that timed
+        // out stays until the router's cancel finds it.
+        if let (Err(e), Some(id)) = (&reply, started)
+            && e.code != "timeout"
+        {
+            self.runs.lock().unwrap().remove(&id);
+        }
+        let mut reply = reply?;
         if let Some(id) = done {
             self.ended(id);
         }
@@ -233,9 +248,20 @@ impl Relay {
             }
             (p.router_id.clone(), p.run)
         };
-        if let Some(c) = workers.conn(&router) {
-            c.tx.send(Frame::RunOutput { run, stream, data });
+        let Some(c) = workers.conn(&router) else { return Ok(()) };
+        // A router whose link cannot keep up: the output in between is
+        // dropped, and the router hears where, rather than this host
+        // queueing it without end (X89).
+        let mut dropping = self.dropping.lock().unwrap();
+        if c.tx.queued() > MAX_QUEUED {
+            dropping.insert(id);
+            return Ok(());
         }
+        if dropping.remove(&id) {
+            let line = "moonlet: output dropped here: the link to this session's host was too slow\n";
+            c.tx.send(Frame::RunOutput { run, stream: 2, data: line.as_bytes().to_vec() });
+        }
+        c.tx.send(Frame::RunOutput { run, stream, data });
         Ok(())
     }
 
@@ -244,8 +270,6 @@ impl Relay {
         self.runs.lock().unwrap().remove(&id);
     }
 
-    /// Member `runner` went away: each router whose command it ran hears
-    /// so, and runs it again itself.
     /// Member `router` went away: the commands it routed through this host
     /// stop where they run, as a worker stops one when its central host's
     /// daemon stops (X62).
@@ -274,6 +298,8 @@ impl Relay {
         }
     }
 
+    /// Member `runner` went away: each router whose command it ran hears
+    /// so, and runs it again itself.
     pub fn runner_gone(&self, workers: &Workers, runner: &str) {
         let lost: Vec<(String, u32)> = {
             let mut runs = self.runs.lock().unwrap();

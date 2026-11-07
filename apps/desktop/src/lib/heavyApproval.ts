@@ -39,6 +39,13 @@ export function approvalScope(
   return { approveOn: targets, banner: targets.map((t) => t.label), toast: null };
 }
 
+/** Where Approve on a worker's row of the Workers page goes (X89): the
+ * project's approval on the central host, which every member then has,
+ * or the worker's own, from a central host before X89. */
+export function workerRowApproval(info: HeavyInfo): "project" | "worker" {
+  return info.account ? "project" : "worker";
+}
+
 /** The `link.get` of this Mac and of each connected tailnet host. */
 export async function readLinks(hosts: HostInfo[]): Promise<Record<string, LinkInfo | null>> {
   const ids = ["local", ...hosts.filter((h) => h.remote && h.kind === "tailnet" && h.status === "connected").map((h) => h.id)];

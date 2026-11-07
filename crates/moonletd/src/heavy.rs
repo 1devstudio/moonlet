@@ -277,11 +277,7 @@ impl Heavy {
     pub fn seed_account(&self) {
         let Ok(all) = self.read() else { return };
         for (k, a) in all {
-            let Some((origin, root)) = k.rsplit_once(' ') else { continue };
-            let identity = ProjectIdentity {
-                origin: (!origin.is_empty()).then(|| origin.to_string()),
-                root: Some(root.to_string()),
-            };
+            let Some(identity) = parse_key(&k) else { continue };
             if let Err(e) = self.sessions.seed_heavy_approval(&identity, &a.commands, &a.env) {
                 tracing::warn!("cannot keep an approval of heavy commands in the account: {e:#}");
             }
@@ -335,6 +331,16 @@ pub(crate) fn key(id: &ProjectIdentity) -> Option<String> {
     Some(format!("{origin} {root}"))
 }
 
+/// The project identity a [`key`] names; none for text no key could be.
+pub(crate) fn parse_key(k: &str) -> Option<ProjectIdentity> {
+    let (origin, root) = k.rsplit_once(' ')?;
+    let identity = ProjectIdentity {
+        origin: (!origin.is_empty()).then(|| origin.to_string()),
+        root: Some(root.to_string()),
+    };
+    (key(&identity).as_deref() == Some(k)).then_some(identity)
+}
+
 /// Whether `argv`, with `env`'s names, is a command `approved` covers: the
 /// check a runner makes, and the central host for a cloud machine it
 /// passes a member's command on to (X89).
@@ -364,4 +370,26 @@ pub fn sorted(v: &[String]) -> Vec<String> {
     v.sort();
     v.dedup();
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_heavy_json_key_reads_back_as_its_project() {
+        let root = "4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a";
+        for (k, origin) in [
+            (format!("github.com/acme/shop {root}"), Some("github.com/acme/shop")),
+            (format!(" {root}"), None),
+        ] {
+            let id = parse_key(&k).unwrap();
+            assert_eq!(id.origin.as_deref(), origin);
+            assert_eq!(id.root.as_deref(), Some(root));
+            assert_eq!(key(&id), Some(k));
+        }
+        for bad in ["shop", "github.com/acme/shop not-a-root", ""] {
+            assert_eq!(parse_key(bad), None, "{bad}");
+        }
+    }
 }
