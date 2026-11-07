@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{self, ChatItemEvent, ChatStateEvent};
-use moonlet_proto::types::{AgentState, AsideAnswer, ChatImage, ChatState, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
+use moonlet_proto::types::{AgentState, ArchivedChat, AsideAnswer, ChatImage, ChatState, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -670,75 +670,160 @@ impl ChatManager {
             if path.extension().is_none_or(|x| x != "json") {
                 continue;
             }
-            let Some(saved) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Saved>(&b).ok()) else {
-                tracing::warn!("unreadable chat {}", path.display());
-                continue;
-            };
-            let mut state = saved.state;
-            let mut interrupted = false;
-            let mut kept = Vec::new();
-            if matches!(state.status.as_str(), "working" | "blocked") {
-                // The main agent's questions and plans wait for their answer,
-                // which the resumed agent gets as a message. Tool permissions
-                // are asked again when the agent continues.
-                state.pending.retain(|p| p.agent.is_none() && KEPT_TOOLS.contains(&p.tool.as_str()));
-                kept = state.pending.iter().map(|p| p.id.clone()).collect();
-                state.status = if kept.is_empty() { "idle" } else { "blocked" }.into();
-                state.turn_started_at = None;
-                interrupted = kept.is_empty();
+            if self.load(&path).is_some() {
+                n += 1;
             }
-            super::stop_subagents(&mut state);
-            let pending = state.pending.clone();
-            for it in &mut state.items {
-                it.partial = false;
-                if let Some(t) = it.tool.as_mut()
-                    && t.status == "running"
-                    && !pending.iter().any(|p| asks_for(p, t))
-                {
-                    t.status = "error".into();
-                }
-            }
-            let mut info = saved.info;
-            info.pid = None;
-            info.agent_state = agent_state(&state.status);
-            let old = info.id;
-            // Keeps its id unless a live terminal (e.g. adopted) took it.
-            let info = self.terms.register_chat(info);
-            if info.id != old {
-                let _ = std::fs::remove_file(&path);
-            }
-            let chat = Arc::new(Chat {
-                id: info.id,
-                inner: Mutex::new(Inner {
-                    info,
-                    cfg: saved.cfg,
-                    env: saved.env,
-                    state,
-                    adapter: None,
-                    stdin: None,
-                    pid: None,
-                    family: Default::default(),
-                    generation: 0,
-                    restart: false,
-                    kept,
-                    stderr: Vec::new(),
-                    saved_at: Instant::now(),
-                    dirty: true,
-                    active_at: now_ms(),
-                    frozen: false,
-                }),
-            });
-            self.chats.lock().unwrap().insert(chat.id, chat.clone());
-            let mut inner = chat.inner.lock().unwrap();
-            if interrupted {
-                let id = super::local_id("system");
-                upsert(&mut inner.state, item(id, "system", "Interrupted by a daemon restart"));
-            }
-            super::undeliver(&mut inner.state);
-            self.save(&chat, &mut inner);
-            n += 1;
         }
         n
+    }
+
+    /// Brings back the saved chat at `path`, under the chats' folder, and
+    /// says its id: as after a daemon start, its agent starts with the next
+    /// message.
+    fn load(&self, path: &Path) -> Option<TerminalId> {
+        let Some(saved) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Saved>(&b).ok()) else {
+            tracing::warn!("unreadable chat {}", path.display());
+            return None;
+        };
+        let mut state = saved.state;
+        let mut interrupted = false;
+        let mut kept = Vec::new();
+        if matches!(state.status.as_str(), "working" | "blocked") {
+            // The main agent's questions and plans wait for their answer,
+            // which the resumed agent gets as a message. Tool permissions
+            // are asked again when the agent continues.
+            state.pending.retain(|p| p.agent.is_none() && KEPT_TOOLS.contains(&p.tool.as_str()));
+            kept = state.pending.iter().map(|p| p.id.clone()).collect();
+            state.status = if kept.is_empty() { "idle" } else { "blocked" }.into();
+            state.turn_started_at = None;
+            interrupted = kept.is_empty();
+        }
+        super::stop_subagents(&mut state);
+        let pending = state.pending.clone();
+        for it in &mut state.items {
+            it.partial = false;
+            if let Some(t) = it.tool.as_mut()
+                && t.status == "running"
+                && !pending.iter().any(|p| asks_for(p, t))
+            {
+                t.status = "error".into();
+            }
+        }
+        let mut info = saved.info;
+        info.pid = None;
+        info.agent_state = agent_state(&state.status);
+        let old = info.id;
+        // Keeps its id unless a live terminal (e.g. adopted) took it.
+        let info = self.terms.register_chat(info);
+        if info.id != old {
+            let _ = std::fs::remove_file(&path);
+        }
+        let chat = Arc::new(Chat {
+            id: info.id,
+            inner: Mutex::new(Inner {
+                info,
+                cfg: saved.cfg,
+                env: saved.env,
+                state,
+                adapter: None,
+                stdin: None,
+                pid: None,
+                family: Default::default(),
+                generation: 0,
+                restart: false,
+                kept,
+                stderr: Vec::new(),
+                saved_at: Instant::now(),
+                dirty: true,
+                active_at: now_ms(),
+                frozen: false,
+            }),
+        });
+        self.chats.lock().unwrap().insert(chat.id, chat.clone());
+        let mut inner = chat.inner.lock().unwrap();
+        if interrupted {
+            let id = super::local_id("system");
+            upsert(&mut inner.state, item(id, "system", "Interrupted by a daemon restart"));
+        }
+        super::undeliver(&mut inner.state);
+        self.save(&chat, &mut inner);
+        Some(chat.id)
+    }
+
+    /// The folder of archived session `session`'s kept chats (X86); none
+    /// for an id that could name another folder.
+    fn archived_dir(&self, session: &str) -> Option<PathBuf> {
+        let plain = !session.is_empty() && session.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        plain.then(|| self.dir.join("archived").join(session))
+    }
+
+    /// Keeps chat `id` of session `session`, which is being archived (X86):
+    /// its agent stops and its transcript moves out of the live chats, so a
+    /// daemon start does not bring it back. Closing its tab next leaves it.
+    pub fn archive(&self, id: TerminalId, session: &str) {
+        let (Ok(chat), Some(to)) = (self.get(id), self.archived_dir(session)) else { return };
+        let table = crate::process::table();
+        {
+            let mut inner = chat.inner.lock().unwrap();
+            if let Some(stopping) = Self::detach_agent(&mut inner, &table) {
+                self.end_later(stopping);
+            }
+            self.settle(&chat, &mut inner, "Stopped");
+            inner.dirty = true;
+            self.save(&chat, &mut inner);
+        }
+        self.chats.lock().unwrap().remove(&id);
+        let moved = crate::paths::ensure_private_dir(&to).and_then(|_| Ok(std::fs::rename(self.file(id), to.join(format!("{id}.json")))?));
+        if let Err(e) = moved {
+            tracing::warn!(chat = id, "keeping an archived chat failed: {e:#}");
+        }
+    }
+
+    /// The saved chats in `dir`, oldest tab first.
+    fn saved_in(dir: &Path) -> Vec<(PathBuf, Saved)> {
+        let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+        let mut all: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter_map(|p| Some((p.clone(), serde_json::from_slice::<Saved>(&std::fs::read(&p).ok()?).ok()?)))
+            .collect();
+        all.sort_by_key(|(_, s)| s.info.id);
+        all
+    }
+
+    /// Archived session `session`'s kept chats, oldest tab first (X86).
+    pub fn archived(&self, session: &str) -> Vec<ArchivedChat> {
+        let Some(dir) = self.archived_dir(session) else { return Vec::new() };
+        Self::saved_in(&dir)
+            .into_iter()
+            .map(|(_, s)| ArchivedChat { id: s.info.id, title: s.info.title, agent: s.cfg.agent, items: s.state.items })
+            .collect()
+    }
+
+    /// Brings back session `session`'s kept chats as it is restored (X86),
+    /// and says their ids, oldest tab first.
+    pub fn unarchive(&self, session: &str) -> Vec<TerminalId> {
+        let Some(dir) = self.archived_dir(session) else { return Vec::new() };
+        let mut back = Vec::new();
+        for (path, _) in Self::saved_in(&dir) {
+            let Some(name) = path.file_name() else { continue };
+            let live = self.dir.join(name);
+            if let Err(e) = std::fs::rename(&path, &live) {
+                tracing::warn!("cannot bring back {}: {e:#}", path.display());
+                continue;
+            }
+            back.extend(self.load(&live));
+        }
+        let _ = std::fs::remove_dir(&dir);
+        back
+    }
+
+    /// Deletes session `session`'s kept chats, as it is removed (X86).
+    pub fn forget_archived(&self, session: &str) {
+        if let Some(dir) = self.archived_dir(session) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     fn file(&self, id: TerminalId) -> PathBuf {
@@ -1456,6 +1541,57 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    /// X86: an archived session's chat leaves the live chats, its transcript
+    /// kept: listed by the session's history, not brought back by a daemon
+    /// start, back with its items when the session is restored.
+    #[tokio::test]
+    async fn an_archived_chat_is_kept_listed_and_restored_with_its_session() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats
+            .create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), name: "t".into(), title: Some("Claude".into()), session_id: Some("s-1".into()), ..Default::default() })
+            .unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+
+        chats.archive(info.id, "s-1");
+        terms.kill(info.id, true).unwrap();
+        assert!(!chats.is_chat(info.id));
+        assert!(terms.get(info.id).is_none());
+        let kept = chats.archived("s-1");
+        assert_eq!(kept.len(), 1);
+        assert_eq!((kept[0].title.as_str(), kept[0].agent.as_str()), ("Claude", "claude"));
+        let said: Vec<_> = kept[0].items.iter().map(|i| (i.kind.as_str(), i.text.as_str())).collect();
+        assert!(said.contains(&("user", "hi")) && said.contains(&("assistant", "hello")), "{said:?}");
+        assert!(chats.archived("s-2").is_empty());
+
+        // A new daemon does not bring it back while its session is archived.
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2.clone(), dir.path().join("chats"));
+        assert_eq!(chats2.restore(), 0);
+
+        // Restoring the session does, with its transcript.
+        let back = chats2.unarchive("s-1");
+        assert_eq!(back.len(), 1);
+        let st = chats2.state(back[0]).unwrap();
+        assert_eq!(st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect::<Vec<_>>(), ["hi"]);
+        assert!(terms2.get(back[0]).unwrap().info().chat);
+        assert!(chats2.archived("s-1").is_empty());
+    }
+
+    /// X86: forgetting an archived session's chats deletes them.
+    #[tokio::test]
+    async fn forgetting_an_archived_sessions_chats_deletes_them() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-1".into()), ..Default::default() }).unwrap();
+        chats.archive(info.id, "s-1");
+        terms.kill(info.id, true).unwrap();
+        assert_eq!(chats.archived("s-1").len(), 1);
+        chats.forget_archived("s-1");
+        assert!(chats.archived("s-1").is_empty());
+        assert!(chats.unarchive("s-1").is_empty());
     }
 
     /// A chat whose agent runs `pnpm stack:check` and holds "queue this" (X49).

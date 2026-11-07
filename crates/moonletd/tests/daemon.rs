@@ -783,6 +783,23 @@ async fn archiving_can_delete_the_branch_on_origin_too() {
     assert_eq!(git(&repo, &["branch", "--list", &s.branch]), "");
 }
 
+/// X86: `session.history` gives an archived session's kept chats, and
+/// refuses a session that is not archived.
+#[tokio::test]
+async fn an_archived_sessions_history_is_read_over_rpc() {
+    use moonlet_proto::types::SessionArchived;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_repo, p) = project_with_repo(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Old work").await;
+    let live = c.request::<_, serde_json::Value>(methods::SESSION_HISTORY, serde_json::json!({"id": s.id})).await;
+    assert!(live.unwrap_err().to_string().contains("not archived"));
+
+    let _: SessionArchived = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id})).await.unwrap();
+    let history: serde_json::Value = c.request(methods::SESSION_HISTORY, serde_json::json!({"id": s.id})).await.unwrap();
+    assert_eq!(history, serde_json::json!({"chats": []}));
+}
+
 #[tokio::test]
 async fn archiving_a_session_whose_branch_is_already_deleted_archives_it() {
     use moonlet_proto::types::{Session, SessionArchived};
