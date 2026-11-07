@@ -1,41 +1,149 @@
-//! Tracker tokens (X44): the macOS Keychain, one generic password per
-//! connection id. e2e builds use a 0600 file instead, so tests never prompt.
+//! Tracker tokens (X44): the macOS Keychain, one generic password holding
+//! every connection's token (X91). e2e builds use a 0600 file instead, so
+//! tests never prompt.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
-pub trait Secrets {
+pub trait Secrets: Send + Sync {
     fn get(&self, id: &str) -> Option<String>;
     fn set(&self, id: &str, token: &str) -> Result<(), String>;
     fn delete(&self, id: &str);
 }
 
-/// The store this build uses: the Keychain, or `secrets.json` in an e2e build.
-pub fn store() -> Box<dyn Secrets> {
+/// The store this build uses, one per process: the Keychain, or
+/// `secrets.json` in an e2e build.
+pub fn store() -> &'static dyn Secrets {
+    static STORE: OnceLock<Box<dyn Secrets>> = OnceLock::new();
+    STORE.get_or_init(new_store).as_ref()
+}
+
+fn new_store() -> Box<dyn Secrets> {
     #[cfg(all(target_os = "macos", not(feature = "e2e")))]
-    return Box::new(Keychain);
+    return Box::new(OneItem::new(Keychain { service: "dev.onedevstudio.moonlet.trackers".into() }));
     #[allow(unreachable_code)]
     Box::new(FileSecrets(moonlet_core::paths::home().join("secrets.json")))
 }
 
-#[cfg(all(target_os = "macos", not(feature = "e2e")))]
-pub struct Keychain;
+/// The generic passwords of one Keychain service, by account. A read by a
+/// binary the item does not trust (every dev build, a build not signed with
+/// the Developer ID) asks for the login password, once per item.
+pub trait Items: Send + Sync {
+    /// `Ok(None)` when there is no such item; `Err` when it could not be
+    /// read, as when the user refused the password.
+    fn read(&self, account: &str) -> Result<Option<Vec<u8>>, String>;
+    fn write(&self, account: &str, data: &[u8]) -> Result<(), String>;
+    fn remove(&self, account: &str);
+}
 
-#[cfg(all(target_os = "macos", not(feature = "e2e")))]
-const SERVICE: &str = "dev.onedevstudio.moonlet.trackers";
+/// The account of the one item holding every token. Connection ids are
+/// `<kind>:<site>`, so none is this.
+const ALL: &str = "tokens";
 
-#[cfg(all(target_os = "macos", not(feature = "e2e")))]
-impl Secrets for Keychain {
+/// Connection id to token.
+type Tokens = BTreeMap<String, String>;
+
+/// Every token in one Keychain item, read once per app start and kept in
+/// memory (X91): a start asks for the password once at most, not once per
+/// connection and request.
+pub struct OneItem<I> {
+    items: I,
+    cache: Mutex<Cache>,
+}
+
+#[derive(Default)]
+struct Cache {
+    /// The item as read, or why it could not be.
+    all: Option<Result<Tokens, String>>,
+    /// Connections whose item of their own, from before X91, was looked
+    /// for: each is read once per start at most.
+    looked: BTreeSet<String>,
+}
+
+#[cfg_attr(feature = "e2e", allow(dead_code))]
+impl<I: Items> OneItem<I> {
+    pub fn new(items: I) -> Self {
+        Self { items, cache: Mutex::default() }
+    }
+
+    fn load(&self) -> Result<Tokens, String> {
+        match self.items.read(ALL)? {
+            None => Ok(Tokens::new()),
+            Some(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("the Keychain's tracker tokens cannot be read: {e}")),
+        }
+    }
+
+    /// Changes the item as it is now, not as this process last read it: a
+    /// dev build beside the app may have saved a token since. An item that
+    /// cannot be read is never overwritten.
+    fn change(&self, cache: &mut Cache, edit: impl FnOnce(&mut Tokens)) -> Result<(), String> {
+        let mut all = self.load()?;
+        edit(&mut all);
+        self.items.write(ALL, &serde_json::to_vec(&all).map_err(|e| e.to_string())?)?;
+        cache.all = Some(Ok(all));
+        Ok(())
+    }
+}
+
+impl<I: Items> Secrets for OneItem<I> {
     fn get(&self, id: &str) -> Option<String> {
-        let bytes = security_framework::passwords::get_generic_password(SERVICE, id).ok()?;
-        String::from_utf8(bytes).ok()
+        let mut cache = self.cache.lock().unwrap();
+        let tokens = cache.all.get_or_insert_with(|| self.load()).as_ref().ok()?;
+        if let Some(token) = tokens.get(id) {
+            return Some(token.clone());
+        }
+        // Saved before X91, in an item of its own: moved into the one item.
+        if !cache.looked.insert(id.into()) {
+            return None;
+        }
+        let token = String::from_utf8(self.items.read(id).ok()??).ok()?;
+        if self.change(&mut cache, |all| {
+            all.insert(id.into(), token.clone());
+        })
+        .is_ok()
+        {
+            self.items.remove(id);
+        }
+        Some(token)
     }
     fn set(&self, id: &str, token: &str) -> Result<(), String> {
-        security_framework::passwords::set_generic_password(SERVICE, id, token.as_bytes())
-            .map_err(|e| format!("cannot keep the token in the Keychain: {e}"))
+        let mut cache = self.cache.lock().unwrap();
+        self.change(&mut cache, |all| {
+            all.insert(id.into(), token.into());
+        })
     }
     fn delete(&self, id: &str) {
-        let _ = security_framework::passwords::delete_generic_password(SERVICE, id);
+        let mut cache = self.cache.lock().unwrap();
+        let _ = self.change(&mut cache, |all| {
+            all.remove(id);
+        });
+        self.items.remove(id);
+    }
+}
+
+/// The login Keychain's generic passwords of one service.
+#[cfg(all(target_os = "macos", not(feature = "e2e")))]
+pub struct Keychain {
+    pub service: String,
+}
+
+#[cfg(all(target_os = "macos", not(feature = "e2e")))]
+impl Items for Keychain {
+    fn read(&self, account: &str) -> Result<Option<Vec<u8>>, String> {
+        const NOT_FOUND: i32 = -25300; // errSecItemNotFound
+        match security_framework::passwords::get_generic_password(&self.service, account) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.code() == NOT_FOUND => Ok(None),
+            Err(e) => Err(format!("cannot read the tokens in the Keychain: {e}")),
+        }
+    }
+    fn write(&self, account: &str, data: &[u8]) -> Result<(), String> {
+        security_framework::passwords::set_generic_password(&self.service, account, data)
+            .map_err(|e| format!("cannot keep the token in the Keychain: {e}"))
+    }
+    fn remove(&self, account: &str) {
+        let _ = security_framework::passwords::delete_generic_password(&self.service, account);
     }
 }
 
@@ -86,6 +194,70 @@ impl Secrets for FileSecrets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// The login Keychain as a binary it does not trust sees it: each read
+    /// of an item asks for the password, so the test lists the prompts.
+    #[derive(Clone, Default)]
+    struct Keychain {
+        items: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+        prompts: Arc<Mutex<Vec<String>>>,
+        /// The user presses Cancel in every password prompt.
+        refused: Arc<Mutex<bool>>,
+    }
+
+    impl Keychain {
+        fn with(items: &[(&str, &str)]) -> Self {
+            let k = Keychain::default();
+            for (account, data) in items {
+                k.items.lock().unwrap().insert(account.to_string(), data.as_bytes().to_vec());
+            }
+            k
+        }
+        /// The prompts since the last call.
+        fn prompts(&self) -> Vec<String> {
+            std::mem::take(&mut *self.prompts.lock().unwrap())
+        }
+        /// The items Keychain Access lists under the service.
+        fn accounts(&self) -> Vec<String> {
+            self.items.lock().unwrap().keys().cloned().collect()
+        }
+    }
+
+    impl Items for Keychain {
+        fn read(&self, account: &str) -> Result<Option<Vec<u8>>, String> {
+            let found = self.items.lock().unwrap().get(account).cloned();
+            if found.is_some() {
+                self.prompts.lock().unwrap().push(account.to_string());
+                if *self.refused.lock().unwrap() {
+                    return Err("User canceled the operation.".into());
+                }
+            }
+            Ok(found)
+        }
+        fn write(&self, account: &str, data: &[u8]) -> Result<(), String> {
+            self.items.lock().unwrap().insert(account.to_string(), data.to_vec());
+            Ok(())
+        }
+        fn remove(&self, account: &str) {
+            self.items.lock().unwrap().remove(account);
+        }
+    }
+
+    #[test]
+    fn three_connections_ask_for_the_keychain_password_once_per_start() {
+        let keychain = Keychain::with(&[(
+            "tokens",
+            r#"{"clickup:9012":"pk_clickup","jira:acme.atlassian.net":"kim@acme.dev:ATATT3x","linear:acme":"lin_api_key"}"#,
+        )]);
+        let store = OneItem::new(keychain.clone());
+        for _ in 0..3 {
+            assert_eq!(store.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+            assert_eq!(store.get("clickup:9012").as_deref(), Some("pk_clickup"));
+            assert_eq!(store.get("linear:acme").as_deref(), Some("lin_api_key"));
+        }
+        assert_eq!(keychain.prompts(), vec!["tokens"]);
+    }
 
     #[test]
     fn a_file_store_keeps_tokens_private_and_forgets_them() {
@@ -101,5 +273,86 @@ mod tests {
         store.delete("jira:acme.atlassian.net");
         assert_eq!(store.get("jira:acme.atlassian.net"), None);
         assert_eq!(store.get("linear:acme").as_deref(), Some("lin_api_key"));
+    }
+
+    #[test]
+    fn tokens_kept_one_item_per_connection_move_into_the_one_item() {
+        let keychain = Keychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x"), ("linear:acme", "lin_api_key")]);
+        let first = OneItem::new(keychain.clone());
+        assert_eq!(first.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+        assert_eq!(first.get("linear:acme").as_deref(), Some("lin_api_key"));
+        assert_eq!(keychain.accounts(), vec!["tokens"]);
+        keychain.prompts();
+
+        let next_start = OneItem::new(keychain.clone());
+        assert_eq!(next_start.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+        assert_eq!(next_start.get("linear:acme").as_deref(), Some("lin_api_key"));
+        assert_eq!(keychain.prompts(), vec!["tokens"]);
+    }
+
+    #[test]
+    fn a_token_another_moonlet_saved_meanwhile_is_kept() {
+        let keychain = Keychain::with(&[("tokens", r#"{"linear:acme":"lin_api_key"}"#)]);
+        let app = OneItem::new(keychain.clone());
+        assert_eq!(app.get("linear:acme").as_deref(), Some("lin_api_key"));
+        let dev_build = OneItem::new(keychain.clone());
+        dev_build.set("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x").unwrap();
+        app.set("clickup:9012", "pk_clickup").unwrap();
+
+        let next_start = OneItem::new(keychain.clone());
+        assert_eq!(next_start.get("linear:acme").as_deref(), Some("lin_api_key"));
+        assert_eq!(next_start.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+        assert_eq!(next_start.get("clickup:9012").as_deref(), Some("pk_clickup"));
+    }
+
+    #[test]
+    fn cancelling_the_password_prompt_asks_no_more_and_keeps_the_tokens() {
+        let saved = r#"{"jira:acme.atlassian.net":"kim@acme.dev:ATATT3x"}"#;
+        let keychain = Keychain::with(&[("tokens", saved)]);
+        *keychain.refused.lock().unwrap() = true;
+        let store = OneItem::new(keychain.clone());
+        for _ in 0..3 {
+            assert_eq!(store.get("jira:acme.atlassian.net"), None);
+            assert_eq!(store.get("linear:acme"), None);
+        }
+        assert_eq!(keychain.prompts(), vec!["tokens"]);
+        assert!(store.set("linear:acme", "lin_api_key").is_err());
+        store.delete("jira:acme.atlassian.net");
+        assert_eq!(keychain.items.lock().unwrap().get("tokens").map(|b| String::from_utf8(b.clone()).unwrap()).as_deref(), Some(saved));
+    }
+
+    #[test]
+    fn cancelling_the_prompt_for_a_token_kept_on_its_own_asks_no_more() {
+        let keychain = Keychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x")]);
+        *keychain.refused.lock().unwrap() = true;
+        let store = OneItem::new(keychain.clone());
+        for _ in 0..3 {
+            assert_eq!(store.get("jira:acme.atlassian.net"), None);
+        }
+        assert_eq!(keychain.prompts(), vec!["jira:acme.atlassian.net"]);
+        assert_eq!(keychain.accounts(), vec!["jira:acme.atlassian.net"]);
+    }
+
+    /// Against the real Keychain, under a throwaway service; run by hand with
+    /// `cargo test -p moonlet-app --lib secrets -- --ignored`.
+    #[cfg(all(target_os = "macos", not(feature = "e2e")))]
+    #[test]
+    #[ignore]
+    fn the_keychain_keeps_every_token_in_one_item() {
+        let service = format!("dev.onedevstudio.moonlet.trackers.test-{}", std::process::id());
+        let keychain = || super::Keychain { service: service.clone() };
+        keychain().write("linear:acme", b"lin_api_key").unwrap();
+        let store = OneItem::new(keychain());
+        assert_eq!(store.get("jira:acme.atlassian.net"), None);
+        store.set("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x").unwrap();
+        assert_eq!(store.get("linear:acme").as_deref(), Some("lin_api_key"));
+        assert_eq!(keychain().read("linear:acme"), Ok(None));
+        let next_start = OneItem::new(keychain());
+        assert_eq!(next_start.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+        assert_eq!(next_start.get("linear:acme").as_deref(), Some("lin_api_key"));
+        next_start.delete("jira:acme.atlassian.net");
+        next_start.delete("linear:acme");
+        keychain().remove("tokens");
+        assert_eq!(keychain().read("tokens"), Ok(None));
     }
 }
