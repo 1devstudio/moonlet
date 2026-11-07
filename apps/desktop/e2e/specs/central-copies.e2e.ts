@@ -1,4 +1,4 @@
-// The central host's own app lists the sessions other members run (X86).
+// The central host's own app lists the sessions other members run (X88).
 // Here the app's daemon is the central host: a second scratch daemon, on
 // ::1 and named MacBook, pairs with it as a member, with the code Settings ›
 // Hosts › Let another Mac connect shows (only the app manages tailnet
@@ -46,7 +46,7 @@ async function macPairingLink(): Promise<URL> {
   return new URL((await code.getAttribute("title"))!);
 }
 
-describe("the central host's copies of other members' sessions (X86)", () => {
+describe("the central host's copies of other members' sessions (X88)", () => {
   let session = "";
   // What the app's daemon shared while linked goes again (X68).
   let shared = { workspaces: [] as string[], sections: [] as string[] };

@@ -106,7 +106,7 @@ describe("archiveSession", () => {
     expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "session.processes", "git.push", "session.archive"]);
   });
 
-  it("names the member that runs a copy where its unpushed work is (X86)", async () => {
+  it("names the member that runs a copy where its unpushed work is (X88)", async () => {
     const copy: Session = { ...ws, id: "s7", owner: { worker: "book-id", name: "MacBook", reachable: true } };
     useStore.setState({ sessions: { "local#copy:s7": [copy] }, selected: { host: "local#copy:s7", session: "s7" } });
     answers(undefined, { files: [], commits: 2, upstream: null });

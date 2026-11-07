@@ -1,4 +1,4 @@
-// The sessions other members run, in the central host's own app (X86). Its
+// The sessions other members run, in the central host's own app (X88). Its
 // daemon holds a copy of each (X72); the app lists them from it and opens
 // each under its copy host, so its calls go to the member running it.
 
@@ -42,7 +42,7 @@ export function copyView(session: Session, terminals: TerminalInfo[], chats: num
 }
 
 /** What the session view offers for a session opened under `host`: a copy
- * of another member's session (X86) offers none of what that member
+ * of another member's session (X88) offers none of what that member
  * refuses through the central host (X72), and its folder here is a read
  * only copy, never opened in another app. */
 export function copyOffers(host: string): { files: boolean; newTabs: boolean; processes: boolean; projectSettings: boolean; setup: boolean; openIn: boolean } {
@@ -50,7 +50,7 @@ export function copyOffers(host: string): { files: boolean; newTabs: boolean; pr
   return { files: ok, newTabs: ok, processes: ok, projectSettings: ok, setup: ok, openIn: ok };
 }
 
-/** Why a copy (X86) does not do `action` when a shortcut or the command
+/** Why a copy (X88) does not do `action` when a shortcut or the command
  * palette asks it to: where to do it instead. */
 export const copyRefused = (s: Session, action: string) => `${s.name} runs on ${s.owner?.name ?? "another Mac"}: ${action} there.`;
 

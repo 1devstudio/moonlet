@@ -19,7 +19,7 @@ const s = (id: string, extra: Partial<Session> = {}): Session => ({
 });
 const book = { worker: "book-id", name: "MacBook", reachable: true };
 
-describe("the copies the central host's app lists (X86)", () => {
+describe("the copies the central host's app lists (X88)", () => {
   // `session.list {copies: true}` from the app's own daemon: its own
   // session, and one the MacBook runs.
   const list = [s("s1"), s("s7", { owner: book })];
@@ -38,7 +38,7 @@ describe("the copies the central host's app lists (X86)", () => {
   });
 });
 
-describe("what a copy shows when opened (X86)", () => {
+describe("what a copy shows when opened (X88)", () => {
   const copy = s("s7", { owner: book, created_at: 1700 });
   const chat = {
     id: 3,
@@ -84,7 +84,7 @@ describe("what a copy shows when opened (X86)", () => {
   });
 });
 
-describe("what a copy offers (X86)", () => {
+describe("what a copy offers (X88)", () => {
   it("offers none of what its member refuses through the central host", () => {
     expect(copyOffers("local#copy:s7")).toEqual({ files: false, newTabs: false, processes: false, projectSettings: false, setup: false, openIn: false });
     expect(copyOffers("local")).toEqual({ files: true, newTabs: true, processes: true, projectSettings: true, setup: true, openIn: true });
