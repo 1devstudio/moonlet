@@ -36,49 +36,91 @@ agents continue their conversations.
 
 - [x] An archived session belongs to a task the same way a live one does: by
       its stored link, or (unless unlinked) by its branch name or its PR (X44
-      link rules). (`tasksBoard.test.ts` lists a task's archived sessions apart)
+      link rules). An archived session's PR is no longer polled: the PR seen
+      last in this run of the app counts, else the PR number the daemon keeps,
+      which links it to the GitHub issue that PR closes. (`tasksBoard.test.ts`
+      "lists a task's archived sessions apart, by its stored link or its branch,
+      leaving an unlinked one out"; `tasksStore.test.ts` "links an archived
+      session to the issue its stored PR closes, though its PR is no longer
+      polled")
 - [x] A card lists its archived sessions apart from its live ones. They do not
       count as the task's sessions: they move no GitHub issue to In Progress or
       In Review, raise no out-of-sync chip ("Session open", "Done, N sessions"
       with Clean up), never make the card need the user, and are not archived
-      again by Clean up. (`tasksBoard.test.ts` counts no archived session as the task's)
+      again by Clean up. (`tasksBoard.test.ts` "counts no archived session as
+      the task's: no column, chip, empty line or clean-up of their own")
 - [x] A card with only archived sessions still says "No sessions" with its
-      Start button, and the list row's summary counts only live sessions. (`tasksBoard.test.ts` counts no archived session as the task's)
+      Start button, and the list row's summary counts only live sessions.
+      (`tasksBoard.test.ts` "counts no archived session as the task's: no
+      column, chip, empty line or clean-up of their own"; `tasksList.test.ts`
+      "sums, counts and takes the PR of its live sessions only")
 - [x] The board card, the list row's detail and the task detail show
       `N archived`, folded; unfolded, each archived session is a row with its
-      name, an archive mark and its branch. (`archivedSession.test.ts` counts them for the folded line, `tasks-mode.e2e.ts` X86)
+      name, an archive mark and its branch. (`archivedSession.test.ts` "counts
+      them for the folded line"; `tasks-mode.e2e.ts` "lists a task's archived sessions under its card, opens one read only, and restores it from its header (X86)", on the board card)
 - [x] The session's Task tab lists the task's archived sessions after the live
       ones; "Session N of M" and "Sessions on this task N" count only live
-      ones. (`tasksBoard.test.ts` finds the card of a session, live or archived; UI only, no test of the tab's rows)
+      ones. It finds its task's card by the session's host and id.
+      (`tasksBoard.test.ts` "finds the card of a session, live or archived, by
+      its host and id". Partly: the tab's rows themselves are UI only, no test.)
 
 ### The archived session's page
 
-- [x] Selecting an archived session (from a task, or from History) shows its
-      read-only page instead of the home screen. (`tasks-mode.e2e.ts` X86, from a task)
-- [x] The header shows its name, `Archived` and a **Restore** button. (`tasks-mode.e2e.ts` X86)
+- [x] Selecting an archived session (from a task, or by name in History) shows
+      its read-only page instead of the home screen. (`tasks-mode.e2e.ts` "lists a task's archived sessions under its card, opens one read only, and restores it from its header (X86)")
+- [x] The header shows its name, `Archived` and a **Restore** button.
+      (`tasks-mode.e2e.ts` "lists a task's archived sessions under its card, opens one read only, and restores it from its header (X86)")
 - [x] The page shows the task it belongs to, `project/branch`, its PR when
-      known, when it was created and when it was archived (sessions archived
-      before X86 have no archive time and show none). (`archivedSession.test.ts`, `tasks-mode.e2e.ts` X86; archive time: `a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived`)
+      known (by its number alone when its state is not), when it was created
+      and when it was archived (sessions archived before X86 have no archive
+      time and show none). (`archivedSession.test.ts` "says its task, where it
+      worked, its PR and when it was created and archived", "leaves out what it
+      does not know, as for a session archived before X86", "says a PR whose
+      state it no longer knows by its number"; `a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived`)
+- [x] The page names the tabs Restore starts again: an agent's tab (a terminal
+      agent, whose transcript is not kept here) continues its conversation, a
+      shell starts again. (`archivedSession.test.ts` "names the tabs Restore
+      starts again: an agent's goes on with its conversation")
 - [x] The page shows each chat transcript the session had when it was
       archived, oldest tab first, read only: no input, no permission answers.
-      A session with no chat transcripts says so. (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`, `an_archived_sessions_history_is_read_over_rpc`, `archivedSession.test.ts` says when it kept no chat; the rendered transcript is UI only)
+      A session with no chat transcripts says so; a host whose moonlet has no
+      `session.history` says to update it, and any other failure says why.
+      (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`,
+      `an_archived_sessions_history_is_read_over_rpc`; `archivedSession.test.ts`
+      "says when it kept no chat, when the host's moonlet is too old to say,
+      and why else it could not". Partly: the rendered transcript is UI only.)
 - [x] **Restore** restores the session (as History's Restore does) and shows its
-      normal view. (`actions.test.ts` restoreSession, `tasks-mode.e2e.ts` X86)
+      normal view. (`actions.test.ts` "restores the session and shows it,
+      live", "says why it could not, and leaves it archived";
+      `tasks-mode.e2e.ts` "lists a task's archived sessions under its card, opens one read only, and restores it from its header (X86)")
 
 ### Archive and restore keep the conversation
 
 - [x] Archiving a session keeps its chats' transcripts (they leave the live
-      chat list) and remembers the tabs it had (S4 restore entries). (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
+      chat list) and remembers the tabs it had (S4 restore entries).
+      (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
+- [x] An archive that fails after its chats were kept (a worktree or branch git
+      will not remove) leaves the session live with its chats.
+      (`a_failed_archive_gives_the_session_its_chats_back`)
 - [x] Restoring brings back each kept chat with its transcript, and each
       remembered tab: a Claude tab continues its conversation (`--continue`)
       when the workspace's Claude profile is the one it ran in (X33), other
-      agents resume as after a restart, shells start again in their folder. (`restoring_an_archived_session_continues_its_claude_tab`, `an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`; the profile rule is S4's own `restore_request`, tested by `a_restored_claude_tab_continues_only_in_the_same_profile`)
+      agents resume as after a restart, shells start again in their folder.
+      (`restoring_an_archived_session_continues_its_claude_tab`,
+      `an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`; the
+      profile rule is S4's own, `a_restored_claude_tab_continues_only_in_the_same_profile`)
+- [x] A kept chat whose terminal id another chat took meanwhile (ids start
+      again with each daemon) comes back under a new id, and neither
+      transcript is lost. (`a_kept_chat_whose_id_was_taken_meanwhile_comes_back_beside_the_new_one`)
 - [x] Restoring a session archived before X86 (nothing kept) starts one tab, as
       before. (`a_session_archived_without_tabs_restores_with_one_and_says_when_it_was_archived`)
 - [x] A kept chat is not restored after a daemon restart while its session is
-      archived, and never counts as a live terminal. (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
+      archived, and never counts as a live terminal.
+      (`an_archived_chat_is_kept_listed_and_restored_with_its_session`)
 - [x] Removing a project from moonlet, which forgets its archived sessions,
-      deletes their kept chats. (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`, `forgetting_an_archived_sessions_chats_deletes_them`)
+      deletes their kept chats.
+      (`an_archived_sessions_chat_is_its_history_and_comes_back_on_restore`,
+      `forgetting_an_archived_sessions_chats_deletes_them`)
 
 ## UI
 
@@ -133,18 +175,23 @@ built from it.
 - `crates/moonlet-core/src/session.rs`: archive then unarchive relaunches a
   Claude tab with `--continue`; a session archived with no tabs starts one;
   archive sets `archived_at`; a chat session's chat is its history and comes
-  back on Restore, and removing the project deletes it.
+  back on Restore, and removing the project deletes it; a failed archive gives
+  the chats back.
 - `crates/moonlet-core/src/chat/runtime.rs`: an archived chat leaves the live
   list, is not restored by a daemon start, is listed by its session's history
-  and comes back with its items on unarchive; forgetting it deletes it.
-- `crates/moonletd/tests/`: `session.history` returns an archived session's
-  chats and refuses a live session.
+  and comes back with its items on unarchive, beside a chat that took its id;
+  forgetting it deletes it.
+- `crates/moonletd/tests/daemon.rs`: `session.history` returns an archived
+  session's chats and refuses a live session.
 - `lib/tasksBoard.test.ts`: archived sessions on `card.archived`, by link and
-  by branch; no column move, no chip, not in Clean up.
-- `lib/tasksList.test.ts`, `lib/taskDetails.test.ts`: counts and rows.
-- `lib/archivedSession.test.ts`: the page's summary lines.
+  by branch; no column move, no chip, not in Clean up; the card of a session by
+  host and id.
+- `lib/tasksStore.test.ts`: the link by the PR number the daemon keeps.
+- `lib/tasksList.test.ts`: the list row counts only live sessions.
+- `lib/archivedSession.test.ts`: the page's lines, its notes and kept tabs.
+- `lib/actions.test.ts`: `restoreSession`.
 - `e2e/specs/tasks-mode.e2e.ts`: archive a linked session, see it under its
-  card, open its read-only page, Restore.
+  card, open its read-only page, Restore; open it again from History.
 
 ## Open questions
 
