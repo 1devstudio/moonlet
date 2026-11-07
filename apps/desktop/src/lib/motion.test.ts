@@ -133,6 +133,32 @@ describe("motion (X82)", () => {
     expect(getComputedStyle(tabWithSpinner(false)).animationPlayState).toBe("running");
   });
 
+  /** A tab's container hidden as the session view hides it, holding a pane
+   *  that says it is visible, as Monaco's diff editor does on its two sides.
+   *  Monaco writes it inline, and the app's rule wins in WebKit by
+   *  `!important`, which jsdom ignores: here a rule before the app's says it,
+   *  and `file-explorer.e2e.ts` covers Monaco's own. */
+  async function tabWithVisiblePane(hidden: boolean): Promise<HTMLElement> {
+    sheet(".says-visible { visibility: visible; }");
+    sheet(oneSelectorEach(await appCss()));
+    const tab = document.createElement("div");
+    tab.style.visibility = hidden ? "hidden" : "visible";
+    for (const [k, v] of Object.entries(quietWhen(hidden))) tab.setAttribute(k, v);
+    const pane = document.createElement("div");
+    pane.className = "says-visible";
+    tab.append(pane);
+    document.body.append(tab);
+    return pane;
+  }
+
+  it("hides a pane that sets itself visible inside a hidden tab", async () => {
+    expect(getComputedStyle(await tabWithVisiblePane(true)).visibility).toBe("hidden");
+  });
+
+  it("keeps a pane that sets itself visible shown in the shown tab", async () => {
+    expect(getComputedStyle(await tabWithVisiblePane(false)).visibility).toBe("visible");
+  });
+
   it("runs an endless animation once when the system asks for reduced motion", () => {
     // jsdom matches no media query: apply the reduced-motion rules as WebKit would.
     const reduced = [...page().cssRules]

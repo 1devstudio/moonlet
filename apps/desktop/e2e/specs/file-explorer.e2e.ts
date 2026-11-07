@@ -103,6 +103,21 @@ describe("File explorer and changed files", () => {
     await expect($('button[aria-label="Back to the changed files"]')).not.toBeExisting();
   });
 
+  it("hides the diff when the session's terminal tab is shown again", async () => {
+    // Monaco sets its diff's sides visible itself, which once showed them over the other tab.
+    const side = $(".monaco-diff-editor .editor.modified");
+    await expect(side).toBeDisplayed({ wait: 15_000 });
+    const terminalTab = '//div[not(@title)][contains(@class, "w-[172px]")][.//button[@title="Close tab"]]';
+    await browser.execute((x: string) => {
+      const t = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      t.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    }, terminalTab);
+    await expect($(terminalTab)).toHaveAttribute("aria-current", "true");
+    await expect(side).not.toBeDisplayed();
+    await activate("package.json");
+    await expect(side).toBeDisplayed();
+  });
+
   it("opens a file's diff from the keyboard with Space too", async () => {
     await browser.execute(() => (document.querySelector('div[role="button"][title="docs/guide.md"]') as HTMLElement).focus());
     await browser.keys("Space");
