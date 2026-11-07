@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { archiveSession } from "./actions";
+import { archiveSession, restoreSession } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
 import { answerConfirm, type ConfirmOptions } from "./confirm";
@@ -8,6 +8,7 @@ import { DEFAULT_GIT_SETTINGS } from "./gitSettings";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 
 // Answers the confirm modal as soon as it opens, like a click on its buttons,
 // keeping what it asked.
@@ -260,5 +261,29 @@ describe("archiveSession", () => {
     daemon.rpc.mockRejectedValue(new Error("boom"));
     await archiveSession();
     expect(useStore.getState().archiving).toEqual({});
+  });
+});
+
+describe("restoreSession (X86)", () => {
+  const old = { ...ws, archived: true, archived_at: 5 };
+  beforeEach(() => {
+    daemon.rpc.mockReset();
+    useStore.setState({ sessions: { local: [old] }, selected: null, toasts: [], showHistory: true });
+  });
+
+  it("restores the session and shows it, live", async () => {
+    daemon.rpc.mockImplementation(async (_host: string, method: string) => (method === "session.unarchive" ? { ...old, archived: false, archived_at: null, terminals: [7] } : true));
+    await restoreSession("local", old);
+    const st = useStore.getState();
+    expect([st.selected, st.sessions.local[0].archived, st.showHistory, st.toasts.map((t) => t.text)]).toEqual([{ host: "local", session: "s1" }, false, false, ["Restored s1"]]);
+  });
+
+  it("says why it could not, and leaves it archived", async () => {
+    daemon.rpc.mockImplementation(async () => {
+      throw new Error("cannot add the worktree");
+    });
+    await restoreSession("local", old);
+    const st = useStore.getState();
+    expect([st.sessions.local[0].archived, st.toasts.map((t) => t.text)]).toEqual([true, ["cannot add the worktree"]]);
   });
 });

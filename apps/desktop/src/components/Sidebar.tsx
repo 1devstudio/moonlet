@@ -8,7 +8,7 @@ import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
-import { archiveSession, openProjectSettings } from "../lib/actions";
+import { archiveSession, openProjectSettings, restoreSession } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
@@ -897,20 +897,14 @@ function HistoryList() {
       {archived.map(({ host, w }) => (
         <div key={host + w.id} className="group flex h-[38px] items-center gap-3 pl-[22px] pr-4 hover:bg-panel-2">
           <Archive size={13} className="text-faint" />
-          <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{w.name}</span>
+          {/* Its read-only page, with Restore in the header (X86). */}
+          <button className="min-w-0 flex-1 truncate text-left ui-text-14 text-[#cfcfcf] hover:text-fg" onClick={() => selectSession(host, w.id)}>
+            {w.name}
+          </button>
           <IconButton
             title="Restore session"
             className="opacity-0 group-hover:opacity-100"
-            onClick={async () => {
-              try {
-                await rpc(host, M.sessionUnarchive, { id: w.id });
-                useStore.setState({ showHistory: false });
-                selectSession(host, w.id);
-                toast(`Restored ${w.name}`);
-              } catch (e) {
-                errorToast(e);
-              }
-            }}
+            onClick={() => void restoreSession(host, w)}
           >
             <RotateCcw size={12} />
           </IconButton>

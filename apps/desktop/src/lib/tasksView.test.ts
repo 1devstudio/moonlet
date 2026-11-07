@@ -83,7 +83,7 @@ describe("modeSwitch (X45, X65 mode switch)", () => {
 
 describe("filterBoard (X45 header filters)", () => {
   const t = (key: string, column: Task["column"], mine: boolean): Task => ({ connection: "linear:acme", key, title: key, url: "", column, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, mine });
-  const card = (task: Task, rows = 0, orphans = 0) => ({ task, column: task.column === "done" ? ("done" as const) : ("todo" as const), rows: Array.from({ length: rows }, () => ({}) as never), needsYou: false, orphans: Array.from({ length: orphans }, () => ({}) as never), empty: null, drift: null });
+  const card = (task: Task, rows = 0, orphans = 0) => ({ task, column: task.column === "done" ? ("done" as const) : ("todo" as const), rows: Array.from({ length: rows }, () => ({}) as never), archived: [], needsYou: false, orphans: Array.from({ length: orphans }, () => ({}) as never), empty: null, drift: null });
   const board = {
     todo: [card(t("ENG-1", "todo", true)), card(t("ENG-2", "todo", false))],
     in_progress: [],

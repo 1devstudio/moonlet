@@ -638,6 +638,31 @@ describe("Tasks mode", () => {
     await tasksButton().click();
   });
 
+  it("lists a task's archived sessions under its card, opens one read only, and restores it from its header (X86)", async () => {
+    const earlier = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: "Earlier try", branch: "12-earlier-try", agent: "none" }).id;
+    rpc(w, "session.archive", { id: earlier });
+    const c = card("acme/storefront#12", "Open");
+    const fold = c.$('.//button[contains(normalize-space(), " archived")]');
+    await fold.waitForDisplayed({ timeout: 10_000 });
+    // The archived sessions are folded.
+    await expect(c.$('.//button[@aria-label="Archived session Earlier try"]')).not.toBeExisting();
+    await fold.click();
+    await c.$('.//button[@aria-label="Archived session Earlier try"]').click();
+
+    const page = $('//div[@role="region"][@aria-label="Archived session Earlier try"]');
+    await expect(page).toBeDisplayed({ wait: 10_000 });
+    await expect(page.$('.//dl[@aria-label="About this session"]')).toHaveText(expect.stringContaining("acme/storefront#12 Fix checkout button"));
+    await expect(page.$('.//dl[@aria-label="About this session"]')).toHaveText(expect.stringContaining("12-earlier-try"));
+    await expect(page.$(`.${sel.text("No chat transcripts were kept for this session.")}`)).toBeDisplayed({ wait: 10_000 });
+
+    await page.$('.//header//button[contains(normalize-space(), "Restore")]').click();
+    await expect($(sel.sessionRow("Earlier try"))).toHaveAttribute("aria-current", "true", { wait: 10_000 });
+    await expect(page).not.toBeExisting();
+    expect(rpc<(Session & { archived: boolean })[]>(w, "session.list", {}).find((x) => x.id === earlier)?.archived).toBe(false);
+    rpc(w, "session.archive", { id: earlier });
+    await tasksButton().click();
+  });
+
   it("shows the same tasks as a list whose rows open into their sessions, and unfolds and folds a column", async () => {
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
     const row = $('//section[@aria-label="Open"]//div[@role="row"][starts-with(@aria-label, "acme/storefront#15")]');

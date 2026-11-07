@@ -65,6 +65,8 @@ export interface Card {
   task: Task;
   column: Exclude<Column, "hidden">;
   rows: CardRow[];
+  /** Its archived sessions, listed apart: they count for nothing else (X86). */
+  archived: BoardSession[];
   /** A session waits on the user: the card is outlined amber. */
   needsYou: boolean;
   /** Worktrees whose branch carries the task and that no session uses. */
@@ -165,6 +167,10 @@ export function tasksBoard(input: BoardInput): Board {
     return m;
   };
   const sessionsOf = byTask(live, (s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link));
+  const archivedOf = byTask(
+    input.sessions.filter((s) => s.archived),
+    (s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link),
+  );
   const orphansOf = byTask(loose, (w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks, input.link));
   for (const task of input.tasks) {
     if (task.column === "hidden") continue;
@@ -175,6 +181,7 @@ export function tasksBoard(input: BoardInput): Board {
       task,
       column,
       rows: sessions.map((session) => ({ session, meta: rowMeta(session) })),
+      archived: archivedOf.get(task) ?? [],
       needsYou: sessions.some((s) => s.state === "blocked"),
       orphans,
       drift: drift(column, task.column, sessions, orphans, typeof input.sessionStartRule === "function" ? input.sessionStartRule(task) : input.sessionStartRule),
@@ -182,6 +189,13 @@ export function tasksBoard(input: BoardInput): Board {
     });
   }
   return board;
+}
+
+/** The card of the task session `id` works on, or worked on before it was archived (X86). */
+export function cardOfSession(board: Board, id: string): Card | undefined {
+  return Object.values(board)
+    .flat()
+    .find((c) => c.rows.some((r) => r.session.id === id) || c.archived.some((s) => s.id === id));
 }
 
 /** The cards with an out-of-sync chip (the Out of sync view and the Tasks button's count). */

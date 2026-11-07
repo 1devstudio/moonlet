@@ -290,6 +290,19 @@ export async function runScript(script: "run" | "setup") {
   }
 }
 
+/** Restores archived session `ws` on `host` and shows it, its tabs and
+ *  agents back as they were (X86); History and its read-only page use it. */
+export async function restoreSession(host: string, ws: Session) {
+  try {
+    const back = await rpc<Session>(host, M.sessionUnarchive, { id: ws.id });
+    useStore.setState((s) => ({ showHistory: false, sessions: { ...s.sessions, [host]: (s.sessions[host] ?? []).map((x) => (x.id === ws.id ? back : x)) } }));
+    selectSession(host, ws.id);
+    toast(`Restored ${ws.name}`);
+  } catch (e) {
+    errorToast(e);
+  }
+}
+
 /** Archives `target`, or the selected session, once confirmed. The host's
  * Git settings and the session's PR decide what happens to its folder and
  * branch (X55), or the confirm modal's checkbox for "Ask each time" (X23). */
