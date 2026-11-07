@@ -166,10 +166,11 @@ export function tasksBoard(input: BoardInput): Board {
     }
     return m;
   };
-  const sessionsOf = byTask(live, (s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link));
+  const taskOf = (s: BoardSession) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link);
+  const sessionsOf = byTask(live, taskOf);
   const archivedOf = byTask(
     input.sessions.filter((s) => s.archived),
-    (s) => taskForSession(s, s.pr, s.originRepo, input.tasks, input.link),
+    taskOf,
   );
   const orphansOf = byTask(loose, (w) => taskForSession({ branch: w.branch ?? "" }, null, w.originRepo, input.tasks, input.link));
   for (const task of input.tasks) {
@@ -191,11 +192,14 @@ export function tasksBoard(input: BoardInput): Board {
   return board;
 }
 
-/** The card of the task session `id` works on, or worked on before it was archived (X86). */
-export function cardOfSession(board: Board, id: string): Card | undefined {
+/** The card of the task a session works on, or worked on before it was
+ *  archived (X86). A board's sessions on its own host, `boardHost`, have no
+ *  `host`; ids are compared with their host. */
+export function cardOfSession(board: Board, boardHost: string, session: { host: string; id: string }): Card | undefined {
+  const is = (s: BoardSession) => s.id === session.id && (s.host ?? boardHost) === session.host;
   return Object.values(board)
     .flat()
-    .find((c) => c.rows.some((r) => r.session.id === id) || c.archived.some((s) => s.id === id));
+    .find((c) => c.rows.some((r) => is(r.session)) || c.archived.some(is));
 }
 
 /** The cards with an out-of-sync chip (the Out of sync view and the Tasks button's count). */

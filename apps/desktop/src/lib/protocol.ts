@@ -660,6 +660,10 @@ export interface Session {
   created_at: number;
   /** When it was archived (X86); absent on sessions archived before X86. */
   archived_at?: number | null;
+  /** Its tabs when it was archived, started again by Restore (X86). */
+  archived_restore?: { kind: string; title: string; agent: string | null }[];
+  /** Its pull request's number, kept by the daemon. */
+  pr?: number | null;
   /** The workspace the session belongs to (X32). */
   workspace_id?: string | null;
   model?: string | null;

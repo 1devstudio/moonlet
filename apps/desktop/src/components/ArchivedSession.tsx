@@ -1,7 +1,7 @@
 import { Archive, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { restoreSession } from "../lib/actions";
-import { archivedSummary, historyNote } from "../lib/archivedSession";
+import { archivedSummary, historyNote, keptTabs } from "../lib/archivedSession";
 import { chatBlocks } from "../lib/chat";
 import { rpc } from "../lib/daemon";
 import { M, type ArchivedChat, type Session, type SessionHistory } from "../lib/protocol";
@@ -17,7 +17,10 @@ const SHOWN = 200;
  *  transcripts, and Restore in the header. */
 export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
   const project = useStore((s) => s.projects[host]?.find((p) => p.id === ws.project_id)?.name);
-  const pr = useStore((s) => s.prs[sesKey(host, ws.id)] ?? null);
+  // No longer polled once archived: the last one seen, else its kept number.
+  const polled = useStore((s) => s.prs[sesKey(host, ws.id)] ?? null);
+  const pr = polled ?? (ws.pr ? { number: ws.pr, state: "" } : null);
+  const tabs = keptTabs(ws.archived_restore);
   const task = useSessionTask(host, ws)?.card.task ?? null;
   const [history, setHistory] = useState<SessionHistory | Error | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -73,6 +76,16 @@ export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
             )}
             <dt className="text-faint">When</dt>
             <dd className="text-muted">{lines.when}</dd>
+            {tabs.length > 0 && (
+              <>
+                <dt className="text-faint">On Restore</dt>
+                <dd className="flex flex-col text-muted">
+                  {tabs.map((t, i) => (
+                    <span key={i}>{t}</span>
+                  ))}
+                </dd>
+              </>
+            )}
           </dl>
           {history === null && <div className="py-10 text-center ui-text-13 text-faint">Loading transcripts…</div>}
           {note && <p className="mt-6 ui-text-13 text-faint">{note}</p>}

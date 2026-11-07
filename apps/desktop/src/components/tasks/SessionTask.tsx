@@ -42,9 +42,9 @@ export function useSessionTask(host: string, ws: Session): SessionTask | null {
   }, [ref, ws.task, ws.task_unlinked]);
   const { board } = useWorkspaceBoard(ref);
   return useMemo(() => {
-    const card = board ? cardOfSession(board, ws.id) : undefined;
+    const card = board && ref ? cardOfSession(board, ref.host, { host, id: ws.id }) : undefined;
     return card && ref ? { card, board: ref } : null;
-  }, [board, ref, ws.id]);
+  }, [board, ref, host, ws.id]);
 }
 
 /** Above the conversation: the task, its state and its other sessions. */

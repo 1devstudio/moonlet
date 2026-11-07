@@ -6,7 +6,7 @@ import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns
 import { create } from "zustand";
 import { DaemonError, hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type Worktree } from "./protocol";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type Worktree } from "./protocol";
 import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
@@ -820,6 +820,12 @@ export function originRepoOf(s: Pick<StoreState, "projects">, host: string, data
   return own ? (data.repos[own.id] ?? null) : null;
 }
 
+/** An archived session's PR, no longer polled, by the number the daemon
+ *  keeps (X86): enough to link it to the GitHub issue it closes. */
+function keptPr(n: number | null | undefined): PullRequest | null {
+  return n ? { number: n, url: "", state: "", title: "", checks: [], review_decision: null } : null;
+}
+
 /** What the board needs of a workspace's sessions (X45). */
 /**
  * What a workspace's board is built from. `members` are the hosts of the
@@ -842,7 +848,7 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
         task: x.task ?? null,
         task_unlinked: !!x.task_unlinked,
         state: sessionState(s, h, x.id),
-        pr: s.prs[sesKey(h, x.id)] ?? null,
+        pr: s.prs[sesKey(h, x.id)] ?? (x.archived ? keptPr(x.pr) : null),
         additions: s.git[sesKey(h, x.id)]?.additions ?? 0,
         deletions: s.git[sesKey(h, x.id)]?.deletions ?? 0,
         project: s.projects[h]?.find((p) => p.id === x.project_id)?.name,

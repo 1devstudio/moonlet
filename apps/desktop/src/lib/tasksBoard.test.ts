@@ -197,9 +197,20 @@ describe("archived sessions on their task (X86)", () => {
     expect(c.archived.map((s) => s.name)).toEqual(["Linked", "By branch"]);
   });
 
-  it("finds the card of a session, live or archived", () => {
-    const b = board([task("MOON-7", "todo"), task("MOON-8", "in_progress")], [session("Live", "moon-8-a"), session("Old", "moon-7-a", { archived: true })]);
-    expect([cardOfSession(b, "Live")?.task.key, cardOfSession(b, "Old")?.task.key, cardOfSession(b, "Gone")]).toEqual(["MOON-8", "MOON-7", undefined]);
+  it("finds the card of a session, live or archived, by its host and id", () => {
+    const b = board(
+      [task("MOON-7", "todo"), task("MOON-8", "in_progress")],
+      [session("Live", "moon-8-a"), session("Old", "moon-7-a", { archived: true }), session("Away", "moon-8-b", { id: "s9", host: "studio-mini" })],
+    );
+    expect([
+      cardOfSession(b, "local", { host: "local", id: "Live" })?.task.key,
+      cardOfSession(b, "local", { host: "local", id: "Old" })?.task.key,
+      cardOfSession(b, "local", { host: "studio-mini", id: "s9" })?.task.key,
+      // Ids are unique per host only: the same id on another host is not it.
+      cardOfSession(b, "local", { host: "studio-mini", id: "Live" }),
+      cardOfSession(b, "local", { host: "local", id: "s9" }),
+      cardOfSession(b, "local", { host: "local", id: "Gone" }),
+    ]).toEqual(["MOON-8", "MOON-7", "MOON-8", undefined, undefined, undefined]);
   });
 
   it("counts no archived session as the task's: no column, chip, empty line or clean-up of their own", () => {

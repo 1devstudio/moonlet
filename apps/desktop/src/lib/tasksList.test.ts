@@ -153,3 +153,21 @@ describe("boardListGroups (X50 List by the board's columns)", () => {
     expect(listRow({ ...c, drift: { kind: "started", text: "Session running", fix: "" } }, 0).chip).toBe("Session running");
   });
 });
+
+describe("a row with archived sessions (X86)", () => {
+  it("sums, counts and takes the PR of its live sessions only", () => {
+    const b = tasksBoard({
+      tasks: [task("MOON-154", "in_progress"), task("MOON-155", "in_progress")],
+      sessions: [
+        session("Now", "moon-154-now"),
+        session("Before", "moon-154-before", { archived: true, state: "working", pr: pr(90, "merged") }),
+        session("Long ago", "moon-155-old", { archived: true, state: "blocked" }),
+      ],
+      worktrees: [],
+      sessionStartRule: "suggest",
+    });
+    const [now, old] = b.in_progress.map((c) => listRow(c));
+    expect([now.sum, now.glyphs, now.worktrees, now.pr]).toEqual(["1 session", ["idle"], 1, "no PR"]);
+    expect([old.sum, old.glyphs, old.worktrees, old.needsYou]).toEqual(["none", [], 0, false]);
+  });
+});

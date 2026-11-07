@@ -660,6 +660,11 @@ describe("Tasks mode", () => {
     await expect(page).not.toBeExisting();
     expect(rpc<(Session & { archived: boolean })[]>(w, "session.list", {}).find((x) => x.id === earlier)?.archived).toBe(false);
     rpc(w, "session.archive", { id: earlier });
+
+    // History opens the same page.
+    await $('//button[normalize-space()="History"]').click();
+    await $('//button[normalize-space()="Earlier try"]').click();
+    await expect($('//div[@role="region"][@aria-label="Archived session Earlier try"]')).toBeDisplayed({ wait: 10_000 });
     await tasksButton().click();
   });
 

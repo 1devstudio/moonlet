@@ -7,6 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { answerTaskRequest, createIssue, pairedPhones, setColumnShow, shareTasks, workspacesToPoll } from "./tasksStore";
+import { tasksBoard } from "./tasksBoard";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -1873,6 +1874,19 @@ describe("errors as the user reads them", () => {
     setColumnShow("moon", "Todo", "fold");
     await vi.waitFor(() => expect(useStore.getState().toasts.at(-1)?.text).toBe("Could not write trackers.toml: permission denied"));
     useTasks.setState({ config: null });
+  });
+});
+
+describe("an archived session's pull request (X86)", () => {
+  const identity = { origin: "github.com/acme/web", root: "r1" };
+  const issue = { connection: "github:github.com", key: "acme/web#9", title: "Saved carts", url: "", column: "open" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, github: { repo: "acme/web", number: 9, closingPrs: [131] } };
+  const data: TasksData = { tasks: [issue], worktrees: [], sources: [], repos: { p1: "acme/web" }, syncedAt: null, error: null };
+  const old: Session = { id: "s1", project_id: "p1", name: "Carts", branch: "carts", base: "main", path: "/w/s1", agent: null, archived: true, created_at: 0, workspace_id: "W", terminals: [], layout: null, pr: 131 };
+
+  it("links an archived session to the issue its stored PR closes, though its PR is no longer polled", () => {
+    const state = { ...useStore.getState(), prs: {}, sessions: { local: [old] }, projects: { local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }] } };
+    const card = tasksBoard(boardInput(state, "local", "W", data, DEFAULT_CONFIG)).todo[0];
+    expect([card.task.key, card.archived.map((s) => [s.name, s.pr?.number])]).toEqual(["acme/web#9", [["Carts", 131]]]);
   });
 });
 

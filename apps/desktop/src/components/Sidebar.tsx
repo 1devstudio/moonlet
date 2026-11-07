@@ -898,7 +898,10 @@ function HistoryList() {
         <div key={host + w.id} className="group flex h-[38px] items-center gap-3 pl-[22px] pr-4 hover:bg-panel-2">
           <Archive size={13} className="text-faint" />
           {/* Its read-only page, with Restore in the header (X86). */}
-          <button className="min-w-0 flex-1 truncate text-left ui-text-14 text-[#cfcfcf] hover:text-fg" onClick={() => selectSession(host, w.id)}>
+          <button className="min-w-0 flex-1 truncate text-left ui-text-14 text-[#cfcfcf] hover:text-fg" onClick={() => {
+              useStore.setState({ showHistory: false });
+              selectSession(host, w.id);
+            }}>
             {w.name}
           </button>
           <IconButton

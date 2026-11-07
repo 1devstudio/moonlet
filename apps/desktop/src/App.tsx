@@ -1,6 +1,6 @@
-import { ArchivedSession } from "./components/ArchivedSession";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, FolderPlus, Plus, Search, X } from "lucide-react";
+import { ArchivedSession } from "./components/ArchivedSession";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { RightPanel } from "./components/RightPanel";
