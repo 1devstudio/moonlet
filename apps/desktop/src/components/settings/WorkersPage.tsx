@@ -285,7 +285,7 @@ export function WorkersPage() {
             <Cpu size={20} />
           </span>
           <span className="ui-text-14 font-medium">Only {name} runs heavy commands</span>
-          <span className="max-w-[440px] ui-text-12.5 text-muted">No machine runs heavy commands for {name} yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host.</span>
+          <span className="max-w-[440px] ui-text-12.5 text-muted">No machine runs heavy commands for {name} yet. Turn on Takes heavy commands from other hosts, or Use for heavy commands on a remote host.</span>
           <Button variant="primary" onClick={() => void goSettings({ page: "hosts" })}>
             <Server size={13} /> Open Hosts
           </Button>

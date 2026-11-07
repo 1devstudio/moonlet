@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "./workerLink";
+import { centralHeavyHostId, centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "./workerLink";
 import { DaemonError } from "./daemon";
 import type { HostInfo, LinkInfo, LinkState } from "./protocol";
 
@@ -144,6 +144,14 @@ describe("which remote hosts take heavy commands (X61)", () => {
     ];
     expect(heavyHostIds(hosts, "studio-mini")).toEqual(["build-box"]);
     expect(heavyHostIds(hosts, null)).toEqual(["studio-mini", "build-box"]);
+  });
+
+  it("the central host's row gets its own switch, set on it directly (X89)", () => {
+    const hosts = [remoteHost("studio-mini", "tailnet"), remoteHost("build-box", "tailnet"), remoteHost("old-mini", "tailnet", "reconnecting")];
+    expect(centralHeavyHostId(hosts, "studio-mini")).toBe("studio-mini");
+    // Only while it is connected, and only once there is one.
+    expect(centralHeavyHostId(hosts, "old-mini")).toBeNull();
+    expect(centralHeavyHostId(hosts, null)).toBeNull();
   });
 });
 
