@@ -24,6 +24,19 @@ export function approvalTargets(host: string, hosts: HostInfo[], links: Record<s
   return [host, ...workers].map((id) => ({ id, label: label(id) }));
 }
 
+/** Where Approve approves, and how the banner and the toast name it. Since
+ * X89 the approval is kept in the account, so approving on the project's
+ * host covers every member; a host from before X89 approves on each
+ * machine (`targets`, from [`approvalTargets`]). `toast` null: name the
+ * machines it reached. */
+export function approvalScope(
+  info: HeavyInfo,
+  targets: { id: string; label: string }[],
+): { approveOn: { id: string; label: string }[]; banner: string[]; toast: string[] | null } {
+  if (info.account) return { approveOn: targets.slice(0, 1), banner: ["every host of your account that takes heavy commands"], toast: ["every host of your account"] };
+  return { approveOn: targets, banner: targets.map((t) => t.label), toast: null };
+}
+
 /** The `link.get` of this Mac and of each connected tailnet host. */
 export async function readLinks(hosts: HostInfo[]): Promise<Record<string, LinkInfo | null>> {
   const ids = ["local", ...hosts.filter((h) => h.remote && h.kind === "tailnet" && h.status === "connected").map((h) => h.id)];
@@ -43,7 +56,9 @@ export async function approveHeavy(
 ): Promise<Approved> {
   const lists = { commands: info.config.commands, env: info.config.env };
   const next = await rpc<HeavyInfo>(host, M.heavyApprove, { project: id, ...lists });
-  const [first, ...workers] = approvalTargets(host, hosts, links);
+  const scope = approvalScope(next, approvalTargets(host, hosts, links));
+  if (scope.toast) return { info: next, toast: approvedToast(project.name, lists.commands, scope.toast, []) };
+  const [first, ...workers] = scope.approveOn;
   const machines = [first.label];
   const unreachable: string[] = [];
   if (project.identity?.root) {

@@ -3454,6 +3454,10 @@ pub struct HeavyInfo {
     pub approved: Option<HeavyApproval>,
     /// Why `[heavy]` cannot be used as written; nothing is routed then.
     pub error: Option<String>,
+    /// The approval is kept in the account, so it holds on every member
+    /// (X89); false on a host that shares no account, or from before X89.
+    #[serde(default)]
+    pub account: bool,
 }
 
 /// `exec.route` params, from moonlet's `PreToolUse` hook.

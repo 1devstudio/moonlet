@@ -52,10 +52,7 @@ impl Heavy {
     pub fn get(&self, project: &str) -> Result<HeavyInfo, RpcError> {
         let p = self.project(project)?;
         let config = project_config::load(Path::new(&p.path), p.base_branch.clone());
-        let approved = match key(&p.identity) {
-            Some(k) => self.read().map_err(internal)?.remove(&k),
-            None => None,
-        };
+        let approved = self.approval(&p.identity).map_err(internal)?;
         let error = config
             .error
             .clone()
@@ -64,6 +61,7 @@ impl Heavy {
             config: config.config.heavy,
             approved,
             error,
+            account: self.sessions.has_account(),
         })
     }
 
@@ -104,7 +102,12 @@ impl Heavy {
                 format!("{}'s heavy commands changed since they were shown", p.name),
             ));
         }
-        {
+        if self.sessions.has_account() {
+            // Once, for every member of the account (X89).
+            self.sessions
+                .set_heavy_approval(&p.identity, &sorted(&r.commands), &sorted(&r.env))
+                .map_err(internal)?;
+        } else {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut all = self.read().map_err(internal)?;
             all.insert(
@@ -219,8 +222,10 @@ impl Heavy {
         }
         let heavy = config.config.heavy;
         let words = heavy::route(&r.command, &heavy.commands).ok_or("not_heavy")?;
-        let approved = key(&project.identity)
-            .and_then(|k| self.read().ok()?.remove(&k))
+        let approved = self
+            .approval(&project.identity)
+            .ok()
+            .flatten()
             .ok_or("not_approved")?;
         let entries: Vec<String> = heavy
             .commands
@@ -246,6 +251,37 @@ impl Heavy {
             return Err("claude_rule");
         }
         Ok(())
+    }
+
+    /// Project `identity`'s approval: the account's, kept once for every
+    /// member (X89), or `heavy.json`'s on a host that shares no account.
+    pub fn approval(&self, identity: &ProjectIdentity) -> anyhow::Result<Option<HeavyApproval>> {
+        if self.sessions.has_account() {
+            return Ok(self
+                .sessions
+                .heavy_approval(identity)
+                .map(|(commands, env)| HeavyApproval { commands, env }));
+        }
+        Ok(match key(identity) {
+            Some(k) => self.read()?.remove(&k),
+            None => None,
+        })
+    }
+
+    /// Approvals this host kept in `heavy.json` before X89 become the
+    /// account's, giving way to any approval made on a member.
+    pub fn seed_account(&self) {
+        let Ok(all) = self.read() else { return };
+        for (k, a) in all {
+            let Some((origin, root)) = k.rsplit_once(' ') else { continue };
+            let identity = ProjectIdentity {
+                origin: (!origin.is_empty()).then(|| origin.to_string()),
+                root: Some(root.to_string()),
+            };
+            if let Err(e) = self.sessions.seed_heavy_approval(&identity, &a.commands, &a.env) {
+                tracing::warn!("cannot keep an approval of heavy commands in the account: {e:#}");
+            }
+        }
     }
 
     fn project(&self, id: &str) -> Result<Project, RpcError> {

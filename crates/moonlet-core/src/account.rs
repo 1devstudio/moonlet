@@ -36,6 +36,9 @@ pub enum RecordKind {
     /// A member's worker settings (X89), by worker id: `heavy` (whether it
     /// takes other hosts' heavy commands) and `slots`.
     Worker,
+    /// A project's approved heavy commands (X89), by project identity: its
+    /// `commands` and `env`, approved together.
+    HeavyApproval,
 }
 
 impl RecordKind {
@@ -50,6 +53,7 @@ impl RecordKind {
             RecordKind::ProjectFiles => "project_files",
             RecordKind::SignIn => "signin",
             RecordKind::Worker => "worker",
+            RecordKind::HeavyApproval => "heavy_approval",
         }
     }
 }

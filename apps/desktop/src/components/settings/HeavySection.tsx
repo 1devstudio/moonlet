@@ -6,7 +6,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { Plus, ShieldCheck, TriangleAlert, X } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { approvalBanner, entryStates, heavyChanged, heavyDraft, heavyFromDraft, secretWarning, type HeavyDraft } from "../../lib/heavyCommands";
-import { approvalTargets, approveHeavy, readLinks } from "../../lib/heavyApproval";
+import { approvalScope, approvalTargets, approveHeavy, readLinks } from "../../lib/heavyApproval";
 import { M, type HeavyInfo, type HeavyOs, type LinkInfo, type ProjectIdentity } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
@@ -67,10 +67,7 @@ export function HeavySection({
   if (!info) return null;
   const host_label = host === "local" ? "this Mac" : (hosts[host]?.label ?? host);
   const states = new Map(entryStates(info).map((e) => [e.command, e.approved]));
-  const banner = approvalBanner(
-    info,
-    approvalTargets(host, Object.values(hosts), links).map((t) => t.label),
-  );
+  const banner = approvalBanner(info, approvalScope(info, approvalTargets(host, Object.values(hosts), links)).banner);
   const set = (patch: Partial<HeavyDraft>) => setDraft({ ...draft, ...patch });
   const secrets = heavyFromDraft(draft)
     .env.map(secretWarning)

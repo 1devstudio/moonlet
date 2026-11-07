@@ -298,3 +298,143 @@ async fn link_json_settings_become_the_accounts_at_first_start() {
     .await;
     assert_eq!(own(&book).await, (true, 3));
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+const HEAVY: &str = "[heavy]\ncommands = [\"pnpm check\"]\nenv = [\"CI\"]\n";
+
+/// Project `shop` on `d`: a checkout of one repository, whatever the
+/// member, listing `pnpm check` as its heavy command. Gives its id.
+async fn shop_on(d: &Daemon, origin_repo: &std::path::Path) -> String {
+    let checkout = d.home.path().join("src/shop");
+    if !origin_repo.join(".git").exists() {
+        std::fs::create_dir_all(origin_repo).unwrap();
+        git(origin_repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(origin_repo.join("package.json"), "{}\n").unwrap();
+        git(origin_repo, &["add", "."]);
+        git(origin_repo, &["commit", "-q", "-m", "shop"]);
+    }
+    std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+    git(
+        checkout.parent().unwrap(),
+        &["clone", "-q", origin_repo.to_str().unwrap(), "shop"],
+    );
+    git(
+        &checkout,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://git.invalid/acme/shop.git",
+        ],
+    );
+    // Kept out of git, as many projects keep it (X90).
+    std::fs::create_dir_all(checkout.join(".moonlet")).unwrap();
+    std::fs::write(checkout.join(".moonlet/config.toml"), HEAVY).unwrap();
+    let p: Value = d.call("project.add", json!({ "path": checkout })).await;
+    p["id"].as_str().unwrap().to_string()
+}
+
+async fn approved(d: &Daemon, project: &str) -> Value {
+    let info: Value = d.call("heavy.get", json!({ "project": project })).await;
+    info["approved"].clone()
+}
+
+#[tokio::test]
+async fn an_approval_on_one_member_lets_every_member_route_and_run_the_list() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let on_mini = shop_on(&mini, repo.path()).await;
+    let on_book = shop_on(&book, repo.path()).await;
+    let session: Value = mini
+        .call(
+            "session.create",
+            json!({ "project_id": on_mini, "name": "Fix cart" }),
+        )
+        .await;
+    let route = || async {
+        let r: Value = mini
+            .call(
+                "exec.route",
+                json!({ "session": session["id"], "command": "pnpm check", "cwd": session["path"] }),
+            )
+            .await;
+        r
+    };
+    assert_eq!(
+        route().await,
+        json!({ "route": false, "reason": "not_approved" })
+    );
+    // Approved once, on the MacBook.
+    let _: Value = book
+        .call(
+            "heavy.approve",
+            json!({ "project": on_book, "commands": ["pnpm check"], "env": ["CI"] }),
+        )
+        .await;
+    within(
+        Duration::from_secs(3),
+        "the approval on studio-mini",
+        || async {
+            approved(&mini, &on_mini).await == json!({ "commands": ["pnpm check"], "env": ["CI"] })
+        },
+    )
+    .await;
+    assert_eq!(route().await, json!({ "route": true, "reason": null }));
+    let info: Value = mini.call("heavy.get", json!({ "project": on_mini })).await;
+    assert_eq!(info["account"], json!(true));
+}
+
+#[tokio::test]
+async fn approvals_from_heavy_json_reach_the_account_at_first_start() {
+    let (mini, addr) = central().await;
+    let repo = tempfile::tempdir().unwrap();
+    let on_mini = shop_on(&mini, repo.path()).await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let _ = shop_on(&book, repo.path()).await;
+    let projects: Value = book.call("project.list", json!({})).await;
+    let id = &projects[0]["identity"];
+    let key = format!(
+        "{} {}",
+        id["origin"].as_str().unwrap_or(""),
+        id["root"].as_str().unwrap()
+    );
+    // What the MacBook approved before X89, kept in its heavy.json.
+    book.stop();
+    std::fs::write(
+        book.home.path().join("heavy.json"),
+        json!({ key: { "commands": ["pnpm check"], "env": ["CI"] } }).to_string(),
+    )
+    .unwrap();
+    book.restart().await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "the approval on studio-mini",
+        || async {
+            approved(&mini, &on_mini).await == json!({ "commands": ["pnpm check"], "env": ["CI"] })
+        },
+    )
+    .await;
+}

@@ -147,7 +147,7 @@ pub struct Daemon {
     /// ones this daemon serves as a central host (X60).
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
-    heavy: Arc<crate::heavy::Heavy>,
+    pub(crate) heavy: Arc<crate::heavy::Heavy>,
     /// Cloud workers' settings and machines (X63).
     cloud: Arc<crate::cloud::CloudSettings>,
     pub machines: Arc<crate::machines::Machines>,
