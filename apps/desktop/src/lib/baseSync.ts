@@ -81,15 +81,21 @@ export function pullToast(branch: string, r: { pulled: number; head: string }): 
 }
 
 /** The same project on the other connected hosts, matched by identity, to
- *  pull there too when the chip is clicked on `host`. A project without a
- *  root commit is its host's alone. */
-export function sameProjectElsewhere(host: string, project: Project, projects: Record<string, Project[]>, connected: (host: string) => boolean): { host: string; project: Project }[] {
+ *  pull there too when the chip is clicked on `host`: every checkout of it,
+ *  with its folder's name when a host has more than one. A project without
+ *  a root commit is its host's alone. */
+export function sameProjectElsewhere(
+  host: string,
+  project: Project,
+  projects: Record<string, Project[]>,
+  connected: (host: string) => boolean,
+): { host: string; project: Project; folder: string | null }[] {
   const key = identityKey(project.identity);
   if (!key) return [];
   return Object.entries(projects).flatMap(([h, list]) => {
     if (h === host || !connected(h)) return [];
-    const same = list.find((p) => identityKey(p.identity) === key);
-    return same ? [{ host: h, project: same }] : [];
+    const same = list.filter((p) => identityKey(p.identity) === key);
+    return same.map((p) => ({ host: h, project: p, folder: same.length > 1 ? (p.path.split("/").filter(Boolean).pop() ?? p.path) : null }));
   });
 }
 

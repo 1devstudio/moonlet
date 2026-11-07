@@ -16,16 +16,21 @@ const status = (behind: number, ahead: number, fetch_error: string | null = null
 /** One host's daemon: how far main is behind origin as last fetched, how
  *  far after a fetch (`fetched`), a failed fetch, no origin/main at all,
  *  and a pull that waits for `hold`. */
-type Daemon = { behind: number; ahead?: number; fetched?: number; fetchError?: string; noUpstream?: boolean; hold?: Promise<void> };
+type Daemon = { behind: number; ahead?: number; fetched?: number; fetchError?: string; noUpstream?: boolean; hold?: Promise<void>; holdFetch?: Promise<void> };
 
 function daemons(state: Record<string, Daemon>) {
-  daemon.rpc.mockImplementation(async (h: string, method: string, params: { fetch?: boolean }) => {
-    const s = state[h];
+  daemon.rpc.mockImplementation(async (h: string, method: string, params: { path: string; fetch?: boolean }) => {
+    const s = state[`${h}:${params.path}`] ?? state[h];
     if (method === "git.base_status") {
       if (s.noUpstream) return null;
       if (params.fetch && s.fetchError) return status(s.behind, s.ahead ?? 0, s.fetchError);
       if (params.fetch && s.fetched !== undefined) s.behind = s.fetched;
-      return status(s.behind, s.ahead ?? 0);
+      const read = status(s.behind, s.ahead ?? 0);
+      // The next fetch answers late, with what it read before.
+      const late = params.fetch ? s.holdFetch : undefined;
+      if (late) s.holdFetch = undefined;
+      await late;
+      return read;
     }
     if (method === "git.pull_base") {
       await s.hold;
@@ -107,6 +112,26 @@ describe("pulling a project's base branch on every host that has it", () => {
     release();
     await onMini;
     expect(shown()).toEqual([pulledHere, "studio-mini: already pulling main. build-box: already up to date.", "Pulled 2 commits into main. New sessions start from 9c41e2a."]);
+  });
+
+  it("pulls every checkout of the project on another host, each named by its folder", async () => {
+    daemons({ local: { behind: 3 }, mini: { behind: 2 }, "vps:/home/me/ledger": { behind: 1 }, "vps:/srv/ledger-ci": { behind: 0 } });
+    useStore.setState((s) => ({ projects: { ...s.projects, vps: [project("v3", "/home/me/shop", shop), project("v4", "/home/me/ledger"), project("v5", "/srv/ledger-ci")] } }));
+    await pullBaseEverywhere("local", "p1");
+    expect(shown()).toEqual([pulledHere, "studio-mini: pulled 2 commits. build-box (ledger): pulled 1 commit. build-box (ledger-ci): already up to date."]);
+  });
+
+  it("does not pull again from a fetch that read the branch before the pull", async () => {
+    let release = () => {};
+    daemons({ local: { behind: 3 }, mini: { behind: 2, holdFetch: new Promise<void>((r) => (release = r)) }, vps: { behind: 0 } });
+    useStore.setState({ gitSettings: { mini: { ...gitSettingsOf({}, "mini"), fast_forward_base: true } } });
+    // studio-mini's timed fetch is under way, and answers after the pull.
+    const timed = refreshBase("mini", "m7", { fetch: true });
+    await pullBaseEverywhere("local", "p1");
+    release();
+    await timed;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shown()).toEqual([pulledHere, "studio-mini: pulled 2 commits. build-box: already up to date."]);
   });
 
   it("skips a host that is not connected", async () => {
