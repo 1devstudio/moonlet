@@ -1,18 +1,19 @@
 // The central host's own app lists the sessions other members run (X86).
 // Here the app's daemon is the central host: a second scratch daemon, on
-// ::1 and named MacBook, pairs with it as a member, with a code from
-// `moonletd pair` on the app's daemon. Its project is a clone of the app's,
+// ::1 and named MacBook, pairs with it as a member, with the code Settings ›
+// Hosts › Let another Mac connect shows (only the app manages tailnet
+// access and pairing). Its project is a clone of the app's,
 // so both know it as the same project, and its session `Fix cart` is
 // copied to the app's daemon (X72). The app lists it with the host icon,
 // opens it without what the MacBook refuses through the central host,
 // shows it read only while the MacBook is gone, and drops it once the
 // MacBook archives it, so later specs see none.
 
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { accountSnapshot, BIN_DIR, restoreAccount, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, openSettings, restoreAccount, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "copies-book-home");
@@ -26,34 +27,28 @@ const row = sel.sessionRow(SESSION);
 /** One request to the MacBook's daemon over its socket. */
 const bookRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params);
 
-/** Runs `moonletd pair` on the app's daemon; resolves with the link it prints. */
-function startPairing(): { proc: ChildProcess; link: Promise<string> } {
-  const proc = spawn(join(BIN_DIR, "moonletd"), ["pair"], { env: w.env });
-  const link = new Promise<string>((resolve, reject) => {
-    let out = "";
-    let err = "";
-    proc.stdout!.on("data", (d) => {
-      out += d.toString();
-      const m = out.match(/^(moonlet:\/\/pair\?\S+)$/m);
-      if (m) resolve(m[1]);
-    });
-    proc.stderr!.on("data", (d) => (err += d.toString()));
-    proc.on("exit", (code) => reject(new Error(`moonletd pair exited ${code} before printing a link: ${out} ${err}`)));
-  });
-  return { proc, link };
+const allow = sel.settingsSwitch("Allow connections from my tailnet");
+
+/** The pairing link Settings › Hosts shows for another Mac, with tailnet
+ * access turned on first. Settings stays open: leaving it cancels the code. */
+async function macPairingLink(): Promise<URL> {
+  await openSettings("Hosts");
+  if ((await $(allow).getAttribute("aria-checked")) !== "true") await $(allow).click();
+  const letIn = sel.settingsButton("Let another Mac connect");
+  await $(letIn).waitForEnabled({ timeout: 15_000 });
+  await $(letIn).click();
+  const code = $('//code[starts-with(@title, "moonlet://pair?")]');
+  await code.waitForExist({ timeout: 10_000 });
+  return new URL((await code.getAttribute("title"))!);
 }
 
 describe("the central host's copies of other members' sessions (X86)", () => {
-  let pairing: ChildProcess | undefined;
   let session = "";
   // What the app's daemon shared while linked goes again (X68).
   let shared = { workspaces: [] as string[], sections: [] as string[] };
 
   before(async () => {
     shared = accountSnapshot(w);
-    // Tailnet access, for the MacBook to pair. `moonlet rpc` may not manage
-    // it; `moonletd tailnet` speaks as the app.
-    execFileSync(join(BIN_DIR, "moonletd"), ["tailnet", "on"], { env: w.env, stdio: "pipe" });
     mkdirSync(join(w.root, "book"), { recursive: true });
     execFileSync("git", ["clone", "-q", w.repo, clone], { env: w.env, stdio: "pipe" });
     mkdirSync(home, { recursive: true });
@@ -62,27 +57,24 @@ describe("the central host's copies of other members' sessions (X86)", () => {
     await bookRpc("link.set", { worker: { name: "MacBook" } });
   });
 
-  after(() => {
-    pairing?.kill();
+  after(async () => {
     try {
       execFileSync(join(BIN_DIR, "moonlet"), ["rpc", "daemon.shutdown", "{}"], { env, stdio: "pipe" });
     } catch {
       // Already gone.
     }
     // Tailnet access is the daemon's setting, kept for the rest of the run: off again.
-    try {
-      execFileSync(join(BIN_DIR, "moonletd"), ["tailnet", "off"], { env: w.env, stdio: "pipe" });
-    } catch (e) {
-      console.warn(`tailnet off: ${e}`);
-    }
+    if (await $(sel.settings).isExisting()) await closeSettings();
+    await openSettings("Hosts");
+    if ((await $(allow).getAttribute("aria-checked")) === "true") await $(allow).click();
+    await closeSettings();
     restoreAccount(w, shared);
   });
 
   it("lists the MacBook's session with the host icon naming it", async () => {
-    const started = startPairing();
-    pairing = started.proc;
-    const link = new URL(await started.link);
+    const link = await macPairingLink();
     await bookRpc("link.pair", { central: { name: link.searchParams.get("host"), addrs: [link.searchParams.get("addr")] }, code: link.searchParams.get("code") });
+    await closeSettings();
     const project = await bookRpc<{ id: string }>("project.add", { path: clone });
     session = (await bookRpc<{ id: string }>("session.create", { project_id: project.id, name: SESSION, agent: "none" })).id;
 
