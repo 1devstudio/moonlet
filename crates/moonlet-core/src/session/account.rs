@@ -1606,6 +1606,28 @@ mod tests {
         assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
     }
 
+    /// X89's records reach a member from before X89 as a kind it does not
+    /// know: it keeps them and passes them on, as X68 says.
+    #[tokio::test]
+    async fn a_record_kind_a_member_does_not_know_is_kept_and_passed_on() {
+        let (_a, book) = member("book").await;
+        let (_b, old) = member("old").await;
+        let (_c, air) = member("air").await;
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        // The change, as one from a newer moonlet: a kind of its own.
+        let mut changes = book.account_changes_for(&old.account_version());
+        for c in &mut changes {
+            if c.kind == "worker" {
+                c.kind = "worker_from_a_newer_moonlet".into();
+            }
+        }
+        old.apply_account(changes);
+        let passed: Vec<Change> = old.account_changes_for(&air.account_version());
+        assert!(passed.iter().any(|c| c.kind == "worker_from_a_newer_moonlet"), "{passed:?}");
+        // And it changed nothing it reads.
+        assert_eq!(old.worker_settings().get("air"), None);
+    }
+
     #[tokio::test]
     async fn two_approvals_made_apart_never_mix_their_lists() {
         let (_a, book) = member("book").await;

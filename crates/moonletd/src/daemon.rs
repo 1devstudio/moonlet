@@ -819,6 +819,15 @@ impl Daemon {
         Ok(())
     }
 
+    /// Tests only: a central host from before X89, which knows none of the
+    /// methods members route through.
+    fn before_x89(method: &str) -> Result<(), RpcError> {
+        if std::env::var_os("MOONLET_TEST_BEFORE_X89").is_some() {
+            return Err(RpcError::new("unknown_method", format!("unknown method {method}")));
+        }
+        Ok(())
+    }
+
     /// The member linked on `conn`, by worker id and name (X89): a paired
     /// Mac's daemon registered as a worker, never a cloud machine, a phone
     /// or an agent's CLI.
@@ -1908,6 +1917,7 @@ impl Daemon {
             }
             // A routing call from one member to another (X89).
             m::PEER_CALL => {
+                Self::before_x89(method)?;
                 // A member, or a cloud machine calling back the member whose
                 // command it runs (X89).
                 let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
@@ -1957,6 +1967,7 @@ impl Daemon {
             // The members a member may route a command to through this
             // central host: those that take other hosts' commands (X89).
             m::WORKER_PEERS => {
+                Self::before_x89(method)?;
                 let (member, _) = self.member_on(conn)?;
                 let r: m::WorkerPeers = params(p).unwrap_or_default();
                 let status = |w: m::WorkerInfo, cloud: bool| m::WorkerStatus {
@@ -2019,6 +2030,7 @@ impl Daemon {
             // commands, then has it run one in a routing copy of its
             // session (X89).
             m::WORKER_STATUS => {
+                Self::before_x89(method)?;
                 self.member_on(conn)?;
                 ok(self.runs.status_for_members(&self.link.info().worker))
             }

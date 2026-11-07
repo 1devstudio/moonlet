@@ -3785,6 +3785,8 @@ impl LiveCopies {
             .worker
             .iter()
             .filter(|k| k.kind == CopyKind::Run && keep.as_deref() != Some(k.host.as_str()))
+            // A copy a command runs in now stays until it ends (X89).
+            .filter(|k| !k.in_use_until.is_some_and(|t| t > moonlet_core::paths::now_ms()))
             .map(|k| k.id.clone())
             .collect();
         for id in ids {
@@ -3836,6 +3838,23 @@ impl LiveCopies {
     }
 
     /// Call holding [`LiveCopies::run_lock`].
+    /// A run in routing copy `copy` ended while this host takes no heavy
+    /// commands any more: the copy goes now, as the others went when the
+    /// switch went off (X89).
+    pub fn drop_run_copy_if_off(self: &Arc<Self>, copy: &str) {
+        let info = self.link.info();
+        if info.worker.enabled || info.worker.cloud {
+            return;
+        }
+        let me = self.clone();
+        let copy = copy.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = me.remove(&copy, CloseReason::Stopped).await {
+                tracing::warn!(%copy, "cannot remove the routing copy: {}", e.message);
+            }
+        });
+    }
+
     pub async fn reset_run(&self, copy: &str) {
         self.update_kept(copy, |k| {
             k.last_used = Some(moonlet_core::paths::now_ms());

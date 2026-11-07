@@ -1403,6 +1403,7 @@ impl Runs {
             // returns to its fence either way.
             sync.reset_run(&req.copy).await;
             drop(claim);
+            sync.drop_run_copy_if_off(&req.copy);
         });
         Ok(true)
     }
