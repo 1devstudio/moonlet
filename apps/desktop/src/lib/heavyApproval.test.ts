@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { approvalTargets } from "./heavyApproval";
-import type { HostInfo, LinkInfo } from "./protocol";
+import { approvalBanner, approvedToast } from "./heavyCommands";
+import { approvalTargets, approvalScope } from "./heavyApproval";
+import type { HeavyInfo, HostInfo, LinkInfo } from "./protocol";
 
 const host = (id: string, label: string, status = "connected"): HostInfo => ({ id, label, remote: true, kind: "tailnet", status }) as unknown as HostInfo;
 const link = (central: string | null, enabled = true, name = "w"): LinkInfo =>
@@ -24,5 +25,28 @@ describe("who an approval covers (X62)", () => {
       { id: "local", label: "this Mac" },
       { id: "devbox", label: "devbox" },
     ]);
+  });
+});
+
+describe("an approval kept in the account (X89)", () => {
+  const heavy = (account: boolean): HeavyInfo => ({ config: { commands: ["pnpm check"], os: "any", env: [], outputs: [] }, approved: null, error: null, account });
+  const targets = [
+    { id: "studio-mini", label: "studio-mini" },
+    { id: "local", label: "this Mac" },
+  ];
+
+  it("the approval toast names the account", () => {
+    const scope = approvalScope(heavy(true), targets);
+    // Approved once, on the project's host: the account carries it.
+    expect(scope.approveOn).toEqual([{ id: "studio-mini", label: "studio-mini" }]);
+    expect(approvalBanner(heavy(true), scope.banner)?.text).toBe(
+      "Approving the list lets agents run it without asking, on every host of your account that takes heavy commands. Approved commands can run code from the project, including code the agent wrote, on this Mac.",
+    );
+    expect(approvedToast("shop", ["pnpm check"], scope.toast!, [])).toBe("Approved pnpm check for shop on every host of your account");
+  });
+
+  it("each machine, on a host from before X89", () => {
+    const scope = approvalScope(heavy(false), targets);
+    expect(scope).toEqual({ approveOn: targets, banner: ["studio-mini", "this Mac"], toast: null });
   });
 });

@@ -1212,6 +1212,7 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         tracing::warn!("cannot keep this host's worker settings in the account: {e:#}");
     }
     daemon.link.follow_settings();
+    daemon.heavy.seed_account();
     let d = Arc::downgrade(daemon);
     let me = worker.id.clone();
     daemon.sessions.on_account_applied(move |changes| {
