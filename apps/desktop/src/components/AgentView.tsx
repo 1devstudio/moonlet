@@ -109,6 +109,9 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { parseCopyHost } from "../lib/copyHost";
+import { readOnlyLine } from "../lib/centralCopies";
+import { useSync } from "../lib/syncStore";
 import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
 
@@ -907,6 +910,7 @@ function ChatEditor({
   top,
   layout,
   designSlash = null,
+  refuse = null,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -942,6 +946,9 @@ function ChatEditor({
    *  forms, over a footer naming the design system it will use once that
    *  is known (X65). */
   designSlash?: { footer: string | null } | null;
+  /** Why nothing can be sent now, said instead of sending, keeping the
+   *  text: a copy whose member is away (X86). */
+  refuse?: string | null;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -1042,6 +1049,10 @@ function ChatEditor({
   const send = () => {
     const t = text.trim();
     if (!t && !images.length) return;
+    if (refuse) {
+      toast(refuse);
+      return;
+    }
     if (t) rememberPrompt(t);
     onSend(t, images);
     setImages([]);
@@ -1385,6 +1396,10 @@ export function AgentView({
   onReply?: (reply: Exclude<SuggestedReply, { kind: "send" }>) => void;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
+  // A copy whose member is away is read only (X86).
+  const copySession = useStore((s) => (parseCopyHost(host) ? s.sessions[host]?.[0] : undefined));
+  const here = useSync((s) => s.meName) ?? "this Mac";
+  const copyRefusal = copySession ? readOnlyLine(copySession, here) : null;
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const toolCalls = useStore((s) => s.settings.toolCalls);
   const blocks = useMemo(() => (st ? chatBlocks(st.items, toolCalls) : []), [st?.items, toolCalls]);
@@ -1825,6 +1840,7 @@ export function AgentView({
           top={st && <AgentsStrip host={host} id={id} st={st} visible={visible} onSend={(text) => send(text, [])} />}
           layout={layout}
           designSlash={designSlash}
+          refuse={copyRefusal}
         />
         {/* Under the input (X29, X34, X51): +, context ring and cost on the left, settings on the right; narrower chats drop the extras. */}
         <div className="mt-1.5 flex h-[34px] items-center justify-between gap-2 whitespace-nowrap ui-text-12.5 text-muted">

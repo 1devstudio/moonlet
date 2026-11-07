@@ -1,6 +1,6 @@
 # X86 — The central host's own app lists the sessions other members run
 
-- **Status:** draft
+- **Status:** implemented (untried between two real Macs)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts), [0015](../adr/0015-sessions-follow-the-user.md) (sessions follow the user)
@@ -39,20 +39,20 @@ With this spec, the app on the central host lists those sessions and opens them 
 - [x] A copy opens under its copy host, `local#copy:<session>`, so every call goes through `session.forward` and `session.attach` to the owner (X72). (`apps/desktop/src/lib/centralCopiesStore.test.ts` › opens one with the terminals its member lists; `copyHost.test.ts`)
 - [x] The session shows its chats and terminals as the owner lists them (`terminal.list` and `chat.summaries` through the copy host), with a stand-in for each chat while the owner lists none. Its chat follows `session.event` live, and the open copy is read again whenever the copies are. (`centralCopies.test.ts` › what a copy shows when opened; `centralCopiesStore.test.ts`; `copyHost.test.ts` for `session.event`)
 - [x] A message typed in its chat goes to the owner's agent (`chat.send` through the copy host). Answering a permission, a plan or a question does too. Nothing moves. (`copyHost.test.ts` routes every chat call as `session.forward`)
-- [ ] What the owner refuses through the central host is not offered: the Files panel, opening a new terminal or agent tab, the project's config, Processes, and renaming.
+- [x] What the owner refuses through the central host is not offered: the Files tab, opening a new terminal or agent tab (the + menu, and ⌘T and the other shortcuts, which say "fix-cart runs on MacBook: open new tabs there."), Re-run setup, Processes, Project settings, Open in, and renaming. (`centralCopies.test.ts` › what a copy offers; `e2e/specs/central-copies.e2e.ts`)
 - [x] Git status and diffs come from the owner (`git.*` through the copy host), never from the copy's folder on this Mac. (`copyHost.test.ts`)
 
 ### While the owner is unreachable
 
-- [ ] The session shows "MacBook is asleep. This is the copy on studio-mini, read only." above the composer. Its chat and git status come from the copy. Typing is refused with that line instead of being lost.
-- [ ] Once the owner has been unreachable for 30 s, the line offers **Continue on studio-mini**, counting down before then: "Continue on studio-mini in 12 s". A copy pinned to its owner offers nothing (X73).
-- [ ] **Continue on studio-mini** asks the daemon for `session.continue_here {session}`. Once it answers, the session is this Mac's own: it is listed and opened under `local`, without the icon. Its errors read as on the phone: "MacBook is back: fix-cart goes on there.", "fix-cart is kept on MacBook.", "studio-mini has no copy of fix-cart yet."
+- [x] The session shows "MacBook is asleep. This is the copy on studio-mini, read only." at its top, under its tabs. Its chat and git status come from the copy. A message sent in its chat is refused with that line, and stays in the input. (`apps/mobile/src/lib/copies.test.ts`, which tests the line the desktop shares; `e2e/specs/central-copies.e2e.ts`)
+- [x] Once the owner has been unreachable for 30 s, the line offers **Continue on studio-mini**, counting down before then: "Continue on studio-mini in 12 s". A copy pinned to its owner offers nothing (X73). (`apps/mobile/src/lib/copies.test.ts`)
+- [x] **Continue on studio-mini** asks the daemon for `session.continue_here {session}`. Once it answers, the session is this Mac's own: it is listed and opened under `local`, without the icon. Its errors read as on the phone: "MacBook is back: fix-cart goes on there.", "fix-cart is kept on MacBook.", "studio-mini has no copy of fix-cart yet." (`apps/mobile/src/lib/copies.test.ts`)
 
 ## UI
 
 - Sidebar: the copy's row is an ordinary session row with X73's host icon. No other mark.
-- The session: the read-only line sits above the composer, in the muted style of X73's offline line, with **Continue on studio-mini** as its button.
-- Hidden for a copy: the Files tab, the new-terminal and new-agent buttons, Processes, the project settings entry, and the row menu items listed above.
+- The session: the read-only line sits at its top, under its tabs, in the muted style, with **Continue on studio-mini** as its button. It is there for a session without a chat too.
+- Hidden for a copy: the Files tab, the + menu, Re-run setup, Processes, Project settings and Open in in the ⋯ menu, and the row menu items listed above.
 
 ## Protocol and RPCs
 
@@ -76,7 +76,7 @@ Nothing crosses a new boundary: the app talks to its own daemon over its socket.
 ## Test plan
 
 - Unit (`apps/desktop/src/lib/`): which copies the app lists (this Mac central or not, its own worker's dropped, one another host lists dropped); the row's mark and menu for a copy; what a copy session offers; the read-only line and **Continue on** countdown and errors.
-- e2e (`apps/desktop/e2e/specs/central-copies.e2e.ts`): a scratch daemon links to the app's daemon as a member and makes a session there. The app shows it with the host icon, opens it, sends a message that reaches the member's chat, and, with the member's daemon stopped, shows the read-only line.
+- e2e (`apps/desktop/e2e/specs/central-copies.e2e.ts`): a scratch daemon named MacBook pairs with the app's daemon as a member and makes a session there. The app shows it with the host icon, opens it without Files, offers only Open and Archive in its menu, shows the read-only line and the dimmed icon while the MacBook's daemon is stopped, and drops the row once the MacBook archives it. A message reaching the member's agent is not in it, since e2e agents are fakes that refuse to run; `crates/moonletd/tests/central_copies.rs` › `a_message_through_the_central_host_reaches_the_owners_agent` covers the daemons' side, and `copyHost.test.ts` the app's routing.
 
 ## Open questions
 
