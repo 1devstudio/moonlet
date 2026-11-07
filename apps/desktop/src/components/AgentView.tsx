@@ -171,8 +171,8 @@ export const Markdown = memo(function Markdown({ text, task = false }: { text: s
   const open = (url: string) => void openUrl(url).catch(errorToast);
   const anchorOf = (e: React.MouseEvent) => (e.target as HTMLElement).closest("a");
   /** Copies a code block when the event is on its copy control (X87). */
-  const copyCode = (e: React.SyntheticEvent) => {
-    const code = codeToCopy(e.target as Element);
+  const copyCode = (e: React.SyntheticEvent, key?: string) => {
+    const code = codeToCopy(e.target as Element, key);
     if (code === null) return false;
     e.preventDefault();
     void navigator.clipboard.writeText(code).then(() => toast("Copied code"), errorToast);
@@ -184,9 +184,7 @@ export const Markdown = memo(function Markdown({ text, task = false }: { text: s
         className={cx("chat-md selectable", task && "task-md")}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") copyCode(e);
-        }}
+        onKeyDown={(e) => copyCode(e, e.key)}
         onClick={(e) => {
           if (copyCode(e)) return;
           const a = anchorOf(e);

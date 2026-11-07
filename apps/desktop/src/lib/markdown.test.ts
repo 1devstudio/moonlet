@@ -175,12 +175,12 @@ describe("copying a code block (X87)", () => {
 
   it("gives each block, fenced or indented, its own control, and inline code none", () => {
     const body = parse(renderChatMarkdown("Use `ls` here.\n\n```ts\nconst a = 1;\n```\n\nThen:\n\n    echo indented\n"));
-    expect(copyControls(body).map(codeToCopy)).toEqual(["const a = 1;", "echo indented"]);
+    expect(copyControls(body).map((c) => codeToCopy(c))).toEqual(["const a = 1;", "echo indented"]);
   });
 
   it("puts the control on code blocks in a task's description too", () => {
     const body = parse(renderTaskMarkdown("Steps:\n\n```\nnpm ci\n```"));
-    expect(copyControls(body).map(codeToCopy)).toEqual(["npm ci"]);
+    expect(copyControls(body).map((c) => codeToCopy(c))).toEqual(["npm ci"]);
   });
 
   it("copies nothing for a click on the code itself", () => {
@@ -190,6 +190,14 @@ describe("copying a code block (X87)", () => {
     expect(keyword.textContent).toBe("let");
     expect(codeToCopy(code)).toBeNull();
     expect(codeToCopy(keyword)).toBeNull();
+  });
+
+  it("copies for Enter or Space on the control, and for no other key", () => {
+    const [control] = copyControls(parse(renderChatMarkdown("```\nmake build\n```")));
+    expect(codeToCopy(control, "Enter")).toBe("make build");
+    expect(codeToCopy(control, " ")).toBe("make build");
+    expect(codeToCopy(control, "a")).toBeNull();
+    expect(codeToCopy(control, "Tab")).toBeNull();
   });
 });
 
