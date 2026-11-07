@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
+import { codeToCopy, fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -163,6 +163,43 @@ describe("a task's description (X46)", () => {
   });
 });
 
+describe("copying a code block (X87)", () => {
+  const parse = (html: string) => new DOMParser().parseFromString(html, "text/html").body;
+  const copyControls = (body: HTMLElement) => [...body.querySelectorAll('[role="button"][aria-label="Copy code"]')];
+
+  it("copies a fenced block's code, without highlighting or the fence's final newline", () => {
+    const body = parse(renderChatMarkdown('Run:\n\n```sh\ncd app\n\npnpm test -- --run "a b"\n```\n'));
+    const [control] = copyControls(body);
+    expect(codeToCopy(control)).toBe('cd app\n\npnpm test -- --run "a b"');
+  });
+
+  it("gives each block, fenced or indented, its own control, and inline code none", () => {
+    const body = parse(renderChatMarkdown("Use `ls` here.\n\n```ts\nconst a = 1;\n```\n\nThen:\n\n    echo indented\n"));
+    expect(copyControls(body).map((c) => codeToCopy(c))).toEqual(["const a = 1;", "echo indented"]);
+  });
+
+  it("puts the control on code blocks in a task's description too", () => {
+    const body = parse(renderTaskMarkdown("Steps:\n\n```\nnpm ci\n```"));
+    expect(copyControls(body).map((c) => codeToCopy(c))).toEqual(["npm ci"]);
+  });
+
+  it("copies nothing for a click on the code itself", () => {
+    const body = parse(renderChatMarkdown("```js\nlet x = 2;\n```"));
+    const code = body.querySelector("code")!;
+    const keyword = body.querySelector(".hljs-keyword")!;
+    expect(keyword.textContent).toBe("let");
+    expect(codeToCopy(code)).toBeNull();
+    expect(codeToCopy(keyword)).toBeNull();
+  });
+
+  it("copies for Enter or Space on the control, and for no other key", () => {
+    const [control] = copyControls(parse(renderChatMarkdown("```\nmake build\n```")));
+    expect(codeToCopy(control, "Enter")).toBe("make build");
+    expect(codeToCopy(control, " ")).toBe("make build");
+    expect(codeToCopy(control, "a")).toBeNull();
+    expect(codeToCopy(control, "Tab")).toBeNull();
+  });
+});
 
 describe("isMarkdownPath (X26, X77)", () => {
   it("is true for Markdown files by extension, in any case", () => {

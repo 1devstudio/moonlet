@@ -124,3 +124,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X84 | Idle agents rest: a chat agent idle for a day is stopped, and the next message resumes it | P1 | 3 | implemented | [X84-idle-agents-rest.md](X84-idle-agents-rest.md) |
 | X85 | The moonlet website: a homepage and docs in `apps/homepage` (Next.js), hosted on Vercel | P1 | 4 | implemented (the Vercel project not yet connected) | [X85-homepage.md](X85-homepage.md) |
 | X86 | Archived sessions stay on their task: a read-only page with their chats, and Restore brings back their tabs and chats, agents resuming as after a restart | P1 | 3 | implemented | [X86-archived-sessions-on-tasks.md](X86-archived-sessions-on-tasks.md) |
+| X87 | Copy a code block in agent messages: a copy icon on every fenced or indented code block in chat Markdown | P1 | 3 | implemented | [X87-copy-code-blocks.md](X87-copy-code-blocks.md) |
