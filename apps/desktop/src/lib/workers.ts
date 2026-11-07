@@ -14,7 +14,9 @@ export interface WorkerRow {
   load: { text: string; fraction: number; busy: boolean } | null;
   slots: string;
   rtt: string;
-  running: { session: string; command: string; since: number }[];
+  /** Each with the host whose session it is, when it runs for another
+   * host than the one the page is about (X89). */
+  running: { session: string; command: string; since: number; host?: string }[];
   /** The project this worker has not approved, for **Approve**. */
   approve: { project: string } | null;
   /** Its switch and slots (X89), which any app changes; null from a
@@ -97,7 +99,12 @@ export function workersPage(input: WorkersInput): WorkersPageView {
   // A removed machine's worker may still be connected for a moment.
   const cloudWorkers = new Set([...machines, ...(input.removed ?? [])].map((m) => m.worker).filter(Boolean));
   const rows: WorkerRow[] = linked.filter((w) => !cloudWorkers.has(w.id)).map((w) => {
-    const running = runningOn(w.name);
+    // Its own jobs from this central host, then what it runs for other
+    // hosts (X89).
+    const serving = (w.running ?? [])
+      .filter((s) => s.host !== status.host.name)
+      .map((s) => ({ session: s.session, command: s.command, since: s.started_at, host: s.host }));
+    const running = [...runningOn(w.name), ...serving];
     const skip = status.skips.find((s) => s.worker === w.id);
     const basics = `${osName(w.os)} · ${w.cores} cores`;
     let line: WorkerRow["line"] = { tone: "muted", text: basics };
@@ -138,15 +145,20 @@ export function workersPage(input: WorkersInput): WorkersPageView {
   const hostLoad = load(h.load, h.cores);
   const busy = h.used >= h.slots || !!hostLoad?.busy;
   const basics = `${osName(h.os)} · ${h.cores} cores`;
+  // The central host's own runs, then what it runs for members (X89).
+  const centralRunning = [
+    ...runningOn(h.name),
+    ...(status.serving ?? []).map((s) => ({ session: s.session, command: s.command, since: s.started_at, host: s.host })),
+  ];
   rows.push({
     id: h.name,
     name: h.name,
     badges: ["Central host"],
     line: busy ? { tone: "blocked", text: `${basics} · busy, takes commands no one else can` } : { tone: "muted", text: basics },
     load: hostLoad,
-    slots: `${runningOn(h.name).length} of ${h.slots}`,
+    slots: `${centralRunning.length} of ${h.slots}`,
     rtt: "–",
-    running: runningOn(h.name),
+    running: centralRunning,
     approve: null,
     settings: members?.[0] ? settingsOf(members[0].worker) : null,
   });

@@ -110,6 +110,8 @@ pub struct Runs {
     here_now: Mutex<HashSet<u32>>,
     /// Routing copies a run is using on this worker.
     copies_in_use: Mutex<HashSet<String>>,
+    /// What this host runs for other hosts, by connection and run (X89).
+    serving: Mutex<HashMap<(ClientId, u32), m::Serving>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
     /// Why a worker was last skipped for a project, by worker and project,
@@ -190,6 +192,7 @@ impl Runs {
             lost: Mutex::default(),
             here_now: Mutex::default(),
             copies_in_use: Mutex::default(),
+            serving: Mutex::default(),
             going: Mutex::default(),
             skips: Mutex::default(),
             base_env,
@@ -912,6 +915,7 @@ impl Runs {
             head,
             session_path,
             outputs: plan.outputs.clone(),
+            session_name: Some(plan.session_name.clone()),
         };
         let started = conn
             .request(
@@ -1173,7 +1177,15 @@ impl Runs {
             running,
             skips,
             routed: self.routed.lock().unwrap().len() as u32,
+            serving: self.serving_now(),
         }
+    }
+
+    /// What this host runs for other hosts now, oldest first (X89).
+    pub fn serving_now(&self) -> Vec<m::Serving> {
+        let mut out: Vec<m::Serving> = self.serving.lock().unwrap().values().cloned().collect();
+        out.sort_by_key(|s| s.started_at);
+        out
     }
 
     /// Output of a remote run, from the worker on connection `from`.
@@ -1269,6 +1281,16 @@ impl Runs {
                 return Err(RpcError::new("busy", "a command of the session runs here"));
             }
             routed.insert((from, req.run), cancel.clone());
+            let (host, session) = sync.run_copy_for(&req.copy).unwrap_or_default();
+            self.serving.lock().unwrap().insert(
+                (from, req.run),
+                m::Serving {
+                    host,
+                    session: req.session_name.clone().unwrap_or(session),
+                    command: req.argv.iter().map(|w| crate::heavy::quote(w)).collect::<Vec<_>>().join(" "),
+                    started_at: moonlet_core::paths::now_ms(),
+                },
+            );
             Claim {
                 runs: self.clone(),
                 run: (from, req.run),
@@ -1448,6 +1470,7 @@ struct Claim {
 impl Drop for Claim {
     fn drop(&mut self) {
         self.runs.routed.lock().unwrap().remove(&self.run);
+        self.runs.serving.lock().unwrap().remove(&self.run);
         self.runs.copies_in_use.lock().unwrap().remove(&self.copy);
     }
 }

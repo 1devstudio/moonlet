@@ -1082,8 +1082,10 @@ impl Requests for WorkerRequests {
         Box::pin(async move {
             match method.as_str() {
                 m::WORKER_PING => {
-                    let used = link.as_ref().and_then(|l| l.runs()).map(|r| r.used_here());
-                    Ok(serde_json::json!({ "load": load(), "used": used }))
+                    let runs = link.as_ref().and_then(|l| l.runs());
+                    let used = runs.as_ref().map(|r| r.used_here());
+                    let running = runs.map(|r| r.serving_now()).unwrap_or_default();
+                    Ok(serde_json::json!({ "load": load(), "used": used, "running": running }))
                 }
                 // The machine is being removed (X63): it leaves the tailnet.
                 // Only a cloud machine: a Mac or host paired as a worker stays.

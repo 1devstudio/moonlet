@@ -187,6 +187,7 @@ impl Workers {
                         rtt_ms,
                         load,
                         used,
+                        running: Vec::new(),
                     },
                     conn: conn.clone(),
                 },
@@ -307,6 +308,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                     e.info.rtt_ms = Some(rtt);
                     e.info.load = answer["load"].as_f64();
                     e.info.used = answer["used"].as_u64().map(|n| n as u32);
+                    e.info.running = serde_json::from_value(answer["running"].clone()).unwrap_or_default();
                 }
             }
             Err(e) => {

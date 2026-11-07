@@ -557,6 +557,13 @@ impl LiveCopies {
             .map(Peer::Link)
     }
 
+    /// The host a routing copy kept here runs commands for, by name, and
+    /// its session (X89).
+    pub fn run_copy_for(&self, copy: &str) -> Option<(String, String)> {
+        let k = self.kept(copy).filter(|k| k.kind == CopyKind::Run)?;
+        Some((k.host, k.session))
+    }
+
     /// The member a routing copy kept here runs commands for, by worker
     /// id (X89); none for a copy of this machine's central host.
     pub fn copy_member(&self, copy: &str) -> Option<String> {

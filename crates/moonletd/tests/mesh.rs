@@ -1304,3 +1304,46 @@ async fn two_hosts_picking_one_slot_run_one_there_and_one_elsewhere() {
     }
     assert_eq!((a.status, b.status), (0, 0));
 }
+
+#[tokio::test]
+async fn worker_list_lists_every_member_with_what_it_runs() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    let (_c, _) =
+        start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
+    let running = within_value(
+        Duration::from_secs(5),
+        "the Air's running command",
+        || async {
+            let list: Vec<Value> = mini.call("worker.list", json!({})).await;
+            let air = list.into_iter().find(|w| w["id"] == json!(AIR))?;
+            air["running"].as_array().filter(|r| !r.is_empty()).cloned()
+        },
+    )
+    .await;
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0]["host"], json!("Alex's MacBook Pro"));
+    assert_eq!(running[0]["session"], json!("Fix cart"));
+    assert_eq!(
+        running[0]["command"],
+        json!("sh -c 'echo started; sleep 3'")
+    );
+    assert!(running[0]["started_at"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn exec_status_lists_what_a_host_runs_for_other_hosts() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let (_c, _) =
+        start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
+    let status: Value = mini.call("exec.status", json!({})).await;
+    let serving = status["serving"].as_array().cloned().unwrap_or_default();
+    assert_eq!(serving.len(), 1, "{status}");
+    assert_eq!(serving[0]["host"], json!("Alex's MacBook Pro"));
+    assert_eq!(serving[0]["session"], json!("Fix cart"));
+}

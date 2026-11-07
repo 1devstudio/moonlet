@@ -139,7 +139,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ### Jobs and the Workers page
 
 - [x] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
-- [ ] A host's `worker.ping` answer gains `used` (done) and `running: [{host, session, command, started_at}]` (not yet): what it runs now, for whom. The central host's `worker.list` carries them for every member, its own row included. (`worker_list_lists_every_member_with_what_it_runs`)
+- [x] A host's `worker.ping` answer gains `used` and `running: [{host, session, command, started_at}]`: what it runs now for other hosts, for whom. The central host's `worker.list` carries them for every member; its own, for members, are `exec.status`'s `serving`. (`worker_list_lists_every_member_with_what_it_runs`)
 - [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
 - [x] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
 
@@ -246,7 +246,7 @@ Where the tests live:
 | Routing copies | `a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
 | Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
 | Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine`, `a_members_cloud_session_waits_for_the_central_hosts_machine`, `a_cloud_machine_takes_a_members_command_of_its_own_project_only` |
-| `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
+| `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`, `exec_status_lists_what_a_host_runs_for_other_hosts`; Vitest "lists what each host runs for other hosts, and for whom", Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
 | Saving from the app | e2e `worker-link.e2e.ts` "turning another host's heavy commands on from the Workers page saves it (X89)", `routing.e2e.ts` "a host's switch and slots on the Workers page are saved (X89)"; Vitest "says what a change of the switch or slots did" |
 
 **Manual, before the status says implemented:** with the real central host and MacBook, a session on the MacBook routes `pnpm check` to the central host with the central host's switch turned on from the MacBook. Then a third member gets a command through the central host.
