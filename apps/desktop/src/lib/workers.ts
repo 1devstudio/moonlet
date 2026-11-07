@@ -3,7 +3,7 @@
 // skipped. Pure: components/settings/WorkersPage.tsx renders it.
 
 import { machineLine, removedLine, type MachineLine } from "./cloudMachines";
-import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
+import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo, WorkerSettingsEntry } from "./protocol";
 
 export interface WorkerRow {
   id: string;
@@ -17,6 +17,9 @@ export interface WorkerRow {
   running: { session: string; command: string; since: number }[];
   /** The project this worker has not approved, for **Approve**. */
   approve: { project: string } | null;
+  /** Its switch and slots (X89), which any app changes; null from a
+   * central host before X89. */
+  settings: { worker: string; heavy: boolean; slots: number } | null;
 }
 
 export interface WorkersInput {
@@ -33,6 +36,9 @@ export interface WorkersInput {
   now?: number;
   /** Sessions by id, with whether they asked for the cloud. */
   cloudSessions?: Record<string, { name: string; cloud?: boolean }>;
+  /** `worker.settings` from the central host, itself first (X89); null
+   * when it is older and knows no such method. */
+  settings?: WorkerSettingsEntry[] | null;
 }
 
 /** A cloud machine's row: its state line, and its worker's columns once it has one. */
@@ -54,11 +60,39 @@ function load(value: number | null | undefined, cores: number): WorkerRow["load"
   return { text: `${value.toFixed(1)} / ${cores}`, fraction: Math.min(value / c, 1), busy: value >= 0.7 * c };
 }
 
-export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: CloudRow[]; removed: string[]; summary: string; empty: boolean } {
+/** What the Workers page shows. `hint` stands above the rows while no host
+ * takes the others' commands; `update` asks to update an older central host. */
+export interface WorkersPageView {
+  rows: WorkerRow[];
+  cloud: CloudRow[];
+  removed: string[];
+  summary: string;
+  empty: boolean;
+  hint: string | null;
+  update: string | null;
+}
+
+const NOBODY = "No host runs heavy commands for the others yet. Turn on Takes heavy commands from other hosts on a host below.";
+
+/** The toast after a member's switch or slots changed (X89). */
+export function settingsToast(name: string, change: { heavy?: boolean; slots?: number }): string {
+  if (change.heavy !== undefined) return change.heavy ? `${name} takes heavy commands from your other hosts` : `${name} no longer takes heavy commands from your other hosts`;
+  const n = change.slots ?? 0;
+  return `${name} runs at most ${n} heavy ${n === 1 ? "command" : "commands"} at once`;
+}
+
+export function workersPage(input: WorkersInput): WorkersPageView {
   const { status } = input;
+  const members = input.settings ?? null;
+  // Since X89 every member is listed, with its switch and slots; the
+  // central host's own entry comes first.
+  const settingsOf = (id: string) => {
+    const e = members?.find((m) => m.worker === id);
+    return e ? { worker: e.worker, heavy: e.heavy, slots: e.slots } : null;
+  };
   const runningOn = (name: string) =>
     status.running.filter((r) => r.worker === name).map((r) => ({ session: input.sessions[r.session] ?? r.session, command: r.command, since: r.started_at }));
-  const linked = input.workers.filter((w) => w.heavy);
+  const linked = input.workers.filter((w) => w.heavy || (members !== null && settingsOf(w.id) !== null && members[0]?.worker !== w.id));
   const machines = input.cloud ?? [];
   // A removed machine's worker may still be connected for a moment.
   const cloudWorkers = new Set([...machines, ...(input.removed ?? [])].map((m) => m.worker).filter(Boolean));
@@ -79,8 +113,27 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: Cl
       rtt: w.rtt_ms == null ? "–" : `${w.rtt_ms} ms`,
       running,
       approve: skip?.reason === "not_approved" ? { project: skip.project } : null,
+      settings: settingsOf(w.id),
     };
   });
+  // Members that are not linked now: their settings still change, and
+  // reach them when they link.
+  for (const m of (members ?? []).slice(1)) {
+    if (rows.some((r) => r.id === m.worker) || cloudWorkers.has(m.worker)) continue;
+    rows.push({
+      id: m.worker,
+      name: m.name,
+      badges: m.worker === input.me ? ["This Mac"] : [],
+      line: { tone: "muted", text: "Not connected · changes apply when it links" },
+      load: null,
+      slots: "–",
+      rtt: "–",
+      running: [],
+      approve: null,
+      settings: settingsOf(m.worker),
+    });
+  }
+  if (members) rows.sort((a, b) => a.name.localeCompare(b.name));
   const h = status.host;
   const hostLoad = load(h.load, h.cores);
   const busy = h.used >= h.slots || !!hostLoad?.busy;
@@ -95,6 +148,7 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: Cl
     rtt: "–",
     running: runningOn(h.name),
     approve: null,
+    settings: members?.[0] ? settingsOf(members[0].worker) : null,
   });
   const cloud: CloudRow[] = machines.map((m) => {
     const w = linked.find((x) => x.id === m.worker);
@@ -110,13 +164,18 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: Cl
     };
   });
   const n = status.running.length;
-  const total = linked.reduce((sum, w) => sum + w.slots, h.slots);
+  const taking = linked.filter((w) => w.heavy);
+  const total = taking.reduce((sum, w) => sum + w.slots, h.slots);
+  const nobody = taking.length === 0 && machines.length === 0;
   return {
     rows,
     cloud,
     removed: (input.removed ?? []).map(removedLine),
     summary: `${n} ${n === 1 ? "command" : "commands"} running · ${n} of ${total} slots in use`,
-    empty: linked.length === 0 && machines.length === 0,
+    // Since X89 the rows stay, so a host can be turned on right there.
+    empty: nobody && members === null,
+    hint: nobody && members !== null ? NOBODY : null,
+    update: input.settings === null ? `Update moonlet on ${h.name} to run commands between your hosts` : null,
   };
 }
 

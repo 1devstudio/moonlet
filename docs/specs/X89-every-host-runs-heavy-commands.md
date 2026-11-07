@@ -44,16 +44,16 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Worker settings
 
-- [ ] Every member of the account has two **worker settings**:
+- [x] Every member of the account has two **worker settings**:
   - `heavy`: whether it takes heavy commands from other hosts' sessions, `false` by default;
   - `slots`: how many routed commands it runs at once, 1 to 64, 2 by default.
 
   They are kept in the account state, keyed by the member's worker id (X41), so every member holds every member's settings. (`a_new_member_takes_no_other_hosts_commands_and_has_two_slots`)
-- [ ] `worker.settings.set {worker, heavy?, slots?}` on any member changes a member's settings, its own or another's. It reaches the member it names within 3 s while both are linked, and at the member's next `account.sync` otherwise (X68). Each field follows X68's rule: the change with the latest stamp wins. (`worker_settings_set_on_one_member_reach_the_host_they_name`, `settings_set_for_an_offline_member_apply_when_it_links`)
-- [ ] Only an app or a paired desktop changes worker settings. A phone and the `moonlet` CLI are refused with `forbidden`, so an agent cannot turn on a host to run its commands. (`only_an_app_or_a_paired_mac_changes_worker_settings`)
-- [ ] `slots` outside 1 to 64 is refused with `invalid_params`, and nothing is stored. (`slots_outside_one_to_sixty_four_are_refused`)
-- [ ] `link.set {worker: {enabled, slots}}` (X41, X61, X62) now writes the host's own worker settings in the account state, with `enabled` as `heavy`. `link.get` reports the account's values. The switches on the Hosts page work as before, and agree with the Workers page. (`link_set_writes_the_hosts_own_worker_settings`)
-- [ ] The first time a member starts with this spec and the account has no settings for it, it writes its `link.json` values (`worker.enabled` and `worker.slots`) as its settings, stamped as old as can be, so any change made meanwhile on another member wins. (`link_json_settings_become_the_accounts_at_first_start`)
+- [x] `worker.settings.set {worker, heavy?, slots?}` on any member changes a member's settings, its own or another's. It reaches the member it names within 3 s while both are linked, and at the member's next `account.sync` otherwise (X68). Each field follows X68's rule: the change with the latest stamp wins. (`worker_settings_set_on_one_member_reach_the_host_they_name`, `settings_set_for_an_offline_member_apply_when_it_links`)
+- [x] Only an app or a paired desktop changes worker settings. A phone and the `moonlet` CLI are refused with `forbidden`, so an agent cannot turn on a host to run its commands. (`only_an_app_or_a_paired_mac_changes_worker_settings`)
+- [x] `slots` outside 1 to 64 is refused with `invalid_params`, and nothing is stored. (`slots_outside_one_to_sixty_four_are_refused`)
+- [x] `link.set {worker: {enabled, slots}}` (X41, X61, X62) now writes the host's own worker settings in the account state, with `enabled` as `heavy`. `link.get` reports the account's values. The switches on the Hosts page work as before, and agree with the Workers page. (`link_set_writes_the_hosts_own_worker_settings`)
+- [x] The first time a member starts with this spec and the account has no settings for it, it writes its `link.json` values (`worker.enabled` and `worker.slots`) as its settings, stamped as old as can be, so any change made meanwhile on another member wins. (`link_json_settings_become_the_accounts_at_first_start`)
 - [ ] A host applies a change to its own settings within 1 s. Turning `heavy` off refuses new commands from other hosts and removes the routing copies it keeps for them, as X62 does. Commands already running finish. Lowering `slots` never stops a running command. (`turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish`)
 - [ ] `heavy` covers other hosts' commands only. A host always runs its own sessions' commands when no other machine is free, as X62's central host does. (`a_host_runs_its_own_sessions_commands_when_no_other_is_free`)
 
@@ -139,8 +139,8 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 - [ ] Jobs are kept on the session's host, with X62's states, phases, timeline and output. The app's Jobs tab reads them there, as now.
 - [ ] A host's `worker.ping` answer gains `used` and `running: [{host, session, command, started_at}]`: what it runs now, for whom. The central host's `worker.list` carries them for every member, its own row included. (`worker_list_lists_every_member_with_what_it_runs`)
-- [ ] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
-- [ ] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
+- [x] Settings › Machines › Workers lists every member of the account: its settings, load, slots in use, round trip from this Mac, and its running commands, each with its session and the session's host. (Vitest "lists every member with its switch and slots")
+- [x] A member that is not linked now shows "Not connected · changes apply when it links", with its switch and stepper still enabled. (Vitest "an offline member's row")
 
 ### Older daemons
 
@@ -244,7 +244,7 @@ Where the tests live:
 | Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
 | Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine` |
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |
-| Saving from the app | e2e "turning another host's heavy commands on from the Workers page saves it" |
+| Saving from the app | e2e `worker-link.e2e.ts` "turning another host's heavy commands on from the Workers page saves it (X89)", `routing.e2e.ts` "a host's switch and slots on the Workers page are saved (X89)"; Vitest "says what a change of the switch or slots did" |
 
 **Manual, before the status says implemented:** with the real central host and MacBook, a session on the MacBook routes `pnpm check` to the central host with the central host's switch turned on from the MacBook. Then a third member gets a command through the central host.
 
