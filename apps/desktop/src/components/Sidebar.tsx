@@ -407,7 +407,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
         useStore.setState({ showHistory: false });
         selectSession(host, s.id);
       }}
-      onDoubleClick={() => setRenaming(true)}
+      onDoubleClick={() => !s.owner && setRenaming(true)}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e);
@@ -754,6 +754,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
   const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  // Another member's session, through its copy here, cannot be renamed (X86).
+  const renames = !!s && !s.owner;
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -761,7 +763,7 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MenuItems items={items} onClose={onClose} />
-      {s && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
+      {renames && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
     </div>
   );
 }
@@ -855,7 +857,8 @@ function followItems(host: string, s: Session): MenuItem[] {
 }
 
 function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
-  return sessionMenu({ ...task, sync: sync.offered }).flatMap((id): MenuItem[] => {
+  const copy = s.owner ? { reachable: s.owner.reachable } : undefined;
+  return sessionMenu({ ...task, sync: sync.offered, copy }).flatMap((id): MenuItem[] => {
     switch (id) {
       case "open":
         return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];

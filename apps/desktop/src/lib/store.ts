@@ -48,6 +48,8 @@ import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import type { TaskRequestEvent } from "./tasksRelay";
 import { spawnedNotices } from "./spawned";
+import { copyEntries } from "./centralCopies";
+import { parseCopyHost } from "./copyHost";
 import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, CloneDone, CloneProgress, ProjectIdentity, ReadRequest } from "./protocol";
@@ -737,8 +739,35 @@ export async function loadAccount(host: string) {
   }
 }
 
+/** Lists the sessions other members run, from this Mac's daemon while it
+ * is a central host (X86), each under its copy host, sharing this Mac's
+ * account so opening one keeps its workspace shown. */
+let copiesRun = 0;
+export async function loadCopies() {
+  const run = ++copiesRun;
+  const account = get().accounts.local;
+  let list: Session[] = [];
+  if (account && account.central === null) {
+    try {
+      list = await rpc<Session[]>("local", M.sessionList, { copies: true });
+    } catch {
+      return;
+    }
+  }
+  // A later load's answer is newer.
+  if (run !== copiesRun) return;
+  const entries = copyEntries(list, get().accounts.local);
+  set((s) => {
+    const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([h]) => parseCopyHost(h)?.host !== "local"));
+    const accounts = Object.fromEntries(Object.entries(s.accounts).filter(([h]) => parseCopyHost(h)?.host !== "local"));
+    for (const h of Object.keys(entries)) if (s.accounts.local) accounts[h] = s.accounts.local;
+    return { sessions: { ...sessions, ...entries }, accounts };
+  });
+}
+
 function onAccount(host: string, info: AccountInfo) {
   set((s) => ({ accounts: { ...s.accounts, [host]: info } }));
+  if (host === "local") void loadCopies();
   const seen = get().settings.sharedNotices ?? [];
   const notice = host === "local" ? sharedNotice(info, seen) : null;
   if (notice) {
@@ -1264,8 +1293,14 @@ function handleEvent(e: DaemonEvent) {
       // An agent opened a session (X22): say so, and leave the user where they are.
       for (const n of notices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of list) if (!w.archived) syncLayout(host, w);
+      // Another member's sessions changed with it, or their records came (X86).
+      if (host === "local") void loadCopies();
       break;
     }
+    case EV.workersChanged:
+      // A member came or went: its copies say whether it is reachable (X86).
+      if (host === "local") void loadCopies();
+      break;
     case EV.terminalReadRequest:
       void onReadRequest(host, data as ReadRequest);
       break;

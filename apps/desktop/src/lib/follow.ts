@@ -3,6 +3,7 @@
 // offers. The daemons move sessions; these say what the app shows.
 
 import type { ChatImage } from "./attachments";
+import type { SessionOwner } from "./protocol";
 
 /** The mark at the end of a session's row: none for a session on this Mac
  * that is not kept here; the host for one running on another member, with
@@ -23,13 +24,18 @@ export function hostMark(
 /** {@link hostMark} for a session row listed from `host`: the central host
  * is offline while this Mac's link cannot reach it (`unreachableSince`),
  * whatever the app's own connection to it says; another host goes by the
- * app's connection (`connected`). */
+ * app's connection (`connected`). A copy of a session another member runs
+ * (X86) names that member, as the copy says, and goes by its link. */
 export function rowMark(
-  s: { pinned?: string | null },
+  s: { pinned?: string | null; owner?: SessionOwner },
   host: string,
   label: string,
   o: { connected: boolean; central: string | null; unreachableSince: number | null },
 ): ReturnType<typeof hostMark> {
+  if (s.owner) {
+    const since = s.owner.unreachable_since;
+    return hostMark(s, host, s.owner.name, s.owner.reachable, s.owner.reachable || since == null ? undefined : offlineSince(since));
+  }
   const cut = host === o.central && o.unreachableSince !== null ? o.unreachableSince : null;
   return hostMark(s, host, label, o.connected && cut === null, cut === null ? undefined : offlineSince(cut));
 }

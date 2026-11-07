@@ -157,6 +157,23 @@ describe("shownSections (X68)", () => {
     ]);
   });
 
+  it("lists the sessions other members run with the central host's own, each under its copy host, once (X86)", () => {
+    const owner = { worker: "book-id", name: "MacBook", reachable: true };
+    const parts = sectionParts(["local"], named("a", "1devstudio"), {
+      sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
+      projects: { local: [p("a", "shop")] },
+      sessions: {
+        local: [s("s1", "a")],
+        "local#copy:s7": [s("s7", "a", { owner })],
+        // The app also lists s9 from the MacBook itself: shown from there only.
+        "local#copy:s9": [s("s9", "a", { owner })],
+        macbook: [s("s9", "a")],
+      },
+    });
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local#copy:s7 s7", "local s1"]]]);
+  });
+
   it("orders sessions for ⌘1–9 as the sidebar shows them, skipping collapsed sections and groups", () => {
     const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
     const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
@@ -263,6 +280,11 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
     expect(sessionMenu({ linked: false, sources: true })).toEqual(["open", "link-task", "archive"]);
     expect(sessionMenu({ linked: true, sources: true })).toEqual(["open", "archive"]);
     expect(sessionMenu({ linked: false, sources: false })).toEqual(["open", "archive"]);
+  });
+
+  it("offers only Open for a session another member runs, and Archive while that member is reachable (X86)", () => {
+    expect(sessionMenu({ linked: false, sources: true, sync: true, copy: { reachable: true } })).toEqual(["open", "archive"]);
+    expect(sessionMenu({ linked: false, sources: true, sync: true, copy: { reachable: false } })).toEqual(["open"]);
   });
 
   it("offers Keep in sync with this Mac where the session can be kept in sync (X60)", () => {
