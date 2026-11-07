@@ -1273,3 +1273,34 @@ async fn a_runner_that_loses_the_sessions_host_stops_the_command() {
         assert!(!after.exists(), "the command went on on {runner}");
     }
 }
+
+#[tokio::test]
+async fn two_hosts_picking_one_slot_run_one_there_and_one_elsewhere() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let on_book = book_session(&book, repo.path()).await;
+    let on_air = book_session(&air, repo.path()).await;
+    let _: bool = book
+        .call(
+            "worker.settings.set",
+            json!({ "worker": MINI, "heavy": true, "slots": 1 }),
+        )
+        .await;
+    within(Duration::from_secs(3), "studio-mini's one slot", || async {
+        own(&mini).await == (true, 1)
+    })
+    .await;
+    // Both ask at once, and both see studio-mini's slot free.
+    let argv = ["sh", "-c", "sleep 2"];
+    let (a, b) = tokio::join!(run(&book, &on_book, &argv), run(&air, &on_air, &argv));
+    // One of them has the slot; the other runs where its session is.
+    let mini_runs = |r: &Ran| r.stderr == "moonlet: running on studio-mini\n";
+    assert!(mini_runs(&a) != mini_runs(&b), "{a:?} {b:?}");
+    if !mini_runs(&a) {
+        assert_eq!(a.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    }
+    if !mini_runs(&b) {
+        assert_eq!(b.stderr, "moonlet: running on Alex's MacBook Air\n");
+    }
+    assert_eq!((a.status, b.status), (0, 0));
+}

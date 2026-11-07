@@ -98,7 +98,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 - [x] The central host's own sessions pick in the same order. For them, the central host is H. The order of X62's table is unchanged: a linked member with `heavy` on comes before the central host. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
 - [x] A command never waits for a slot. When no candidate is free, it runs on H, and a project that allows cloud overflow gets a machine for the next command (X63).
 - [x] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy`, and the session's host tries the next candidate. It never refuses its own sessions' commands, as they have nowhere else to go. A member also sees the central host's slots in use in `worker.status`, so a full central host is not asked at all. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`)
-- [ ] Two sessions' hosts may pick the same member at once. The member takes what its slots allow, refuses the rest with `busy`, and each session's host goes on to its next candidate. (`two_hosts_picking_one_slot_run_one_there_and_one_elsewhere`)
+- [x] Two sessions' hosts may pick the same member at once. The member takes what its slots allow, refuses the rest with `busy`, and each session's host goes on to its next candidate. (`two_hosts_picking_one_slot_run_one_there_and_one_elsewhere`)
 
 ### Reaching another member
 
