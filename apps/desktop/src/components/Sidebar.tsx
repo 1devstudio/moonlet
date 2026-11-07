@@ -609,7 +609,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [renaming, setRenaming] = useState(false);
   const { lines } = useContext(TaskLines);
-  // A string, so the selector's value only changes with the hosts (X86).
+  // A string, so the selector's value only changes with the hosts (X88).
   const connected = useStore((s) => connectedHosts(s.hosts));
   const groups = useMemo(() => {
     const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions, connected: connected.split(",") });
@@ -756,7 +756,7 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
   const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
-  // Another member's session, through its copy here, cannot be renamed (X86).
+  // Another member's session, through its copy here, cannot be renamed (X88).
   const renames = !!s && !s.owner;
   return (
     <div

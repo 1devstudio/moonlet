@@ -25,7 +25,7 @@ export function hostMark(
  * is offline while this Mac's link cannot reach it (`unreachableSince`),
  * whatever the app's own connection to it says; another host goes by the
  * app's connection (`connected`). A copy of a session another member runs
- * (X86) names that member, as the copy says, and goes by its link. */
+ * (X88) names that member, as the copy says, and goes by its link. */
 export function rowMark(
   s: { pinned?: string | null; owner?: SessionOwner },
   host: string,

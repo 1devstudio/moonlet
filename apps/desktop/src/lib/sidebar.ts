@@ -96,7 +96,7 @@ export interface SectionPart {
   projects: Project[];
   sessions: Session[];
   /** The host a row of the part is opened under, by session id, when it
-   * is not `host`: the copy host of a session another member runs (X86). */
+   * is not `host`: the copy host of a session another member runs (X88). */
   hostOf?: Record<string, string>;
 }
 
@@ -245,7 +245,7 @@ export const connectedHosts = (hosts: Record<string, { id: string; status: strin
 
 /** Each member's side of shared section `sec`, from what it lists: the
  * first holder's is `sec` itself. A holder's side also has the sessions
- * other members run that it holds copies of (X86), each under its copy
+ * other members run that it holds copies of (X88), each under its copy
  * host, except one a host the app is connected to (`connected`, every host
  * when not given) lists as its own: a copy keeps its session's id (X72). */
 export function sectionParts(
@@ -285,7 +285,7 @@ export function sharedSessionOrder(o: {
   hosts: ListingHost[];
   projects: Record<string, Project[]>;
   sessions: Record<string, Session[]>;
-  /** The hosts the app is connected to, for which copies show (X86). */
+  /** The hosts the app is connected to, for which copies show (X88). */
   connected?: string[];
   activeAt: (host: string, s: Session) => number;
   stateOf?: (host: string, s: Session) => AgentState | null;
@@ -375,7 +375,7 @@ export function lastActive(terminals: Record<number, { session_id?: string; last
 /**
  * A session row's right-click menu. Link to task… is there for a session
  * without a task in a workspace with a task source (X46). A copy of a
- * session another member runs (X86) has only what the central host can ask
+ * session another member runs (X88) has only what the central host can ask
  * that member for: Open, and Archive while the member is reachable.
  */
 export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean } }): ("open" | "link-task" | "keep-sync" | "archive")[] {

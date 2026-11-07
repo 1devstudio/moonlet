@@ -26,7 +26,7 @@ function current(): { host: string; ws: Session } | null {
 }
 
 /** The selected session, to `action` in: none in a copy of another
- * member's session (X86), which says where to do it instead. */
+ * member's session (X88), which says where to do it instead. */
 function outsideCopies(action: string): { host: string; ws: Session } | null {
   const c = current();
   if (c && parseCopyHost(c.host)) {
@@ -329,7 +329,7 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const pr = s.prs[sesKey(c.host, c.ws.id)];
   const plan = archivePlan(git, pr?.state, c.ws.branch, base);
   // Work only on this machine that the archive would take (X55).
-  // A copy's work is on the member running it (X86).
+  // A copy's work is on the member running it (X88).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.ws.owner?.name ?? c.host);
   const params = unpushedParams(c.ws, pr);
   // What still runs in it, beyond its tabs, is named and stopped too (X83);

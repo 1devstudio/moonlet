@@ -1,5 +1,5 @@
 // The line at the top of a copy's session while the member running it is away
-// (X86): read only, and Continue on <this Mac> once the central host can
+// (X88): read only, and Continue on <this Mac> once the central host can
 // take the session over (X73).
 
 import { useState } from "react";
@@ -11,7 +11,7 @@ import { useSync } from "../lib/syncStore";
 import { useNow } from "../lib/useNow";
 import { Button } from "./ui";
 
-/** The copy opened under `host` (X86), this Mac's name, and the read-only
+/** The copy opened under `host` (X88), this Mac's name, and the read-only
  * line while its member is away; no session for any other host. */
 export function useCopyReadOnly(host: string): { session?: Session; here: string; line: string | null } {
   const session = useStore((st) => (parseCopyHost(host) ? st.sessions[host]?.[0] : undefined));

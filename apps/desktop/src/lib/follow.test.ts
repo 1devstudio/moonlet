@@ -51,7 +51,7 @@ describe("the central host offline (X73)", () => {
   });
 });
 
-describe("where a copy runs, on the central host (X86)", () => {
+describe("where a copy runs, on the central host (X88)", () => {
   it("names the member that runs it, from the copy, dimmed while that member is unreachable", () => {
     const since = new Date(2026, 9, 29, 14, 2).getTime();
     const o = { connected: false, central: null, unreachableSince: null };
