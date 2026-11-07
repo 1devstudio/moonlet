@@ -362,6 +362,9 @@ pub struct WorkerLink {
     runs: std::sync::OnceLock<Weak<crate::exec::Runs>>,
     /// Takes the central host's requests for this member's sessions (X72).
     forwarder: std::sync::OnceLock<Forwarder>,
+    /// Answers a cloud machine's `session.files_fetch` for a session of
+    /// this member's it runs a command of (X89, X74).
+    files: std::sync::OnceLock<FilesFetcher>,
     /// Takes the central host's terminal relays (X72).
     relayer: std::sync::OnceLock<Relayer>,
     /// Shows a URL the central host found the user here for (X75).
@@ -392,6 +395,7 @@ impl WorkerLink {
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
+            files: std::sync::OnceLock::new(),
             relayer: std::sync::OnceLock::new(),
             shower: std::sync::OnceLock::new(),
             tunneler: std::sync::OnceLock::new(),
@@ -664,6 +668,11 @@ impl WorkerLink {
     /// member's sessions (X72).
     pub fn set_forwarder(&self, f: Forwarder) {
         let _ = self.forwarder.set(f);
+    }
+
+    /// What answers a cloud machine's `session.files_fetch` (X89).
+    pub fn set_files_fetcher(&self, f: FilesFetcher) {
+        let _ = self.files.set(f);
     }
 
     /// What takes input for the terminals the central host relays, and
@@ -1058,6 +1067,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
+/// Answers `session.files_fetch` for a cloud machine (X89).
+pub type FilesFetcher = Arc<dyn Fn(m::SessionFilesFetch) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
+
 /// Shows this Mac's app a URL from another member (X75); false when it was
 /// kept for the app, which is not connected.
 pub type Shower = Arc<dyn Fn(m::BrowserShow) -> bool + Send + Sync>;
@@ -1391,6 +1403,16 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
         m::EXEC_DONE => {
             let req: m::ExecDone = serde_json::from_value(params).map_err(bad)?;
             Ok(serde_json::to_value(runs.take_done(&sync, &peer, req, &me.name).await?).unwrap())
+        }
+        // A cloud machine running a command of this member's session asks
+        // for the files X74 copies to cloud machines.
+        m::SESSION_FILES_FETCH => {
+            let req: m::SessionFilesFetch = serde_json::from_value(params).map_err(bad)?;
+            if !sync.was_offered(&from) || !sync.was_asked(&from, &req.session) {
+                return Err(RpcError::new("forbidden", "this host asked no command of that session there"));
+            }
+            let f = link.files.get().cloned().ok_or_else(|| RpcError::new("gone", "nothing answers"))?;
+            f(req).await
         }
         other => Err(RpcError::new("forbidden", format!("{other} does not go between members"))),
     }

@@ -4431,6 +4431,14 @@ impl Daemon {
             })
         }));
         let d = Arc::downgrade(self);
+        self.link.set_files_fetcher(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                Ok(serde_json::to_value(d.files_fetched(r, true).await?).unwrap())
+            })
+        }));
+        let d = Arc::downgrade(self);
         self.link.set_relayer(Arc::new(move |r| {
             let d = d.clone();
             Box::pin(async move {
@@ -5132,8 +5140,14 @@ impl Daemon {
                     // A cloud machine's routed copies, when its central
                     // host lets them have the files.
                     let Some(host) = d.link.host() else { continue };
-                    for (session, path, _) in d.sync.copies_of(m::CopyKind::Run) {
-                        if let Err(e) = d.fetch_copied_files(&host, &session, &path, None).await {
+                    for (session, path, member) in d.sync.run_copies() {
+                        // A member's session's files come from that member,
+                        // through the central host (X89).
+                        let peer = match member {
+                            Some(m) => crate::peer::Peer::Relay(host.clone(), m),
+                            None => crate::peer::Peer::Link(host.clone()),
+                        };
+                        if let Err(e) = d.fetch_copied_files(&peer, &session, &path, None).await {
                             tracing::debug!(%session, "no copied files: {e:#}");
                         }
                     }
@@ -5144,7 +5158,7 @@ impl Daemon {
                 }
                 let Some(host) = d.link.host() else { continue };
                 for (session, path, identity) in d.sync.live_copies() {
-                    if let Err(e) = d.fetch_copied_files(&host, &session, &path, identity.as_ref()).await {
+                    if let Err(e) = d.fetch_copied_files(&crate::peer::Peer::Link(host.clone()), &session, &path, identity.as_ref()).await {
                         tracing::debug!(%session, "cannot fetch the copied files: {e:#}");
                     }
                 }
@@ -5163,7 +5177,7 @@ impl Daemon {
         });
     }
 
-    async fn fetch_copied_files(&self, host: &moonlet_link::Host, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
+    async fn fetch_copied_files(&self, host: &crate::peer::Peer, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
         // A cloud machine has no account: it takes the central host's list.
         let cloud = self.link.info().worker.cloud;
         let patterns = match crate::copied_files::lists().lock().unwrap().get(session) {
@@ -5176,7 +5190,11 @@ impl Daemon {
             .map(|e| (e.path, e.sha))
             .collect();
         let fetched = host
-            .request(m::SESSION_FILES_FETCH, serde_json::to_value(m::SessionFilesFetch { session: session.to_string(), have })?)
+            .request(
+                m::SESSION_FILES_FETCH,
+                serde_json::to_value(m::SessionFilesFetch { session: session.to_string(), have })?,
+                std::time::Duration::from_secs(60),
+            )
             .await
             .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
         let fetched: m::SessionFilesFetched = serde_json::from_value(fetched)?;

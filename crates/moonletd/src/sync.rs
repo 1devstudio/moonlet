@@ -716,6 +716,25 @@ impl LiveCopies {
     }
 
     /// As [`Self::live_copies`], for this machine's copies of `kind`.
+    /// The routing copies this machine keeps, with the member each runs
+    /// commands for (X89), or none for its central host's.
+    pub fn run_copies(&self) -> Vec<(String, PathBuf, Option<String>)> {
+        self.data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty() && k.paused.is_none())
+            .map(|k| (k.session.clone(), PathBuf::from(&k.path), k.peer.clone()))
+            .collect()
+    }
+
+    /// Whether this host asked `worker` to prepare a routing copy of
+    /// `session` (X89).
+    pub fn was_asked(&self, worker: &str, session: &str) -> bool {
+        self.asked.lock().unwrap().contains(&(worker.to_string(), session.to_string()))
+    }
+
     pub fn copies_of(&self, kind: CopyKind) -> Vec<(String, PathBuf, Option<ProjectIdentity>)> {
         self.data
             .lock()

@@ -2821,3 +2821,27 @@ async fn the_central_host_checks_a_members_command_for_a_cloud_machine_against_t
         Some("forbidden".to_string())
     );
 }
+
+#[tokio::test]
+async fn a_cloud_machine_gets_a_members_copied_files_when_the_switch_is_on() {
+    let c = cloud().await;
+    c.ready().await;
+    let (book, session) = busy_member(&c).await;
+    let tree = PathBuf::from(session["path"].as_str().unwrap());
+    std::fs::write(tree.join(".env"), "API_KEY=secret\n").unwrap();
+    // The project's files go to cloud machines (X74), set on the MacBook.
+    let projects: Value = book.call("project.list", json!({})).await;
+    let _: Value = book
+        .call(
+            "project.copied_files.set",
+            json!({ "id": projects[0]["id"], "patterns": [".env"], "cloud": true }),
+        )
+        .await;
+    let (out, err, status) = run_in(&book, &session, &["sh", "-c", "echo ran"]).await;
+    assert_eq!((out.as_str(), status), ("ran\n", 0), "{err}");
+    let copy = copies_on(&c)[0].clone();
+    until_true("the MacBook's .env on the cloud machine", || {
+        std::fs::read_to_string(copy.join(".env")).ok().as_deref() == Some("API_KEY=secret\n")
+    })
+    .await;
+}
