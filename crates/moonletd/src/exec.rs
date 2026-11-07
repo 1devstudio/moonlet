@@ -139,6 +139,9 @@ pub struct Plan {
     pub session_name: String,
     /// The session asked for the cloud (X63).
     pub cloud: bool,
+    /// The project's setup command, from its main checkout, for a routing
+    /// copy that has none of its own (X89).
+    pub setup: Option<String>,
 }
 
 /// How waiting for a cloud machine ended.
@@ -715,6 +718,7 @@ impl Runs {
             .ok_or_else(|| Fail::Refused("gone".into(), "it went away".into()))?;
         let prepare = m::ExecPrepare {
             session: plan.session.clone(),
+            setup: plan.setup.clone(),
         };
         let prepared: ExecPrepared = self
             .unless_stopped(

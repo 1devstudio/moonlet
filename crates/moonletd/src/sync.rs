@@ -131,6 +131,10 @@ struct Kept {
     /// is not this machine's central host (X89).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     peer: Option<String>,
+    /// A routing copy's setup command, as the host that routes its
+    /// commands has it in its project's main checkout (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup_command: Option<String>,
     session: String,
     /// The copy's worktree; empty until it is made.
     #[serde(default)]
@@ -627,7 +631,7 @@ impl LiveCopies {
     fn setup_of(&self, k: &Kept) -> Option<CopySetup> {
         let mut setup = k.setup.clone()?;
         if setup.state != SetupState::Running
-            && let Some(now) = setup_command(Path::new(&k.path))
+            && let Some(now) = setup_of_copy(k)
         {
             setup.command = now;
         }
@@ -2353,7 +2357,7 @@ impl LiveCopies {
     /// approved for its project, and waits for the user otherwise.
     fn begin_setup(self: &Arc<Self>, id: &str) {
         let Some(k) = self.kept(id) else { return };
-        let Some(command) = setup_command(Path::new(&k.path)) else {
+        let Some(command) = setup_of_copy(&k) else {
             self.set_setup(id, None);
             return;
         };
@@ -2383,7 +2387,7 @@ impl LiveCopies {
         if k.path.is_empty() {
             return Err(RpcError::new("not_ready", "the copy is not made yet"));
         }
-        let Some(current) = setup_command(Path::new(&k.path)) else {
+        let Some(current) = setup_of_copy(&k) else {
             return Err(RpcError::new("no_setup", "the copy has no setup script"));
         };
         if current != command {
@@ -3303,6 +3307,16 @@ impl LiveCopies {
     }
 }
 
+/// Copy `k`'s setup command: for a routing copy, the one the host that
+/// routes its commands sent (X89); otherwise, or when it sent none, the
+/// copy's own `.moonlet/config.toml`'s.
+fn setup_of_copy(k: &Kept) -> Option<String> {
+    match &k.setup_command {
+        Some(c) if k.kind == CopyKind::Run => Some(c.clone()).filter(|c| !c.trim().is_empty()),
+        _ => setup_command(Path::new(&k.path)),
+    }
+}
+
 /// The copy's setup command, exactly as its `.moonlet/config.toml` has it;
 /// none when blank.
 fn setup_command(copy: &Path) -> Option<String> {
@@ -3540,6 +3554,7 @@ impl LiveCopies {
         self: &Arc<Self>,
         session: String,
         member: Option<(String, String)>,
+        setup: Option<String>,
     ) -> Result<m::ExecPrepared, RpcError> {
         let (host, peer) = match member {
             Some((id, name)) => (name, Some(id)),
@@ -3588,6 +3603,10 @@ impl LiveCopies {
             }
         };
         drop(_held);
+        // The router's setup command, kept for the copy's setup (X89).
+        if setup.is_some() {
+            self.update_kept(&id, |k| k.setup_command = setup.clone());
+        }
         self.save();
         // A routing copy has nobody to retry it: one whose folder went, or
         // that stopped on an error, is made again.

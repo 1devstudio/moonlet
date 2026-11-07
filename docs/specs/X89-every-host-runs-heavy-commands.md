@@ -114,7 +114,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ### Routing copies
 
 - [ ] A host keeps a routing copy of another host's session at `$MOONLET_HOME/runs/<the session's host>/<project>/<session>/`, as X62 does for its central host. It is made, fenced and brought back as X62 says, with the session's host in the central host's place. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
-- [ ] Setup in a routing copy follows X62: on a Mac, the user approves the exact setup command once per project and session's host. Until then the Mac refuses with `setup_pending`. (`a_routing_copy_for_another_member_waits_for_setup_approval`)
+- [x] Setup in a routing copy follows X62: on a Mac, the user approves the exact setup command once per project and session's host. Until then the Mac refuses with `setup_pending`. The command is the one in the session's host's main checkout (X90), sent with `exec.prepare` as `setup`, since a copy made from git may have no `.moonlet/config.toml`; a copy falls back to its own config's when none is sent. (`a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`)
 - [ ] A routing copy for another host is removed:
   - when that session is archived: the session's host sends `sync.closing` to each machine it routed the session to;
   - when this host turns `heavy` off;
@@ -240,7 +240,7 @@ Where the tests live:
 | Slots across hosts | `a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`, `two_hosts_picking_one_slot_run_one_there_and_one_elsewhere` |
 | The relay | `a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host`, `a_member_cannot_name_another_sender_through_the_relay`, `the_central_host_passes_on_only_the_routing_methods`, `a_runner_reads_only_the_sessions_routed_to_it`, `output_through_the_relay_reaches_moonlet_exec_in_order` |
 | `peer` and older members | `a_member_before_this_spec_is_not_offered_other_hosts_commands`, `a_central_host_before_this_spec_leaves_members_running_their_own_commands` |
-| Routing copies | `a_routing_copy_for_another_member_waits_for_setup_approval`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
+| Routing copies | `a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`, `archiving_a_members_session_removes_its_routing_copies_on_other_hosts` |
 | Going away | `a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`, `a_runner_that_loses_the_sessions_host_stops_the_command`, `a_member_without_its_central_host_runs_its_own_commands` |
 | Cloud machines | `a_members_session_runs_on_the_projects_cloud_machine`, `a_members_busy_command_starts_an_overflow_machine` |
 | `worker.list` and the Workers page | `worker_list_lists_every_member_with_what_it_runs`; Vitest "lists every member with its switch and slots", "an offline member's row", "the summary line counts the account's slots", "says to update an older central host" |

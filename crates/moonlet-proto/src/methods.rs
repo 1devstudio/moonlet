@@ -3546,6 +3546,12 @@ pub struct ExecExited {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecPrepare {
     pub session: String,
+    /// The project's setup command, from the main checkout of the host
+    /// that routes the command (X90, X89): a routing copy made from git
+    /// may have no `.moonlet/config.toml` of its own. The runner still
+    /// asks the user before it runs a command it was not approved for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live

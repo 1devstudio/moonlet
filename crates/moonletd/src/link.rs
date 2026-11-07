@@ -1109,7 +1109,7 @@ impl Requests for WorkerRequests {
                         return Err(RpcError::new("not_approved", "heavy commands are off here"));
                     }
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
-                    Ok(serde_json::to_value(sync.prepare_run(req.session, None).await?).unwrap())
+                    Ok(serde_json::to_value(sync.prepare_run(req.session, None, req.setup).await?).unwrap())
                 }
                 m::EXEC_START => {
                     let req: m::ExecStart = serde_json::from_value(params)

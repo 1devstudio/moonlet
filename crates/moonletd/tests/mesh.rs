@@ -342,6 +342,7 @@ async fn shop_on(d: &Daemon, origin_repo: &std::path::Path) -> String {
         std::fs::create_dir_all(origin_repo).unwrap();
         git(origin_repo, &["init", "-q", "-b", "main"]);
         std::fs::write(origin_repo.join("package.json"), "{}\n").unwrap();
+        std::fs::write(origin_repo.join(".gitignore"), "node_modules/\n").unwrap();
         git(origin_repo, &["add", "."]);
         git(origin_repo, &["commit", "-q", "-m", "shop"]);
     }
@@ -788,4 +789,51 @@ async fn a_stopped_members_command_stops_on_the_central_host() {
         .call("job.list", json!({ "session": session["id"] }))
         .await;
     assert_eq!(jobs[0]["worker"]["name"], json!("studio-mini"));
+}
+
+#[tokio::test]
+async fn a_routing_copy_runs_the_setup_of_the_sessions_main_checkout() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    // Kept out of git, in the MacBook's main checkout only (X90).
+    std::fs::write(
+        book.home.path().join("src/shop/.moonlet/config.toml"),
+        format!("setup = \"mkdir -p node_modules && touch node_modules/.set-up\"\n{RUN_HEAVY}"),
+    )
+    .unwrap();
+    mini_takes(&mini, &book, true).await;
+    // studio-mini asks first, so this run stays on the MacBook.
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    let setups: Vec<Value> = within_value(Duration::from_secs(10), "studio-mini asks", || async {
+        let s: Vec<Value> = mini.call("exec.setups", json!({})).await;
+        (!s.is_empty()).then_some(s)
+    })
+    .await;
+    assert_eq!(
+        setups[0]["command"],
+        json!("mkdir -p node_modules && touch node_modules/.set-up")
+    );
+    let _: Value = mini
+        .call(
+            "sync.run_setup",
+            json!({ "copy": setups[0]["copy"], "command": setups[0]["command"] }),
+        )
+        .await;
+    // Once the setup has run, the command runs on studio-mini, where the
+    // setup's ignored files are.
+    let ran = within_value(Duration::from_secs(20), "a run on studio-mini", || async {
+        let ran = run(
+            &book,
+            &session,
+            &["sh", "-c", "test -e node_modules/.set-up && echo set"],
+        )
+        .await;
+        ran.stderr
+            .starts_with("moonlet: running on studio-mini\n")
+            .then_some(ran)
+    })
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
 }

@@ -30,6 +30,8 @@ pub struct Checked {
     pub os: moonlet_proto::types::HeavyOs,
     /// Ignored paths brought back after a run.
     pub outputs: Vec<String>,
+    /// The project's setup command, for a routing copy (X89).
+    pub setup: Option<String>,
 }
 
 pub struct Heavy {
@@ -173,6 +175,7 @@ impl Heavy {
         let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         let os = config.config.heavy.os;
         let outputs = config.config.heavy.outputs.clone();
+        let setup = config.config.setup.clone().filter(|c| !c.trim().is_empty());
         let names = config.config.heavy.env;
         let passed = env
             .iter()
@@ -193,6 +196,7 @@ impl Heavy {
             env: passed,
             os,
             outputs,
+            setup,
         })
     }
 

@@ -1788,6 +1788,7 @@ impl Daemon {
                     local: crate::exec::Command { argv: r.argv, cwd: checked.cwd, env },
                     os: checked.os,
                     outputs: checked.outputs,
+                    setup: checked.setup,
                     host: me.name,
                     slots: me.slots,
                 };
@@ -1897,7 +1898,7 @@ impl Daemon {
                     return Err(RpcError::new("not_approved", "heavy commands are off here"));
                 }
                 let r: m::ExecPrepare = params(p)?;
-                ok(self.sync.prepare_run(r.session, Some(member)).await?)
+                ok(self.sync.prepare_run(r.session, Some(member), r.setup).await?)
             }
             m::EXEC_START | m::SYNC_UPDATE => {
                 let (member, _) = self.member_on(conn)?;
