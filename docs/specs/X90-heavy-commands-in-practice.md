@@ -32,12 +32,12 @@ With this spec:
 
 ### The project's list
 
-- [ ] `exec.route` and `exec.run` read `[heavy]` (`commands`, `os`, `env` and `outputs`) from the `.moonlet/config.toml` of the session's project's main checkout, the folder `heavy.get` reads. A worktree's own `.moonlet/config.toml` plays no part in routing.
-- [ ] A session whose worktree has no `.moonlet/` folder routes an approved command that the main checkout lists. (`a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list`)
-- [ ] An entry that only the worktree's config lists is not routed (`not_heavy`), even when the same text was approved, because the main checkout does not list it. (`an_entry_only_the_worktree_lists_is_not_routed`)
-- [ ] A main checkout whose config cannot be read, or whose `[heavy]` is invalid, routes nothing (`invalid_config`), as X62 fails closed today. (`an_unreadable_main_checkout_config_routes_nothing`)
-- [ ] The `outputs` and `os` a run uses are the main checkout's, read when the run starts, as X62 reads them now from the worktree. (`outputs_come_from_the_main_checkouts_list`)
-- [ ] Approval is unchanged. The user approves the exact list and `env` names on the project page, and an entry added or changed in the main checkout is not routed until it is approved.
+- [x] `exec.route` and `exec.run` read `[heavy]` (`commands`, `os`, `env` and `outputs`) from the `.moonlet/config.toml` of the session's project's main checkout, the folder `heavy.get` reads. A worktree's own `.moonlet/config.toml` plays no part in routing.
+- [x] A session whose worktree has no `.moonlet/` folder routes an approved command that the main checkout lists. (`a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list`)
+- [x] An entry that only the worktree's config lists is not routed (`not_heavy`), even when the same text was approved, because the main checkout does not list it. (`an_entry_only_the_worktree_lists_is_not_routed`)
+- [x] A main checkout whose config cannot be read, or whose `[heavy]` is invalid, routes nothing (`invalid_config`), as X62 fails closed today. (`an_unreadable_main_checkout_config_routes_nothing`)
+- [x] The `outputs` and `os` a run uses are the main checkout's, read when the run starts, as X62 reads them now from the worktree. (`outputs_come_from_the_main_checkouts_list`)
+- [x] Approval is unchanged. The user approves the exact list and `env` names on the project page, and an entry added or changed in the main checkout is not routed until it is approved.
 
 ### Background calls
 
