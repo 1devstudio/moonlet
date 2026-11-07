@@ -21,13 +21,13 @@ Agent replies in the structured agent view render as Markdown, but a message the
 - [x] A code block in a user message has the same copy control as in agent replies (X87).
 - [x] A single newline in a user message renders as a line break; agent replies keep Markdown's usual soft breaks.
 - [x] HTML the user typed shows as text, never as markup (markdown-it with HTML disabled, then the chat sanitiser, as for agent replies).
-- [ ] Links in the bubble behave as in agent replies (X9): a plain click never navigates the app window (component behaviour, manual check).
+- [x] A URL in the bubble is a link, and links behave as in agent replies (X9): the bubble uses the same `Markdown` component on each app, so a plain click never navigates the app window. A path the user types stays text (no X30 file link).
 - [x] The phone app's bubble uses the same renderer; a long code line scrolls inside its block instead of widening the bubble (scratch page, 390 px).
 - [x] Inline code in the bubble stands out from the bubble's background (visual check, `e2e/snap.ts`).
 
 ## UI
 
-The bubble keeps its shape, colour and width (right-aligned, at most 85% of the column on the desktop). Its content uses the `.chat-md` styles of agent replies, plus `.user-md`, which gives inline code the app background, since the bubble already has the raised colour inline code uses elsewhere.
+The bubble keeps its shape, colour and width (right-aligned, at most 85% of the column on the desktop). Its text takes the size and line height of agent replies (`.chat-md`): on the desktop 14 px at a 1.6 line height, was 1.625; on the phone 14.5 px at 1.5, was 1.45. Archived sessions (X86) show their user messages the same way, since they reuse the bubble. Its content uses the `.chat-md` styles of agent replies, plus `.user-md`, which gives inline code the app background, since the bubble already has the raised colour inline code uses elsewhere.
 
 ## Protocol and RPCs
 
@@ -44,6 +44,7 @@ The message text goes through the same path as agent text: markdown-it with `htm
 ## Out of scope
 
 - File links (X30) in user messages: paths the user types stay text.
+- Design mode's own message views (X65): the edits message and comment cards a design chat shows in place of a bubble keep their plain text. A design's brief, shown in the bubble, is formatted.
 - The queued-message and side-question cards: they still show their text as typed.
 - A preview of the formatting in the composer while typing.
 

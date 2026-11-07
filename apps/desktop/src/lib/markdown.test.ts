@@ -220,8 +220,11 @@ describe("the user's own messages (X92)", () => {
   it("shows HTML the user typed as text", () => {
     expect(renderUserMarkdown("why is <b>this</b> bold?")).toBe("<p>why is &lt;b&gt;this&lt;/b&gt; bold?</p>\n");
   });
-});
 
+  it("links a URL as agent replies do (X9), and leaves a path the user typed as text (X30)", () => {
+    expect(renderUserMarkdown("see https://example.com/a and src/lib/chat.ts")).toBe('<p>see <a href="https://example.com/a">https://example.com/a</a> and src/lib/chat.ts</p>\n');
+  });
+});
 
 describe("isMarkdownPath (X26, X77)", () => {
   it("is true for Markdown files by extension, in any case", () => {

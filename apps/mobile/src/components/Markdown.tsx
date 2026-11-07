@@ -1,6 +1,7 @@
 import { useMemo, type SyntheticEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { codeToCopy, openableUrl, renderChatMarkdown, renderUserMarkdown } from "@desktop/lib/markdown";
+import { cx } from "./ui";
 
 /**
  * Agent Markdown, rendered and sanitised as on the desktop; links open in the
@@ -18,7 +19,7 @@ export function Markdown({ text, className, user = false }: { text: string; clas
   };
   return (
     <div
-      className={`chat-md selectable text-[14.5px] leading-[1.5] ${user ? "user-md" : ""} ${className ?? ""}`}
+      className={cx("chat-md selectable text-[14.5px] leading-[1.5]", user && "user-md", className)}
       dangerouslySetInnerHTML={{ __html: html }}
       onKeyDown={(e) => copyCode(e, e.key)}
       onClick={(e) => {
