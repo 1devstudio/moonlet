@@ -3724,10 +3724,15 @@ impl LiveCopies {
     pub fn heavy_approval(&self, copy: &str) -> Option<m::HeavyApproval> {
         let k = self.kept(copy)?;
         let identity = k.identity.as_ref()?;
-        if let Some((commands, env)) = self.sessions.heavy_approval(identity) {
+        // The key checks the identity; the account's approval counts only
+        // for a copy of this machine's own central host, the host whose
+        // account this machine shares.
+        let key = project_key(&k.host, identity)?;
+        if self.link.central_name().as_deref() == Some(k.host.as_str())
+            && let Some((commands, env)) = self.sessions.heavy_approval(identity)
+        {
             return Some(m::HeavyApproval { commands, env });
         }
-        let key = project_key(&k.host, identity)?;
         self.load_projects().remove(&key)?.approved_heavy
     }
 
