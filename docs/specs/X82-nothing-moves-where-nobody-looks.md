@@ -34,6 +34,12 @@ the system's reduced-motion setting.
 - [x] Animations inside a tab that is not shown are paused, and run again once
       the tab is shown (`pauses an animation inside a hidden tab`,
       `keeps an animation in the shown tab running`).
+- [x] Nothing inside a tab that is not shown is seen or takes clicks, even
+      what marks itself visible, such as the diff editor's two sides
+      (`hides a pane that sets itself visible inside a hidden tab`,
+      `keeps a pane that sets itself visible shown in the shown tab`;
+      `file-explorer.e2e.ts` › "hides the diff when the session's terminal tab
+      is shown again").
 - [x] Every endless animation moves only opacity and transform, which the
       compositor animates without painting; the chat's shimmer is one of them,
       and so are Tailwind's `animate-*` classes the app uses
@@ -91,7 +97,9 @@ None: no new inputs.
 - Vitest, `motion.test.ts`: `pauses an animation inside a hidden tab`,
   `keeps an animation in the shown tab running`,
   `animates only opacity and transform in every endless animation`,
-  `runs an endless animation once when the system asks for reduced motion` and
+  `runs an endless animation once when the system asks for reduced motion`,
+  `hides a pane that sets itself visible inside a hidden tab`,
+  `keeps a pane that sets itself visible shown in the shown tab` and
   `shows a progress bar without a percentage as a still, striped bar across the track when the system asks for reduced motion`.
   The endless-animation test builds the app's stylesheet with Tailwind from
   `index.css` and every file it imports, with the `animate-*` classes found in
@@ -104,6 +112,11 @@ None: no new inputs.
   bar's test reads the app's stylesheet with the reduced-motion rules as
   `@media screen` ones (the only media jsdom applies) and a child element
   standing in for the bar's `::after`.
+- The hiding rule wins over Monaco's inline `visibility: visible` by
+  `!important`, which jsdom ignores: its tests give the pane a stylesheet rule
+  placed before the app's, and the e2e checks Monaco's own in WebKit.
+- e2e, `file-explorer.e2e.ts`: "hides the diff when the session's terminal tab
+  is shown again".
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown` and `ticks the Agents tab's clock only while agents
   run and the tab is shown`.

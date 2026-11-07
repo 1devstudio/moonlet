@@ -31,6 +31,7 @@ Clicking a changed file in the Changes tab used to replace the list with a diff,
 - [x] A diff tab is titled with what it compares: `against <base>` or `uncommitted`. (`changes.test.ts` › "says what a diff tab compares")
 - [x] The diff keeps what the panel had: split or inline, hunk stage and discard on uncommitted changes, and comments to the agent (⇧⌘M). Preview hides the hunk and comment controls. The `+a −d` totals the panel showed above an open diff are gone.
 - [x] A diff tab reads its file when it opens, when the worktree changes (as long as something watches it, which the right panel does while open) and when it comes back to the front; a tab behind another one does not read.
+- [x] A diff tab behind another tab is not seen over it, nor takes its clicks (X82). (`file-explorer.e2e.ts` › "hides the diff when the session's terminal tab is shown again")
 
 ## UI
 
@@ -65,4 +66,4 @@ The preview renders in the same sandboxed frame as file tabs' preview (X26).
 ## Test plan
 
 - Vitest: `layout.test.ts`, `markdown.test.ts`.
-- e2e: `file-explorer.e2e.ts` opens a diff from the keyboard and by click, switches to it on a second click, and previews a Markdown file.
+- e2e: `file-explorer.e2e.ts` opens a diff from the keyboard and by click, switches to it on a second click, hides it behind the terminal tab, and previews a Markdown file.
