@@ -64,11 +64,11 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 ### Approval for the whole account
 
-- [ ] A project's approval is kept in the account state, keyed by project identity: the exact `commands` and the exact `env` names, as X62 keeps them in `heavy.json`. `heavy.approve {project, commands, env}` on any member writes it, so every member holds it. X62's rules stand: the lists must be the config's as it is now on the member that approves, approving replaces the previous lists, and only an app or a paired desktop approves. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
-- [ ] The session's host routes a command when it matches an entry that is both in its own main checkout's list and in the account's approval, and when every `env` name of its list is approved. These are X62's rules, applied to the account's record. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
-- [ ] A host that runs a command for another host checks it again: it runs only a command that matches an entry of the account's approval for the project's identity, with only approved `env` names. Otherwise it refuses with `not_approved`. (`a_runner_refuses_a_command_the_account_has_not_approved`)
-- [ ] A member's main checkout whose list differs from the approved one shows the difference on its project page, as X62 does ("pnpm build was added since you approved the list"). Approving there replaces the account's approval with that member's list.
-- [ ] The first time a member starts with this spec, each approval in its `heavy.json` with no approval in the account for that identity is written into the account, stamped as old as can be. The per-worker approvals in `sync/projects.json` (`approved_heavy`) are no longer read. (`approvals_from_heavy_json_reach_the_account_at_first_start`)
+- [x] A project's approval is kept in the account state, keyed by project identity: the exact `commands` and the exact `env` names, as X62 keeps them in `heavy.json`. `heavy.approve {project, commands, env}` on any member writes it, so every member holds it. X62's rules stand: the lists must be the config's as it is now on the member that approves, approving replaces the previous lists, and only an app or a paired desktop approves. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
+- [x] The session's host routes a command when it matches an entry that is both in its own main checkout's list and in the account's approval, and when every `env` name of its list is approved. These are X62's rules, applied to the account's record. (`an_approval_on_one_member_lets_every_member_route_and_run_the_list`)
+- [x] A host that runs a command for another host checks it again: it runs only a command that matches an entry of the account's approval for the project's identity, with only approved `env` names. Otherwise it refuses with `not_approved`. (`a_worker_runs_what_the_account_approved_without_approving_itself`; X62's `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`, now with a worker from before X89, which keeps only its own approval)
+- [x] A member's main checkout whose list differs from the approved one shows the difference on its project page, as X62 does ("pnpm build was added since you approved the list"). Approving there replaces the account's approval with that member's list, and the other members' project pages show the new approval at once, keeping any edits not saved yet (`heavy.approval_changed`). (`approving_on_a_member_with_another_list_replaces_the_accounts`; Vitest "keeps the page's list and takes another member's approval (X89)")
+- [x] The first time a member starts with this spec, each approval in its `heavy.json` with no approval in the account for that identity is written into the account, stamped as old as can be. The per-worker approvals in `sync/projects.json` (`approved_heavy`) are no longer read. (`approvals_from_heavy_json_reach_the_account_at_first_start`)
 
 ### Picking a machine
 
@@ -191,7 +191,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 - **Account state (X68):** two new record kinds. Each field follows X68's rules, and older members keep and pass them on unread.
   - `worker`, keyed by worker id, with `heavy` and `slots`;
-  - `heavy_approval`, keyed by project identity, with `commands` and `env`.
+  - `heavy_approval`, keyed by project identity, with one field `approved: {commands, env}`, so two approvals made apart never mix their lists: the later one stands whole.
 - **`link.json`:** `worker.enabled` and `worker.slots` are read once, at the first start with this spec, and then follow the account.
 - **`heavy.json`:** read once, at the first start with this spec, and then no longer written.
 - **Routing copies:** `$MOONLET_HOME/runs/<session's host>/…`, as in X62.
@@ -200,7 +200,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ## Security considerations
 
 - **Turning a host on is the consent.** A host with `heavy` on runs the account's approved commands for every member's sessions, including code an agent wrote there, as the user. ADR 0009 accepted this for workers of the central host. This spec extends it to every member, and keeps it off by default. A phone and an agent's CLI cannot turn a host on.
-- **One approval for the account.** Approving on one member approves on all of them, including members that were offline. The banner says so before the user clicks. The approval is still the exact list the approving member's page showed, and every runner checks the command against it again.
+- **One approval for the account.** Approving on one member approves on all of them, including members that were offline. The two lists are one value in the account, so an `env` name approved with one list never comes with another list's commands; a member that shares the account runs only by the account's approval, never by an older one of its own (`two_approvals_made_apart_never_mix_their_lists`). The banner says so before the user clicks. The approval is still the exact list the approving member's page showed, and every runner checks the command against it again.
 - **Any member changes any member's settings.** ADR 0014 already trusts every member with the account. Only an app or a paired desktop writes the settings through the RPC. A member's daemon sends only its own changes to the account log (X68).
 - **The relay.** The central host fills in `from` from the authenticated connection, passes on only the routing methods, and passes a cloud machine's calls only for its runs. A session's host serves files only for sessions it routed to the caller. The central host sees every relayed byte, as it already holds a copy of every session (X72).
 - **Environment.** Only the approved `[heavy] env` names cross, to whichever machine runs the command, as in X62.
@@ -234,7 +234,7 @@ Where the tests live:
 | Turning off, lowering slots | `turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish` |
 | Own sessions always run at home | `a_host_runs_its_own_sessions_commands_when_no_other_is_free` |
 | A member's session is routed | `a_members_session_runs_its_heavy_command_on_the_central_host` |
-| Approval for the account | `an_approval_on_one_member_lets_every_member_route_and_run_the_list`, `a_runner_refuses_a_command_the_account_has_not_approved`, `approvals_from_heavy_json_reach_the_account_at_first_start`; Vitest "the approval toast names the account" |
+| Approval for the account | `an_approval_on_one_member_lets_every_member_route_and_run_the_list`, `a_worker_runs_what_the_account_approved_without_approving_itself`, `approvals_from_heavy_json_reach_the_account_at_first_start`; core `a_heavy_approval_on_one_member_is_every_members`; Vitest "the approval toast names the account", "each machine, on a host from before X89" |
 | Candidates, `heavy` off | `a_host_with_heavy_commands_off_takes_none_from_other_hosts` |
 | Order (worked examples) | `picks_as_in_the_mesh_order_table`, `picks_as_in_the_order_table` |
 | Slots across hosts | `a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`, `two_hosts_picking_one_slot_run_one_there_and_one_elsewhere` |

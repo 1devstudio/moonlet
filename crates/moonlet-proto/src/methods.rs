@@ -429,6 +429,8 @@ pub const WORKER_SETTINGS: &str = "worker.settings";
 /// Changes a member's worker settings (X89): [`WorkerSettingsSet`] →
 /// `true`. Only an app or a paired desktop.
 pub const WORKER_SETTINGS_SET: &str = "worker.settings.set";
+/// `{}`, when another member approved a project's heavy commands (X89).
+pub const EV_HEAVY_APPROVAL_CHANGED: &str = "heavy.approval_changed";
 /// [`WorkerSettingsEntry`]s, when any member's settings change (X89).
 pub const EV_WORKER_SETTINGS_CHANGED: &str = "worker.settings_changed";
 /// [`LinkInfo`], on every change of the link's settings or state.
@@ -3454,6 +3456,10 @@ pub struct HeavyInfo {
     pub approved: Option<HeavyApproval>,
     /// Why `[heavy]` cannot be used as written; nothing is routed then.
     pub error: Option<String>,
+    /// The approval is kept in the account, so it holds on every member
+    /// (X89); false on a host that shares no account, or from before X89.
+    #[serde(default)]
+    pub account: bool,
 }
 
 /// `exec.route` params, from moonlet's `PreToolUse` hook.

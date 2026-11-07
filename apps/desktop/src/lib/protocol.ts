@@ -450,6 +450,9 @@ export interface HeavyInfo {
   approved: HeavyApproval | null;
   /** Why the table cannot be used; nothing is routed then. */
   error: string | null;
+  /** The approval is kept in the account, for every member (X89); absent
+   * from a host before X89. */
+  account?: boolean;
 }
 
 /** A worker linked to the central host, from `worker.list` (X41, X62). */
@@ -1642,6 +1645,7 @@ export const EV = {
   syncChanged: "sync.changed",
   workersChanged: "workers.changed",
   workerSettingsChanged: "worker.settings_changed",
+  heavyApprovalChanged: "heavy.approval_changed",
   jobChanged: "job.changed",
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",

@@ -147,7 +147,7 @@ pub struct Daemon {
     /// ones this daemon serves as a central host (X60).
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
-    heavy: Arc<crate::heavy::Heavy>,
+    pub(crate) heavy: Arc<crate::heavy::Heavy>,
     /// Cloud workers' settings and machines (X63).
     cloud: Arc<crate::cloud::CloudSettings>,
     pub machines: Arc<crate::machines::Machines>,
@@ -1728,6 +1728,13 @@ impl Daemon {
                             commands: crate::heavy::sorted(&r.commands),
                             env: crate::heavy::sorted(&r.env),
                         };
+                        // A member of the account approves for the whole
+                        // account, which is what it runs by (X89).
+                        if self.sessions.has_account() {
+                            self.sessions
+                                .set_heavy_approval(identity, &approval.commands, &approval.env)
+                                .map_err(internal)?;
+                        }
                         self.sync.approve_heavy(identity, approval)?;
                         // Its central host no longer says it has not approved.
                         self.link.register_again();
