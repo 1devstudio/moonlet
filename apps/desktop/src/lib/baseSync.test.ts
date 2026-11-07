@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aheadText, autoPulls, baseChip, fetchDue, behindHeadline, chipClick, fetchedLabel, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
+import { aheadText, autoPulls, baseChip, fetchDue, behindHeadline, chipClick, fetchedLabel, justMerged, otherPullsText, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
 import type { BaseStatus } from "./protocol";
 
 const status = (ahead: number, behind: number): BaseStatus => ({
@@ -147,5 +147,17 @@ describe("autoPulls (X55)", () => {
     expect(autoPulls(status(0, 0), false, true)).toBe(false);
     expect(autoPulls(status(0, 3), true, true)).toBe(false);
     expect(autoPulls(null, false, true)).toBe(false);
+  });
+});
+
+describe("otherPullsText", () => {
+  it("names another host's base branch only when it is not the clicked one's", () => {
+    expect(
+      otherPullsText("main", [
+        { label: "studio-mini", branch: "develop", pulled: 1 },
+        { label: "build-box", branch: "develop", pulled: 0 },
+        { label: "devbox", branch: "develop", error: "fatal: not a git repository." },
+      ]),
+    ).toBe("studio-mini: pulled 1 commit into develop. build-box: develop already up to date. devbox: couldn't pull into develop: fatal: not a git repository.");
   });
 });

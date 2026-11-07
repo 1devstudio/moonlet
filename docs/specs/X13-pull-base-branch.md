@@ -14,7 +14,8 @@ New sessions branch from the project's local base branch (`main` unless `.moonle
 2. The project row in the sidebar shows a chip next to the project name: an arrow and the number of commits `main` is behind, for example `↓ 3`.
 3. Hovering the chip opens a popover: "main is 3 commits behind origin", the incoming commits (short sha and subject, newest first), and when moonlet last fetched. The popover only informs; it has no buttons.
 4. Clicking the chip fast-forwards the local branch. The chip shows `pulling` meanwhile, then disappears, and a toast says "Pulled 3 commits into main. New sessions start from 9c41e2a."
-5. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that moonlet only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
+5. The MacBook and `studio-mini` both have `ledger` (the same project by identity, X41). Clicking the chip on the MacBook also pulls `main` on `studio-mini`, after fetching there, and the toast ends with "studio-mini: pulled 3 commits."
+6. When the local branch has commits that are not on `origin`, the chip reads `diverged`. Hovering or clicking it opens a popover that explains that moonlet only fast-forwards, changed nothing, and offers a `git pull --rebase` command to copy.
 
 ## Behaviour and acceptance criteria
 
@@ -31,6 +32,9 @@ New sessions branch from the project's local base branch (`main` unless `.moonle
 - [x] The behind popover has no buttons: the chip is the only way to pull. Its commit list scrolls when the commits do not fit.
 - [x] The popover opens below the chip, or above it when the chip sits too low in the window for the popover to fit below.
 - [x] Only one pull popover is open at a time. Opening another project's popover closes the first, so a Pull click cannot land on the wrong project's popover.
+- [x] Clicking the chip also pulls the project's base branch on every other connected host that has the same project, matched by identity (X41: origin and root commit). Each of those hosts fetches `origin/<base>` first, since its last fetch may be old, then fast-forwards when its branch is only behind. A project without a root commit is pulled only where it was clicked; a host that is not connected is skipped. (pullEverywhere.test.ts › "pulls on the other hosts too and says so in one toast", "fetches on the other host first, as its last fetch may be old", "skips a host that is not connected", "pulls a project without a root commit only where it was clicked")
+- [x] One toast reports every host: the clicked host's text as above, then one sentence per other host, by its label: "studio-mini: pulled 2 commits.", "build-box: already up to date.", "studio-mini: main can't be fast-forwarded, nothing changed." for a copy with commits of its own (left as it is), and "studio-mini: couldn't pull: couldn't fetch origin/main." when its fetch failed, rather than calling it up to date. Another host's branch is named when it is not the clicked project's ("pulled 1 commit into develop"). When the clicked host's pull fails, its error toast shows and the other hosts still pull. (pullEverywhere.test.ts › "leaves a copy with commits of its own alone and says so", "says a host that couldn't fetch didn't pull, rather than that it is up to date", "still pulls on the other hosts when the clicked one fails"; baseSync.test.ts › otherPullsText)
+- [x] X55's automatic fast-forward after a fetch pulls only on the host that fetched: each host follows its own Git settings. (pullEverywhere.test.ts › "leaves the other hosts' copies alone")
 - [x] The diverged popover's command targets the work tree that has the branch checked out. When none does, it switches to the branch first.
 
 ## UI
@@ -48,7 +52,7 @@ The popover is fixed below the chip, 276 px wide, like the row context menu. Whe
 - `git.base_status {path, branch, fetch}` → `BaseStatus | null`: `{branch, upstream, ahead, behind, commits: Commit[], checkout: string | null, fetch_error: string | null}`.
 - `git.pull_base {path, branch}` → `{pulled, head}`.
 
-Both run on the host that owns the project, so remote projects work the same way.
+Both run on the host that owns the project, so remote projects work the same way. A click on the chip sends them to every connected host with the same project: `git.base_status {fetch: true}` then `git.pull_base` on the others, so no new RPC is needed and older daemons work.
 
 ## Security considerations
 
@@ -64,5 +68,6 @@ Both run on the host that owns the project, so remote projects work the same way
 ## Test plan
 
 - Integration (`crates/moonlet-core/src/git.rs`): a clone of a bare origin that is behind, up to date, diverged, and missing the remote branch; a failed fetch; pulling with the branch checked out (work tree updated) and not checked out (ref moved); a refused diverged pull.
+- Unit (`apps/desktop/src/lib/pullEverywhere.test.ts`): the store with a daemon double per host; pulls on the other hosts by identity, fetch first, diverged, failed fetch, disconnected host, no root commit, a failed clicked host, and the automatic pull staying on one host.
 - Unit (`apps/desktop/src/lib/baseSync.test.ts`): chip states, what a chip click does, popover texts, popover placement above or below the chip, fetched label, pull toast, the diverged command, and the newly merged PR detection that triggers a fetch.
-- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits with no buttons in the popover, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open.
+- e2e (`apps/desktop/e2e/specs/pull-base.e2e.ts`): with an origin that has new commits, the chip shows the count, hovering it lists the commits with no buttons in the popover, and clicking it moves the local branch. With a second project behind, hovering its chip and then the first project's leaves one popover open. Pulling on the other hosts has no e2e spec: it needs a second daemon holding the same project, and pulling is not one of AGENTS.md's crucial features.

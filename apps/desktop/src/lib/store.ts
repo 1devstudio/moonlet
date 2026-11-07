@@ -39,7 +39,7 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
 import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, onChatItem, onChatState, reloadChats } from "./chat";
-import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { autoPulls, fetchDue, justMerged, otherCopies, otherPullsText, pullToast, type FetchInfo, type OtherPull } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
@@ -938,16 +938,59 @@ export async function refreshAllBases(host: string, opts: { fetch?: boolean } = 
 export async function pullBase(host: string, projectId: string) {
   const p = get().projects[host]?.find((x) => x.id === projectId);
   if (!p) return;
+  const text = await pullHere(host, p);
+  if (text) toast(text);
+}
+
+/** The chip's click: pulls on `host`, and on every other connected host
+ *  that has the same project, each after fetching there, with one toast. */
+export async function pullBaseEverywhere(host: string, projectId: string) {
+  const s = get();
+  const p = s.projects[host]?.find((x) => x.id === projectId);
+  if (!p) return;
+  const others = otherCopies(host, p, s.projects, (h) => s.hosts[h]?.status === "connected");
+  const [here, ...there] = await Promise.all([pullHere(host, p), ...others.map((o) => pullThere(o.host, o.project))]);
+  const text = [here, otherPullsText(p.base_branch, there.filter((r): r is OtherPull => r !== null))].filter(Boolean).join(" ");
+  if (text) toast(text);
+}
+
+/** Pulls what was last fetched; the toast's text, or null after an error toast. */
+async function pullHere(host: string, p: Project): Promise<string | null> {
   const key = projKey(host, p.id);
   patchBase(key, { pulling: true });
+  let text: string | null = null;
   try {
-    toast(pullToast(p.base_branch, await rpc<BasePull>(host, M.gitPullBase, { path: p.path, branch: p.base_branch })));
+    text = pullToast(p.base_branch, await rpc<BasePull>(host, M.gitPullBase, { path: p.path, branch: p.base_branch }));
   } catch (e) {
     errorToast(e);
   }
   // Refresh before clearing `pulling`, so the chip does not flash the old count.
   await refreshBase(host, p.id);
   patchBase(key, { pulling: false });
+  return text;
+}
+
+/** Fetches and fast-forwards another host's copy of the project. Its last
+ *  fetch may be old, so it fetches first. Null when it has no origin branch. */
+async function pullThere(host: string, p: Project): Promise<OtherPull | null> {
+  const key = projKey(host, p.id);
+  const of = { label: get().hosts[host]?.label ?? host, branch: p.base_branch };
+  patchBase(key, { pulling: true });
+  let out: OtherPull | null;
+  try {
+    const st = await rpc<BaseStatus | null>(host, M.gitBaseStatus, { path: p.path, branch: p.base_branch, fetch: true });
+    patchBase(key, { status: st, fetchError: st?.fetch_error ?? null, ...(st && !st.fetch_error && { fetchedAt: Date.now(), reason: null }) });
+    if (!st) out = null;
+    else if (st.fetch_error) out = { ...of, error: `couldn't fetch origin/${p.base_branch}` };
+    else if (st.behind === 0) out = { ...of, pulled: 0 };
+    else if (st.ahead > 0) out = { ...of, diverged: true };
+    else out = { ...of, pulled: (await rpc<BasePull>(host, M.gitPullBase, { path: p.path, branch: p.base_branch })).pulled };
+  } catch (e) {
+    out = { ...of, error: errorMessage(e) };
+  }
+  await refreshBase(host, p.id);
+  patchBase(key, { pulling: false });
+  return out;
 }
 
 export async function refreshAllGit(host: string) {

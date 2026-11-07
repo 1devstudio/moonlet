@@ -1,7 +1,8 @@
 // The project's base branch against origin, as the sidebar's pull chip and
 // popover show it (X13). Pure, so it is unit-tested.
 
-import type { BaseStatus } from "./protocol";
+import type { BaseStatus, Project } from "./protocol";
+import { identityKey } from "./sidebar";
 
 const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
 
@@ -76,6 +77,37 @@ export function fetchedLabel(f: FetchInfo, now: number): string {
 export function pullToast(branch: string, r: { pulled: number; head: string }): string {
   if (r.pulled === 0) return `${branch} is already up to date.`;
   return `Pulled ${commits(r.pulled)} into ${branch}. New sessions start from ${r.head.slice(0, 7)}.`;
+}
+
+/** The same project on the other connected hosts, matched by identity, to
+ *  pull there too when the chip is clicked on `host`. A project without a
+ *  root commit is this host's alone. */
+export function otherCopies(host: string, project: Project, projects: Record<string, Project[]>, connected: (host: string) => boolean): { host: string; project: Project }[] {
+  const key = identityKey(project.identity);
+  if (!key) return [];
+  return Object.entries(projects).flatMap(([h, list]) => {
+    if (h === host || !connected(h)) return [];
+    const copy = list.find((p) => identityKey(p.identity) === key);
+    return copy ? [{ host: h, project: copy }] : [];
+  });
+}
+
+/** What a pull on another host did. */
+export type OtherPull = { label: string; branch: string } & ({ pulled: number } | { diverged: true } | { error: string });
+
+/** The other hosts' part of the pull toast: "studio-mini: pulled 2 commits."
+ *  `branch` is the clicked project's; another host's branch is named only
+ *  when it differs. */
+export function otherPullsText(branch: string, pulls: OtherPull[]): string {
+  return pulls
+    .map((r) => {
+      const into = r.branch === branch ? "" : ` into ${r.branch}`;
+      if ("error" in r) return `${r.label}: couldn't pull${into}: ${r.error.replace(/\.$/, "")}.`;
+      if ("diverged" in r) return `${r.label}: ${r.branch} can't be fast-forwarded, nothing changed.`;
+      if (r.pulled > 0) return `${r.label}: pulled ${commits(r.pulled)}${into}.`;
+      return `${r.label}: ${into ? `${r.branch} ` : ""}already up to date.`;
+    })
+    .join(" ");
 }
 
 /** Where the pull popover opens: below the chip, or above it when the chip
