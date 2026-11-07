@@ -38,8 +38,9 @@ pub trait Items: Send + Sync {
 }
 
 /// The account of the one item holding every token. Connection ids are
-/// `<kind>:<site>`, so none is this.
-const ALL: &str = "tokens";
+/// `<kind>:<site>`, so none is this; an id that is (a hand-edited
+/// `trackers.toml`) is refused rather than reaching the item.
+const TOKENS_ACCOUNT: &str = "tokens";
 
 /// Connection id to token.
 type Tokens = BTreeMap<String, String>;
@@ -56,9 +57,9 @@ pub struct OneItem<I> {
 struct Cache {
     /// The item as read, or why it could not be.
     all: Option<Result<Tokens, String>>,
-    /// Connections whose item of their own, from before X91, was looked
+    /// Connections whose item of their own, from before X91, was old_items_checked
     /// for: each is read once per start at most.
-    looked: BTreeSet<String>,
+    old_items_checked: BTreeSet<String>,
 }
 
 #[cfg_attr(feature = "e2e", allow(dead_code))]
@@ -68,7 +69,7 @@ impl<I: Items> OneItem<I> {
     }
 
     fn load(&self) -> Result<Tokens, String> {
-        match self.items.read(ALL)? {
+        match self.items.read(TOKENS_ACCOUNT)? {
             None => Ok(Tokens::new()),
             Some(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("the Keychain's tracker tokens cannot be read: {e}")),
         }
@@ -76,11 +77,16 @@ impl<I: Items> OneItem<I> {
 
     /// Changes the item as it is now, not as this process last read it: a
     /// dev build beside the app may have saved a token since. An item that
-    /// cannot be read is never overwritten.
-    fn change(&self, cache: &mut Cache, edit: impl FnOnce(&mut Tokens)) -> Result<(), String> {
+    /// cannot be read is never overwritten. This start uses the change even
+    /// when the Keychain could not keep it: a refreshed Linear sign-in has
+    /// already spent its old refresh token.
+    fn change(&self, cache: &mut Cache, edit: impl Fn(&mut Tokens)) -> Result<(), String> {
+        if let Some(Ok(tokens)) = cache.all.as_mut() {
+            edit(tokens);
+        }
         let mut all = self.load()?;
         edit(&mut all);
-        self.items.write(ALL, &serde_json::to_vec(&all).map_err(|e| e.to_string())?)?;
+        self.items.write(TOKENS_ACCOUNT, &serde_json::to_vec(&all).map_err(|e| e.to_string())?)?;
         cache.all = Some(Ok(all));
         Ok(())
     }
@@ -88,13 +94,16 @@ impl<I: Items> OneItem<I> {
 
 impl<I: Items> Secrets for OneItem<I> {
     fn get(&self, id: &str) -> Option<String> {
+        if id == TOKENS_ACCOUNT {
+            return None;
+        }
         let mut cache = self.cache.lock().unwrap();
         let tokens = cache.all.get_or_insert_with(|| self.load()).as_ref().ok()?;
         if let Some(token) = tokens.get(id) {
             return Some(token.clone());
         }
         // Saved before X91, in an item of its own: moved into the one item.
-        if !cache.looked.insert(id.into()) {
+        if !cache.old_items_checked.insert(id.into()) {
             return None;
         }
         let token = String::from_utf8(self.items.read(id).ok()??).ok()?;
@@ -108,12 +117,18 @@ impl<I: Items> Secrets for OneItem<I> {
         Some(token)
     }
     fn set(&self, id: &str, token: &str) -> Result<(), String> {
+        if id == TOKENS_ACCOUNT {
+            return Err(format!("{id} is not a connection id"));
+        }
         let mut cache = self.cache.lock().unwrap();
         self.change(&mut cache, |all| {
             all.insert(id.into(), token.into());
         })
     }
     fn delete(&self, id: &str) {
+        if id == TOKENS_ACCOUNT {
+            return;
+        }
         let mut cache = self.cache.lock().unwrap();
         let _ = self.change(&mut cache, |all| {
             all.remove(id);
@@ -199,16 +214,18 @@ mod tests {
     /// The login Keychain as a binary it does not trust sees it: each read
     /// of an item asks for the password, so the test lists the prompts.
     #[derive(Clone, Default)]
-    struct Keychain {
+    struct PromptingKeychain {
         items: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
         prompts: Arc<Mutex<Vec<String>>>,
         /// The user presses Cancel in every password prompt.
         refused: Arc<Mutex<bool>>,
+        /// Saving an item fails.
+        unwritable: Arc<Mutex<bool>>,
     }
 
-    impl Keychain {
+    impl PromptingKeychain {
         fn with(items: &[(&str, &str)]) -> Self {
-            let k = Keychain::default();
+            let k = PromptingKeychain::default();
             for (account, data) in items {
                 k.items.lock().unwrap().insert(account.to_string(), data.as_bytes().to_vec());
             }
@@ -218,13 +235,13 @@ mod tests {
         fn prompts(&self) -> Vec<String> {
             std::mem::take(&mut *self.prompts.lock().unwrap())
         }
-        /// The items Keychain Access lists under the service.
+        /// The items PromptingKeychain Access lists under the service.
         fn accounts(&self) -> Vec<String> {
             self.items.lock().unwrap().keys().cloned().collect()
         }
     }
 
-    impl Items for Keychain {
+    impl Items for PromptingKeychain {
         fn read(&self, account: &str) -> Result<Option<Vec<u8>>, String> {
             let found = self.items.lock().unwrap().get(account).cloned();
             if found.is_some() {
@@ -236,6 +253,9 @@ mod tests {
             Ok(found)
         }
         fn write(&self, account: &str, data: &[u8]) -> Result<(), String> {
+            if *self.unwritable.lock().unwrap() {
+                return Err("cannot keep the token in the Keychain".into());
+            }
             self.items.lock().unwrap().insert(account.to_string(), data.to_vec());
             Ok(())
         }
@@ -246,7 +266,7 @@ mod tests {
 
     #[test]
     fn three_connections_ask_for_the_keychain_password_once_per_start() {
-        let keychain = Keychain::with(&[(
+        let keychain = PromptingKeychain::with(&[(
             "tokens",
             r#"{"clickup:9012":"pk_clickup","jira:acme.atlassian.net":"kim@acme.dev:ATATT3x","linear:acme":"lin_api_key"}"#,
         )]);
@@ -277,7 +297,7 @@ mod tests {
 
     #[test]
     fn tokens_kept_one_item_per_connection_move_into_the_one_item() {
-        let keychain = Keychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x"), ("linear:acme", "lin_api_key")]);
+        let keychain = PromptingKeychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x"), ("linear:acme", "lin_api_key")]);
         let first = OneItem::new(keychain.clone());
         assert_eq!(first.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
         assert_eq!(first.get("linear:acme").as_deref(), Some("lin_api_key"));
@@ -292,7 +312,7 @@ mod tests {
 
     #[test]
     fn a_token_another_moonlet_saved_meanwhile_is_kept() {
-        let keychain = Keychain::with(&[("tokens", r#"{"linear:acme":"lin_api_key"}"#)]);
+        let keychain = PromptingKeychain::with(&[("tokens", r#"{"linear:acme":"lin_api_key"}"#)]);
         let app = OneItem::new(keychain.clone());
         assert_eq!(app.get("linear:acme").as_deref(), Some("lin_api_key"));
         let dev_build = OneItem::new(keychain.clone());
@@ -308,7 +328,7 @@ mod tests {
     #[test]
     fn cancelling_the_password_prompt_asks_no_more_and_keeps_the_tokens() {
         let saved = r#"{"jira:acme.atlassian.net":"kim@acme.dev:ATATT3x"}"#;
-        let keychain = Keychain::with(&[("tokens", saved)]);
+        let keychain = PromptingKeychain::with(&[("tokens", saved)]);
         *keychain.refused.lock().unwrap() = true;
         let store = OneItem::new(keychain.clone());
         for _ in 0..3 {
@@ -323,7 +343,7 @@ mod tests {
 
     #[test]
     fn cancelling_the_prompt_for_a_token_kept_on_its_own_asks_no_more() {
-        let keychain = Keychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x")]);
+        let keychain = PromptingKeychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x")]);
         *keychain.refused.lock().unwrap() = true;
         let store = OneItem::new(keychain.clone());
         for _ in 0..3 {
@@ -333,7 +353,7 @@ mod tests {
         assert_eq!(keychain.accounts(), vec!["jira:acme.atlassian.net"]);
     }
 
-    /// Against the real Keychain, under a throwaway service; run by hand with
+    /// Against the real PromptingKeychain, under a throwaway service; run by hand with
     /// `cargo test -p moonlet-app --lib secrets -- --ignored`.
     #[cfg(all(target_os = "macos", not(feature = "e2e")))]
     #[test]
@@ -354,5 +374,43 @@ mod tests {
         next_start.delete("linear:acme");
         keychain().remove("tokens");
         assert_eq!(keychain().read("tokens"), Ok(None));
+    }
+
+    #[test]
+    fn no_connection_can_reach_the_item_holding_every_token() {
+        let saved = r#"{"linear:acme":"lin_api_key"}"#;
+        let keychain = PromptingKeychain::with(&[("tokens", saved)]);
+        let store = OneItem::new(keychain.clone());
+        assert_eq!(store.get("tokens"), None);
+        assert!(store.set("tokens", "x").is_err());
+        store.delete("tokens");
+        assert_eq!(keychain.accounts(), vec!["tokens"]);
+        assert_eq!(OneItem::new(keychain.clone()).get("linear:acme").as_deref(), Some("lin_api_key"));
+    }
+
+    #[test]
+    fn a_token_that_cannot_move_still_works_for_the_rest_of_the_start() {
+        let keychain = PromptingKeychain::with(&[("jira:acme.atlassian.net", "kim@acme.dev:ATATT3x")]);
+        *keychain.unwritable.lock().unwrap() = true;
+        let store = OneItem::new(keychain.clone());
+        for _ in 0..3 {
+            assert_eq!(store.get("jira:acme.atlassian.net").as_deref(), Some("kim@acme.dev:ATATT3x"));
+        }
+        assert_eq!(keychain.accounts(), vec!["jira:acme.atlassian.net"]);
+    }
+
+    #[test]
+    fn a_token_saved_while_the_keychain_refuses_is_used_for_the_rest_of_the_start() {
+        // A Linear refresh spends the old refresh token: a command that
+        // waited for it must use the new tokens, even when they could not
+        // be kept.
+        let keychain = PromptingKeychain::with(&[("tokens", r#"{"linear:acme":"old"}"#)]);
+        let store = OneItem::new(keychain.clone());
+        assert_eq!(store.get("linear:acme").as_deref(), Some("old"));
+        *keychain.refused.lock().unwrap() = true;
+        assert!(store.set("linear:acme", "new").is_err());
+        assert_eq!(store.get("linear:acme").as_deref(), Some("new"));
+        *keychain.refused.lock().unwrap() = false;
+        assert_eq!(OneItem::new(keychain.clone()).get("linear:acme").as_deref(), Some("old"));
     }
 }
