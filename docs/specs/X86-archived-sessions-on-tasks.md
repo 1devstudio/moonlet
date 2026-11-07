@@ -15,8 +15,11 @@ shell: the agent's conversation is gone.
 
 With this feature an archived session stays listed on its task, as archived.
 Opening it shows a read-only page with its chat transcripts and a Restore
-button. Restore brings back the tabs it had when it was archived, and its
-agents continue their conversations.
+button. Restore brings back the chats and tabs it had when it was archived.
+Its agents resume the way they do after a daemon restart (S4): a chat goes on
+from its kept transcript, a Claude tab continues its conversation while the
+workspace uses the Claude profile it ran in (X33), and an agent with no known
+way to resume starts again.
 
 ## User journey
 
@@ -28,7 +31,8 @@ agents continue their conversations.
    are the task, project and branch, its PR, when it was created and archived,
    and its chat transcripts, read only.
 4. The user clicks **Restore**. The worktree comes back, its tabs open again,
-   and a Claude agent continues its last conversation in that worktree.
+   and its Claude agent continues its conversation (unless the workspace's
+   Claude profile changed since, X33).
 
 ## Behaviour and acceptance criteria
 
@@ -166,6 +170,13 @@ built from it.
 
 - The transcript of a TUI agent tab (the terminal's screen is gone once its
   process ends; the agent's own history is continued on Restore instead).
+- A conversation per Claude TUI tab: like a restart (S4), Restore runs
+  `claude --continue`, which takes the worktree's latest conversation, so two
+  Claude TUI tabs in one worktree both continue that one. Keeping each tab's
+  conversation id would change S4 too, and is left for its own spec.
+- A test that the page offers no input or permission answers: it renders the
+  kept items with the chat's item views and no editor, and React components
+  have no unit tests here (AGENTS.md).
 - Archived sessions on the phone (X76): the hub drops an archived session's
   copy, so the phone cannot list them.
 - Changing the "issue moves to Done" rule: it stays Suggest or Off (X46).

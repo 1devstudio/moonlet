@@ -123,4 +123,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X83 | A session's processes, listed and stopped | P1 | 3 | implemented | [X83-session-processes-listed-and-stopped.md](X83-session-processes-listed-and-stopped.md) |
 | X84 | Idle agents rest: a chat agent idle for a day is stopped, and the next message resumes it | P1 | 3 | implemented | [X84-idle-agents-rest.md](X84-idle-agents-rest.md) |
 | X85 | The moonlet website: a homepage and docs in `apps/homepage` (Next.js), hosted on Vercel | P1 | 4 | implemented (the Vercel project not yet connected) | [X85-homepage.md](X85-homepage.md) |
-| X86 | Archived sessions stay on their task: a read-only page with their chats, and Restore continues their agents | P1 | 3 | implemented | [X86-archived-sessions-on-tasks.md](X86-archived-sessions-on-tasks.md) |
+| X86 | Archived sessions stay on their task: a read-only page with their chats, and Restore brings back their tabs and chats, agents resuming as after a restart | P1 | 3 | implemented | [X86-archived-sessions-on-tasks.md](X86-archived-sessions-on-tasks.md) |
