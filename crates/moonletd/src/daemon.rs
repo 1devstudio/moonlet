@@ -802,6 +802,42 @@ impl Daemon {
         Ok(())
     }
 
+    /// Every member's worker settings, this host's first (X89): off and 2
+    /// slots until set.
+    pub fn worker_settings(&self) -> Vec<m::WorkerSettingsEntry> {
+        let me = self.link.info().worker;
+        let kept = self.sessions.worker_settings();
+        let mut names = self.sessions.member_names();
+        names.insert(me.id.clone(), me.name.clone());
+        let mut out: Vec<m::WorkerSettingsEntry> = names
+            .into_iter()
+            .map(|(worker, name)| {
+                let s = kept.get(&worker).copied().unwrap_or_default();
+                let (heavy, slots) = if worker == me.id {
+                    (me.enabled, me.slots)
+                } else {
+                    (s.heavy.unwrap_or(false), s.slots.unwrap_or_else(m::default_slots))
+                };
+                m::WorkerSettingsEntry {
+                    worker,
+                    name,
+                    heavy,
+                    slots,
+                }
+            })
+            .collect();
+        out.sort_by_key(|e| (e.worker != me.id, e.name.clone(), e.worker.clone()));
+        out
+    }
+
+    /// Tells the apps every member's worker settings (X89).
+    pub fn worker_settings_changed(&self) {
+        self.terminals.emit(Message::event(
+            m::EV_WORKER_SETTINGS_CHANGED,
+            self.worker_settings(),
+        ));
+    }
+
     /// Every change to profiles or their accounts sends the full list, as
     /// `profile.list` returns it.
     fn emit_profiles(&self) {
@@ -1649,7 +1685,12 @@ impl Daemon {
                 self.link_managers_only(conn, false)?;
                 let r: m::LinkSet = params(p)?;
                 self.link_managers_only(conn, r.central.is_some())?;
-                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+                let settings = r.worker.as_ref().is_some_and(|w| w.enabled.is_some() || w.slots.is_some());
+                let info = self.link.set(r, &crate::mobile::tailscale_addresses())?;
+                if settings {
+                    self.worker_settings_changed();
+                }
+                ok(info)
             }
             m::LINK_RETRY => {
                 self.link_managers_only(conn, false)?;
@@ -1878,6 +1919,38 @@ impl Daemon {
                 ok(self.heavy.route(&r))
             }
             m::WORKER_LIST => ok(self.workers.list()),
+            m::WORKER_SETTINGS => ok(self.worker_settings()),
+            // Turning a host on lets it run other hosts' agents' commands:
+            // never an agent's CLI nor a phone (X89).
+            m::WORKER_SETTINGS_SET => {
+                self.app_or_paired_mac(conn, "worker settings")?;
+                let r: m::WorkerSettingsSet = params(p)?;
+                if r.slots.is_some_and(|n| !(1..=64).contains(&n)) {
+                    return Err(RpcError::new("invalid_params", "slots must be from 1 to 64"));
+                }
+                if r.worker == self.link.info().worker.id {
+                    let req = m::LinkSet {
+                        central: None,
+                        worker: Some(m::LinkWorkerSet {
+                            enabled: r.heavy,
+                            slots: r.slots,
+                            name: None,
+                        }),
+                    };
+                    self.link.set(req, &[])?;
+                } else {
+                    if !self.sessions.member_names().contains_key(&r.worker) {
+                        return Err(RpcError::new("not_found", format!("no member {}", r.worker)));
+                    }
+                    let set = moonlet_core::session::WorkerSettings {
+                        heavy: r.heavy,
+                        slots: r.slots,
+                    };
+                    self.sessions.set_worker_settings(&r.worker, set).map_err(internal)?;
+                }
+                self.worker_settings_changed();
+                ok(true)
+            }
             m::ACCOUNT_SYNC => {
                 // Only a linked Mac's daemon: a paired Mac's connection that
                 // registered as a worker, never a phone, nor an agent's CLI,
