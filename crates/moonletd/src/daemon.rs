@@ -1773,13 +1773,9 @@ impl Daemon {
                             commands: crate::heavy::sorted(&r.commands),
                             env: crate::heavy::sorted(&r.env),
                         };
-                        // A member of the account approves for the whole
-                        // account, which is what it runs by (X89).
-                        if self.sessions.has_account() {
-                            self.sessions
-                                .set_heavy_approval(identity, &approval.commands, &approval.env)
-                                .map_err(internal)?;
-                        }
+                        // Only this worker's own, which a worker from
+                        // before X89 runs by; the account's approval is the
+                        // project page's, checked against its config (X89).
                         self.sync.approve_heavy(identity, approval)?;
                         // Its central host no longer says it has not approved.
                         self.link.register_again();
@@ -1922,6 +1918,11 @@ impl Daemon {
                 // command it runs (X89).
                 let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
                 let from = if cloud && conn.client == crate::link::WORKER_CLIENT {
+                    // Not once its machine is being removed (X63).
+                    conn.phone
+                        .as_deref()
+                        .and_then(|d| self.machines.machine_of(d))
+                        .ok_or_else(|| RpcError::new("forbidden", "this machine is being removed"))?;
                     self.workers
                         .worker_on(conn.id)
                         .ok_or_else(|| RpcError::new("forbidden", "only a member routes commands here"))?

@@ -1030,7 +1030,9 @@ fn refusal(reply: &moonlet_proto::Message) -> Option<String> {
 
 #[tokio::test]
 async fn the_central_host_passes_on_only_the_routing_methods() {
-    let (mini, addr, _book, _air) = account().await;
+    // Its raw connections answer no pings: the central host must not drop
+    // them meanwhile.
+    let (mini, addr, _book, _air) = account_env(&[("MOONLET_WORKER_PING_MS", "60000")]).await;
     // A third Mac's daemon, by hand.
     let p: MobilePairing = mini
         .call("mobile.pair_start", json!({ "kind": "desktop" }))

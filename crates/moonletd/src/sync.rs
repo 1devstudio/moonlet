@@ -3849,7 +3849,16 @@ impl LiveCopies {
         let me = self.clone();
         let copy = copy.to_string();
         tokio::spawn(async move {
-            if let Err(e) = me.remove(&copy, CloseReason::Stopped).await {
+            // Under the copy's lock, as `prepare_run` takes it: not when the
+            // switch went on again meanwhile, nor once another run took it.
+            let lock = me.lock(&copy);
+            let _one = lock.lock().await;
+            let now = moonlet_core::paths::now_ms();
+            let in_use = me.kept(&copy).is_some_and(|k| k.in_use_until.is_some_and(|t| t > now));
+            if me.link.info().worker.enabled || in_use {
+                return;
+            }
+            if let Err(e) = me.remove_held(&copy, CloseReason::Stopped).await {
                 tracing::warn!(%copy, "cannot remove the routing copy: {}", e.message);
             }
         });

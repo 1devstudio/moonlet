@@ -99,6 +99,16 @@ impl Peer {
         }
     }
 
+    /// Which connection of the link a run started on (X89): a link that
+    /// connected again lost what the old connection carried. None for a
+    /// server connection, which never comes back as itself.
+    pub fn generation(&self) -> Option<u64> {
+        match self {
+            Peer::Conn(_) => None,
+            Peer::Link(h) | Peer::Relay(h, _) => Some(h.connection()),
+        }
+    }
+
     /// A cloud machine's connection, which gets only the files of a run.
     pub fn is_cloud(&self) -> bool {
         match self {

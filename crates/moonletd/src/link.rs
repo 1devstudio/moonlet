@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use moonlet_core::paths::now_ms;
+use moonlet_core::account::RecordKind;
 use moonlet_core::session::{SessionManager, WorkerSettings};
 use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{BoxFuture, Events, Host, HostInfo, HostOptions, HostStatus, Requests};
@@ -1298,11 +1299,12 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         let Some(d) = d.upgrade() else { return };
         // Another member approved a project's heavy commands (X89): the
         // project pages show it.
-        if changes.iter().any(|c| c.kind == "heavy_approval") {
+        if changes.iter().any(|c| c.kind == RecordKind::HeavyApproval.as_str()) {
             d.terminals.emit(Message::event(m::EV_HEAVY_APPROVAL_CHANGED, serde_json::json!({})));
         }
-        if changes.iter().any(|c| c.kind == "worker") {
-            if changes.iter().any(|c| c.kind == "worker" && c.id == me) {
+        let worker = RecordKind::Worker.as_str();
+        if changes.iter().any(|c| c.kind == worker) {
+            if changes.iter().any(|c| c.kind == worker && c.id == me) {
                 d.link.follow_settings();
             }
             d.worker_settings_changed();
@@ -1333,10 +1335,7 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
     // this host takes other hosts' commands.
     // A cloud machine has no account: it runs what its central host passes
     // on, as it runs the central host's own commands (X63).
-    let runner_side = matches!(
-        method.as_str(),
-        m::EXEC_PREPARE | m::EXEC_START | m::SYNC_UPDATE | m::SYNC_CLOSING
-    );
+    let runner_side = crate::relay::TO_RUNNER.contains(&method.as_str());
     // A cloud machine the central host offered calls back only as the
     // runner of this member's command.
     let name = if me.cloud || (!runner_side && sync.was_offered(&from)) {
@@ -1347,7 +1346,7 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
             .remove(&from)
             .ok_or_else(|| RpcError::new("forbidden", "not a member of this account"))?
     };
-    if runner_side && method != m::SYNC_CLOSING && !me.enabled {
+    if runner_side && !matches!(method.as_str(), m::SYNC_CLOSING | m::EXEC_CANCEL) && !me.enabled {
         return Err(RpcError::new("not_approved", "heavy commands are off here"));
     }
     let own_copy = |copy: &str| {

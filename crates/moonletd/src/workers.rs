@@ -199,6 +199,11 @@ impl Workers {
             && !again
         {
             old.conn.close();
+            // What it ran on the old connection is lost (X89).
+            let gone: Vec<_> = self.on_gone.lock().unwrap().clone();
+            for f in &gone {
+                f(&id);
+            }
         }
         self.changed();
         // Registering again on the same connection keeps its ping loop.

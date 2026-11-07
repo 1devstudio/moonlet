@@ -112,6 +112,9 @@ pub struct Runs {
     copies_in_use: Mutex<HashSet<String>>,
     /// What this host runs for other hosts, by connection and run (X89).
     serving: Mutex<HashMap<(ClientId, u32), m::Serving>>,
+    /// Runs cancelled before their start arrived, so a late start never
+    /// runs (X89).
+    cancelled_early: Mutex<HashSet<(ClientId, u32)>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
     /// Why a worker was last skipped for a project, by worker and project,
@@ -193,6 +196,7 @@ impl Runs {
             here_now: Mutex::default(),
             copies_in_use: Mutex::default(),
             serving: Mutex::default(),
+            cancelled_early: Mutex::default(),
             going: Mutex::default(),
             skips: Mutex::default(),
             base_env,
@@ -715,14 +719,20 @@ impl Runs {
         };
         // With the project's identity: its ready cloud machines too.
         let peers = serde_json::to_value(m::WorkerPeers { identity: plan.identity.clone() }).unwrap();
-        let (central, others) = tokio::join!(
-            ask(m::WORKER_STATUS, serde_json::json!({})),
-            ask(m::WORKER_PEERS, peers)
-        );
-        let central = central.and_then(|v| serde_json::from_value::<m::WorkerStatus>(v).ok());
+        // `worker.status`'s own round trip is this host's to the central
+        // host, which a member reached through it adds to its own (X89).
+        let asked = std::time::Instant::now();
+        let central = ask(m::WORKER_STATUS, serde_json::json!({})).await;
+        let leg = asked.elapsed().as_millis() as u64;
+        let others = ask(m::WORKER_PEERS, peers).await;
+        let central = central
+            .and_then(|v| serde_json::from_value::<m::WorkerStatus>(v).ok())
+            .map(|s| m::WorkerStatus { rtt_ms: Some(leg), ..s });
         let others = others
             .and_then(|v| serde_json::from_value::<Vec<m::WorkerStatus>>(v).ok())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| m::WorkerStatus { rtt_ms: Some(s.rtt_ms.unwrap_or(0) + leg), ..s });
         central
             .into_iter()
             .chain(others)
@@ -917,6 +927,8 @@ impl Runs {
             outputs: plan.outputs.clone(),
             session_name: Some(plan.session_name.clone()),
         };
+        // A link that connects again lost the run: it runs elsewhere (X89).
+        let generation = conn.generation();
         let started = conn
             .request(
                 m::EXEC_START,
@@ -925,6 +937,14 @@ impl Runs {
             )
             .await;
         if let Err(e) = started {
+            // A start that timed out may still arrive: it is cancelled
+            // before the next machine runs the command, so it never runs
+            // twice (X89).
+            if e.code == "timeout" {
+                let _ = conn
+                    .request(m::EXEC_CANCEL, serde_json::json!({ "run": run }), Duration::from_secs(10))
+                    .await;
+            }
             self.remote.lock().unwrap().remove(&run);
             return Err(Fail::Refused(e.code, e.message));
         }
@@ -975,6 +995,7 @@ impl Runs {
                 }
                 _ = tick.tick() => {
                     let gone = conn.is_gone()
+                        || conn.generation() != generation
                         || match &conn {
                             Peer::Conn(c) => workers.conn(worker).is_none_or(|w| w.id != c.id),
                             Peer::Link(_) => false,
@@ -1246,15 +1267,8 @@ impl Runs {
                     "this machine has not approved the project's heavy commands",
                 )
             })?;
-            let command = req
-                .argv
-                .iter()
-                .map(|w| crate::heavy::quote(w))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let words_ok =
-                !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
-            if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
+            // The same check the central host makes for a cloud machine (X89).
+            if !crate::heavy::runs_approved(&req.argv, &req.env, Some(&approved)) {
                 return Err(RpcError::new(
                     "not_approved",
                     "not an approved heavy command here",
@@ -1268,6 +1282,9 @@ impl Runs {
         // checked, and given back on every refusal and at the end.
         let claim = {
             let mut routed = self.routed.lock().unwrap();
+            if self.cancelled_early.lock().unwrap().remove(&(from, req.run)) {
+                return Err(RpcError::new("stopped", "that run was cancelled"));
+            }
             if routed.contains_key(&(from, req.run)) {
                 return Err(RpcError::new("busy", "that run is going on"));
             }
@@ -1451,7 +1468,17 @@ impl Runs {
     /// `exec.cancel` from the host that routed run `run` here, on the
     /// connection `from` it came on.
     pub fn cancel_here(&self, from: ClientId, run: u32) -> bool {
-        match self.routed.lock().unwrap().get(&(from, run)) {
+        let routed = self.routed.lock().unwrap();
+        if !routed.contains_key(&(from, run)) {
+            // Its start may still come: it never runs then. A cancel of a
+            // run that already ended lands here too; a few are kept.
+            let mut early = self.cancelled_early.lock().unwrap();
+            if early.len() >= 256 {
+                early.clear();
+            }
+            early.insert((from, run));
+        }
+        match routed.get(&(from, run)) {
             Some(n) => {
                 n.notify_one();
                 true

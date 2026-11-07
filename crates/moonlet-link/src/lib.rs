@@ -160,6 +160,9 @@ pub struct Host {
     /// Packs the daemon sent, by transfer id, for its requests (X60).
     packs: Mutex<PackAssembler>,
     next_transfer: AtomicU32,
+    /// How many times the link connected: a run that started on one
+    /// connection is lost when another one replaced it (X89).
+    connections: AtomicU64,
     batch: Mutex<Vec<u8>>,
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
@@ -225,6 +228,7 @@ impl Host {
             requests: Mutex::new(None),
             packs: Mutex::new(PackAssembler::default()),
             next_transfer: AtomicU32::new(1),
+            connections: AtomicU64::new(0),
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
@@ -276,6 +280,12 @@ impl Host {
         link.tx
             .send(bytes)
             .map_err(|_| RpcError::new("disconnected", "connection closed"))
+    }
+
+    /// Which connection of the link this is: it changes each time the link
+    /// connects again (X89).
+    pub fn connection(&self) -> u64 {
+        self.connections.load(Ordering::SeqCst)
     }
 
     /// What answers the daemon's requests from now on (X41).
@@ -603,6 +613,7 @@ async fn run_link(
     // A pack cut off by the last link will never be whole.
     *host.packs.lock().unwrap() = PackAssembler::default();
     *host.link.lock().unwrap() = Some(Link { tx, urgent });
+    host.connections.fetch_add(1, Ordering::SeqCst);
     // Fetch home for path display; ignore failures.
     let h2 = host.clone();
     host.rt.spawn(async move {
