@@ -97,7 +97,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
   (`picks_as_in_the_mesh_order_table`)
 - [x] The central host's own sessions pick in the same order. For them, the central host is H. The order of X62's table is unchanged: a linked member with `heavy` on comes before the central host. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
 - [x] A command never waits for a slot. When no candidate is free, it runs on H, and a project that allows cloud overflow gets a machine for the next command (X63).
-- [ ] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy`, and the session's host tries the next candidate. It never refuses its own sessions' commands, as they have nowhere else to go. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`)
+- [x] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy`, and the session's host tries the next candidate. It never refuses its own sessions' commands, as they have nowhere else to go. A member also sees the central host's slots in use in `worker.status`, so a full central host is not asked at all. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`, `slots_count_every_routed_command_a_host_runs`)
 - [ ] Two sessions' hosts may pick the same member at once. The member takes what its slots allow, refuses the rest with `busy`, and each session's host goes on to its next candidate. (`two_hosts_picking_one_slot_run_one_there_and_one_elsewhere`)
 
 ### Reaching another member
@@ -115,7 +115,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 
 - [ ] A host keeps a routing copy of another host's session at `$MOONLET_HOME/runs/<the session's host>/<project>/<session>/`, as X62 does for its central host. It is made, fenced and brought back as X62 says, with the session's host in the central host's place. (`a_members_session_runs_its_heavy_command_on_the_central_host`)
 - [x] Setup in a routing copy follows X62: on a Mac, the user approves the exact setup command once per project and session's host. Until then the Mac refuses with `setup_pending`. The command is the one in the session's host's main checkout (X90), sent with `exec.prepare` as `setup`, since a copy made from git may have no `.moonlet/config.toml`; a copy falls back to its own config's when none is sent. (`a_routing_copy_runs_the_setup_of_the_sessions_main_checkout`)
-- [ ] A routing copy for another host is removed:
+- [x] A routing copy for another host is removed:
   - when that session is archived: the session's host sends `sync.closing` to each machine it routed the session to;
   - when this host turns `heavy` off;
   - when the session's host leaves the account;

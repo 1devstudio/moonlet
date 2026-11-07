@@ -837,3 +837,96 @@ async fn a_routing_copy_runs_the_setup_of_the_sessions_main_checkout() {
     .await;
     assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
 }
+
+/// studio-mini's routing copies, the folders under its `runs/`.
+fn mini_copies(mini: &Daemon) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut dirs = vec![mini.home.path().join("runs")];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.join(".git").exists() {
+                out.push(p);
+            } else if p.is_dir() && p.file_name().is_some_and(|n| n != "repos") {
+                dirs.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn archiving_a_members_session_removes_its_routing_copies_on_other_hosts() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(
+        ran.stderr.starts_with("moonlet: running on studio-mini\n"),
+        "{ran:?}"
+    );
+    assert_eq!(mini_copies(&mini).len(), 1);
+    let _: Value = book
+        .call(
+            "session.archive",
+            json!({ "id": session["id"], "force": true }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "studio-mini's copy gone",
+        || async { mini_copies(&mini).is_empty() },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    let _: bool = book
+        .call(
+            "worker.settings.set",
+            json!({ "worker": MINI, "heavy": true, "slots": 1 }),
+        )
+        .await;
+    within(Duration::from_secs(3), "studio-mini's one slot", || async {
+        own(&mini).await == (true, 1)
+    })
+    .await;
+    // studio-mini runs a command of its own session: its one slot is taken.
+    let on_mini = shop_on(&mini, repo.path()).await;
+    std::fs::write(
+        mini.home.path().join("src/shop/.moonlet/config.toml"),
+        RUN_HEAVY,
+    )
+    .unwrap();
+    let _: Value = mini
+        .call(
+            "heavy.approve",
+            json!({ "project": on_mini, "commands": ["sh -c", "pnpm check"], "env": [] }),
+        )
+        .await;
+    let own_session: Value = mini
+        .call(
+            "session.create",
+            json!({ "project_id": on_mini, "name": "Own" }),
+        )
+        .await;
+    let mut c = mini.app().await;
+    let _: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": own_session["id"], "argv": ["sh", "-c", "sleep 5"], "cwd": own_session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    // Not asked at all: worker.status said its one slot was taken.
+    let st: Value = book.call("exec.status", json!({})).await;
+    assert_eq!(st["skips"], json!([]), "{st}");
+}
