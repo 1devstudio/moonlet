@@ -1043,6 +1043,54 @@ async fn a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status
     assert!(!c.worktree.join("package.json").exists());
 }
 
+/// A background Bash call's `moonlet exec` can be killed outright when
+/// Claude Code stops it (X90): its connection closes, and the run on the
+/// worker stops and still brings its changes back.
+#[tokio::test]
+async fn a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back() {
+    let (c, _mac) = linked().await;
+    let (mut client, _run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "echo x > before.txt; echo started; sleep 30; touch after.txt",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        let f = tokio::time::timeout(Duration::from_secs(20), client.next_frame())
+            .await
+            .expect("the run never started")
+            .unwrap()
+            .unwrap();
+        if matches!(&f, Frame::RunOutput { stream: 1, data, .. } if data.starts_with(b"started")) {
+            break;
+        }
+    }
+    drop(client);
+    let mut job = Value::Null;
+    for _ in 0..200 {
+        job = jobs(&c).await[0].clone();
+        if ["done", "stopped"].contains(&job["state"]["kind"].as_str().unwrap_or_default()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Well before the command's 30 s sleep would have ended.
+    assert!(
+        ["done", "stopped"].contains(&job["state"]["kind"].as_str().unwrap_or_default()),
+        "the run went on: {job}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("before.txt")).unwrap(),
+        "x\n"
+    );
+    assert!(!c.worktree.join("after.txt").exists());
+}
+
 #[tokio::test]
 async fn a_commit_made_by_the_run_moves_the_sessions_branch() {
     let (c, _mac) = linked().await;
