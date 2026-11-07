@@ -142,7 +142,7 @@ GitHub goes through the daemon, because `gh` runs on the project's host:
   - `[github]`, `[linear]`, `[jira]`, `[clickup]`: `branch_template` (empty for the default) and `max_length`, and the Keep in step rules under `[<tracker>.rules]`. Rules and branch names are per tracker, not per connection.
   - `[link]`: `branch`, `pr`, `title`.
   - `[[connections]]`: `id`, `kind`, `site`, `account`, `auth` (`api_key`, `token` or `oauth`), never the token; `[[connections.sources]]` with `key`, `name` and `workspace`; `[connections.states]` mapping a state name to a column.
-- Tokens: Keychain generic passwords, service `dev.onedevstudio.moonlet.trackers`, account `<connection id>`. A Linear OAuth sign-in is kept as its access token, refresh token and expiry. e2e builds, and builds for other systems, keep tokens in `~/.moonlet/secrets.json`, readable only by the user.
+- Tokens: one Keychain generic password, service `dev.onedevstudio.moonlet.trackers`, account `tokens`, a JSON object from connection id to token, read once per start (X91; before X91, one item per connection, account `<connection id>`). A Linear OAuth sign-in is kept as its access token, refresh token and expiry. e2e builds, and builds for other systems, keep tokens in `~/.moonlet/secrets.json`, readable only by the user.
 
 ## Security considerations
 
