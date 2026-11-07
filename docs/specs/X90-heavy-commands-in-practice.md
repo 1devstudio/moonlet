@@ -1,6 +1,6 @@
 # X90 — Heavy commands in practice: the project's list, long runs and full output
 
-- **Status:** draft
+- **Status:** implemented (untried in a real session)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md)
@@ -49,11 +49,11 @@ With this spec:
 
 ### Full output
 
-- [ ] Every job keeps its output as plain text in `$MOONLET_HOME/jobs/<session>/<job>.log`, mode 0600: stdout and stderr in the order they came, ANSI escapes kept, `moonlet:` lines included. The same limit as the job's stored output applies: past 10 MiB the middle is dropped and replaced by "moonlet: 3.2 MB of output dropped here". After a rerun, each run's output is there, with X62's separator line between them. (`a_jobs_whole_output_is_in_its_log_file`, `a_log_over_ten_mib_keeps_its_start_and_end`)
-- [ ] The file is removed with its job, when the job leaves the history of 50, or when the session is archived. (`a_jobs_log_goes_with_the_job`)
-- [ ] `moonlet exec`'s last stderr line, after everything else moonlet says, reads `moonlet: full output in <path>`, with `~` for the home folder. It is printed for every job, routed or run on the session's own host, because moonlet cannot tell when Claude Code will cut an output short. (`moonlet_exec_ends_with_the_full_outputs_path`)
-- [ ] `job.list` and `job.output` stay refused to the `moonlet` CLI. The log file is the agent's way to the whole output.
-- [ ] The chat's Bash row and the job tab show the line like any other `moonlet:` line, in the accent colour (X62).
+- [x] Every job keeps its output as plain text in `$MOONLET_HOME/jobs/<session>/<job>.log`, mode 0600: stdout and stderr in the order they came, ANSI escapes kept, `moonlet:` lines included. The same limit as the job's stored output applies: past 10 MiB the middle is dropped and replaced by "moonlet: 3.2 MB of output dropped here". After a rerun, each run's output is there, with X62's separator line between them. (`a_jobs_whole_output_is_in_its_log_file`, `a_log_over_ten_mib_keeps_its_start_and_end`)
+- [x] The file is removed with its job, when the job leaves the history of 50, or when the session is archived. (`a_jobs_log_goes_with_the_job`)
+- [x] `moonlet exec`'s last stderr line, after everything else moonlet says, reads `moonlet: full output in <path>`, with `~` for the home folder. It is printed for every job, routed or run on the session's own host, because moonlet cannot tell when Claude Code will cut an output short. (`moonlet_exec_ends_with_the_full_outputs_path`)
+- [x] `job.list` and `job.output` stay refused to the `moonlet` CLI. The log file is the agent's way to the whole output.
+- [x] The chat's Bash row shows the line like any other `moonlet:` line, in the accent colour (X62). The job's own output never holds it: `moonlet exec` prints it after the job has ended.
 
 ## UI
 
