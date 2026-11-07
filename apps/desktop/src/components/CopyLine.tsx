@@ -3,36 +3,33 @@
 // take the session over (X73).
 
 import { useState } from "react";
-import { continueFailed, continueOffer, continueWait, readOnlyLine } from "../lib/centralCopies";
+import { continueOffer, continueWait, readOnlyLine } from "../lib/centralCopies";
 import { parseCopyHost } from "../lib/copyHost";
-import { rpc } from "../lib/daemon";
-import { M } from "../lib/protocol";
-import { selectSession, toast, useStore } from "../lib/store";
+import type { Session } from "../lib/protocol";
+import { continueHere, useStore } from "../lib/store";
 import { useSync } from "../lib/syncStore";
 import { useNow } from "../lib/useNow";
 import { Button } from "./ui";
 
-export function CopyLine({ host }: { host: string }) {
-  const copy = parseCopyHost(host);
-  const s = useStore((st) => (copy ? st.sessions[host]?.[0] : undefined));
+/** The copy opened under `host` (X86), this Mac's name, and the read-only
+ * line while its member is away; no session for any other host. */
+export function useCopyReadOnly(host: string): { session?: Session; here: string; line: string | null } {
+  const session = useStore((st) => (parseCopyHost(host) ? st.sessions[host]?.[0] : undefined));
   const here = useSync((st) => st.meName) ?? "this Mac";
+  return { session, here, line: session ? readOnlyLine(session, here) : null };
+}
+
+export function CopyLine({ host }: { host: string }) {
+  const { session: s, here, line } = useCopyReadOnly(host);
   const [busy, setBusy] = useState(false);
   const now = useNow(!!s && continueWait(s, Date.now()) > 0);
-  if (!copy || !s) return null;
-  const line = readOnlyLine(s, here);
-  if (!line) return null;
+  if (!s || !line) return null;
   const offer = continueOffer(s, here, now);
   const ready = !!offer && continueWait(s, now) === 0;
   const go = async () => {
     setBusy(true);
-    try {
-      await rpc("local", M.sessionContinueHere, { session: s.id });
-      selectSession("local", s.id);
-    } catch (e) {
-      toast(continueFailed(e, s, here), "error");
-    } finally {
-      setBusy(false);
-    }
+    await continueHere(s, here);
+    setBusy(false);
   };
   return (
     <div role="status" className="flex shrink-0 items-center gap-2 border-b border-border px-7 py-1.5 ui-text-12.5 text-muted">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyEntries, copyOffers, copyView, newTabRefused } from "./centralCopies";
+import { copyEntries, copyOffers, copyRefused, copyView } from "./centralCopies";
 import type { Session } from "./protocol";
 
 const s = (id: string, extra: Partial<Session> = {}): Session => ({
@@ -91,7 +91,10 @@ describe("what a copy offers (X86)", () => {
     expect(copyOffers("studio-mini")).toEqual({ files: true, newTabs: true, processes: true, projectSettings: true, setup: true, openIn: true });
   });
 
-  it("says where a new tab opens instead", () => {
-    expect(newTabRefused(s("fix-cart", { owner: book }))).toBe("fix-cart runs on MacBook: open new tabs there.");
+  it("says where to do what a copy does not offer", () => {
+    const copy = s("fix-cart", { owner: book });
+    expect(copyRefused(copy, "open new tabs")).toBe("fix-cart runs on MacBook: open new tabs there.");
+    expect(copyRefused(copy, "run its scripts")).toBe("fix-cart runs on MacBook: run its scripts there.");
+    expect(copyRefused(copy, "change its project settings")).toBe("fix-cart runs on MacBook: change its project settings there.");
   });
 });

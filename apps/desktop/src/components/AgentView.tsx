@@ -109,9 +109,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
-import { parseCopyHost } from "../lib/copyHost";
-import { readOnlyLine } from "../lib/centralCopies";
-import { useSync } from "../lib/syncStore";
+import { useCopyReadOnly } from "./CopyLine";
 import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
 
@@ -1397,9 +1395,7 @@ export function AgentView({
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   // A copy whose member is away is read only (X86).
-  const copySession = useStore((s) => (parseCopyHost(host) ? s.sessions[host]?.[0] : undefined));
-  const here = useSync((s) => s.meName) ?? "this Mac";
-  const copyRefusal = copySession ? readOnlyLine(copySession, here) : null;
+  const copyRefusal = useCopyReadOnly(host).line;
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const toolCalls = useStore((s) => s.settings.toolCalls);
   const blocks = useMemo(() => (st ? chatBlocks(st.items, toolCalls) : []), [st?.items, toolCalls]);
@@ -1486,6 +1482,11 @@ export function AgentView({
   // Another member's session comes here first (X73).
   const sendUser = userSend(sendText, (text, images) => sendOrBring(host, wsId, id, text, images, (t, i) => call(M.chatSend, { text: t, images: i })));
   const send = (text: string, images: ChatImage[]) => {
+    // Suggested replies and the agents strip send here too (X86).
+    if (copyRefusal) {
+      toast(copyRefusal);
+      return;
+    }
     stick.current = true;
     if (revising) {
       setRevise(null);

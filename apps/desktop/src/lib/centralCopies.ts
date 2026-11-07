@@ -50,8 +50,9 @@ export function copyOffers(host: string): { files: boolean; newTabs: boolean; pr
   return { files: ok, newTabs: ok, processes: ok, projectSettings: ok, setup: ok, openIn: ok };
 }
 
-/** Why a new tab does not open in a copy (X86), for a shortcut pressed in it. */
-export const newTabRefused = (s: Session) => `${s.name} runs on ${s.owner?.name ?? "another Mac"}: open new tabs there.`;
+/** Why a copy (X86) does not do `action` when a shortcut or the command
+ * palette asks it to: where to do it instead. */
+export const copyRefused = (s: Session, action: string) => `${s.name} runs on ${s.owner?.name ?? "another Mac"}: ${action} there.`;
 
 /** The line above the composer while the session's member is away. */
 export function readOnlyLine(s: Session, central: string): string | null {

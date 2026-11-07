@@ -5,7 +5,8 @@ import { rpc, sendInput } from "./daemon";
 import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
 import { M, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
 import { killParams, runningLine, stillRunningLine, withRunning } from "./sessionProcesses";
-import { copyOffers, newTabRefused } from "./centralCopies";
+import { copyRefused } from "./centralCopies";
+import { parseCopyHost } from "./copyHost";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
@@ -24,16 +25,17 @@ function current(): { host: string; ws: Session } | null {
   return s.selected && ws ? { host: s.selected.host, ws } : null;
 }
 
-/** The selected session, for opening a new tab in it: none in a copy of
- * another member's session (X86), which says where to open one instead. */
-function forNewTab(): { host: string; ws: Session } | null {
+/** The selected session, to `action` in: none in a copy of another
+ * member's session (X86), which says where to do it instead. */
+function outsideCopies(action: string): { host: string; ws: Session } | null {
   const c = current();
-  if (c && !copyOffers(c.host).newTabs) {
-    toast(newTabRefused(c.ws));
+  if (c && parseCopyHost(c.host)) {
+    toast(copyRefused(c.ws, action));
     return null;
   }
   return c;
 }
+const forNewTab = () => outsideCopies("open new tabs");
 
 async function spawnShell(host: string, ws: Session, cwd?: string): Promise<TerminalInfo> {
   const focused = getLayout(host, ws.id).focused;
@@ -84,7 +86,7 @@ export async function newSessionAgentTab() {
 }
 
 export async function split(dir: "row" | "col") {
-  const c = current();
+  const c = forNewTab();
   if (!c) return;
   const layout = getLayout(c.host, c.ws.id);
   const target = layout.focused;
@@ -279,13 +281,13 @@ export async function setClassic(host: string, id: number, classic: boolean) {
 
 /** Opens Project settings for `target`, or the selected session's project. */
 export function openProjectSettings(target?: { host: string; project: string }, focus?: "run") {
-  const c = current();
+  const c = target ? null : outsideCopies("change its project settings");
   const t = target ?? (c && { host: c.host, project: c.ws.project_id });
   if (t) void goSettings(focus ? { page: "project", host: t.host, id: t.project, focus } : { page: "project", host: t.host, id: t.project });
 }
 
 export async function runScript(script: "run" | "setup") {
-  const c = current();
+  const c = outsideCopies("run its scripts");
   if (!c) return;
   try {
     // No run command yet: offer to set one instead of failing (X8).
