@@ -78,7 +78,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
+import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
@@ -171,13 +171,23 @@ export const Markdown = memo(function Markdown({ text, task = false }: { text: s
   useEffect(() => setLink(null), [html]);
   const open = (url: string) => void openUrl(url).catch(errorToast);
   const anchorOf = (e: React.MouseEvent) => (e.target as HTMLElement).closest("a");
+  /** Copies a code block when the event is on its copy control (X87). */
+  const copyCode = (e: React.SyntheticEvent, key?: string) => {
+    const code = codeToCopy(e.target as Element, key);
+    if (code === null) return false;
+    e.preventDefault();
+    void navigator.clipboard.writeText(code).then(() => toast("Copied code"), errorToast);
+    return true;
+  };
   return (
     <>
       <div
         className={cx("chat-md selectable", task && "task-md")}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
+        onKeyDown={(e) => copyCode(e, e.key)}
         onClick={(e) => {
+          if (copyCode(e)) return;
           const a = anchorOf(e);
           if (!a) return;
           // Links never navigate the app window; ⌘-click or Enter (a click
