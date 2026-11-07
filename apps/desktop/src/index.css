@@ -18,3 +18,14 @@ body,
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* A tab not shown stays mounted under `visibility: hidden` (quietWhen). A
+   descendant that sets its own `visibility: visible`, as Monaco's diff editor
+   does on its two sides, would still paint over the shown tab and take its
+   clicks: hide everything inside, pseudo-elements too (they do not take the
+   property from their element). */
+[data-quiet] *,
+[data-quiet] *::before,
+[data-quiet] *::after {
+  visibility: hidden !important;
+}

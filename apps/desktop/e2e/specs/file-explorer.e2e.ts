@@ -87,12 +87,16 @@ describe("File explorer and changed files", () => {
   /** A diff tab of the main window, by the file's path. */
   const diffTab = (path: string) => `//div[starts-with(@title, ${JSON.stringify(`${path} — `)})][.//button[@title="Close tab"]]`;
 
-  /** Activates a tab. A tab takes mousedown, which the embedded driver's click does not raise. */
-  const activate = (path: string) =>
-    browser.execute((p: string) => {
-      const t = document.evaluate(`//div[starts-with(@title, ${JSON.stringify(`${p} — `)})]`, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+  /** Activates a tab, by an XPath. A tab takes mousedown, which the embedded driver's click does not raise. */
+  const press = (xpath: string) =>
+    browser.execute((x: string) => {
+      const t = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
       t.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    }, path);
+    }, xpath);
+  /** Activates a diff tab, by the file's path. */
+  const activate = (path: string) => press(`//div[starts-with(@title, ${JSON.stringify(`${path} — `)})]`);
+  /** The session's terminal tab: the only tab without a title, as this spec opens no job. */
+  const terminalTab = '//div[not(@title)][button[@title="Close tab"]]';
 
   it("opens a file's diff in a tab of the main window from the keyboard", async () => {
     await browser.execute(() => (document.querySelector('div[role="button"][title="package.json"]') as HTMLElement).focus());
@@ -101,6 +105,17 @@ describe("File explorer and changed files", () => {
     // The right panel keeps the list.
     await expect($(sel.text("2 files changed"))).toBeDisplayed();
     await expect($('button[aria-label="Back to the changed files"]')).not.toBeExisting();
+  });
+
+  it("hides the diff when the session's terminal tab is shown again", async () => {
+    // Monaco sets its diff's sides visible itself, which once showed them over the other tab.
+    const side = $(".monaco-diff-editor .editor.modified");
+    await expect(side).toBeDisplayed({ wait: 15_000 });
+    await press(terminalTab);
+    await expect($(terminalTab)).toHaveAttribute("aria-current", "true");
+    await expect(side).not.toBeDisplayed();
+    await activate("package.json");
+    await expect(side).toBeDisplayed();
   });
 
   it("opens a file's diff from the keyboard with Space too", async () => {
