@@ -27,6 +27,10 @@ use crate::workers::Workers;
 /// that is also this host's worker keys by the same link.
 const FIRST_RELAY: u32 = 0x6000_0000;
 
+/// How long after `exec.prepare` a runner may call its router back without
+/// a run going on: a routing copy is made within the prepare's 10 minutes.
+const PREPARED_FOR: Duration = Duration::from_secs(15 * 60);
+
 /// What a router may ask a runner, and a runner its router: the routing
 /// methods of X62, nothing else.
 const TO_RUNNER: [&str; 5] = [m::EXEC_PREPARE, m::EXEC_START, m::EXEC_CANCEL, m::SYNC_UPDATE, m::SYNC_CLOSING];
@@ -47,8 +51,10 @@ struct Passed {
 pub struct Relay {
     next: AtomicU32,
     runs: Mutex<HashMap<u32, Passed>>,
-    /// Routers and the runners they asked to prepare a routing copy.
-    prepared: Mutex<std::collections::HashSet<Pair>>,
+    /// Routers and the runners they last asked to prepare a routing copy,
+    /// with when: a runner calls its router back only while that is recent
+    /// or a run of that router's goes on there.
+    prepared: Mutex<HashMap<Pair, std::time::Instant>>,
 }
 
 impl Relay {
@@ -101,18 +107,21 @@ impl Relay {
                 if wanted.as_deref() != Some(key.as_str()) {
                     return Err(RpcError::new("forbidden", "a cloud machine runs commands of its own project only"));
                 }
-            } else if !self.prepared.lock().unwrap().contains(&(from.clone(), to.clone())) {
+            } else if !self.prepared_lately(&from, &to) {
                 return Err(RpcError::new("forbidden", format!("{from} routed nothing to {to}")));
             }
         } else if !workers.list().iter().any(|w| w.worker.id == to && w.worker.peer) {
             return Err(unsupported());
         }
         // A runner calls back only a router that asked it to run something.
-        if !runner_side && !self.prepared.lock().unwrap().contains(&(to.clone(), from.clone())) {
+        if !runner_side && !self.prepared_lately(&to, &from) && !self.runs_for(&to, &from) {
             return Err(RpcError::new("forbidden", format!("{to} routed nothing to {from}")));
         }
         if method == m::EXEC_PREPARE {
-            self.prepared.lock().unwrap().insert((from.clone(), to.clone()));
+            self.prepared
+                .lock()
+                .unwrap()
+                .insert((from.clone(), to.clone()), std::time::Instant::now());
         }
         let mut params = call.params;
         // The relay run an `exec.done` ends.
@@ -193,6 +202,23 @@ impl Relay {
             reply["pack"] = Value::from(conn.send_pack(&pack)?);
         }
         Ok(reply)
+    }
+
+    /// Whether `router` asked `runner` to prepare a copy in the last
+    /// [`PREPARED_FOR`]; older entries go.
+    fn prepared_lately(&self, router: &str, runner: &str) -> bool {
+        let mut prepared = self.prepared.lock().unwrap();
+        prepared.retain(|_, at| at.elapsed() < PREPARED_FOR);
+        prepared.contains_key(&(router.to_string(), runner.to_string()))
+    }
+
+    /// Whether a run of `router`'s goes on on `runner` now.
+    fn runs_for(&self, router: &str, runner: &str) -> bool {
+        self.runs
+            .lock()
+            .unwrap()
+            .values()
+            .any(|p| p.router_id == router && p.runner == runner)
     }
 
     /// Output of relay run `id` from the member that runs it, on `from`:

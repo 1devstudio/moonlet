@@ -1917,7 +1917,40 @@ impl Daemon {
                 } else {
                     self.member_on(conn)?.0
                 };
-                let r: m::PeerCall = params(p)?;
+                let mut r: m::PeerCall = params(p)?;
+                // A cloud machine runs what its central host passes on
+                // without an approval of its own (X63): the central host
+                // checks a member's command against the account's approval
+                // of the machine's project, and gives its own setup (X89).
+                if let Some(to) = r.to.as_deref()
+                    && let Some(key) = self.machines.key_of_worker(to)
+                {
+                    let project = self
+                        .sessions
+                        .list_projects()
+                        .into_iter()
+                        .find(|p| crate::heavy::key(&p.identity).as_deref() == Some(key.as_str()))
+                        .ok_or_else(|| RpcError::new("forbidden", "this host does not have the machine's project"))?;
+                    match r.method.as_str() {
+                        m::EXEC_START => {
+                            let start: m::ExecStart = serde_json::from_value(r.params.clone())
+                                .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                            let approved = self.heavy.approval(&project.identity).map_err(internal)?;
+                            if !crate::heavy::runs_approved(&start.argv, &start.env, approved.as_ref()) {
+                                return Err(RpcError::new("not_approved", "not an approved heavy command of the machine's project"));
+                            }
+                        }
+                        m::EXEC_PREPARE => {
+                            let config = moonlet_core::project_config::load(Path::new(&project.path), project.base_branch.clone());
+                            r.params["setup"] = config
+                                .config
+                                .setup
+                                .filter(|c| !c.trim().is_empty())
+                                .map_or(Value::Null, Value::from);
+                        }
+                        _ => {}
+                    }
+                }
                 ok(self.relay.call(&self.workers, &self.machines, conn, from, cloud, r).await?)
             }
             // The members a member may route a command to through this

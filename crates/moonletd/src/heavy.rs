@@ -335,6 +335,17 @@ pub(crate) fn key(id: &ProjectIdentity) -> Option<String> {
     Some(format!("{origin} {root}"))
 }
 
+/// Whether `argv`, with `env`'s names, is a command `approved` covers: the
+/// check a runner makes, and the central host for a cloud machine it
+/// passes a member's command on to (X89).
+pub fn runs_approved(argv: &[String], env: &BTreeMap<String, String>, approved: Option<&HeavyApproval>) -> bool {
+    let Some(approved) = approved else { return false };
+    let command = argv.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ");
+    !argv.is_empty()
+        && heavy::route(&command, &approved.commands).is_some()
+        && env.keys().all(|k| approved.env.contains(k))
+}
+
 /// `w` as one word for a POSIX shell: as it is when it holds nothing a
 /// shell reads, in single quotes otherwise.
 pub fn quote(w: &str) -> String {

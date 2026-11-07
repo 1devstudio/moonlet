@@ -2708,13 +2708,15 @@ async fn a_cloud_machine_takes_a_members_command_of_its_own_project_only() {
             Some("forbidden".to_string())
         );
     }
-    // Nor anything but preparing first.
-    let call = json!({ "to": worker, "method": "exec.start", "params": { "run": 1 } });
+    // Nor a command the account did not approve for the project.
+    let call = json!({ "to": worker, "method": "exec.start", "params": {
+        "run": 1, "copy": "x", "argv": ["sh", "run.sh"], "cwd": "", "env": {}, "tree": "", "head": "", "session_path": "", "outputs": []
+    } });
     assert_eq!(
         ask_link(&mut s, 4, "peer.call", call)
             .await
             .map(|(code, _)| code),
-        Some("forbidden".to_string())
+        Some("not_approved".to_string())
     );
 }
 
@@ -2774,5 +2776,48 @@ async fn a_members_cloud_session_waits_for_the_central_hosts_machine() {
         lines.last().copied(),
         Some(format!("moonlet: running on {name}").as_str()),
         "{err}"
+    );
+}
+
+#[tokio::test]
+async fn the_central_host_checks_a_members_command_for_a_cloud_machine_against_the_accounts_approval()
+ {
+    let c = cloud().await;
+    let machine = c.ready().await;
+    let worker = machine["worker"].as_str().unwrap().to_string();
+    // The MacBook approved `sh -c` for the account.
+    let (_book, _session) = busy_member(&c).await;
+    for _ in 0..100 {
+        let info: Value = c.d.call("heavy.get", json!({ "project": c.project })).await;
+        if info["approved"]["commands"] == json!(["sh -c"]) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // A member's daemon, by hand, that skips its own check.
+    let token = pair(&c.d, &c.addr, "Maya's Mac", DeviceKind::Desktop).await;
+    let mut s = worker_link(&c.addr, &token).await;
+    let start = |argv: Value| {
+        json!({ "to": worker, "method": "exec.start", "params": {
+            "run": 1, "copy": "x", "argv": argv, "cwd": "", "env": {}, "tree": "", "head": "", "session_path": "", "outputs": []
+        } })
+    };
+    assert_eq!(
+        ask_link(
+            &mut s,
+            2,
+            "peer.call",
+            start(json!(["rm", "-rf", "/tmp/x"]))
+        )
+        .await
+        .map(|(code, _)| code),
+        Some("not_approved".to_string())
+    );
+    // An approved one still needs the machine prepared for it first.
+    assert_eq!(
+        ask_link(&mut s, 3, "peer.call", start(json!(["sh", "-c", "true"])))
+            .await
+            .map(|(code, _)| code),
+        Some("forbidden".to_string())
     );
 }
