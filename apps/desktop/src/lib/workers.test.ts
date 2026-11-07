@@ -251,6 +251,13 @@ describe("every member's worker settings on the Workers page (X89)", () => {
     expect(page.rows[0].slots).toBe("2 of 2");
   });
 
+  it("a host's slots in use are what it reports, its own sessions' commands too", () => {
+    // The Air runs one command for the MacBook and two of its own.
+    const air = worker("air", "Alex's MacBook Air", { slots: 4, used: 3, running: [{ host: "Alex's MacBook Pro", session: "Fix cart", command: "pnpm check", started_at: 1 }] });
+    const page = workersPage({ workers: [air], status: status(), me: null, sessions, settings: [entry("mini", "studio-mini", true), entry("air", "Alex's MacBook Air", true, 4)] });
+    expect(page.rows[0].slots).toBe("3 of 4");
+  });
+
   it("says what a change of the switch or slots did", () => {
     expect(settingsToast("studio-mini", { heavy: true })).toBe("studio-mini takes heavy commands from your other hosts");
     expect(settingsToast("studio-mini", { heavy: false })).toBe("studio-mini no longer takes heavy commands from your other hosts");

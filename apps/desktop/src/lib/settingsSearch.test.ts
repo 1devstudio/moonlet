@@ -218,7 +218,12 @@ describe("heavy commands in the search (X62)", () => {
       ["Cloud workers", "Machines › Cloud workers", undefined],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
     ]);
-    expect(found("run at most")).toEqual([["Run at most", "Machines › Hosts", "heavy-slots"]]);
+    expect(found("run at most")).toEqual([
+      ["Run at most", "Machines › Hosts", "heavy-slots"],
+      ["Every host's switch and slots", "Machines › Workers", undefined],
+    ]);
+    // Every host's switch and slots, set from the Workers page (X89).
+    expect(found("every host")).toEqual([["Every host's switch and slots", "Machines › Workers", undefined]]);
     expect(found("heavy commands")).toEqual([
       ["Takes heavy commands from other hosts", "Machines › Hosts", "heavy-commands"],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
