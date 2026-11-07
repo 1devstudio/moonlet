@@ -297,15 +297,47 @@ async fn moonlet_exec_in_a_session_runs_through_its_daemon() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "out\n");
-    assert_eq!(
-        String::from_utf8_lossy(&out.stderr),
-        "moonlet: running on studio-mini\nerr\n"
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.starts_with("moonlet: running on studio-mini\nerr\nmoonlet: full output in "),
+        "{err}"
     );
     assert_eq!(out.status.code(), Some(4));
     // A command the daemon will not run runs here, as without moonlet.
     let out = exec_in(&s, &["echo", "here"]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "here\n");
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+}
+
+#[tokio::test]
+async fn moonlet_exec_ends_with_the_full_outputs_path() {
+    let s = approved_shop().await;
+    // The daemon's home is the agent's home here, so the path reads with `~`.
+    let out = exec_in(&s, &["sh", "-c", "echo out; echo err >&2"])
+        .env("HOME", s.home.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let mut app = Client::connect_app(&s.socket, s.home.path()).await.unwrap();
+    let jobs: Value = app
+        .request("job.list", json!({ "session": s.session }))
+        .await
+        .unwrap();
+    let id = jobs[0]["id"].as_str().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.ends_with(&format!(
+            "\nmoonlet: full output in ~/jobs/{}/{id}.log\n",
+            s.session
+        )),
+        "{err}"
+    );
+    let log = std::fs::read_to_string(s.home.path().join(format!("jobs/{}/{id}.log", s.session)))
+        .unwrap();
+    assert!(
+        log.starts_with("moonlet: running on studio-mini\n"),
+        "{log}"
+    );
 }
 
 /// Starts `moonlet exec` on a long command and waits until it printed

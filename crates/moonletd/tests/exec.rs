@@ -1943,6 +1943,111 @@ async fn output_over_ten_mib_keeps_its_start_and_end() {
     );
 }
 
+/// The log file `exec.exited` names when run `run` ends (X90).
+async fn exited_log(mut c: Client, run: u32) -> PathBuf {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(20), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .expect("the daemon closed the connection");
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "exec.exited"
+            && data["run"] == json!(run)
+        {
+            return PathBuf::from(data["log"].as_str().expect("no log in exec.exited"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_jobs_whole_output_is_in_its_log_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "echo one; sleep 0.3; echo two >&2; sleep 0.3; printf '\\033[31mthree\\033[0m\\n'",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let log = exited_log(client, run).await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        log,
+        c.daemon
+            .home
+            .path()
+            .join("jobs")
+            .join(&c.session)
+            .join(format!("{id}.log"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "moonlet: running on studio-mini\none\ntwo\n\u{1b}[31mthree\u{1b}[0m\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[tokio::test]
+async fn a_log_over_ten_mib_keeps_its_start_and_end() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOB_OUTPUT_MAX", "1000")]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "i=0; while [ $i -lt 300 ]; do echo line$i; i=$((i+1)); done",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let log = std::fs::read_to_string(exited_log(client, run).await).unwrap();
+    assert!(
+        log.starts_with("moonlet: running on studio-mini\nline0\nline1\n"),
+        "{log}"
+    );
+    assert!(log.ends_with("line298\nline299\n"), "{log}");
+    assert!(log.len() < 1200, "{}", log.len());
+    assert!(
+        log.lines()
+            .any(|l| l.starts_with("moonlet: ") && l.ends_with(" of output dropped here")),
+        "{log}"
+    );
+}
+
+#[tokio::test]
+async fn a_jobs_log_goes_with_the_job() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOBS_KEPT", "1")]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(&["sh", "run.sh"], &c.worktree.clone(), json!({}))
+        .await;
+    let first = exited_log(client, run).await;
+    assert!(first.exists());
+    let (client, run) = c
+        .start(&["sh", "run.sh"], &c.worktree.clone(), json!({}))
+        .await;
+    let second = exited_log(client, run).await;
+    assert!(!first.exists(), "the dropped job's log stayed");
+    assert!(second.exists());
+    let _: Value = c
+        .daemon
+        .call("session.archive", json!({ "id": c.session, "force": true }))
+        .await;
+    assert!(!second.exists(), "the archived session's log stayed");
+}
+
 #[tokio::test]
 async fn a_jobs_phases_and_timeline_after_a_rerun() {
     let (c, mac) = linked().await;
