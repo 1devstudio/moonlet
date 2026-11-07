@@ -472,6 +472,23 @@ body:not(.kbd-nav) button:focus {
 .chat-md code { font: calc(12.5px * var(--ui-scale, 1)) var(--font-mono); background: var(--color-raised); padding: 0.1em 0.35em; border-radius: 4px; }
 .chat-md pre { background: #181818; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; overflow: auto; }
 .chat-md pre code { background: none; padding: 0; font-size: calc(12.5px * var(--ui-scale, 1)); line-height: 1.5; }
+/* A code block's copy control (X87): shown on hover or focus, always on touch screens. */
+.chat-md :where(.code-block) { position: relative; margin: 0.55em 0; }
+.chat-md .code-block > pre { margin: 0; }
+.code-copy {
+  position: absolute; top: 5px; right: 5px; z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  color: var(--color-muted); background: #181818; border: 1px solid var(--color-border);
+  opacity: 0; transition: opacity 120ms ease;
+}
+.code-copy::before {
+  content: ""; width: 12px; height: 12px; background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+.code-block:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+.code-copy:hover { color: var(--color-fg); background: var(--color-hover); }
+@media (hover: none) { .code-copy { opacity: 1; } }
 .chat-md blockquote { padding: 0 1em; color: var(--color-muted); border-left: 3px solid var(--color-border-strong); }
 .chat-md table { border-collapse: collapse; display: block; overflow: auto; }
 .chat-md th, .chat-md td { border: 1px solid var(--color-border-strong); padding: 4px 10px; }

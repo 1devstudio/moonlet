@@ -328,6 +328,24 @@ chatMd.core.ruler.push("task_checklists", (state) => {
   });
 });
 
+// Every code block gets a copy control in its corner (X87). It is a span
+// because the sanitizer forbids buttons; its icon comes from the stylesheet.
+const COPY_CONTROL = '<span class="code-copy" role="button" tabindex="0" aria-label="Copy code" title="Copy code"></span>';
+for (const rule of ["fence", "code_block"] as const) {
+  const render = chatMd.renderer.rules[rule]!;
+  chatMd.renderer.rules[rule] = (tokens, idx, options, env, self) => `<div class="code-block">${COPY_CONTROL}${render(tokens, idx, options, env, self)}</div>\n`;
+}
+
+/**
+ * The code a click on chat Markdown copies (X87): the block's code as
+ * written, without the newline that ends it, when the click is on a copy
+ * control; null for anything else.
+ */
+export function codeToCopy(target: Element | null): string | null {
+  const code = target?.closest(".code-copy")?.closest(".code-block")?.querySelector("pre code");
+  return code ? (code.textContent ?? "").replace(/\n$/, "") : null;
+}
+
 // Chat shows no images (nothing remote loads); a task's description shows
 // each as a link to it, named by its alt text.
 const defaultImage = chatMd.renderer.rules.image!;
