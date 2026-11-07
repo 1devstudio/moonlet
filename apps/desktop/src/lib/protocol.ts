@@ -1645,6 +1645,7 @@ export const EV = {
   syncChanged: "sync.changed",
   workersChanged: "workers.changed",
   workerSettingsChanged: "worker.settings_changed",
+  heavyApprovalChanged: "heavy.approval_changed",
   jobChanged: "job.changed",
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",

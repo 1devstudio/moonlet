@@ -33,7 +33,9 @@ export function approvalScope(
   info: HeavyInfo,
   targets: { id: string; label: string }[],
 ): { approveOn: { id: string; label: string }[]; banner: string[]; toast: string[] | null } {
-  if (info.account) return { approveOn: targets.slice(0, 1), banner: ["every host of your account that takes heavy commands"], toast: ["every host of your account"] };
+  // Workers from before X89 still keep their own approval: Approve goes to
+  // each as before, and names the ones it could not reach.
+  if (info.account) return { approveOn: targets, banner: ["every host of your account that takes heavy commands"], toast: ["every host of your account"] };
   return { approveOn: targets, banner: targets.map((t) => t.label), toast: null };
 }
 
@@ -57,7 +59,6 @@ export async function approveHeavy(
   const lists = { commands: info.config.commands, env: info.config.env };
   const next = await rpc<HeavyInfo>(host, M.heavyApprove, { project: id, ...lists });
   const scope = approvalScope(next, approvalTargets(host, hosts, links));
-  if (scope.toast) return { info: next, toast: approvedToast(project.name, lists.commands, scope.toast, []) };
   const [first, ...workers] = scope.approveOn;
   const machines = [first.label];
   const unreachable: string[] = [];
@@ -70,5 +71,5 @@ export async function approveHeavy(
       (ok ? machines : unreachable).push(w.label);
     }
   }
-  return { info: next, toast: approvedToast(project.name, lists.commands, machines, unreachable) };
+  return { info: next, toast: approvedToast(project.name, lists.commands, scope.toast ?? machines, unreachable) };
 }

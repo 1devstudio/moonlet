@@ -3719,7 +3719,8 @@ impl LiveCopies {
     }
 
     /// What is approved of the project routing copy `copy` is of: the
-    /// account's approval, once for every member (X89), else what this
+    /// account's approval, once for every member (X89), and only it while
+    /// this machine shares its central host's account; else what this
     /// worker approved for its central host (X62).
     pub fn heavy_approval(&self, copy: &str) -> Option<m::HeavyApproval> {
         let k = self.kept(copy)?;
@@ -3728,10 +3729,11 @@ impl LiveCopies {
         // for a copy of this machine's own central host, the host whose
         // account this machine shares.
         let key = project_key(&k.host, identity)?;
-        if self.link.central_name().as_deref() == Some(k.host.as_str())
-            && let Some((commands, env)) = self.sessions.heavy_approval(identity)
-        {
-            return Some(m::HeavyApproval { commands, env });
+        if self.link.central_name().as_deref() == Some(k.host.as_str()) && self.sessions.has_account() {
+            return self
+                .sessions
+                .heavy_approval(identity)
+                .map(|(commands, env)| m::HeavyApproval { commands, env });
         }
         self.load_projects().remove(&key)?.approved_heavy
     }

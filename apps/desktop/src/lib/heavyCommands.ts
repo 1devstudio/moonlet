@@ -50,6 +50,12 @@ export function secretWarning(name: string): string | null {
   return SECRET.test(name) ? `${name} looks like a secret. It reaches every machine that runs these commands, cloud machines too.` : null;
 }
 
+/** The page's state once another member approved (X89): the new approval,
+ * keeping the list as the page shows it, with any edits not saved yet. */
+export function withApproval(shown: HeavyInfo, fresh: HeavyInfo): HeavyInfo {
+  return { ...shown, approved: fresh.approved, account: fresh.account, error: fresh.error };
+}
+
 /** The toast after **Approve**. `unreachable` are machines the app could not approve on. */
 export function approvedToast(project: string, commands: string[], machines: string[], unreachable: string[]): string {
   if (unreachable.length)

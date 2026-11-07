@@ -37,12 +37,15 @@ describe("an approval kept in the account (X89)", () => {
 
   it("the approval toast names the account", () => {
     const scope = approvalScope(heavy(true), targets);
-    // Approved once, on the project's host: the account carries it.
-    expect(scope.approveOn).toEqual([{ id: "studio-mini", label: "studio-mini" }]);
+    // The account carries it; workers from before X89 still get their own.
+    expect(scope.approveOn).toEqual(targets);
     expect(approvalBanner(heavy(true), scope.banner)?.text).toBe(
       "Approving the list lets agents run it without asking, on every host of your account that takes heavy commands. Approved commands can run code from the project, including code the agent wrote, on this Mac.",
     );
     expect(approvedToast("shop", ["pnpm check"], scope.toast!, [])).toBe("Approved pnpm check for shop on every host of your account");
+    expect(approvedToast("shop", ["pnpm check"], scope.toast!, ["devbox"])).toBe(
+      "Approved for shop on every host of your account. devbox was not reachable; approve it from Workers.",
+    );
   });
 
   it("each machine, on a host from before X89", () => {

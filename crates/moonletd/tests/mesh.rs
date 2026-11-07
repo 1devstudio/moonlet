@@ -438,3 +438,60 @@ async fn approvals_from_heavy_json_reach_the_account_at_first_start() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn approving_on_a_member_with_another_list_replaces_the_accounts() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let on_mini = shop_on(&mini, repo.path()).await;
+    let on_book = shop_on(&book, repo.path()).await;
+    let _: Value = book
+        .call(
+            "heavy.approve",
+            json!({ "project": on_book, "commands": ["pnpm check"], "env": ["CI"] }),
+        )
+        .await;
+    // studio-mini's checkout lists one more command.
+    std::fs::write(
+        mini.home.path().join("src/shop/.moonlet/config.toml"),
+        "[heavy]\ncommands = [\"pnpm check\", \"pnpm lint\"]\nenv = [\"CI\"]\n",
+    )
+    .unwrap();
+    within(
+        Duration::from_secs(3),
+        "the MacBook's approval on studio-mini",
+        || async {
+            approved(&mini, &on_mini).await == json!({ "commands": ["pnpm check"], "env": ["CI"] })
+        },
+    )
+    .await;
+    // The MacBook's app hears when another member approves.
+    let mut app = book.app().await;
+    let _: Value = app.request("daemon.info", json!({})).await.unwrap();
+    let _: Value = mini
+        .call(
+            "heavy.approve",
+            json!({ "project": on_mini, "commands": ["pnpm check", "pnpm lint"], "env": ["CI"] }),
+        )
+        .await;
+    let heard = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(Some(moonlet_proto::Frame::Json(moonlet_proto::Message::Event {
+                name, ..
+            }))) = app.next_frame().await
+                && name == "heavy.approval_changed"
+            {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        heard.is_ok(),
+        "the MacBook's app never heard of the approval"
+    );
+    assert_eq!(
+        approved(&book, &on_book).await,
+        json!({ "commands": ["pnpm check", "pnpm lint"], "env": ["CI"] })
+    );
+}

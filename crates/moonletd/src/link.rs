@@ -1217,6 +1217,11 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
     let me = worker.id.clone();
     daemon.sessions.on_account_applied(move |changes| {
         let Some(d) = d.upgrade() else { return };
+        // Another member approved a project's heavy commands (X89): the
+        // project pages show it.
+        if changes.iter().any(|c| c.kind == "heavy_approval") {
+            d.terminals.emit(Message::event(m::EV_HEAVY_APPROVAL_CHANGED, serde_json::json!({})));
+        }
         if changes.iter().any(|c| c.kind == "worker") {
             if changes.iter().any(|c| c.kind == "worker" && c.id == me) {
                 d.link.follow_settings();

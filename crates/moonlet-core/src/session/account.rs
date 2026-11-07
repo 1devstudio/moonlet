@@ -44,6 +44,9 @@ const WORKER: RecordKind = RecordKind::Worker;
 
 /// A project's approved heavy commands, by project identity (X89).
 const HEAVY_APPROVAL: RecordKind = RecordKind::HeavyApproval;
+/// The one field of an approval: `{commands, env}`, so the two lists of
+/// one approval always go together.
+const APPROVED: &str = "approved";
 
 /// A member's worker settings as the account holds them (X89): each `None`
 /// until set, which reads as off and 2 slots.
@@ -508,13 +511,15 @@ impl SessionManager {
     pub fn heavy_approval(&self, identity: &ProjectIdentity) -> Option<(Vec<String>, Vec<String>)> {
         let key = identity_key(identity)?;
         let r = self.with_log(|log| log.records(HEAVY_APPROVAL).remove(&key))?;
-        let list = |f: &str| serde_json::from_value::<Vec<String>>(r.get(f)?.clone()).ok();
+        let lists = r.get(APPROVED)?;
+        let list = |f: &str| serde_json::from_value::<Vec<String>>(lists.get(f)?.clone()).ok();
         Some((list("commands")?, list("env")?))
     }
 
     /// Approves project `identity`'s `commands` and `env` names for every
     /// member (X89), as this member's change, and sends it on. Both lists
-    /// are one change each, so they are always set together.
+    /// are one field, so two approvals made apart never mix: the later one
+    /// stands whole.
     pub fn set_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String]) -> Result<()> {
         self.change_heavy_approval(identity, commands, env, false)
     }
@@ -537,7 +542,8 @@ impl SessionManager {
             }
             let now = now.unwrap_or_default();
             let mut log = a.log.clone();
-            let changes: Vec<Change> = [("commands", json!(commands)), ("env", json!(env))]
+            let value = json!({ "commands": commands, "env": env });
+            let changes: Vec<Change> = [(APPROVED, value)]
                 .into_iter()
                 .filter(|(field, value)| oldest || now.get(*field) != Some(value))
                 .map(|(field, value)| {
@@ -1598,6 +1604,28 @@ mod tests {
         // An approval kept before X89 gives way to the account's.
         mini.seed_heavy_approval(&shop(), &words(&["pnpm test"]), &[]).unwrap();
         assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
+    }
+
+    #[tokio::test]
+    async fn two_approvals_made_apart_never_mix_their_lists() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Both start from one approval, with no env name.
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
+        sync(&book, &mini);
+        // Apart, the MacBook approves NPM_TOKEN, then studio-mini approves
+        // another command with the env names it has, none.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["NPM_TOKEN"])).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        mini.set_heavy_approval(&shop(), &words(&["pnpm check", "pnpm lint"]), &[]).unwrap();
+        sync(&book, &mini);
+        // The later approval stands whole: never its commands with the
+        // MacBook's NPM_TOKEN.
+        for m in [&book, &mini] {
+            assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check", "pnpm lint"]), vec![])));
+        }
     }
 
     #[tokio::test]

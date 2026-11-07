@@ -4,10 +4,10 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { Plus, ShieldCheck, TriangleAlert, X } from "lucide-react";
-import { rpc } from "../../lib/daemon";
-import { approvalBanner, entryStates, heavyChanged, heavyDraft, heavyFromDraft, secretWarning, type HeavyDraft } from "../../lib/heavyCommands";
+import { onDaemonEvent, rpc } from "../../lib/daemon";
+import { approvalBanner, entryStates, heavyChanged, heavyDraft, heavyFromDraft, secretWarning, withApproval, type HeavyDraft } from "../../lib/heavyCommands";
 import { approvalScope, approvalTargets, approveHeavy, readLinks } from "../../lib/heavyApproval";
-import { M, type HeavyInfo, type HeavyOs, type LinkInfo, type ProjectIdentity } from "../../lib/protocol";
+import { EV, M, type HeavyInfo, type HeavyOs, type LinkInfo, type ProjectIdentity } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
 import { Card, Row, Section, Segmented, fieldCls } from "./controls";
@@ -35,6 +35,17 @@ export function useHeavy(host: string, id: string) {
     void rpc<HeavyInfo>(host, M.heavyGet, { project: id }).then(show, () => setInfo(null));
   }, [host, id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(load, [load]);
+  // Another member approved (X89): the approval changes, the edits stay.
+  useEffect(() => {
+    const off = onDaemonEvent((e) => {
+      if (e.host !== host || e.name !== EV.heavyApprovalChanged) return;
+      void rpc<HeavyInfo>(host, M.heavyGet, { project: id }).then(
+        (fresh) => setInfo((shown) => (shown ? withApproval(shown, fresh) : fresh)),
+        () => {},
+      );
+    });
+    return () => void off.then((f) => f());
+  }, [host, id]);
   const dirty = !!info && heavyChanged(orig, draft);
   const save = async () => {
     if (dirty) show(await rpc<HeavyInfo>(host, M.heavySet, { project: id, heavy: heavyFromDraft(draft) }));
