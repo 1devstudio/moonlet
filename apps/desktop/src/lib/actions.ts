@@ -302,7 +302,8 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const pr = s.prs[sesKey(c.host, c.ws.id)];
   const plan = archivePlan(git, pr?.state, c.ws.branch, base);
   // Work only on this machine that the archive would take (X55).
-  const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.host);
+  // A copy's work is on the member running it (X86).
+  const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.ws.owner?.name ?? c.host);
   const params = unpushedParams(c.ws, pr);
   // What still runs in it, beyond its tabs, is named and stopped too (X83);
   // a daemon that cannot say archives as before.
@@ -394,6 +395,7 @@ export function visibleSessionOrder(): { host: string; id: string }[] {
     hosts: hosts.map((h) => ({ host: h.id, account: s.accounts[h.id]?.account, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [] })),
     projects: s.projects,
     sessions: s.sessions,
+    connected: hosts.filter((h) => h.status === "connected").map((h) => h.id),
     activeAt: (host, x) => lastActive(s.terminals[host] ?? {}, x),
     stateOf: (host, x) => sessionState(s, host, x.id),
     collapsed: s.collapsed,

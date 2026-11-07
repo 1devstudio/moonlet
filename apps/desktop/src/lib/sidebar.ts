@@ -236,18 +236,26 @@ export function shownSections(shown: { host: string; id: string; account?: strin
   return out;
 }
 
+/** The hosts the app is connected to, as one comma-joined string. */
+export const connectedHosts = (hosts: Record<string, { id: string; status: string }>) =>
+  Object.values(hosts)
+    .filter((h) => h.status === "connected")
+    .map((h) => h.id)
+    .join(",");
+
 /** Each member's side of shared section `sec`, from what it lists: the
  * first holder's is `sec` itself. A holder's side also has the sessions
  * other members run that it holds copies of (X86), each under its copy
- * host, except one a host the app reaches lists as its own. */
+ * host, except one a host the app is connected to (`connected`, every host
+ * when not given) lists as its own: a copy keeps its session's id (X72). */
 export function sectionParts(
   holding: string[],
   sec: Section,
-  of: { sections: Record<string, Section[]>; projects: Record<string, Project[]>; sessions: Record<string, Session[]> },
+  of: { sections: Record<string, Section[]>; projects: Record<string, Project[]>; sessions: Record<string, Session[]>; connected?: string[] },
 ): SectionPart[] {
   const own = new Set(
     Object.entries(of.sessions)
-      .filter(([h]) => !parseCopyHost(h))
+      .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
       .flatMap(([, list]) => list.map((x) => x.id)),
   );
   return holding.map((h, i) => {
@@ -277,6 +285,8 @@ export function sharedSessionOrder(o: {
   hosts: ListingHost[];
   projects: Record<string, Project[]>;
   sessions: Record<string, Session[]>;
+  /** The hosts the app is connected to, for which copies show (X86). */
+  connected?: string[];
   activeAt: (host: string, s: Session) => number;
   stateOf?: (host: string, s: Session) => AgentState | null;
   collapsed: Record<string, boolean>;
@@ -285,7 +295,7 @@ export function sharedSessionOrder(o: {
   const out: { host: string; id: string }[] = [];
   for (const { ws, sec, hosts } of shownSections(o.shown, o.hosts)) {
     if (o.collapsed[sectionCollapseKey(hosts[0], sec.id)]) continue;
-    const groups = arrangeShared(ws.id, sectionParts(hosts, sec, { sections, projects: o.projects, sessions: o.sessions }), {
+    const groups = arrangeShared(ws.id, sectionParts(hosts, sec, { sections, projects: o.projects, sessions: o.sessions, connected: o.connected }), {
       stateOf: o.stateOf ?? (() => null),
       activeAt: o.activeAt,
       archiving: () => false,

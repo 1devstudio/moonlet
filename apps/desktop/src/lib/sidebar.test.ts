@@ -174,6 +174,22 @@ describe("shownSections (X68)", () => {
     expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local#copy:s7 s7", "local s1"]]]);
   });
 
+  it("still lists a copy another host listed before it went away (X86)", () => {
+    const owner = { worker: "book-id", name: "MacBook", reachable: false };
+    const of = {
+      sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
+      projects: { local: [p("a", "shop")] },
+      // The MacBook's own list, kept from before it went to sleep.
+      sessions: { local: [], "local#copy:s7": [s("s7", "a", { owner })], macbook: [s("s7", "a")] },
+    };
+    const rows = (connected: string[]) =>
+      arrangeShared("personal", sectionParts(["local"], named("a", "1devstudio"), { ...of, connected }), { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null }).flatMap((g) =>
+        g.sessions.map((e) => e.host),
+      );
+    expect(rows(["local"])).toEqual(["local#copy:s7"]);
+    expect(rows(["local", "macbook"])).toEqual([]);
+  });
+
   it("orders sessions for ⌘1–9 as the sidebar shows them, skipping collapsed sections and groups", () => {
     const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
     const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };

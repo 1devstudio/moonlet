@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
@@ -609,8 +609,10 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [renaming, setRenaming] = useState(false);
   const { lines } = useContext(TaskLines);
+  // A string, so the selector's value only changes with the hosts (X86).
+  const connected = useStore((s) => connectedHosts(s.hosts));
   const groups = useMemo(() => {
-    const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions });
+    const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions, connected: connected.split(",") });
     return arrangeShared(ws.id, parts, {
       stateOf: (h, s) => sessionState(useStore.getState(), h, s.id),
       activeAt: (h, s) => activeAt(h, s),
@@ -619,7 +621,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
     });
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, terminals, archiving, host, lines]);
+  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, archiving, host, lines]);
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
