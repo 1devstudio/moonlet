@@ -3718,10 +3718,16 @@ impl LiveCopies {
         self.update_projects(&key, |p| p.approved_heavy = Some(approval))
     }
 
-    /// What this worker approved of the project routing copy `copy` is of.
+    /// What is approved of the project routing copy `copy` is of: the
+    /// account's approval, once for every member (X89), else what this
+    /// worker approved for its central host (X62).
     pub fn heavy_approval(&self, copy: &str) -> Option<m::HeavyApproval> {
         let k = self.kept(copy)?;
-        let key = project_key(&k.host, k.identity.as_ref()?)?;
+        let identity = k.identity.as_ref()?;
+        if let Some((commands, env)) = self.sessions.heavy_approval(identity) {
+            return Some(m::HeavyApproval { commands, env });
+        }
+        let key = project_key(&k.host, identity)?;
         self.load_projects().remove(&key)?.approved_heavy
     }
 

@@ -294,6 +294,8 @@ async fn approving_records_the_commands_and_env_names_together() {
             "config": { "commands": ["pnpm test", "pnpm build"], "os": "any", "env": ["CI"], "outputs": [] },
             "approved": null,
             "error": null,
+            // Kept in the account, for every member (X89).
+            "account": true,
         })
     );
     c.approve(&["pnpm build", "pnpm test"], &["CI"]).await;
@@ -903,21 +905,26 @@ async fn linked_as(worker_env: &[(&str, &str)]) -> (Central, Daemon) {
 }
 
 /// [`linked_as`] with `config` for the project, and the Mac approving its
-/// heavy commands only when `mac_approves`.
+/// heavy commands only when `mac_approves`. A Mac that does not approve is
+/// one from before X89: it keeps its own approval, not the account's.
 async fn linked_with(
     config: &str,
     worker_env: &[(&str, &str)],
     mac_approves: bool,
 ) -> (Central, Daemon) {
-    linked_in(config, worker_env, mac_approves, None).await
+    linked_in(config, worker_env, mac_approves, None, !mac_approves).await
 }
 
 /// [`linked_with`], the Mac letting paired devices in on `phones`'s port.
+/// A Mac `before_x89` shares no account's approvals: its `account.json`
+/// cannot be read, so it keeps only what it approved itself, as a worker
+/// from before X89 does.
 async fn linked_in(
     config: &str,
     worker_env: &[(&str, &str)],
     mac_approves: bool,
     phones: Option<u16>,
+    before_x89: bool,
 ) -> (Central, Daemon) {
     let tools = tempfile::tempdir().unwrap().keep();
     // A tool only the central host has, on its login shell's PATH.
@@ -948,6 +955,9 @@ async fn linked_in(
         &json!({ "central": null, "worker": { "id": MAC_ID, "name": "Alex's MacBook Pro", "enabled": true } })
             .to_string(),
     );
+    if before_x89 {
+        std::fs::create_dir_all(home.path().join("account.json")).unwrap();
+    }
     if let Some(port) = phones {
         write(
             &home.path().join("mobile.json"),
@@ -1397,6 +1407,17 @@ async fn a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it() {
     );
 }
 
+/// X89: the central host's approval is the account's, so a member runs the
+/// project's commands without approving them itself.
+#[tokio::test]
+async fn a_worker_runs_what_the_account_approved_without_approving_itself() {
+    let (c, _mac) = linked_in(RUN_CONFIG, &[], false, None, false).await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_tool_sends_the_command_to_the_next_worker() {
     let (c, _mac) = linked().await;
@@ -1431,7 +1452,7 @@ async fn a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_do
     let port = std::net::TcpListener::bind("[::1]:0").unwrap().local_addr().unwrap().port();
     // The Mac listens on ::1: one on the central host's 127.0.0.1 takes
     // itself for its central host.
-    let (c, mac) = linked_in(&config, &[("MOONLET_MOBILE_ADDRS", "::1")], true, Some(port)).await;
+    let (c, mac) = linked_in(&config, &[("MOONLET_MOBILE_ADDRS", "::1")], true, Some(port), false).await;
     let addr = format!("[::1]:{port}");
     let mut listening = false;
     for _ in 0..100 {

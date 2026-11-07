@@ -42,6 +42,9 @@ const SIGN_IN: RecordKind = RecordKind::SignIn;
 /// A member's worker settings, by worker id (X89).
 const WORKER: RecordKind = RecordKind::Worker;
 
+/// A project's approved heavy commands, by project identity (X89).
+const HEAVY_APPROVAL: RecordKind = RecordKind::HeavyApproval;
+
 /// A member's worker settings as the account holds them (X89): each `None`
 /// until set, which reads as off and 2 slots.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -486,6 +489,62 @@ impl SessionManager {
                         log.set_oldest(WORKER, worker, field, value)
                     } else {
                         log.set(now_ms(), WORKER, worker, field, value)
+                    }
+                })
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
+    /// Project `identity`'s approved heavy commands and `env` names (X89),
+    /// approved once for every member; none until approved.
+    pub fn heavy_approval(&self, identity: &ProjectIdentity) -> Option<(Vec<String>, Vec<String>)> {
+        let key = identity_key(identity)?;
+        let r = self.with_log(|log| log.records(HEAVY_APPROVAL).remove(&key))?;
+        let list = |f: &str| serde_json::from_value::<Vec<String>>(r.get(f)?.clone()).ok();
+        Some((list("commands")?, list("env")?))
+    }
+
+    /// Approves project `identity`'s `commands` and `env` names for every
+    /// member (X89), as this member's change, and sends it on. Both lists
+    /// are one change each, so they are always set together.
+    pub fn set_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String]) -> Result<()> {
+        self.change_heavy_approval(identity, commands, env, false)
+    }
+
+    /// Writes an approval a member kept before X89, with the oldest stamp,
+    /// when the account has none for the project: any approval made on a
+    /// member wins over it.
+    pub fn seed_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String]) -> Result<()> {
+        self.change_heavy_approval(identity, commands, env, true)
+    }
+
+    fn change_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String], oldest: bool) -> Result<()> {
+        let key = identity_key(identity).context("a project without a git root cannot be approved")?;
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("approvals are kept in the account")?;
+            let now = a.log.records(HEAVY_APPROVAL).remove(&key);
+            if oldest && now.is_some() {
+                return Ok(());
+            }
+            let now = now.unwrap_or_default();
+            let mut log = a.log.clone();
+            let changes: Vec<Change> = [("commands", json!(commands)), ("env", json!(env))]
+                .into_iter()
+                .filter(|(field, value)| oldest || now.get(*field) != Some(value))
+                .map(|(field, value)| {
+                    if oldest {
+                        log.set_oldest(HEAVY_APPROVAL, &key, field, value)
+                    } else {
+                        log.set(now_ms(), HEAVY_APPROVAL, &key, field, value)
                     }
                 })
                 .collect();
@@ -1521,6 +1580,24 @@ mod tests {
         // Seeding again, once the account has values, changes nothing.
         air.seed_worker_settings("air", settings(Some(false), Some(2))).unwrap();
         assert_eq!(air.worker_settings().get("air"), Some(&settings(Some(true), Some(5))));
+    }
+
+    fn shop() -> ProjectIdentity {
+        ProjectIdentity { origin: Some("git.invalid/acme/shop".into()), root: Some("4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a".into()) }
+    }
+
+    #[tokio::test]
+    async fn a_heavy_approval_on_one_member_is_every_members() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(mini.heavy_approval(&shop()), None);
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["CI"])).unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
+        // An approval kept before X89 gives way to the account's.
+        mini.seed_heavy_approval(&shop(), &words(&["pnpm test"]), &[]).unwrap();
+        assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
     }
 
     #[tokio::test]

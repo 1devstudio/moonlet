@@ -40,7 +40,8 @@ describe("routed commands", () => {
     await expect($(sel.text("echo heavy is not approved yet"))).toBeDisplayed();
     await expect($(`${heavy}//*[normalize-space()="Not approved"]`)).toBeDisplayed();
     await $(sel.settingsButton("Approve")).click();
-    await expect($(sel.text(`Approved echo heavy for ${PROJECT} on this Mac`))).toBeDisplayed();
+    // Kept in the account, so it holds on every member (X89).
+    await expect($(sel.text(`Approved echo heavy for ${PROJECT} on every host of your account`))).toBeDisplayed();
     await expect($(`${heavy}//*[normalize-space()="Approved"]`)).toBeDisplayed();
     const info = rpc<{ approved: { commands: string[]; env: string[] } | null }>(w, "heavy.get", { project: projectId(w) });
     expect(info.approved).toEqual({ commands: ["echo heavy"], env: [] });
