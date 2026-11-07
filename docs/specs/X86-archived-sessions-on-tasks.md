@@ -77,7 +77,7 @@ agents continue their conversations.
       before.
 - [ ] A kept chat is not restored after a daemon restart while its session is
       archived, and never counts as a live terminal.
-- [ ] Removing a session, or forgetting a project with its archived sessions,
+- [ ] Removing a project from moonlet, which forgets its archived sessions,
       deletes their kept chats.
 
 ## UI
@@ -131,8 +131,9 @@ built from it.
 ## Test plan
 
 - `crates/moonlet-core/src/session.rs`: archive then unarchive relaunches a
-  Claude tab with `--continue` and a shell tab; a session archived with nothing
-  kept starts one tab; archive sets `archived_at`.
+  Claude tab with `--continue`; a session archived with no tabs starts one;
+  archive sets `archived_at`; a chat session's chat is its history and comes
+  back on Restore, and removing the project deletes it.
 - `crates/moonlet-core/src/chat/runtime.rs`: an archived chat leaves the live
   list, is not restored by a daemon start, is listed by its session's history
   and comes back with its items on unarchive; forgetting it deletes it.
