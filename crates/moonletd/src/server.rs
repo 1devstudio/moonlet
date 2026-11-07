@@ -453,7 +453,11 @@ where
                 // (X62); from anyone else, nothing.
                 Frame::RunOutput { run, stream, data } => {
                     if conn.client == crate::link::WORKER_CLIENT {
-                        daemon.runs.forward(conn.id, run, stream, data);
+                        // A command one member runs for another (X89),
+                        // else one this host routed.
+                        if let Err(data) = daemon.relay.output(&daemon.workers, conn.id, run, stream, data) {
+                            daemon.runs.forward(conn.id, run, stream, data);
+                        }
                     }
                 }
                 // Before the request that names it is read (X60). Only a

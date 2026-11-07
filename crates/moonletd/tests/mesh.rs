@@ -930,3 +930,269 @@ async fn a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it() {
     let st: Value = book.call("exec.status", json!({})).await;
     assert_eq!(st["skips"], json!([]), "{st}");
 }
+
+/// Turns the Air's switch on from the MacBook, and studio-mini's off, so
+/// the MacBook's commands can only go to the Air, through studio-mini.
+async fn only_air_takes(mini: &Daemon, book: &Daemon, air: &Daemon) {
+    let _: bool = book
+        .call(
+            "worker.settings.set",
+            json!({ "worker": AIR, "heavy": true }),
+        )
+        .await;
+    within(Duration::from_secs(3), "the Air's switch", || async {
+        own(air).await.0
+    })
+    .await;
+    // studio-mini lists the Air as taking heavy commands.
+    within(
+        Duration::from_secs(5),
+        "studio-mini lists the Air",
+        || async {
+            let list: Vec<Value> = mini.call("worker.list", json!({})).await;
+            list.iter()
+                .any(|w| w["id"] == json!(AIR) && w["heavy"] == json!(true))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_members_session_runs_its_heavy_command_on_another_member_through_the_central_host() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    let ran = run(
+        &book,
+        &session,
+        &["sh", "-c", "echo hi > out.txt; echo done; echo oops >&2"],
+    )
+    .await;
+    assert_eq!(ran.status, 0, "{ran:?}");
+    assert_eq!(ran.stdout, "done\n");
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Air\noops\n");
+    let worktree = std::path::PathBuf::from(session["path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("out.txt")).unwrap(),
+        "hi\n"
+    );
+    // The run happened on the Air, in its routing copy.
+    assert_eq!(mini_copies(&air).len(), 1);
+    assert!(mini_copies(&mini).is_empty());
+}
+
+/// One request on a raw connection, and its reply.
+async fn ask(
+    s: &mut tokio::net::TcpStream,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> moonlet_proto::Message {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no reply")
+        {
+            Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+}
+
+fn refusal(reply: &moonlet_proto::Message) -> Option<String> {
+    match reply {
+        moonlet_proto::Message::Response { error: Some(e), .. } => Some(e.code.clone()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn the_central_host_passes_on_only_the_routing_methods() {
+    let (mini, addr, _book, _air) = account().await;
+    // A third Mac's daemon, by hand.
+    let p: MobilePairing = mini
+        .call("mobile.pair_start", json!({ "kind": "desktop" }))
+        .await;
+    let token =
+        moonlet_link::tailnet::pair(&[addr.clone()], &p.code, "Maya's Mac", DeviceKind::Desktop)
+            .await
+            .unwrap()
+            .token;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let mut reg = registration("2c4d6e8b-1f37-4e61-9a0f-7d3f1c2a5b8e", "Maya's Mac");
+    reg["peer"] = json!(true);
+    assert_eq!(refusal(&ask(&mut s, 1, "worker.register", reg).await), None);
+    // Anything but a routing method stays where it is.
+    let call = json!({ "to": AIR, "method": "session.list", "params": {} });
+    assert_eq!(
+        refusal(&ask(&mut s, 2, "peer.call", call).await).as_deref(),
+        Some("forbidden")
+    );
+    // The central host names the sender, never the sender itself.
+    let call =
+        json!({ "to": AIR, "from": BOOK, "method": "exec.prepare", "params": { "session": "x" } });
+    assert_eq!(
+        refusal(&ask(&mut s, 3, "peer.call", call).await).as_deref(),
+        Some("invalid_params")
+    );
+    // A run nobody passed on cannot be ended.
+    let call = json!({ "to": AIR, "method": "exec.done", "params": { "run": 1610612736u32, "copy": "c", "status": 0, "tree": "", "head": "" } });
+    assert_eq!(
+        refusal(&ask(&mut s, 4, "peer.call", call).await).as_deref(),
+        Some("not_found")
+    );
+    // A member from before X89 registers without `peer`: never offered,
+    // never called.
+    let p: MobilePairing = mini
+        .call("mobile.pair_start", json!({ "kind": "desktop" }))
+        .await;
+    let old_token =
+        moonlet_link::tailnet::pair(&[addr.clone()], &p.code, "Old Mac", DeviceKind::Desktop)
+            .await
+            .unwrap()
+            .token;
+    let mut old = raw(&addr, &old_token, "moonletd-worker").await;
+    let mut reg = registration("5b8e2c4d-6e8b-4f37-9a0f-1c2a7d3f4e61", "Old Mac");
+    reg["heavy"] = json!(true);
+    assert_eq!(
+        refusal(&ask(&mut old, 1, "worker.register", reg).await),
+        None
+    );
+    let call = json!({ "to": "5b8e2c4d-6e8b-4f37-9a0f-1c2a7d3f4e61", "method": "exec.prepare", "params": { "session": "x" } });
+    assert_eq!(
+        refusal(&ask(&mut s, 5, "peer.call", call).await).as_deref(),
+        Some("unsupported")
+    );
+    let peers = ask(&mut s, 6, "worker.peers", json!({})).await;
+    let moonlet_proto::Message::Response {
+        result: Some(list), ..
+    } = peers
+    else {
+        panic!("{peers:?}")
+    };
+    assert_eq!(
+        list,
+        json!([]),
+        "only members that take other hosts' commands, and run them"
+    );
+}
+
+#[tokio::test]
+async fn a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host()
+ {
+    let (mini, _addr, book, mut air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    let marker = format!(
+        "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
+        book.home.path().display()
+    );
+    let mut c = book.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": ["sh", "-c", marker], "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run_id = started["run"].as_u64().unwrap();
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    let mut stopped = false;
+    let status = loop {
+        let frame = tokio::time::timeout(Duration::from_secs(90), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .unwrap();
+        match frame {
+            moonlet_proto::Frame::RunOutput { run, stream, data } if u64::from(run) == run_id => {
+                let text = String::from_utf8_lossy(&data).to_string();
+                if stream == 1 {
+                    stdout.push_str(&text);
+                    if text.contains("there") && !stopped {
+                        stopped = true;
+                        air.stop();
+                    }
+                } else {
+                    stderr.push_str(&text);
+                }
+            }
+            moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run_id) =>
+            {
+                break data["status"].as_i64().unwrap();
+            }
+            _ => {}
+        }
+    };
+    assert!(stopped, "it never ran on the Air: {stdout} {stderr}");
+    assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
+    assert!(
+        stderr.contains(
+            "moonlet: Alex's MacBook Air went away. Running again on Alex's MacBook Pro.\n"
+        ),
+        "{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host() {
+    let (mut mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    let marker = format!(
+        "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
+        book.home.path().display()
+    );
+    let mut c = book.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": ["sh", "-c", marker], "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run_id = started["run"].as_u64().unwrap();
+    let mut stdout = String::new();
+    let mut stopped = false;
+    let status = loop {
+        let frame = tokio::time::timeout(Duration::from_secs(90), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .unwrap();
+        match frame {
+            moonlet_proto::Frame::RunOutput {
+                run,
+                stream: 1,
+                data,
+            } if u64::from(run) == run_id => {
+                let text = String::from_utf8_lossy(&data).to_string();
+                stdout.push_str(&text);
+                if text.contains("there") && !stopped {
+                    stopped = true;
+                    mini.stop();
+                }
+            }
+            moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run_id) =>
+            {
+                break data["status"].as_i64().unwrap();
+            }
+            _ => {}
+        }
+    };
+    assert!(stopped, "it never ran on the Air: {stdout}");
+    assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
+}

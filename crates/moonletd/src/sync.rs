@@ -527,11 +527,8 @@ impl LiveCopies {
     /// which would not know it and might be taken to have archived it.
     fn elsewhere(&self, k: &Kept) -> Option<String> {
         if let Some(member) = &k.peer {
-            return self
-                .workers
-                .conn(member)
-                .is_none()
-                .then(|| format!("{} is not linked.", k.host));
+            let reached = self.workers.conn(member).is_some() || (self.link.host().is_some() && self.is_member(member));
+            return (!reached).then(|| format!("{} is not linked.", k.host));
         }
         (self.link.central_name().as_deref() != Some(k.host.as_str()))
             .then(|| format!("{} is no longer this Mac's central host.", k.host))
@@ -542,7 +539,7 @@ impl LiveCopies {
     /// central host for a routing copy of its session (X89).
     fn host_for(&self, k: &Kept) -> Option<Peer> {
         if let Some(member) = &k.peer {
-            return self.workers.conn(member).map(Peer::Conn);
+            return self.peer_for(member);
         }
         self.elsewhere(k)
             .is_none()
@@ -570,10 +567,18 @@ impl LiveCopies {
         if let Some(conn) = self.workers.conn(worker) {
             return Some(Peer::Conn(conn));
         }
-        (self.sessions.central_account().as_deref() == Some(worker))
-            .then(|| self.link.host())
-            .flatten()
-            .map(Peer::Link)
+        let host = self.link.host()?;
+        if self.sessions.central_account().as_deref() == Some(worker) {
+            return Some(Peer::Link(host));
+        }
+        // Another member of the account, through the central host (X89).
+        self.is_member(worker).then(|| Peer::Relay(host, worker.to_string()))
+    }
+
+    /// Whether worker id `worker` is another member of this machine's
+    /// account (X89).
+    fn is_member(&self, worker: &str) -> bool {
+        self.sessions.has_account() && self.sessions.member_names().contains_key(worker)
     }
 
     fn kept(&self, id: &str) -> Option<Kept> {
@@ -2664,6 +2669,7 @@ impl LiveCopies {
         let worker = match peer {
             Peer::Conn(conn) => self.workers.worker_on(conn.id),
             Peer::Link(_) => self.sessions.central_account(),
+            Peer::Relay(_, to) => Some(to.clone()),
         }
         .ok_or_else(|| RpcError::new("forbidden", "only a linked worker keeps copies"))?;
         if let Some(s) = self.served(copy)
@@ -3813,7 +3819,7 @@ impl LiveCopies {
         let key = project_key(&k.host, identity)?;
         let ours = match &k.peer {
             // A member linked to this central host shares its account (X89).
-            Some(member) => self.workers.conn(member).is_some(),
+            Some(member) => self.workers.conn(member).is_some() || self.is_member(member),
             None => self.link.central_name().as_deref() == Some(k.host.as_str()),
         };
         if ours && self.sessions.has_account() {

@@ -153,6 +153,8 @@ pub struct Daemon {
     pub machines: Arc<crate::machines::Machines>,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
+    /// Routed commands passed between two members (X89).
+    pub relay: Arc<crate::relay::Relay>,
     /// Every session's routed commands, with their output (X62).
     jobs: Arc<crate::jobs::Jobs>,
     /// Board snapshots the app shares, and the phone's requests to it (X76).
@@ -590,6 +592,17 @@ impl Daemon {
         );
         let emitter = terminals.clone();
         let workers = Arc::new(crate::workers::Workers::new(moonlet_core::paths::home().join("workers.json"), move |m| emitter.emit(m)));
+        // A member that ran another's command went away: that member runs
+        // it again (X89).
+        let relay = crate::relay::Relay::new();
+        {
+            let (r, w) = (Arc::downgrade(&relay), Arc::downgrade(&workers));
+            workers.on_gone(move |id| {
+                if let (Some(r), Some(w)) = (r.upgrade(), w.upgrade()) {
+                    r.runner_gone(&w, id);
+                }
+            });
+        }
         let emitter = terminals.clone();
         let sync = crate::sync::LiveCopies::new(
             moonlet_core::paths::home(),
@@ -678,6 +691,7 @@ impl Daemon {
             cloud,
             machines,
             runs,
+            relay,
             jobs,
             clones,
             terminals,
@@ -1884,6 +1898,35 @@ impl Daemon {
                     return ok(self.runs.cancel_here(conn.id, r.run));
                 }
                 ok(self.runs.cancel(conn.id, r.run).await)
+            }
+            // A routing call from one member to another (X89).
+            m::PEER_CALL => {
+                let (member, _) = self.member_on(conn)?;
+                let r: m::PeerCall = params(p)?;
+                ok(self.relay.call(&self.workers, conn, member, r).await?)
+            }
+            // The members a member may route a command to through this
+            // central host: those that take other hosts' commands (X89).
+            m::WORKER_PEERS => {
+                let (member, _) = self.member_on(conn)?;
+                let peers: Vec<m::WorkerStatus> = self
+                    .workers
+                    .list()
+                    .into_iter()
+                    .filter(|w| w.worker.id != member && w.worker.heavy && w.worker.peer)
+                    .map(|w| m::WorkerStatus {
+                        id: w.worker.id,
+                        name: w.worker.name,
+                        heavy: true,
+                        os: w.worker.os,
+                        cores: w.worker.cores,
+                        load: w.load.unwrap_or(0.0),
+                        slots: w.worker.slots,
+                        used: w.used.unwrap_or(0),
+                        rtt_ms: w.rtt_ms,
+                    })
+                    .collect();
+                ok(peers)
             }
             // A member asks whether this central host takes its heavy
             // commands, then has it run one in a routing copy of its

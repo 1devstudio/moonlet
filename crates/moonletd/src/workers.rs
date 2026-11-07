@@ -47,6 +47,8 @@ pub struct Workers {
     started: u64,
     ping_every: Duration,
     emit: Box<dyn Fn(Message) + Send + Sync>,
+    /// Called with each worker id that goes away (X89).
+    on_gone: Mutex<Vec<Arc<dyn Fn(&str) + Send + Sync>>>,
 }
 
 impl Workers {
@@ -70,7 +72,13 @@ impl Workers {
             started: now_ms(),
             ping_every,
             emit: Box::new(emit),
+            on_gone: Mutex::default(),
         }
+    }
+
+    /// Calls `f` with each worker id that goes away from now on (X89).
+    pub fn on_gone(&self, f: impl Fn(&str) + Send + Sync + 'static) {
+        self.on_gone.lock().unwrap().push(Arc::new(f));
     }
 
     /// Sends event `message` to every linked worker but cloud machines and
@@ -168,8 +176,8 @@ impl Workers {
             let kept = list
                 .get(&id)
                 .filter(|o| o.conn.id == conn.id)
-                .map(|o| (o.info.connected_since, o.info.rtt_ms, o.info.load));
-            let (connected_since, rtt_ms, load) = kept.unwrap_or((now_ms(), None, None));
+                .map(|o| (o.info.connected_since, o.info.rtt_ms, o.info.load, o.info.used));
+            let (connected_since, rtt_ms, load, used) = kept.unwrap_or((now_ms(), None, None, None));
             list.insert(
                 id.clone(),
                 Entry {
@@ -178,6 +186,7 @@ impl Workers {
                         connected_since,
                         rtt_ms,
                         load,
+                        used,
                     },
                     conn: conn.clone(),
                 },
@@ -210,6 +219,12 @@ impl Workers {
         self.gone_since.lock().unwrap().extend(removed.iter().map(|id| (id.clone(), now)));
         if !removed.is_empty() {
             self.changed();
+        }
+        let gone: Vec<_> = self.on_gone.lock().unwrap().clone();
+        for id in &removed {
+            for f in &gone {
+                f(id);
+            }
         }
     }
 
@@ -291,6 +306,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                 {
                     e.info.rtt_ms = Some(rtt);
                     e.info.load = answer["load"].as_f64();
+                    e.info.used = answer["used"].as_u64().map(|n| n as u32);
                 }
             }
             Err(e) => {

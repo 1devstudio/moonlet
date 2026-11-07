@@ -96,6 +96,9 @@ pub struct Runs {
     /// is picked: a slot is taken at once, and a worker runs one command
     /// of a session at a time, as it has one routing copy of it.
     claims: Mutex<HashMap<u32, (String, String)>>,
+    /// Runs whose member, reached through the central host, went away, as
+    /// the central host said (X89).
+    lost: Mutex<HashSet<u32>>,
     /// Runs stopped before their command started, with the status they end
     /// with.
     stops: Mutex<HashMap<u32, i32>>,
@@ -178,6 +181,7 @@ impl Runs {
             remote: Mutex::default(),
             claims: Mutex::default(),
             stops: Mutex::default(),
+            lost: Mutex::default(),
             here_now: Mutex::default(),
             copies_in_use: Mutex::default(),
             going: Mutex::default(),
@@ -309,9 +313,9 @@ impl Runs {
         };
         let mut skipped = HashSet::new();
         let mut rerun = false;
-        // A member's own central host, when it takes the member's heavy
-        // commands (X89).
-        let central = self.central_candidate(sync).await;
+        // A member's own central host, and the other members reached
+        // through it, when they take the member's heavy commands (X89).
+        let linked = self.link_candidates(sync).await;
         // A session that asked for the cloud waits for its machine (X63).
         let mut wait_note = None;
         if plan.cloud
@@ -335,7 +339,7 @@ impl Runs {
                     // Picked and claimed at once, so two runs never both take
                     // a worker's last slot, nor its copy of the session.
                     let mut claims = self.claims.lock().unwrap();
-                    let candidates = self.candidates(plan, workers, &skipped, &claims, central.as_ref().map(|(c, _)| c));
+                    let candidates = self.candidates(plan, workers, &skipped, &claims, &linked);
                     let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
                     // None fits, the central host included: it is busy too.
                     let all_busy = chosen.is_none();
@@ -356,7 +360,7 @@ impl Runs {
                     .into_iter()
                     .find(|w| w.worker.id == chosen.id)
                     .map(|w| w.worker.name)
-                    .or_else(|| central.as_ref().filter(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
+                    .or_else(|| linked.iter().find(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
                     .unwrap_or_else(|| chosen.id.clone());
                 let machines = (chosen.kind == Kind::Cloud)
                     .then(|| self.machines())
@@ -593,31 +597,45 @@ impl Runs {
         }
     }
 
-    /// This member's central host as a candidate, with its name (X89): when
-    /// it is linked and says in `worker.status` that it takes other hosts'
-    /// heavy commands. None on a central host, and from one before X89.
-    async fn central_candidate(&self, sync: &LiveCopies) -> Option<(Candidate, String)> {
-        let peer @ Peer::Link(_) = sync.central_peer()? else {
-            return None;
+    /// This member's central host, and the other members it reaches
+    /// through it (`worker.peers`), as candidates with their names (X89):
+    /// those that take other hosts' heavy commands. None on a central host,
+    /// and from one before X89.
+    async fn link_candidates(&self, sync: &LiveCopies) -> Vec<(Candidate, String)> {
+        let Some(peer @ Peer::Link(_)) = sync.central_peer() else {
+            return Vec::new();
         };
-        let v = peer
-            .request(m::WORKER_STATUS, serde_json::json!({}), Duration::from_secs(2))
-            .await
-            .ok()?;
-        let s: m::WorkerStatus = serde_json::from_value(v).ok()?;
-        s.heavy.then(|| {
-            let c = Candidate {
-                id: s.id,
-                kind: Kind::Linked,
-                os: s.os,
-                cores: s.cores,
-                load: s.load,
-                slots: s.slots,
-                used: s.used,
-                rtt_ms: None,
-            };
-            (c, s.name)
-        })
+        let ask = |method: &'static str| {
+            let peer = peer.clone();
+            async move {
+                peer.request(method, serde_json::json!({}), Duration::from_secs(2))
+                    .await
+                    .ok()
+            }
+        };
+        let (central, others) = tokio::join!(ask(m::WORKER_STATUS), ask(m::WORKER_PEERS));
+        let central = central.and_then(|v| serde_json::from_value::<m::WorkerStatus>(v).ok());
+        let others = others
+            .and_then(|v| serde_json::from_value::<Vec<m::WorkerStatus>>(v).ok())
+            .unwrap_or_default();
+        central
+            .into_iter()
+            .chain(others)
+            .filter(|s| s.heavy)
+            .map(|s| {
+                let c = Candidate {
+                    id: s.id,
+                    kind: Kind::Linked,
+                    os: s.os,
+                    cores: s.cores,
+                    load: s.load,
+                    slots: s.slots,
+                    used: s.used,
+                    rtt_ms: s.rtt_ms,
+                };
+                (c, s.name)
+            })
+            .collect()
     }
 
     /// `worker.status` on a central host, for a member (X89): whether it
@@ -631,8 +649,14 @@ impl Runs {
             cores: cores(),
             load: crate::link::load().unwrap_or(0.0),
             slots: me.slots,
-            used: (self.routed.lock().unwrap().len() + self.running.lock().unwrap().len()) as u32,
+            used: self.used_here(),
+            rtt_ms: None,
         }
+    }
+
+    /// Routed commands this host runs now, for itself and others (X89).
+    pub fn used_here(&self) -> u32 {
+        (self.routed.lock().unwrap().len() + self.running.lock().unwrap().len()) as u32
     }
 
     /// The machines that might run a command of `plan`: linked workers
@@ -644,7 +668,7 @@ impl Runs {
         workers: &Workers,
         skipped: &HashSet<String>,
         claims: &HashMap<u32, (String, String)>,
-        central: Option<&Candidate>,
+        linked: &[(Candidate, String)],
     ) -> Vec<Candidate> {
         // Cloud machines run only their own project's commands (X63).
         let (cloud, mine) = match self.machines() {
@@ -676,10 +700,10 @@ impl Runs {
                 rtt_ms: w.rtt_ms,
             })
             .collect();
-        if let Some(c) = central
-            && !skipped.contains(&c.id)
-            && !claims.values().any(|(id, s)| *id == c.id && *s == plan.session)
-        {
+        for (c, _) in linked {
+            if skipped.contains(&c.id) || claims.values().any(|(id, s)| *id == c.id && *s == plan.session) {
+                continue;
+            }
             let mut c = c.clone();
             c.used += claims.values().filter(|(id, _)| *id == c.id).count() as u32;
             out.push(c);
@@ -842,6 +866,9 @@ impl Runs {
                         || match &conn {
                             Peer::Conn(c) => workers.conn(worker).is_none_or(|w| w.id != c.id),
                             Peer::Link(_) => false,
+                            // The central host says the member running it
+                            // went away (X89).
+                            Peer::Relay(..) => self.lost.lock().unwrap().remove(&run),
                         };
                     if gone {
                         self.remote.lock().unwrap().remove(&run);
@@ -1280,6 +1307,14 @@ impl Runs {
         });
         self.done(peer.id(), r.run, r.status, ended, back_ms);
         brought
+    }
+
+    /// `exec.lost` from the central host: the member that ran run `run` of
+    /// this host went away, and the run goes on here (X89).
+    pub fn lost(&self, run: u32) {
+        if self.remote.lock().unwrap().contains_key(&run) {
+            self.lost.lock().unwrap().insert(run);
+        }
     }
 
     /// `exec.cancel` from the host that routed run `run` here, on the

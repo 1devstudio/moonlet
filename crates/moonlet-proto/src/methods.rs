@@ -423,6 +423,16 @@ pub const WORKER_REGISTER: &str = "worker.register";
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
 pub const WORKER_PING: &str = "worker.ping";
+/// A routing call between two members, through their central host (X89):
+/// [`PeerCall`] → the other member's answer. A member sends `to`; the
+/// central host passes it on with `from`, the sender's worker id.
+pub const PEER_CALL: &str = "peer.call";
+/// The members a member may route a command to through its central host,
+/// with their load and slots (X89): [`WorkerStatus`]s.
+pub const WORKER_PEERS: &str = "worker.peers";
+/// `{run}`, from the central host to a member: the member that ran run
+/// `run` for it through the central host went away (X89).
+pub const EV_EXEC_LOST: &str = "exec.lost";
 /// A member asks its central host whether it takes the member's heavy
 /// commands now (X89): [`WorkerStatus`].
 pub const WORKER_STATUS: &str = "worker.status";
@@ -2959,6 +2969,18 @@ pub struct LinkSet {
     pub worker: Option<LinkWorkerSet>,
 }
 
+/// `peer.call` (X89).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PeerCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
 /// `worker.status` (X89): a central host as a candidate for a member's
 /// routed command.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -2973,6 +2995,10 @@ pub struct WorkerStatus {
     pub slots: u32,
     /// Routed commands it runs now, for anyone.
     pub used: u32,
+    /// The central host's round trip to it, for a member reached through
+    /// it (`worker.peers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u64>,
 }
 
 /// `worker.settings.set` (X89): a field left out stays as it is.
@@ -3094,6 +3120,10 @@ pub struct WorkerRegister {
     /// A worker linked only for live copies does not (X62).
     #[serde(default)]
     pub heavy: bool,
+    /// It runs other members' commands, and routes its own, through its
+    /// central host (`peer.call`, X89). Absent from a member before X89.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub peer: bool,
 }
 
 /// A linked worker in `worker.list`.
@@ -3107,6 +3137,10 @@ pub struct WorkerInfo {
     /// The 1-minute load average from the last `worker.ping` answer (X62).
     #[serde(default)]
     pub load: Option<f64>,
+    /// Routed commands it runs now, for any host, from the last
+    /// `worker.ping` answer (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<u32>,
 }
 
 /// `sync.start` params: the session's id on the central host.
