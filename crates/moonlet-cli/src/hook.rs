@@ -13,9 +13,10 @@ pub struct Ask {
 }
 
 /// The fields of a Bash call moonlet routes. The hook answers `allow`, so a
-/// call with any other field, such as `run_in_background` or one that asks
-/// to leave Claude Code's sandbox, goes through Claude Code's own checks.
-const KNOWN_FIELDS: [&str; 3] = ["command", "timeout", "description"];
+/// call with any other field, such as one that asks to leave Claude Code's
+/// sandbox, goes through Claude Code's own checks. A background call is
+/// routed too (X90): it is how a run outlasts the foreground's 10 minutes.
+const KNOWN_FIELDS: [&str; 4] = ["command", "timeout", "description", "run_in_background"];
 
 /// The Bash call in a Claude Code `PreToolUse` payload that may be routed.
 pub fn asks(payload: &Value) -> Option<Ask> {
@@ -120,11 +121,36 @@ mod tests {
         );
     }
 
+    /// Claude Code 2.1.319's `PreToolUse` payload for a Bash call with
+    /// `run_in_background` (X90).
     #[test]
-    fn a_background_bash_call_is_not_routed() {
-        let mut payload = captured();
-        payload["tool_input"]["run_in_background"] = json!(true);
-        assert_eq!(asks(&payload), None);
+    fn a_background_bash_call_is_routed_and_stays_in_the_background() {
+        let payload: Value =
+            serde_json::from_str(include_str!("fixtures/pre_tool_use_bash_background.json"))
+                .unwrap();
+        assert_eq!(
+            asks(&payload),
+            Some(Ask {
+                command: "pnpm check".into(),
+                cwd: "/Users/alex/.moonlet/worktrees/shop/fix-cart".into(),
+                tool_use_id: Some("toolu_01NoQAPN1jqBjTHrojvSFhhY".into()),
+            })
+        );
+        assert_eq!(
+            rewrite(&payload, "/Applications/moonlet.app/Contents/MacOS/moonlet"),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "moonlet: an approved heavy command; it runs on whichever machine is free",
+                    "updatedInput": {
+                        "command": "'/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_01NoQAPN1jqBjTHrojvSFhhY -- pnpm check",
+                        "description": "Run the checks",
+                        "run_in_background": true,
+                    },
+                },
+            })
+        );
         // Nor are other tools or other events.
         let mut read = captured();
         read["tool_name"] = json!("Read");
@@ -132,14 +158,14 @@ mod tests {
         let mut post = captured();
         post["hook_event_name"] = json!("PostToolUse");
         assert_eq!(asks(&post), None);
-        // A field moonlet does not know, such as one that asks to leave
-        // Claude Code's sandbox, keeps the call where it is.
         // Plan mode runs nothing that changes files; an answer of
         // `allow` must not get round it.
-        let mut planning = captured();
+        let mut planning = payload.clone();
         planning["permission_mode"] = json!("plan");
         assert_eq!(asks(&planning), None);
-        let mut unsandboxed = captured();
+        // A field moonlet does not know, such as one that asks to leave
+        // Claude Code's sandbox, keeps the call where it is.
+        let mut unsandboxed = payload.clone();
         unsandboxed["tool_input"]["dangerouslyDisableSandbox"] = json!(true);
         assert_eq!(asks(&unsandboxed), None);
     }

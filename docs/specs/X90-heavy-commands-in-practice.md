@@ -41,11 +41,11 @@ With this spec:
 
 ### Background calls
 
-- [ ] The hook routes a Bash call whose input has only the fields `command`, `timeout`, `description` and `run_in_background`, whatever `run_in_background` holds. Any other field, such as `dangerouslyDisableSandbox`, still keeps the call where it is. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
-- [ ] The rewrite keeps `run_in_background` as the agent sent it. As in X62, `updatedInput` repeats every field and changes only `command`. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
-- [ ] When Claude Code stops a background call (KillShell, or the session ending), `moonlet exec` gets a signal or loses its terminal. The run is then stopped as X62 stops a cancelled one: SIGTERM, SIGKILL after 5 s, and its changes come back. When `moonlet exec` is killed outright, its connection to the daemon closes and the daemon stops the run in the same way. (`a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back`)
-- [ ] An edit the agent makes while a background run goes on is handled by X62's fence rule. A file both changed keeps the session's version, and the run's version goes to `sync-leftovers`, with the line that says so. Nothing new is needed, but the test covers a background call. (`an_edit_during_a_background_run_keeps_the_sessions_version`)
-- [ ] Plan mode, other tools and other hook events are still never routed. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
+- [x] The hook routes a Bash call whose input has only the fields `command`, `timeout`, `description` and `run_in_background`, whatever `run_in_background` holds. Any other field, such as `dangerouslyDisableSandbox`, still keeps the call where it is. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
+- [x] The rewrite keeps `run_in_background` as the agent sent it. As in X62, `updatedInput` repeats every field and changes only `command`. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
+- [x] When Claude Code stops a background call (KillShell, or the session ending), `moonlet exec` gets a signal or loses its terminal. The run is then stopped as X62 stops a cancelled one: SIGTERM, SIGKILL after 5 s, and its changes come back. When `moonlet exec` is killed outright, its connection to the daemon closes and the daemon stops the run in the same way. (`a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back`)
+- [x] An edit the agent makes while a background run goes on is handled by X62's fence rule. A file both changed keeps the session's version, and the run's version goes to `sync-leftovers`, with the line that says so. Nothing new is needed: the daemon cannot tell a background call from a foreground one, so X62's test covers it. (`a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs`)
+- [x] Plan mode, other tools and other hook events are still never routed. (`a_background_bash_call_is_routed_and_stays_in_the_background`)
 
 ### Full output
 
@@ -90,7 +90,7 @@ No new screens.
 Expected values are literals from this spec or from captured output.
 
 - **Rust unit (`crates/moonlet-cli/src/hook.rs`):** `a_background_bash_call_is_routed_and_stays_in_the_background`, against a `PreToolUse` payload with `run_in_background: true`, captured from the current Claude Code (`src/fixtures/pre_tool_use_bash_background.json`). It replaces X62's `a_background_bash_call_is_not_routed`, and keeps that test's checks for plan mode, other tools, other events and `dangerouslyDisableSandbox`.
-- **Daemon e2e (`crates/moonletd/tests/exec.rs`):** `a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list`, `an_entry_only_the_worktree_lists_is_not_routed`, `an_unreadable_main_checkout_config_routes_nothing`, `outputs_come_from_the_main_checkouts_list`, `a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back`, `an_edit_during_a_background_run_keeps_the_sessions_version`, `a_jobs_whole_output_is_in_its_log_file`, `a_log_over_ten_mib_keeps_its_start_and_end`, `a_jobs_log_goes_with_the_job`.
+- **Daemon e2e (`crates/moonletd/tests/exec.rs`):** `a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list`, `an_entry_only_the_worktree_lists_is_not_routed`, `an_unreadable_main_checkout_config_routes_nothing`, `outputs_come_from_the_main_checkouts_list`, `a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back` (X62's code already did this; the test pins it down for background calls), `a_jobs_whole_output_is_in_its_log_file`, `a_log_over_ten_mib_keeps_its_start_and_end`, `a_jobs_log_goes_with_the_job`.
 - **CLI e2e (`crates/moonlet-cli/tests/exec.rs`):** `moonlet_exec_ends_with_the_full_outputs_path`.
 - X62's tests that write `[heavy]` into a session's worktree move it to the project's main checkout. Their names stay.
 - **Manual:** in a real session, a background `pnpm check` that runs past 10 minutes on another Mac, and the agent reading the log file.
@@ -102,7 +102,7 @@ Expected values are literals from this spec or from captured output.
 | `outputs` and `os` | `outputs_come_from_the_main_checkouts_list` |
 | Background calls routed, flag kept | `a_background_bash_call_is_routed_and_stays_in_the_background` |
 | Stopping a background run | `a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back` |
-| Edits during a background run | `an_edit_during_a_background_run_keeps_the_sessions_version` |
+| Edits during a background run | X62's `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
 | The log file and its limit | `a_jobs_whole_output_is_in_its_log_file`, `a_log_over_ten_mib_keeps_its_start_and_end` |
 | The log goes with the job | `a_jobs_log_goes_with_the_job` |
 | The last line | `moonlet_exec_ends_with_the_full_outputs_path` |
