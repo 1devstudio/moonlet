@@ -10,7 +10,7 @@
 // MacBook archives it, so later specs see none.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { accountSnapshot, BIN_DIR, closeSettings, openSettings, restoreAccount, sel, socketRpc, world } from "../fixtures";
@@ -26,6 +26,8 @@ const row = sel.sessionRow(SESSION);
 
 /** One request to the MacBook's daemon over its socket. */
 const bookRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params);
+/** One as the MacBook's own app, which alone manages its link (X75). */
+const bookApp = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params, readFileSync(join(home, "run", "app-token"), "utf8").trim());
 
 const allow = sel.settingsSwitch("Allow connections from my tailnet");
 
@@ -54,7 +56,7 @@ describe("the central host's copies of other members' sessions (X86)", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "mobile.json"), '{ "enabled": true, "port": 0 }\n');
     execFileSync(join(BIN_DIR, "moonletd"), ["start"], { env, stdio: "pipe" });
-    await bookRpc("link.set", { worker: { name: "MacBook" } });
+    await bookApp("link.set", { worker: { name: "MacBook" } });
   });
 
   after(async () => {
@@ -73,7 +75,7 @@ describe("the central host's copies of other members' sessions (X86)", () => {
 
   it("lists the MacBook's session with the host icon naming it", async () => {
     const link = await macPairingLink();
-    await bookRpc("link.pair", { central: { name: link.searchParams.get("host"), addrs: [link.searchParams.get("addr")] }, code: link.searchParams.get("code") });
+    await bookApp("link.pair", { central: { name: link.searchParams.get("host"), addrs: [link.searchParams.get("addr")] }, code: link.searchParams.get("code") });
     await closeSettings();
     const project = await bookRpc<{ id: string }>("project.add", { path: clone });
     session = (await bookRpc<{ id: string }>("session.create", { project_id: project.id, name: SESSION, agent: "none" })).id;

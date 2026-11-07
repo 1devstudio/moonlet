@@ -174,11 +174,15 @@ export function jsonFrame(msg: object): Buffer {
 }
 
 /** One request to a second scratch daemon over its socket `sock`, as any
- *  client may send it. `env` points `moonletd status` at that daemon. */
-export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: string, params: object = {}): Promise<T> {
+ *  client may send it. `env` points `moonletd status` at that daemon.
+ *  With `appToken`, the daemon's own app credential (X75, from
+ *  `<its MOONLET_HOME>/run/app-token`), the request comes as that Mac's
+ *  app, as for what only the app manages, such as its link. */
+export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: string, params: object = {}, appToken?: string): Promise<T> {
   const { protocol } = JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number };
+  const hello = { t: "hello", protocol, client: "e2e", ...(appToken && { app_token: appToken }) };
   return new Promise((resolve, reject) => {
-    const s = connect(sock, () => s.write(Buffer.concat([jsonFrame({ t: "hello", protocol, client: "e2e" }), jsonFrame({ t: "request", id: 1, method, params })])));
+    const s = connect(sock, () => s.write(Buffer.concat([jsonFrame(hello), jsonFrame({ t: "request", id: 1, method, params })])));
     let buf = Buffer.alloc(0);
     s.on("data", (d) => {
       buf = Buffer.concat([buf, d]);
