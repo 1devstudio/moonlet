@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aheadText, autoPulls, baseChip, fetchDue, behindHeadline, chipClick, fetchedLabel, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
+import { aheadText, autoPulls, baseChip, fetchDue, behindHeadline, chipClick, fetchedLabel, afterFetch, elsewhereToast, justMerged, pullPopoverPlacement, pullToast, rebaseCommand } from "./baseSync";
 import type { BaseStatus } from "./protocol";
 
 const status = (ahead: number, behind: number): BaseStatus => ({
@@ -147,5 +147,35 @@ describe("autoPulls (X55)", () => {
     expect(autoPulls(status(0, 0), false, true)).toBe(false);
     expect(autoPulls(status(0, 3), true, true)).toBe(false);
     expect(autoPulls(null, false, true)).toBe(false);
+  });
+});
+
+describe("afterFetch", () => {
+  it("pulls a branch that is only behind, and stops at anything else", () => {
+    expect(afterFetch(status(0, 2))).toBe("pull");
+    expect(afterFetch(status(1, 2))).toEqual({ diverged: true });
+    expect(afterFetch(status(0, 0))).toEqual({ pulled: 0 });
+    expect(afterFetch(status(1, 0))).toEqual({ pulled: 0 });
+    expect(afterFetch(null)).toEqual({ noUpstream: true });
+  });
+
+  it("does not take a failed fetch as up to date", () => {
+    expect(afterFetch({ ...status(0, 0), fetch_error: "fatal: unable to access 'https://github.com/acme/ledger.git/': Could not resolve host: github.com" })).toEqual({ error: "couldn't fetch origin/main" });
+  });
+});
+
+describe("elsewhereToast", () => {
+  it("names another host's base branch only when it is not the clicked one's", () => {
+    expect(
+      elsewhereToast("main", [
+        { label: "studio-mini", branch: "develop", pulled: 1 },
+        { label: "build-box", branch: "develop", pulled: 0 },
+        { label: "devbox", branch: "develop", error: "fatal: not a git repository (or any of the parent directories): .git" },
+      ]),
+    ).toBe("studio-mini: pulled 1 commit into develop. build-box: develop already up to date. devbox: couldn't pull into develop: fatal: not a git repository (or any of the parent directories): .git.");
+  });
+
+  it("says nothing when no other host has the project", () => {
+    expect(elsewhereToast("main", [])).toBe("");
   });
 });

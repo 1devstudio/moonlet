@@ -39,7 +39,7 @@ import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
 import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, onChatItem, onChatState, reloadChats } from "./chat";
-import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
+import { afterFetch, autoPulls, elsewhereToast, fetchDue, justMerged, pullToast, sameProjectElsewhere, type ElsewhereOutcome, type ElsewherePull, type FetchInfo } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
@@ -871,19 +871,47 @@ function patchBase(key: string, patch: Partial<BaseSync>) {
   });
 }
 
+/** Records a base branch status, unless `stale`; with `fetch`, also when
+ *  origin was last fetched and why. Whether a fetch succeeded. */
+function recordBase(key: string, status: BaseStatus | null, opts: { fetch?: boolean; reason?: string }, stale = false): boolean {
+  const fetched = !!opts.fetch && !status?.fetch_error;
+  patchBase(key, {
+    ...(!stale && { status }),
+    ...(opts.fetch && { fetchError: status?.fetch_error ?? null }),
+    ...(fetched && { fetchedAt: Date.now(), reason: opts.reason ?? null }),
+  });
+  return fetched;
+}
+
+/** How many pulls of each project have ended (by `projKey`). A status read
+ *  while one ran may be from before it. */
+const pullsEnded: Record<string, number> = {};
+
+/** Ends a pull: refreshes before clearing `pulling`, so the chip does not
+ *  flash the old count. */
+async function endPull(host: string, projectId: string) {
+  const key = projKey(host, projectId);
+  await refreshBase(host, projectId);
+  pullsEnded[key] = (pullsEnded[key] ?? 0) + 1;
+  patchBase(key, { pulling: false });
+}
+
 /** Reloads a project's base branch status; `fetch` updates origin first. */
 export async function refreshBase(host: string, projectId: string, opts: { fetch?: boolean; reason?: string } = {}) {
   const p = get().projects[host]?.find((x) => x.id === projectId);
   if (!p) return;
+  const key = projKey(host, p.id);
+  const ended = pullsEnded[key] ?? 0;
   try {
     const status = await rpc<BaseStatus | null>(host, M.gitBaseStatus, { path: p.path, branch: p.base_branch, fetch: !!opts.fetch });
-    const fetched = opts.fetch && !status?.fetch_error;
-    patchBase(projKey(host, p.id), {
-      status,
-      ...(opts.fetch && { fetchError: status?.fetch_error ?? null }),
-      ...(fetched && { fetchedAt: Date.now(), reason: opts.reason ?? null }),
-    });
-    if (fetched && autoPulls(status, !!get().base[projKey(host, p.id)]?.pulling, gitSettingsOf(get().gitSettings, host).fast_forward_base)) void pullBase(host, p.id);
+    if ((pullsEnded[key] ?? 0) !== ended) {
+      // A pull ended meanwhile, so this status may be from before it: keep
+      // when origin was fetched, read the branch again, and pull nothing.
+      recordBase(key, status, opts, true);
+      return refreshBase(host, p.id);
+    }
+    const fetched = recordBase(key, status, opts);
+    if (fetched && autoPulls(status, !!get().base[key]?.pulling, gitSettingsOf(get().gitSettings, host).fast_forward_base)) void pullBase(host, p.id);
   } catch {
     /* the project folder is gone or the host disconnected */
   }
@@ -945,9 +973,43 @@ export async function pullBase(host: string, projectId: string) {
   } catch (e) {
     errorToast(e);
   }
-  // Refresh before clearing `pulling`, so the chip does not flash the old count.
-  await refreshBase(host, p.id);
-  patchBase(key, { pulling: false });
+  await endPull(host, p.id);
+}
+
+/** The chip's click: pulls on `host` as `pullBase` does, and on every other
+ *  connected host that has the same project, each after fetching there.
+ *  The other hosts report in a toast of their own once they are all done,
+ *  so a slow host does not hold back the clicked one's. */
+export async function pullBaseEverywhere(host: string, projectId: string) {
+  const s = get();
+  const p = s.projects[host]?.find((x) => x.id === projectId);
+  if (!p) return;
+  const elsewhere = sameProjectElsewhere(host, p, s.projects, (h) => s.hosts[h]?.status === "connected");
+  const [, ...pulls] = await Promise.all([pullBase(host, p.id), ...elsewhere.map((e) => fetchAndPull(e.host, e.project, e.folder))]);
+  const text = elsewhereToast(p.base_branch, pulls);
+  if (text) toast(text);
+}
+
+/** Fetches another host's copy of the project, as its last fetch may be
+ *  old, then fast-forwards it when it is only behind. */
+async function fetchAndPull(host: string, p: Project, folder: string | null): Promise<ElsewherePull> {
+  const key = projKey(host, p.id);
+  const name = get().hosts[host]?.label ?? host;
+  const of = { label: folder ? `${name} (${folder})` : name, branch: p.base_branch };
+  // A pull already running there (its own chip, or X55's) reports itself.
+  if (get().base[key]?.pulling) return { ...of, busy: true };
+  patchBase(key, { pulling: true });
+  let outcome: ElsewhereOutcome;
+  try {
+    const st = await rpc<BaseStatus | null>(host, M.gitBaseStatus, { path: p.path, branch: p.base_branch, fetch: true });
+    recordBase(key, st, { fetch: true });
+    const next = afterFetch(st);
+    outcome = next === "pull" ? { pulled: (await rpc<BasePull>(host, M.gitPullBase, { path: p.path, branch: p.base_branch })).pulled } : next;
+  } catch (e) {
+    outcome = { error: errorMessage(e) };
+  }
+  await endPull(host, p.id);
+  return { ...of, ...outcome };
 }
 
 export async function refreshAllGit(host: string) {

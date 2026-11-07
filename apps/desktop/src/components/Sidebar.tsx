@@ -3,7 +3,7 @@ import { Archive, ArrowDown, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
-import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
+import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -194,7 +194,7 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
     if (action !== "pull") return;
     window.clearTimeout(leaveTimer.current);
     setPos(null);
-    void pullBase(host, projectId);
+    void pullBaseEverywhere(host, projectId);
   };
   const mono = (t: string) => <span className="font-mono text-fg">{t}</span>;
   const command = rebaseCommand(st, project.path);
