@@ -5,6 +5,7 @@
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
 - **Depends on:** [X41](X41-worker-link-and-project-identity.md) (the worker link, `worker.list`, project identity), [X61](X61-remote-hosts-for-heavy-commands.md) (remote hosts as workers) and [X60](X60-keep-in-sync.md) (snapshots, packs, offer and update rounds, setup approval).
+- **Changed by:** [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
 
 ## Summary
 
