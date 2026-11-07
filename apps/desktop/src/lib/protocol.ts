@@ -468,6 +468,15 @@ export interface WorkerInfo {
   load?: number | null;
 }
 
+/** A member's worker settings (X89), from `worker.settings`: whether it
+ * takes other hosts' heavy commands, and its slots. */
+export interface WorkerSettingsEntry {
+  worker: string;
+  name: string;
+  heavy: boolean;
+  slots: number;
+}
+
 /** A routed command of a session (X62), from `job.list` and `job.changed`. */
 export interface Job {
   id: string;
@@ -1548,6 +1557,8 @@ export const M = {
   heavySet: "heavy.set",
   heavyApprove: "heavy.approve",
   workerList: "worker.list",
+  workerSettings: "worker.settings",
+  workerSettingsSet: "worker.settings.set",
   execStatus: "exec.status",
   execSetups: "exec.setups",
   cloudGet: "cloud.get",
@@ -1630,6 +1641,7 @@ export const EV = {
   linkChanged: "link.changed",
   syncChanged: "sync.changed",
   workersChanged: "workers.changed",
+  workerSettingsChanged: "worker.settings_changed",
   jobChanged: "job.changed",
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",
