@@ -1,12 +1,12 @@
 // Sessions follow the user between members (X73): where a session runs,
-// what typing into another member's session does, and what Move to…
+// what typing into another member's session does, and what Run only on…
 // offers. The daemons move sessions; these say what the app shows.
 
 import type { ChatImage } from "./attachments";
 
 /** The mark at the end of a session's row: none for a session on this Mac
  * that is not kept here; the host for one running on another member, with
- * a pin when kept there with Move to…, dimmed while that member is offline. */
+ * a pin when kept there with Run only on…, dimmed while that member is offline. */
 export function hostMark(
   s: { pinned?: string | null },
   host: string,
@@ -110,7 +110,7 @@ export function joinWaiting(waiting: WaitingMessage, next: WaitingMessage): Wait
   return { terminal: waiting.terminal, text: `${waiting.text}\n\n${next.text}`, images: [...waiting.images, ...next.images] };
 }
 
-/** The host that lists a session after Move to… `to` (a worker id): this
+/** The host that lists a session after Run only on… `to` (a worker id): this
  * Mac (`me`) or the central host. */
 export function movedHost(o: { to: string; me: string | null; centralHost: string | null }): string | null {
   return o.to === o.me ? "local" : o.centralHost;
@@ -128,35 +128,33 @@ export const offlineLine = (name: string, since: number) => `${name} is offline 
 /** The time a member went offline, for a row's tooltip. */
 export const offlineSince = (since: number) => clock(since);
 
-/** Move to…'s members: this Mac and the central host, the session's owner
- * checked. None without a central host. */
-export function moveTargets(o: { thisMac: string; central: { id: string; label: string } | null; owner: string }): { to: string; label: string; current: boolean }[] {
+/** Run only on…'s members (X73): this Mac and the central host, by name,
+ * the one the session is kept on (`pinned`, a worker id) checked. None
+ * without a central host. */
+export function moveTargets(o: { thisMac: { id: string; label: string }; central: { id: string; label: string } | null; pinned: string | null }): { to: string; label: string; checked: boolean }[] {
   if (!o.central) return [];
-  return [
-    { to: o.thisMac, label: "This Mac", current: o.owner === o.thisMac },
-    { to: o.central.id, label: o.central.label, current: o.owner === o.central.id },
-  ];
+  return [o.thisMac, o.central].map((m) => ({ to: m.id, label: `Run only on ${m.label}`, checked: o.pinned === m.id }));
 }
 
-/** What a session's menu offers to move it (X73): Move to… this Mac and
- * the central host, Unpin when kept somewhere, and Take over anyway while
- * the central host, which runs it, has been offline 30 s or more and this
- * Mac holds a live copy of it (`copy`) to take it from. */
+/** What a session's menu offers to move it (X73): Run only on… this Mac
+ * and the central host, Unpin when kept somewhere, and Take over anyway
+ * while the central host, which runs it, has been offline 30 s or more and
+ * this Mac holds a live copy of it (`copy`) to take it from. */
 export function followMenu(o: {
   host: string;
   centralHost: string | null;
   me: string | null;
+  meLabel: string;
   centralId: string | null;
   centralLabel: string;
-  pinned: boolean;
+  pinned: string | null;
   unreachableSince: number | null;
   now: number;
   copy: boolean;
-}): ({ kind: "move"; to: string; label: string; current: boolean } | { kind: "unpin" } | { kind: "take-over" })[] {
+}): ({ kind: "move"; to: string; label: string; checked: boolean } | { kind: "unpin" } | { kind: "take-over" })[] {
   if (!o.me || !o.centralId || !o.centralHost) return [];
-  const owner = o.host === "local" ? o.me : o.host === o.centralHost ? o.centralId : null;
-  if (!owner) return [];
-  const moves = moveTargets({ thisMac: o.me, central: { id: o.centralId, label: o.centralLabel }, owner }).map((t) => ({ kind: "move" as const, ...t }));
+  if (o.host !== "local" && o.host !== o.centralHost) return [];
+  const moves = moveTargets({ thisMac: { id: o.me, label: o.meLabel }, central: { id: o.centralId, label: o.centralLabel }, pinned: o.pinned }).map((t) => ({ kind: "move" as const, ...t }));
   const offline = o.unreachableSince !== null && o.now - o.unreachableSince >= 30_000;
   return [
     ...(offline ? [] : moves),

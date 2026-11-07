@@ -51,29 +51,39 @@ describe("the central host offline (X73)", () => {
   });
 });
 
-describe("Move to… (X73)", () => {
-  it("offers this Mac and the central host, with the current owner checked", () => {
-    expect(moveTargets({ thisMac: "book-id", central: { id: "mini-id", label: "studio-mini" }, owner: "book-id" })).toEqual([
-      { to: "book-id", label: "This Mac", current: true },
-      { to: "mini-id", label: "studio-mini", current: false },
+describe("Run only on… (X73)", () => {
+  it("offers this Mac and the central host by name, with the member the session is kept on checked", () => {
+    const central = { id: "mini-id", label: "studio-mini" };
+    expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central, pinned: null })).toEqual([
+      { to: "book-id", label: "Run only on MacBook", checked: false },
+      { to: "mini-id", label: "Run only on studio-mini", checked: false },
     ]);
-    expect(moveTargets({ thisMac: "book-id", central: null, owner: "book-id" })).toEqual([]);
+    expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central, pinned: "mini-id" })).toEqual([
+      { to: "book-id", label: "Run only on MacBook", checked: false },
+      { to: "mini-id", label: "Run only on studio-mini", checked: true },
+    ]);
+    expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central: null, pinned: null })).toEqual([]);
   });
 });
 
 describe("a session's menu to move it (X73)", () => {
-  const base = { centralHost: "mini", me: "book-id", centralId: "mini-id", centralLabel: "studio-mini", pinned: false, unreachableSince: null, now: 100_000, copy: true };
-  it("offers Move to… for this Mac's and the central host's sessions", () => {
+  const base = { centralHost: "mini", me: "book-id", meLabel: "MacBook", centralId: "mini-id", centralLabel: "studio-mini", pinned: null, unreachableSince: null, now: 100_000, copy: true };
+  it("offers Run only on… for this Mac's and the central host's sessions", () => {
     expect(followMenu({ ...base, host: "local" })).toEqual([
-      { kind: "move", to: "book-id", label: "This Mac", current: true },
-      { kind: "move", to: "mini-id", label: "studio-mini", current: false },
+      { kind: "move", to: "book-id", label: "Run only on MacBook", checked: false },
+      { kind: "move", to: "mini-id", label: "Run only on studio-mini", checked: false },
     ]);
-    expect(followMenu({ ...base, host: "mini", pinned: true }).map((i) => i.kind)).toEqual(["move", "move", "unpin"]);
+    expect(followMenu({ ...base, host: "local", pinned: "book-id" })).toEqual([
+      { kind: "move", to: "book-id", label: "Run only on MacBook", checked: true },
+      { kind: "move", to: "mini-id", label: "Run only on studio-mini", checked: false },
+      { kind: "unpin" },
+    ]);
+    expect(followMenu({ ...base, host: "mini", pinned: "mini-id" }).map((i) => i.kind)).toEqual(["move", "move", "unpin"]);
     expect(followMenu({ ...base, host: "vps" })).toEqual([]);
   });
 
   it("offers Take over anyway only after 30 s offline, for what the central host runs", () => {
-    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([{ kind: "move", to: "book-id", label: "This Mac", current: false }, { kind: "move", to: "mini-id", label: "studio-mini", current: true }]);
+    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([{ kind: "move", to: "book-id", label: "Run only on MacBook", checked: false }, { kind: "move", to: "mini-id", label: "Run only on studio-mini", checked: false }]);
     expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000 })).toEqual([{ kind: "take-over" }]);
     expect(followMenu({ ...base, host: "local", unreachableSince: 60_000 })).toEqual([]);
   });

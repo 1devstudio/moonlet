@@ -15,7 +15,7 @@ With this spec, a session's agent runs where the user works, and moves on its ow
 - **When the user types into a session in the app on another member,** that member takes the session over once the current turn ends, and the message runs there.
 - **The phone never moves a session.** Its messages reach the owner through the central host (X72). Only when the owner has been unreachable for 30 s with no sleep notice does a phone message make the central host take the session over.
 
-**Move to…** overrides all of this: it pins the session to one member until the user unpins it, and **Move now** cuts a running turn off to move at once.
+**Run only on…** overrides all of this: it pins the session to one member until the user unpins it, and **Move now** cuts a running turn off to move at once.
 
 Every move raises the session's **ownership number**. Only the member holding the highest number runs the agent (ADR 0009).
 
@@ -40,7 +40,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 3. On the bus, the user answers the agent's question from the phone. `studio-mini` runs the session, so nothing moves.
 4. At home, the user opens the MacBook. `fix-cart` shows "on studio-mini" in the sidebar, and its chat has everything that happened, live. The MacBook's worktree has the agent's latest edits.
 5. The user types a message in `fix-cart` on the MacBook. The agent on `studio-mini` is in the middle of a turn, so the composer shows "Moves here when studio-mini's turn ends · Move now". The turn ends, and the session moves to the MacBook. The agent there reads the user's message and answers.
-6. The user starts a long refactor in the session `big-refactor` and wants it to run on `studio-mini` whatever happens. They pick **Move to… › studio-mini** in its menu. `big-refactor` now shows "Kept on studio-mini". Typing in it on the MacBook sends the message to `studio-mini`, and nothing moves.
+6. The user starts a long refactor in the session `big-refactor` and wants it to run on `studio-mini` whatever happens. They pick **Run only on studio-mini** in its menu. `big-refactor` now shows "Kept on studio-mini". Typing in it on the MacBook sends the message to `studio-mini`, and nothing moves.
 
 ## Behaviour and acceptance criteria
 
@@ -128,11 +128,11 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   4. the chat says "MacBook ran this session while it could not reach studio-mini. Its work is saved in <folder>."
 - [ ] The same checks run when a daemon starts.
 
-### Move to…
+### Run only on…
 
-- [ ] **Move to…** in a session's menu lists the account's members, with the current owner checked. Choosing one pins the session there (`pinned`) and moves it at the end of the current turn, or at once when idle.
+- [ ] A session's menu has **Run only on <member>** for each of the account's members, by the member's name: "Run only on MacBook", "Run only on studio-mini". Every member is listed, the one running the session too, since choosing it keeps the session there. The member the session is kept on is checked; an unpinned session has none checked. Choosing one pins the session there (`pinned`) and moves it at the end of the current turn, or at once when idle.
 - [ ] **Move now** moves it at once: a running turn is cut off and continues on the chosen member with the cut-off note.
-- [ ] A pinned session never moves on its own: not on sleep, not on typing, and not when unreachable. **Unpin** in its menu, or **Move to…** another member, changes that.
+- [ ] A pinned session never moves on its own: not on sleep, not on typing, and not when unreachable. **Unpin** in its menu, or **Run only on** another member, changes that.
 - [ ] Choosing a member that is not reachable is refused: "studio-mini is not reachable."
 
 ### Where a session runs, in the app
@@ -167,7 +167,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - The line above the composer while the central host is offline: "studio-mini is offline since 14:02. fix-cart runs there, so it can't move here until studio-mini is back.", with **Take over anyway** after 30 s.
 - The chat: one muted line where a session moved: "Continued on studio-mini after MacBook went to sleep.", "Moved to MacBook because you typed here.", "Moved to studio-mini (Move now)."
 - The composer, while a typed message waits: "Moves here when studio-mini's turn ends", with **Move now** and **Send to studio-mini instead**.
-- The session menu: **Move to…** › members, **Move now** (while a turn runs), **Unpin**.
+- The session menu: **Run only on <member>** for each member, **Move now** (while a turn runs), **Unpin**.
 - The phone, for an unreachable owner's session whose turn was running: a line above the composer, "MacBook is not reachable · fix-cart was working", with **Continue on studio-mini**.
 - The readiness mark: a small hollow triangle after the session's name, in the muted colour.
 
@@ -243,7 +243,7 @@ What works as specified:
   - It then follows the new owner with an X60 live copy, as the user chose. (`a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner`)
 - **Sleep.** The member freezes its chat agents, sends what is new, and hands its unpinned sessions over with `session.yield`, holding sleep for at most 25 s. On wake, an agent goes on only while its session is still its own. (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_not_handed_over_before_sleep_goes_on_here_after_waking`)
 - **Typing brings a session back.** It waits for the end of the turn, or moves at once with Move now. (`typing_on_the_member_brings_the_session_back_from_the_central_host`, `a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now`)
-- **Move to… pins, and Unpin.** (`a_session_moved_to_the_central_host_stays_there`, `a_session_moved_to_this_mac_stays_through_sleep_until_unpinned`)
+- **Run only on… pins, and Unpin.** (`a_session_moved_to_the_central_host_stays_there`, `a_session_moved_to_this_mac_stays_through_sleep_until_unpinned`)
 - **Take over anyway.** (`a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back`)
 - **Readiness.** (`the_central_host_says_whether_it_could_continue_each_copy`)
 - **The app's marks, menu and lines.** (`apps/desktop/src/lib/follow.test.ts`, `apps/mobile/src/lib/copies.test.ts`)
@@ -251,7 +251,7 @@ What works as specified:
 Where it differs from the draft above:
 - **Moves.** A session moves between a member and the central host. Bringing back a session that a third member runs, or moving one to it, answers `elsewhere` or `unsupported`.
 - **Take over anyway** starts a new conversation on the member: the transcript stayed on the central host. When the central host is back, it keeps its own work from the gap, files and conversation, before the member's work replaces it.
-- **The waiting message** is a toast with Move now, not a line above the composer. It waits up to ten minutes; then, or when the session cannot be brought, it goes where the session runs. More typed into the same chat meanwhile goes with it. Move to… during a turn waits the same way. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
+- **The waiting message** is a toast with Move now, not a line above the composer. It waits up to ten minutes; then, or when the session cannot be brought, it goes where the session runs. More typed into the same chat meanwhile goes with it. Run only on… during a turn waits the same way. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
 - **Only structured chats** are frozen and moved. A PTY agent tab is not.
 - **Setup** does not run when a session continues on the central host.
 - **Waking:** the member waits up to 5 s for its link, and half a second for the account's news, before it lets agents go on.

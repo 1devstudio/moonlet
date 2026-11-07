@@ -136,7 +136,7 @@ export default function Home() {
             <article className="feature">
               <span className="feature__icon"><svg className="icon" width="16" height="16" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg></span>
               <h3 className="feature__title">Sessions follow you</h3>
-              <p className="feature__text">Close the lid and the central host continues. Type on another Mac and the session moves there. <strong>Move to</strong> a machine pins it there when you want it to stay put.</p>
+              <p className="feature__text">Close the lid and the central host continues. Type on another Mac and the session moves there. <strong>Run only on</strong> a machine pins it there when you want it to stay put.</p>
             </article>
             <article className="feature" id="phone">
               <span className="feature__icon"><svg className="icon" width="16" height="16" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg></span>
