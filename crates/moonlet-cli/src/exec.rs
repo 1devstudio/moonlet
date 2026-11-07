@@ -68,6 +68,11 @@ pub async fn routed(
                 if let Ok(e) = serde_json::from_value::<ExecExited>(data)
                     && e.run == started.run
                 {
+                    // Claude Code may cut a long output short: the agent
+                    // reads the rest from the job's log (X90).
+                    if let Some(log) = &e.log {
+                        eprintln!("moonlet: full output in {}", tilde(log));
+                    }
                     return Some(cancelled.unwrap_or(e.status));
                 }
             }
@@ -77,6 +82,17 @@ pub async fn routed(
                 return Some(125);
             }
         }
+    }
+}
+
+/// `path` with the home folder as `~`.
+fn tilde(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() => match Path::new(path).strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.to_string(),
+        },
+        _ => path.to_string(),
     }
 }
 

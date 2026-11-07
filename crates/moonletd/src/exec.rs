@@ -262,7 +262,11 @@ impl Runs {
                 JobState::Done { exit: status }
             };
             runs.jobs.finish(&job, state, Some(&plan.worktree));
-            let exited = ExecExited { run, status };
+            let exited = ExecExited {
+                run,
+                status,
+                log: runs.jobs.log(&job).map(|p| p.display().to_string()),
+            };
             client
                 .tx
                 .send(Frame::Json(Message::event(m::EV_EXEC_EXITED, exited)));

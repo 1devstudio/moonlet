@@ -3483,6 +3483,10 @@ pub struct ExecCancel {
 pub struct ExecExited {
     pub run: u32,
     pub status: i32,
+    /// The job's whole output as plain text, for an agent whose tool
+    /// result was cut short (X90). None from a daemon before X90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
 }
 
 /// `exec.prepare` params.
