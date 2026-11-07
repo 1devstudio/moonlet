@@ -1,5 +1,6 @@
 // The project's base branch against origin, as the sidebar's pull chip and
-// popover show it (X13). Pure, so it is unit-tested.
+// popover show it, and pulling it on the other hosts that have the project
+// (X13). Pure, so it is unit-tested.
 
 import type { BaseStatus, Project } from "./protocol";
 import { identityKey } from "./sidebar";
@@ -81,29 +82,45 @@ export function pullToast(branch: string, r: { pulled: number; head: string }): 
 
 /** The same project on the other connected hosts, matched by identity, to
  *  pull there too when the chip is clicked on `host`. A project without a
- *  root commit is this host's alone. */
-export function otherCopies(host: string, project: Project, projects: Record<string, Project[]>, connected: (host: string) => boolean): { host: string; project: Project }[] {
+ *  root commit is its host's alone. */
+export function sameProjectElsewhere(host: string, project: Project, projects: Record<string, Project[]>, connected: (host: string) => boolean): { host: string; project: Project }[] {
   const key = identityKey(project.identity);
   if (!key) return [];
   return Object.entries(projects).flatMap(([h, list]) => {
     if (h === host || !connected(h)) return [];
-    const copy = list.find((p) => identityKey(p.identity) === key);
-    return copy ? [{ host: h, project: copy }] : [];
+    const same = list.find((p) => identityKey(p.identity) === key);
+    return same ? [{ host: h, project: same }] : [];
   });
 }
 
-/** What a pull on another host did. */
-export type OtherPull = { label: string; branch: string } & ({ pulled: number } | { diverged: true } | { error: string });
+/** How another host's pull ended. */
+export type ElsewhereOutcome = { pulled: number } | { diverged: true } | { noUpstream: true } | { busy: true } | { error: string };
 
-/** The other hosts' part of the pull toast: "studio-mini: pulled 2 commits."
+/** What another host does after fetching, from its fresh status: pull, or
+ *  stop with an outcome. A failed fetch is not taken as up to date. */
+export function afterFetch(st: BaseStatus | null): "pull" | ElsewhereOutcome {
+  if (!st) return { noUpstream: true };
+  if (st.fetch_error) return { error: `couldn't fetch ${st.upstream}` };
+  const chip = baseChip(st, false);
+  if (chip?.kind === "behind") return "pull";
+  if (chip?.kind === "diverged") return { diverged: true };
+  return { pulled: 0 };
+}
+
+/** One host's sentence in the other hosts' toast. */
+export type ElsewherePull = { label: string; branch: string } & ElsewhereOutcome;
+
+/** The other hosts' toast: "studio-mini: pulled 2 commits." per host.
  *  `branch` is the clicked project's; another host's branch is named only
  *  when it differs. */
-export function otherPullsText(branch: string, pulls: OtherPull[]): string {
+export function elsewhereToast(branch: string, pulls: ElsewherePull[]): string {
   return pulls
     .map((r) => {
       const into = r.branch === branch ? "" : ` into ${r.branch}`;
       if ("error" in r) return `${r.label}: couldn't pull${into}: ${r.error.replace(/\.$/, "")}.`;
       if ("diverged" in r) return `${r.label}: ${r.branch} can't be fast-forwarded, nothing changed.`;
+      if ("noUpstream" in r) return `${r.label}: ${r.branch} has no origin/${r.branch} to pull from.`;
+      if ("busy" in r) return `${r.label}: already pulling ${r.branch}.`;
       if (r.pulled > 0) return `${r.label}: pulled ${commits(r.pulled)}${into}.`;
       return `${r.label}: ${into ? `${r.branch} ` : ""}already up to date.`;
     })
