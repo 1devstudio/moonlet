@@ -1900,6 +1900,16 @@ impl Daemon {
                 let r: m::ExecPrepare = params(p)?;
                 ok(self.sync.prepare_run(r.session, Some(member), r.setup).await?)
             }
+            // A member archived the session: its routing copy here goes
+            // (X89).
+            m::SYNC_CLOSING if conn.client == crate::link::WORKER_CLIENT => {
+                let (member, _) = self.member_on(conn)?;
+                let r: m::SyncClosing = params(p)?;
+                if self.sync.copy_member(&r.copy).as_deref() != Some(member.as_str()) {
+                    return Err(RpcError::new("not_found", "no such routing copy"));
+                }
+                ok(self.sync.closing(r).await?)
+            }
             m::EXEC_START | m::SYNC_UPDATE => {
                 let (member, _) = self.member_on(conn)?;
                 let me = self.link.info().worker;

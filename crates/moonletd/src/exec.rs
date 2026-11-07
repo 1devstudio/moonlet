@@ -1124,7 +1124,10 @@ impl Runs {
             if routed.contains_key(&(from, req.run)) {
                 return Err(RpcError::new("busy", "that run is going on"));
             }
-            if routed.len() as u32 >= slots || load >= 0.7 * f64::from(cores) {
+            // Slots count every routed command this host runs, for its own
+            // sessions too (X89).
+            let used = routed.len() + self.running.lock().unwrap().len();
+            if used as u32 >= slots || load >= 0.7 * f64::from(cores) {
                 return Err(RpcError::new("busy", "no free slot"));
             }
             if !self.copies_in_use.lock().unwrap().insert(req.copy.clone()) {
