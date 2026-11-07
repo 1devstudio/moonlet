@@ -804,7 +804,7 @@ function CentralOffline() {
   );
 }
 
-/** Move to…, Unpin and Take over anyway for session `s` on `host` (X73). */
+/** Run only on…, Unpin and Take over anyway for session `s` on `host` (X73). */
 function followItems(host: string, s: Session): MenuItem[] {
   const st = useStore.getState();
   const sync = useSync.getState();
@@ -813,9 +813,10 @@ function followItems(host: string, s: Session): MenuItem[] {
     host,
     centralHost,
     me: sync.me,
+    meLabel: sync.meName ?? "This Mac",
     centralId: st.accounts.local?.account ?? null,
     centralLabel: (centralHost && st.hosts[centralHost]?.label) || "the central host",
-    pinned: !!s.pinned,
+    pinned: s.pinned ?? null,
     unreachableSince: sync.unreachableSince,
     now: Date.now(),
     // Take over anyway makes this Mac's live copy the session's worktree.
@@ -827,7 +828,7 @@ function followItems(host: string, s: Session): MenuItem[] {
     ...items.map((i): MenuItem => {
       switch (i.kind) {
         case "move":
-          return { label: `Move to ${i.label}`, checked: i.current && !!s.pinned, onSelect: () => void moveSession(s.id, i.to) };
+          return { label: i.label, checked: i.checked, onSelect: () => void moveSession(s.id, i.to) };
         case "unpin":
           return { label: "Unpin", icon: <Pin size={14} className="text-muted" />, onSelect: () => void rpc("local", M.sessionUnpin, { session: s.id }).catch(errorToast) };
         case "take-over":

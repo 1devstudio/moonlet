@@ -679,7 +679,7 @@ export interface Session {
   /** The member running its agent, for a session another member owns,
    *  listed by `session.list {copies: true}` (X72). */
   owner?: SessionOwner;
-  /** The member it is kept on, by worker id, when pinned with Move to… (X73). */
+  /** The member it is kept on, by worker id, when pinned with Run only on… (X73). */
   pinned?: string | null;
 }
 

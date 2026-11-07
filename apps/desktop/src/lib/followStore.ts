@@ -1,5 +1,5 @@
 // Typing into a session another member runs brings it to this Mac (X73),
-// and Move to… moves one. The daemons move them; this asks and follows.
+// and Run only on… moves one. The daemons move them; this asks and follows.
 
 import { create } from "zustand";
 import { rpc } from "./daemon";
@@ -75,7 +75,7 @@ export async function sendOrBring(
   }
 }
 
-/** Move to… `to` (a worker id), and keep the session there. While a turn
+/** Run only on… `to` (a worker id), and keep the session there. While a turn
  * runs, it moves when the turn ends, with Move now; then the session is
  * shown where it is listed now. */
 export async function moveSession(sessionId: string, to: string) {
