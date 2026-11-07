@@ -381,7 +381,7 @@ Where the tests live:
 |---|---|
 | `[heavy]` keys | `heavy_table_reads_commands_os_env_and_outputs` |
 | Which commands are routed (worked examples) | `routes_exactly_the_worked_examples`, `shell_keywords_and_builtins_are_never_routed` |
-| Only Claude Code Bash calls in a session's worktree, not background | `a_background_bash_call_is_not_routed`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
+| Only Claude Code Bash calls in a session's worktree (background ones too since X90) | `a_background_bash_call_is_routed_and_stays_in_the_background`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
 | Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval`, `approving_records_the_commands_and_env_names_together`, `approving_a_list_that_changed_meanwhile_fails` |
 | Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |
 | Each linked worker's own approval | `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`; Vitest "the approval toast names every machine it covers", "a worker that was not reachable is named in the toast" |

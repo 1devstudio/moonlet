@@ -1,0 +1,18 @@
+{
+  "session_id": "9802eec2-ec4c-4414-b23a-5b868fcd75d9",
+  "transcript_path": "/Users/alex/.claude/projects/-Users-alex--moonlet-worktrees-shop-fix-cart/9802eec2-ec4c-4414-b23a-5b868fcd75d9.jsonl",
+  "cwd": "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+  "prompt_id": "b61fcc2b-5cd4-4cb0-a761-ba9a3dd6e4f7",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pnpm check",
+    "description": "Run the checks",
+    "run_in_background": true
+  },
+  "tool_use_id": "toolu_01NoQAPN1jqBjTHrojvSFhhY"
+}
