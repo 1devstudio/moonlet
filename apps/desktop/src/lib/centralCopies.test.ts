@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyEntries, copyView } from "./centralCopies";
+import { copyEntries, copyOffers, copyRefused, copyView } from "./centralCopies";
 import type { Session } from "./protocol";
 
 const s = (id: string, extra: Partial<Session> = {}): Session => ({
@@ -81,5 +81,20 @@ describe("what a copy shows when opened (X86)", () => {
         },
       ],
     });
+  });
+});
+
+describe("what a copy offers (X86)", () => {
+  it("offers none of what its member refuses through the central host", () => {
+    expect(copyOffers("local#copy:s7")).toEqual({ files: false, newTabs: false, processes: false, projectSettings: false, setup: false, openIn: false });
+    expect(copyOffers("local")).toEqual({ files: true, newTabs: true, processes: true, projectSettings: true, setup: true, openIn: true });
+    expect(copyOffers("studio-mini")).toEqual({ files: true, newTabs: true, processes: true, projectSettings: true, setup: true, openIn: true });
+  });
+
+  it("says where to do what a copy does not offer", () => {
+    const copy = s("fix-cart", { owner: book });
+    expect(copyRefused(copy, "open new tabs")).toBe("fix-cart runs on MacBook: open new tabs there.");
+    expect(copyRefused(copy, "run its scripts")).toBe("fix-cart runs on MacBook: run its scripts there.");
+    expect(copyRefused(copy, "change its project settings")).toBe("fix-cart runs on MacBook: change its project settings there.");
   });
 });

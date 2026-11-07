@@ -48,7 +48,7 @@ import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import type { TaskRequestEvent } from "./tasksRelay";
 import { spawnedNotices } from "./spawned";
-import { copyEntries, copyView } from "./centralCopies";
+import { continueFailed, copyEntries, copyView } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
 import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
@@ -775,6 +775,18 @@ export async function loadCopies() {
   // The copy open now follows its member, as it comes and goes.
   const open = get().selected?.host;
   if (open && entries[open]) void loadCopy(open);
+}
+
+/** Continue on <this Mac> (X86, X73): takes copy `s` over here, then opens
+ * it as this Mac's own; says why it could not, naming this Mac `here`. */
+export async function continueHere(s: Session, here: string) {
+  try {
+    await rpc("local", M.sessionContinueHere, { session: s.id });
+  } catch (e) {
+    toast(continueFailed(e, s, here), "error");
+    return;
+  }
+  selectSession("local", s.id);
 }
 
 /** Loads what copy host `host` shows (X86): its member's terminals and the

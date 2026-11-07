@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session, TerminalInfo } from "./protocol";
-import { loadAccount, selectSession, useStore } from "./store";
+import { continueHere, loadAccount, selectSession, useStore } from "./store";
 
 /** What the daemon answers, by host and method. */
 const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
@@ -62,7 +62,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   for (const k of Object.keys(answers)) delete answers[k];
-  useStore.setState({ sessions: {}, accounts: {}, projects: { local: [{ id: "p1", name: "shop", path: "/Users/me/shop", base_branch: "main" }] }, terminals: {}, selected: null });
+  useStore.setState({ toasts: [], sessions: {}, accounts: {}, projects: { local: [{ id: "p1", name: "shop", path: "/Users/me/shop", base_branch: "main" }] }, terminals: {}, selected: null });
   answers["local session.list"] = () => [session("own"), session("fix-cart", { owner: book })];
 });
 
@@ -92,5 +92,20 @@ describe("the central host's app and the sessions other members run (X86)", () =
     await settle();
     expect(useStore.getState().terminals["local#copy:fix-cart"]).toEqual({ 3: chat });
     expect(useStore.getState().sessions["local#copy:fix-cart"]?.[0]?.terminals).toEqual([3]);
+  });
+
+  it("continues one here, opening it as this Mac's own", async () => {
+    answers["local session.continue_here"] = () => ({});
+    await continueHere(session("fix-cart", { owner: { ...book, reachable: false } }), "studio-mini");
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "fix-cart" });
+  });
+
+  it("says why it could not continue one here", async () => {
+    answers["local session.continue_here"] = () => {
+      throw Object.assign(new Error("MacBook is reachable"), { code: "reachable" });
+    };
+    await continueHere(session("fix-cart", { owner: { ...book, reachable: false } }), "studio-mini");
+    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().toasts.map((t) => t.text)).toEqual(["MacBook is back: fix-cart goes on there."]);
   });
 });

@@ -29,6 +29,7 @@ import { TaskTab, useSessionTask } from "./tasks/SessionTask";
 import { SessionDesignTab } from "./design/SessionDesign";
 import { designTab } from "../lib/sessionDesign";
 import { pickDesignTab, sessionDesignsOf, useDesign } from "../lib/designStore";
+import { copyOffers } from "../lib/centralCopies";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -52,6 +53,8 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   // A session kept in sync opens its copy on this Mac (X60).
   const copyPath = useSync((s) => s.copies[sesKey(host, ws.id)]?.path || null);
   const openIn = workspaceOpenIn(targets, { kind, host, path: ws.path }, copyPath);
+  // A copy of another member's session offers only what it can ask it (X86).
+  const offers = copyOffers(host);
   const item = (label: string, run: () => void, danger = false) => (
     <button
       key={label}
@@ -73,12 +76,12 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
-            {openIn.choices.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, openIn.path, openIn.host).catch(errorToast)))}
-            <div className="my-1 border-t border-border" />
+            {offers.openIn && openIn.choices.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, openIn.path, openIn.host).catch(errorToast)))}
+            {offers.openIn && <div className="my-1 border-t border-border" />}
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
-            {item("Re-run setup script", () => void runScript("setup"))}
-            {item("Processes…", () => useStore.setState({ rightTab: "processes", rightOpen: true }))}
-            {item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}
+            {offers.setup && item("Re-run setup script", () => void runScript("setup"))}
+            {offers.processes && item("Processes…", () => useStore.setState({ rightTab: "processes", rightOpen: true }))}
+            {offers.projectSettings && item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}
             {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
             {askAgain && item(askAgain, () => void rpc(host, M.terminalReadGrantClear, { session_id: ws.id }).catch(errorToast))}
             <div className="my-1 border-t border-border" />
@@ -276,8 +279,13 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   // The Design tab is there for a session with a design (X65), after the others.
   const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
   const design = designTab(designs);
-  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? "files" : chosen;
-  const withJobs = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
+  // A copy of another member's session has no Files or Processes (X86).
+  const offers = copyOffers(host);
+  const fallback = offers.files ? "files" : "changes";
+  const picked = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? fallback : chosen;
+  const tab = (picked === "files" && !offers.files) || (picked === "processes" && !offers.processes) ? "changes" : picked;
+  const base = offers.files ? TABS : TABS.filter((t) => t.id !== "files");
+  const withJobs = jobs.length ? base.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : base;
   const withDesign = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   // The Processes tab shows while it is the chosen one, picked from the ⋯ menu (X83).
   const shown = tab === "processes" ? [...withDesign, { id: "processes" as const, label: "Processes" }] : withDesign;
