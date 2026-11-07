@@ -10,7 +10,8 @@ const time = (ms: number) => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-/** The line under "Use this Mac for heavy commands", one per link state. */
+/** The line under This Mac's "Takes heavy commands from other hosts", one
+ * per link state. */
 export function linkLine(link: LinkInfo): StatusLine {
   const name = link.central?.name ?? "";
   const s = link.state;
@@ -149,6 +150,12 @@ export function centralHostId(hosts: HostInfo[], link: LinkInfo | null): string 
  * tailnet hosts, but not the central host, which never links to itself. */
 export function heavyHostIds(hosts: HostInfo[], central: string | null): string[] {
   return hosts.filter((h) => h.kind === "tailnet" && h.status === "connected" && h.id !== central).map((h) => h.id);
+}
+
+/** The central host's own row (X89): it takes other hosts' heavy
+ * commands too, set on it directly while it is connected. */
+export function centralHeavyHostId(hosts: HostInfo[], central: string | null): string | null {
+  return hosts.some((h) => h.id === central && h.kind === "tailnet" && h.status === "connected") ? central : null;
 }
 
 /** Choosing a host makes it the central host; choosing it again clears it. */

@@ -15,7 +15,7 @@ import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { HostUpdateButton } from "../HostUpdate";
 import { failureShown, olderHosts, olderHostsText, updateAllLabel } from "../../lib/hostUpdate";
 import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
-import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
+import { centralHeavyHostId, centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { removeMacMessage, type CopiedFiles } from "../../lib/copiedFiles";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
@@ -347,7 +347,7 @@ function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
     <>
     <Row
       setting="heavy-commands"
-      label="Use this Mac for heavy commands"
+      label="Takes heavy commands from other hosts"
       labelId={id}
       hint={link && <Status line={withRunning(linkLine(link), running)} />}
     >
@@ -359,6 +359,22 @@ function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
       <Switch on={!!link?.worker.enabled} disabled={!link} labelledBy={id} onChange={(on) => void set(on)} />
     </Row>
     {link?.worker.enabled && <SlotsRow host={HOST} link={link} remote={null} />}
+    </>
+  );
+}
+
+/** The central host's own "Takes heavy commands from other hosts" and its
+ * slots (X89), set on it as on any member. */
+function CentralHeavyRow({ host }: { host: string }) {
+  const id = useId();
+  const link = useLink(host);
+  const enable = (enabled: boolean) => rpc(host, M.linkSet, { worker: { enabled } }).catch((e) => errorToast(remoteLinkError(e, host)));
+  return (
+    <>
+      <Row setting={`heavy-commands-${host}`} label="Takes heavy commands from other hosts" labelId={id} hint={`Your other hosts' heavy commands may run on ${host}.`}>
+        <Switch on={!!link?.worker.enabled} disabled={!link} labelledBy={id} onChange={(on) => void enable(on)} />
+      </Row>
+      {link?.worker.enabled && <SlotsRow host={host} link={link} remote={host} />}
     </>
   );
 }
@@ -498,6 +514,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const updates = useHostUpdates((s) => s.updates);
   const stale = olderHosts(remotes, appVersion, updates);
   const heavy = heavyHostIds(remotes, central);
+  const centralHeavy = centralHeavyHostId(remotes, central);
   const macs = status ? devicesOfKind(status, "desktop") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
   const install = async (id: string) => {
@@ -611,6 +628,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
                 </IconButton>
               </HostRow>
               {heavy.includes(h.id) && <RemoteHeavyRow host={h.id} central={link?.central ?? null} />}
+              {h.id === centralHeavy && <CentralHeavyRow host={h.id} />}
             </Fragment>
           ))}
           <div className="flex px-4 py-3">

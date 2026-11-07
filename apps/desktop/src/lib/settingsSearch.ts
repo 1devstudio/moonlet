@@ -157,7 +157,7 @@ function index(c: SearchContext): Entry[] {
     app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
     app("hosts", "Machines › Hosts", "tailnet", "Allow connections from my tailnet", "", "pair Mac Tailscale"),
-    app("hosts", "Machines › Hosts", "heavy-commands", "Use this Mac for heavy commands", "", "central host worker link"),
+    app("hosts", "Machines › Hosts", "heavy-commands", "Takes heavy commands from other hosts", "", "central host worker link use this mac"),
     app("hosts", "Machines › Hosts", "heavy-slots", "Run at most", "", "slots at once routed"),
     app("workers", "Machines › Workers", undefined, "Workers", "", "central host load slots routed running"),
     app("cloud", "Machines › Cloud workers", undefined, "Cloud workers", "", "cloud provider Hetzner Google Cloud GCP Compute Engine token service account key rent machines"),
