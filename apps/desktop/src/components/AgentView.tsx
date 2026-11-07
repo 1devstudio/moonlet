@@ -78,7 +78,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
+import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown, renderUserMarkdown } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
@@ -144,10 +144,16 @@ export function useProjectFiles(host: string, root: string, reloadWhen: unknown)
   return useMemo(() => (path: string) => !!files?.has(path), [files]);
 }
 
-/** Chat Markdown; `task` renders a task's description (X46), at the panel's smaller size. */
-export const Markdown = memo(function Markdown({ text, task = false }: { text: string; task?: boolean }) {
+/**
+ * Chat Markdown; `task` renders a task's description (X46), at the panel's
+ * smaller size; `user` a message the user sent (X92), its newlines kept.
+ */
+export const Markdown = memo(function Markdown({ text, task = false, user = false }: { text: string; task?: boolean; user?: boolean }) {
   const files = useContext(FileLinks);
-  const html = useMemo(() => (task ? renderTaskMarkdown(text) : renderChatMarkdown(text, files?.exists)), [text, task, files?.exists]);
+  const html = useMemo(
+    () => (task ? renderTaskMarkdown(text) : user ? renderUserMarkdown(text) : renderChatMarkdown(text, files?.exists)),
+    [text, task, user, files?.exists],
+  );
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -182,7 +188,7 @@ export const Markdown = memo(function Markdown({ text, task = false }: { text: s
   return (
     <>
       <div
-        className={cx("chat-md selectable", task && "task-md")}
+        className={cx("chat-md selectable", task && "task-md", user && "user-md")}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
         onKeyDown={(e) => copyCode(e, e.key)}
@@ -504,7 +510,9 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "user":
       return (
         <div className="flex justify-end py-1">
-          <div className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2 ui-text-14 leading-relaxed">{item.text}</div>
+          <div className="min-w-0 max-w-[85%] break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2">
+            <Markdown text={item.text} user />
+          </div>
         </div>
       );
     case "assistant":

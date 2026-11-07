@@ -229,7 +229,11 @@ export function ChatBlockView({ block, cwd, agents, onAgent = () => {} }: { bloc
   const it = block.item;
   switch (it.kind) {
     case "user":
-      return <div className="selectable self-end rounded-[14px] rounded-br-[4px] bg-raised px-3.5 py-2.5 text-[14.5px] leading-[1.45] whitespace-pre-wrap">{it.text}</div>;
+      return (
+        <div className="min-w-0 max-w-full self-end rounded-[14px] rounded-br-[4px] bg-raised px-3.5 py-2.5">
+          <Markdown text={it.text} user />
+        </div>
+      );
     case "thinking":
       return <Thinking item={it} />;
     case "tool":

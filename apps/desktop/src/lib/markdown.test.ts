@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codeToCopy, fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
+import { codeToCopy, fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown, renderUserMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -200,6 +200,28 @@ describe("copying a code block (X87)", () => {
     expect(codeToCopy(control, "Tab")).toBeNull();
   });
 });
+
+describe("the user's own messages (X92)", () => {
+  const parse = (html: string) => new DOMParser().parseFromString(html, "text/html").body;
+
+  it("shows a fenced code block as code, with a copy control (X87)", () => {
+    const body = parse(renderUserMarkdown("Why does this fail?\n\n```\nsomething\n```"));
+    expect(body.querySelector("p")?.textContent).toBe("Why does this fail?");
+    expect(body.querySelector("pre > code")?.textContent).toBe("something\n");
+    expect(codeToCopy(body.querySelector('[aria-label="Copy code"]')!)).toBe("something");
+  });
+
+  it("keeps each line the user typed on its own line", () => {
+    expect(renderUserMarkdown("first line\nsecond line")).toBe("<p>first line<br>\nsecond line</p>\n");
+    // An agent's reply keeps Markdown's soft breaks.
+    expect(renderChatMarkdown("first line\nsecond line")).toBe("<p>first line\nsecond line</p>\n");
+  });
+
+  it("shows HTML the user typed as text", () => {
+    expect(renderUserMarkdown("why is <b>this</b> bold?")).toBe("<p>why is &lt;b&gt;this&lt;/b&gt; bold?</p>\n");
+  });
+});
+
 
 describe("isMarkdownPath (X26, X77)", () => {
   it("is true for Markdown files by extension, in any case", () => {

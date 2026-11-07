@@ -357,6 +357,11 @@ chatMd.renderer.rules.image = (tokens, idx, options, env, self) => {
   return `<a href="${escapeHtml(String(tokens[idx].attrGet("src") ?? ""))}">${escapeHtml(alt ? `Image: ${alt}` : "Image")}</a>`;
 };
 
+// The user's own messages (X92): a single newline they typed stays a line break.
+const defaultSoftbreak = chatMd.renderer.rules.softbreak!;
+chatMd.renderer.rules.softbreak = (tokens, idx, options, env, self) =>
+  (env as { user?: boolean } | undefined)?.user ? "<br>\n" : defaultSoftbreak(tokens, idx, options, env, self);
+
 const chatSanitize = (html: string) =>
   DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -386,6 +391,11 @@ export function renderTaskMarkdown(source: string): string {
 /** Agent message HTML; only paths `exists` accepts become file links (X30), none without it. */
 export function renderChatMarkdown(source: string, exists?: FileCheck): string {
   return chatSanitize(chatMd.render(source, { exists }));
+}
+
+/** A message the user sent as chat Markdown (X92), with every newline they typed kept. */
+export function renderUserMarkdown(source: string): string {
+  return chatSanitize(chatMd.render(source, { user: true }));
 }
 
 /** Whether a file shows as rendered Markdown in a Preview (X26, X77). */
