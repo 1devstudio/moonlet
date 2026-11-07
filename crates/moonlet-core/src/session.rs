@@ -1939,18 +1939,35 @@ impl SessionManager {
                 let _ = self.terminals.kill(s.id, true);
             }
         }
-        if req.remove_worktree {
-            git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
-        }
         let mut done = SessionArchived::default();
-        // The project's base branch is never deleted (X55), whoever asks.
-        if req.delete_branch && ws.branch != repo.base_branch {
-            git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
-            if req.delete_remote
-                && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await
-            {
-                done.remote_error = Some(format!("{e:#}"));
+        let git_steps = async {
+            if req.remove_worktree {
+                git::worktree_remove(Path::new(&repo.path), Path::new(&ws.path)).await?;
             }
+            // The project's base branch is never deleted (X55), whoever asks.
+            if req.delete_branch && ws.branch != repo.base_branch {
+                git::delete_branch(Path::new(&repo.path), &ws.branch).await?;
+                if req.delete_remote
+                    && let Err(e) = git::delete_remote_branch(Path::new(&repo.path), &ws.branch).await
+                {
+                    done.remote_error = Some(format!("{e:#}"));
+                }
+            }
+            anyhow::Ok(())
+        };
+        if let Err(e) = git_steps.await {
+            // Still live: its kept chats come back to it (X86).
+            let back = self.chats.get().map(|c| c.unarchive(&ws.id)).unwrap_or_default();
+            if !back.is_empty() {
+                let _ = self.mutate(|st| {
+                    if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
+                        w.terminals.extend(&back);
+                    }
+                    Ok(())
+                });
+                self.emit_sessions();
+            }
+            return Err(e);
         }
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
@@ -2003,12 +2020,12 @@ impl SessionManager {
                 tracing::warn!("cannot copy {}'s copied files into {}: {e:#}", repo.name, ws.path);
             }
         }
-        let mut kept = Vec::new();
+        let mut tabs = Vec::new();
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == id) {
                 w.archived = false;
                 w.archived_at = None;
-                kept = std::mem::take(&mut w.archived_restore);
+                tabs = std::mem::take(&mut w.archived_restore);
             }
             Ok(())
         })?;
@@ -2025,7 +2042,7 @@ impl SessionManager {
                 Ok(())
             })?;
         }
-        for entry in &kept {
+        for entry in &tabs {
             match self.spawn_in(&ws, self.restore_request(&ws, &repo, entry)) {
                 Ok(_) => started += 1,
                 Err(e) => tracing::warn!(session = %ws.id, "restoring a tab failed: {e:#}"),
@@ -3389,6 +3406,27 @@ mod tests {
         assert_eq!(chats.archived(&s.id).len(), 1);
         mgr.remove_project(&r.id).unwrap();
         assert!(chats.archived(&s.id).is_empty());
+    }
+
+    /// X86: an archive that fails after its chats were kept, here deleting
+    /// a branch git refuses to delete, leaves the session live with them.
+    #[tokio::test]
+    async fn a_failed_archive_gives_the_session_its_chats_back() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = new_session(&r.id, None);
+        req.agent = Some("claude".into());
+        req.prompt = Some("hi".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let chat = s.terminals[0];
+        wait_until("the first turn never ended", || chats.state(chat).is_ok_and(|st| st.status == "done")).await;
+
+        // The branch is still checked out in the kept worktree.
+        assert!(mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: false, delete_branch: true, delete_remote: false }).await.is_err());
+        let now = mgr.session(&s.id).unwrap();
+        assert!(!now.archived);
+        assert!(chats.archived(&s.id).is_empty());
+        wait_until("the chat never came back", || mgr.session(&s.id).unwrap().terminals.iter().any(|t| chats.state(*t).is_ok_and(|st| st.items.iter().any(|i| i.kind == "user" && i.text == "hi")))).await;
     }
 
     /// The session's terminals in creation order, as (agent, structured).

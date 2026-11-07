@@ -712,12 +712,8 @@ impl ChatManager {
         let mut info = saved.info;
         info.pid = None;
         info.agent_state = agent_state(&state.status);
-        let old = info.id;
         // Keeps its id unless a live terminal (e.g. adopted) took it.
         let info = self.terms.register_chat(info);
-        if info.id != old {
-            let _ = std::fs::remove_file(&path);
-        }
         let chat = Arc::new(Chat {
             id: info.id,
             inner: Mutex::new(Inner {
@@ -747,6 +743,11 @@ impl ChatManager {
         }
         super::undeliver(&mut inner.state);
         self.save(&chat, &mut inner);
+        // Saved under its id now: a file kept elsewhere (X86), or under an
+        // id another chat took meanwhile, goes.
+        if path != self.file(chat.id) {
+            let _ = std::fs::remove_file(path);
+        }
         Some(chat.id)
     }
 
@@ -806,14 +807,11 @@ impl ChatManager {
     pub fn unarchive(&self, session: &str) -> Vec<TerminalId> {
         let Some(dir) = self.archived_dir(session) else { return Vec::new() };
         let mut back = Vec::new();
+        // Loaded where it was kept, never moved over a live chat's file:
+        // its id may have been taken since, ids starting again with each
+        // daemon.
         for (path, _) in Self::saved_in(&dir) {
-            let Some(name) = path.file_name() else { continue };
-            let live = self.dir.join(name);
-            if let Err(e) = std::fs::rename(&path, &live) {
-                tracing::warn!("cannot bring back {}: {e:#}", path.display());
-                continue;
-            }
-            back.extend(self.load(&live));
+            back.extend(self.load(&path));
         }
         let _ = std::fs::remove_dir(&dir);
         back
@@ -1579,6 +1577,46 @@ done
         assert_eq!(st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect::<Vec<_>>(), ["hi"]);
         assert!(terms2.get(back[0]).unwrap().info().chat);
         assert!(chats2.archived("s-1").is_empty());
+    }
+
+    /// X86: ids start again with each daemon, so a new chat can take a kept
+    /// chat's id. Restoring the kept chat then gives it another, and both
+    /// transcripts stay whole.
+    #[tokio::test]
+    async fn a_kept_chat_whose_id_was_taken_meanwhile_comes_back_beside_the_new_one() {
+        let (dir, terms, chats) = setup().await;
+        let old = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-1".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, old.id, |s| s.agent_session.is_some()).await;
+        chats.send(old.id, "first", &[]).unwrap();
+        wait_for(&chats, old.id, |s| s.status == "done").await;
+        chats.archive(old.id, "s-1");
+        terms.kill(old.id, true).unwrap();
+        chats.shutdown().await;
+
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2.clone(), dir.path().join("chats"));
+        assert_eq!(chats2.restore(), 0);
+        let new = chats2.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-2".into()), ..Default::default() }).unwrap();
+        assert_eq!(new.id, old.id, "the test needs the id taken again");
+        wait_for(&chats2, new.id, |s| s.agent_session.is_some()).await;
+        chats2.send(new.id, "second", &[]).unwrap();
+        wait_for(&chats2, new.id, |s| s.status == "done").await;
+        chats2.save_all();
+
+        let back = chats2.unarchive("s-1");
+        assert_eq!(back.len(), 1);
+        assert_ne!(back[0], new.id);
+        let users = |id| chats2.state(id).unwrap().items.into_iter().filter(|i| i.kind == "user").map(|i| i.text).collect::<Vec<_>>();
+        assert_eq!((users(back[0]), users(new.id)), (vec!["first".to_string()], vec!["second".to_string()]));
+
+        // Both are on disk at once, as a daemon that stops now would find them.
+        let terms3 = TerminalManager::new(dir.path().join("sock3"), terms.base_env().clone());
+        let chats3 = ChatManager::new(terms3, dir.path().join("chats"));
+        assert_eq!(chats3.restore(), 2);
+        let mut found: Vec<_> = [back[0], new.id].iter().map(|&id| chats3.state(id).unwrap().items.into_iter().filter(|i| i.kind == "user").map(|i| i.text).collect::<Vec<_>>()).collect();
+        found.sort();
+        assert_eq!(found, [vec!["first".to_string()], vec!["second".to_string()]]);
+        chats2.shutdown().await;
     }
 
     /// X86: forgetting an archived session's chats deletes them.
