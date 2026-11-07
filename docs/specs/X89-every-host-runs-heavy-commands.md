@@ -126,7 +126,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 ### When something goes away
 
 - [x] A run whose machine goes away, or whose relay stops because the central host went away, runs again on the session's host from the same fence, with the line "moonlet: devbox went away. Running again on Alex's MacBook Pro." The exit status is the second run's. The abandoned run's changes never reach the session. (`a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host`, `a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host`, `losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host`)
-- [ ] A runner that loses the session's host mid-run, directly or through the central host, stops the command, as X62's worker does when its central host's daemon stops. (`a_runner_that_loses_the_sessions_host_stops_the_command`)
+- [x] A runner that loses the session's host mid-run, directly or through the central host, stops the command, as X62's worker does when its central host's daemon stops. Through the central host, it hears so from the central host, which cancels the runs of a member that went away. (`a_runner_that_loses_the_sessions_host_stops_the_command`)
 - [x] While the session's host has no link to its central host, every command of its sessions runs on it. (`a_member_without_its_central_host_runs_its_own_commands`)
 
 ### Cloud machines

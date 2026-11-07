@@ -1203,3 +1203,73 @@ async fn losing_the_central_host_mid_relay_runs_the_command_again_on_the_session
     assert!(stopped, "it never ran on the Air: {stdout}");
     assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
 }
+
+/// Starts `argv` in `session` on `d` and waits until it printed
+/// `started`; gives the client, which the caller keeps or drops.
+async fn start_until_started(d: &Daemon, session: &Value, argv: &[&str]) -> (Client, String) {
+    let mut c = d.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": argv, "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run_id = started["run"].as_u64().unwrap();
+    let mut err = String::new();
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .expect("the run never started")
+            .unwrap()
+            .unwrap();
+        match frame {
+            moonlet_proto::Frame::RunOutput {
+                run,
+                stream: 1,
+                data,
+            } if u64::from(run) == run_id => {
+                if String::from_utf8_lossy(&data).contains("started") {
+                    return (c, err);
+                }
+            }
+            moonlet_proto::Frame::RunOutput {
+                run,
+                stream: 2,
+                data,
+            } if u64::from(run) == run_id => {
+                err.push_str(&String::from_utf8_lossy(&data));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_runner_that_loses_the_sessions_host_stops_the_command() {
+    // Directly on the central host, and on another member through it.
+    for relayed in [false, true] {
+        let (mini, _addr, mut book, air) = account().await;
+        let repo = tempfile::tempdir().unwrap();
+        let session = book_session(&book, repo.path()).await;
+        if relayed {
+            only_air_takes(&mini, &book, &air).await;
+        } else {
+            mini_takes(&mini, &book, true).await;
+        }
+        let marker = tempfile::tempdir().unwrap();
+        let after = marker.path().join("after");
+        let command = format!("echo started; sleep 4; touch {}", after.display());
+        let (_c, err) = start_until_started(&book, &session, &["sh", "-c", &command]).await;
+        let runner = if relayed {
+            "Alex's MacBook Air"
+        } else {
+            "studio-mini"
+        };
+        assert_eq!(err, format!("moonlet: running on {runner}\n"));
+        // The MacBook goes away mid-run.
+        book.stop();
+        tokio::time::sleep(Duration::from_secs(7)).await;
+        assert!(!after.exists(), "the command went on on {runner}");
+    }
+}

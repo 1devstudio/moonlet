@@ -602,6 +602,7 @@ impl Daemon {
             workers.on_gone(move |id| {
                 if let (Some(r), Some(w)) = (r.upgrade(), w.upgrade()) {
                     r.runner_gone(&w, id);
+                    r.router_gone(&w, id);
                 }
             });
         }
