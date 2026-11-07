@@ -469,6 +469,8 @@ export interface WorkerInfo {
   connected_since: number;
   rtt_ms?: number | null;
   load?: number | null;
+  /** What it runs for other hosts, from its last ping (X89). */
+  running?: Serving[];
 }
 
 /** A member's worker settings (X89), from `worker.settings`: whether it
@@ -646,6 +648,16 @@ export interface ExecStatus {
   skips: { worker: string; project: string; reason: string; detail?: string | null }[];
   /** Commands this machine runs for its central host. */
   routed: number;
+  /** Commands this machine runs for other hosts, for whom (X89). */
+  serving?: Serving[];
+}
+
+/** A command a host runs for another host (X89). */
+export interface Serving {
+  host: string;
+  session: string;
+  command: string;
+  started_at: number;
 }
 
 /** `.moonlet/config.toml` as the Project settings dialog edits it (X8). */

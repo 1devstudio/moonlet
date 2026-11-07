@@ -225,6 +225,32 @@ describe("every member's worker settings on the Workers page (X89)", () => {
     ]);
   });
 
+  it("lists what each host runs for other hosts, and for whom", () => {
+    const air = worker("air", "Alex's MacBook Air", {
+      running: [
+        { host: "Alex's MacBook Pro", session: "Fix cart", command: "pnpm check", started_at: 5000 },
+        // studio-mini's own command, already listed from its jobs.
+        { host: "studio-mini", session: "s1", command: "pnpm test", started_at: 6000 },
+      ],
+    });
+    const page = workersPage({
+      workers: [air],
+      status: status({
+        running: [{ job: "j1", session: "s1", command: "pnpm test", worker: "Alex's MacBook Air", started_at: 6000 }],
+        serving: [{ host: "Alex's MacBook Pro", session: "Add search", command: "cargo test", started_at: 7000 }],
+      }),
+      me: null,
+      sessions,
+      settings: [entry("mini", "studio-mini", true), entry("air", "Alex's MacBook Air", true)],
+    });
+    expect(page.rows[0].running).toEqual([
+      { session: "fix-cart", command: "pnpm test", since: 6000 },
+      { session: "Fix cart", command: "pnpm check", since: 5000, host: "Alex's MacBook Pro" },
+    ]);
+    expect(page.rows[1].running).toEqual([{ session: "Add search", command: "cargo test", since: 7000, host: "Alex's MacBook Pro" }]);
+    expect(page.rows[0].slots).toBe("2 of 2");
+  });
+
   it("says what a change of the switch or slots did", () => {
     expect(settingsToast("studio-mini", { heavy: true })).toBe("studio-mini takes heavy commands from your other hosts");
     expect(settingsToast("studio-mini", { heavy: false })).toBe("studio-mini no longer takes heavy commands from your other hosts");

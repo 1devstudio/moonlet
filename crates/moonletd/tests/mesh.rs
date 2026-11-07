@@ -18,6 +18,11 @@ const AIR: &str = "0b9e4f61-2a7c-4d3e-8f15-6c2a9d0e7b48";
 
 /// The central host `studio-mini`, with tailnet access on.
 async fn central() -> (Daemon, String) {
+    central_env(&[]).await
+}
+
+/// [`central`], with more of its daemon's environment.
+async fn central_env(extra: &[(&str, &str)]) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
         let port = free_port();
@@ -39,7 +44,10 @@ async fn central() -> (Daemon, String) {
                 // A light load, whatever this machine's is: a busy host is
                 // skipped (X62).
                 ("MOONLET_TEST_LOAD", "0.5"),
-            ],
+            ]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .collect::<Vec<_>>(),
         )
         .await;
         let addr = format!("127.0.0.1:{port}");
@@ -130,7 +138,12 @@ fn row(id: &str, name: &str, heavy: bool, slots: u64) -> (String, String, bool, 
 
 /// Three members that know each other: the central host and two Macs.
 async fn account() -> (Daemon, String, Daemon, Daemon) {
-    let (mini, addr) = central().await;
+    account_env(&[]).await
+}
+
+/// [`account`], with more of the central host's environment.
+async fn account_env(extra: &[(&str, &str)]) -> (Daemon, String, Daemon, Daemon) {
+    let (mini, addr) = central_env(extra).await;
     let book = mac(BOOK, "Alex's MacBook Pro").await;
     let air = mac(AIR, "Alex's MacBook Air").await;
     link(&book, &mini, &addr, "Alex's MacBook Pro").await;
@@ -1202,4 +1215,250 @@ async fn losing_the_central_host_mid_relay_runs_the_command_again_on_the_session
     };
     assert!(stopped, "it never ran on the Air: {stdout}");
     assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
+}
+
+/// Starts `argv` in `session` on `d` and waits until it printed
+/// `started`; gives the client, which the caller keeps or drops.
+async fn start_until_started(d: &Daemon, session: &Value, argv: &[&str]) -> (Client, String) {
+    let mut c = d.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": argv, "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run_id = started["run"].as_u64().unwrap();
+    let mut err = String::new();
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .expect("the run never started")
+            .unwrap()
+            .unwrap();
+        match frame {
+            moonlet_proto::Frame::RunOutput {
+                run,
+                stream: 1,
+                data,
+            } if u64::from(run) == run_id => {
+                if String::from_utf8_lossy(&data).contains("started") {
+                    return (c, err);
+                }
+            }
+            moonlet_proto::Frame::RunOutput {
+                run,
+                stream: 2,
+                data,
+            } if u64::from(run) == run_id => {
+                err.push_str(&String::from_utf8_lossy(&data));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_runner_that_loses_the_sessions_host_stops_the_command() {
+    // Directly on the central host, and on another member through it.
+    for relayed in [false, true] {
+        let (mini, _addr, mut book, air) = account().await;
+        let repo = tempfile::tempdir().unwrap();
+        let session = book_session(&book, repo.path()).await;
+        if relayed {
+            only_air_takes(&mini, &book, &air).await;
+        } else {
+            mini_takes(&mini, &book, true).await;
+        }
+        let marker = tempfile::tempdir().unwrap();
+        let after = marker.path().join("after");
+        let command = format!("echo started; sleep 4; touch {}", after.display());
+        let (_c, err) = start_until_started(&book, &session, &["sh", "-c", &command]).await;
+        let runner = if relayed {
+            "Alex's MacBook Air"
+        } else {
+            "studio-mini"
+        };
+        assert_eq!(err, format!("moonlet: running on {runner}\n"));
+        // The MacBook goes away mid-run.
+        book.stop();
+        tokio::time::sleep(Duration::from_secs(7)).await;
+        assert!(!after.exists(), "the command went on on {runner}");
+    }
+}
+
+#[tokio::test]
+async fn two_hosts_picking_one_slot_run_one_there_and_one_elsewhere() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let on_book = book_session(&book, repo.path()).await;
+    let on_air = book_session(&air, repo.path()).await;
+    let _: bool = book
+        .call(
+            "worker.settings.set",
+            json!({ "worker": MINI, "heavy": true, "slots": 1 }),
+        )
+        .await;
+    within(Duration::from_secs(3), "studio-mini's one slot", || async {
+        own(&mini).await == (true, 1)
+    })
+    .await;
+    // Both ask at once, and both see studio-mini's slot free.
+    let argv = ["sh", "-c", "sleep 2"];
+    let (a, b) = tokio::join!(run(&book, &on_book, &argv), run(&air, &on_air, &argv));
+    // One of them has the slot; the other runs where its session is.
+    let mini_runs = |r: &Ran| r.stderr == "moonlet: running on studio-mini\n";
+    assert!(mini_runs(&a) != mini_runs(&b), "{a:?} {b:?}");
+    if !mini_runs(&a) {
+        assert_eq!(a.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    }
+    if !mini_runs(&b) {
+        assert_eq!(b.stderr, "moonlet: running on Alex's MacBook Air\n");
+    }
+    assert_eq!((a.status, b.status), (0, 0));
+}
+
+#[tokio::test]
+async fn worker_list_lists_every_member_with_what_it_runs() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    let (_c, _) =
+        start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
+    let running = within_value(
+        Duration::from_secs(5),
+        "the Air's running command",
+        || async {
+            let list: Vec<Value> = mini.call("worker.list", json!({})).await;
+            let air = list.into_iter().find(|w| w["id"] == json!(AIR))?;
+            air["running"].as_array().filter(|r| !r.is_empty()).cloned()
+        },
+    )
+    .await;
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0]["host"], json!("Alex's MacBook Pro"));
+    assert_eq!(running[0]["session"], json!("Fix cart"));
+    assert_eq!(
+        running[0]["command"],
+        json!("sh -c 'echo started; sleep 3'")
+    );
+    assert!(running[0]["started_at"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn exec_status_lists_what_a_host_runs_for_other_hosts() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let (_c, _) =
+        start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
+    let status: Value = mini.call("exec.status", json!({})).await;
+    let serving = status["serving"].as_array().cloned().unwrap_or_default();
+    assert_eq!(serving.len(), 1, "{status}");
+    assert_eq!(serving[0]["host"], json!("Alex's MacBook Pro"));
+    assert_eq!(serving[0]["session"], json!("Fix cart"));
+}
+
+#[tokio::test]
+async fn turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let mut c = book.app().await;
+    let started: Value = c
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": ["sh", "-c", "echo started; sleep 2; echo late > late.txt"], "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    let run_id = started["run"].as_u64().unwrap();
+    // Turned off from the MacBook while studio-mini runs it.
+    loop {
+        let f = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if matches!(&f, moonlet_proto::Frame::RunOutput { stream: 1, data, .. } if data.starts_with(b"started"))
+        {
+            break;
+        }
+    }
+    mini_takes(&mini, &book, false).await;
+    let status = loop {
+        let f = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }) = f
+            && name == "exec.exited"
+            && data["run"] == json!(run_id)
+        {
+            break data["status"].as_i64().unwrap();
+        }
+    };
+    // The running command finished, and its change came back.
+    assert_eq!(status, 0);
+    let worktree = std::path::PathBuf::from(session["path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("late.txt")).unwrap(),
+        "late\n"
+    );
+    // The next one runs on the MacBook, and studio-mini's copy goes.
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    within(
+        Duration::from_secs(10),
+        "studio-mini's copies gone",
+        || async { mini_copies(&mini).is_empty() },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_host_runs_its_own_sessions_commands_when_no_other_is_free() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    // studio-mini's switch is off: it still runs its own sessions' commands.
+    let session = book_session(&mini, repo.path()).await;
+    assert_eq!(own(&mini).await.0, false);
+    let ran = run(&mini, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on studio-mini\n");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+    let _ = book;
+}
+
+#[tokio::test]
+async fn a_routing_copy_for_another_member_lives_under_runs_of_the_sessions_host() {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    only_air_takes(&mini, &book, &air).await;
+    run(&book, &session, &["sh", "-c", "true"]).await;
+    let copies = mini_copies(&air);
+    assert_eq!(copies.len(), 1);
+    // runs/<the session's host>/<project>/<session>/
+    let copy = &copies[0];
+    let project = copy.parent().unwrap();
+    let host = project.parent().unwrap();
+    assert_eq!(project.file_name().unwrap(), "shop");
+    assert_eq!(host.parent().unwrap(), air.home.path().join("runs"));
+    assert_ne!(host.file_name().unwrap(), "repos");
+}
+
+#[tokio::test]
+async fn a_central_host_before_this_spec_leaves_members_running_their_own_commands() {
+    let (mini, _addr, book, _air) = account_env(&[("MOONLET_TEST_BEFORE_X89", "1")]).await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let started = std::time::Instant::now();
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

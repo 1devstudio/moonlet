@@ -557,6 +557,13 @@ impl LiveCopies {
             .map(Peer::Link)
     }
 
+    /// The host a routing copy kept here runs commands for, by name, and
+    /// its session (X89).
+    pub fn run_copy_for(&self, copy: &str) -> Option<(String, String)> {
+        let k = self.kept(copy).filter(|k| k.kind == CopyKind::Run)?;
+        Some((k.host, k.session))
+    }
+
     /// The member a routing copy kept here runs commands for, by worker
     /// id (X89); none for a copy of this machine's central host.
     pub fn copy_member(&self, copy: &str) -> Option<String> {
@@ -709,6 +716,25 @@ impl LiveCopies {
     }
 
     /// As [`Self::live_copies`], for this machine's copies of `kind`.
+    /// The routing copies this machine keeps, with the member each runs
+    /// commands for (X89), or none for its central host's.
+    pub fn run_copies(&self) -> Vec<(String, PathBuf, Option<String>)> {
+        self.data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty() && k.paused.is_none())
+            .map(|k| (k.session.clone(), PathBuf::from(&k.path), k.peer.clone()))
+            .collect()
+    }
+
+    /// Whether this host asked `worker` to prepare a routing copy of
+    /// `session` (X89).
+    pub fn was_asked(&self, worker: &str, session: &str) -> bool {
+        self.asked.lock().unwrap().contains(&(worker.to_string(), session.to_string()))
+    }
+
     pub fn copies_of(&self, kind: CopyKind) -> Vec<(String, PathBuf, Option<ProjectIdentity>)> {
         self.data
             .lock()
@@ -3759,6 +3785,8 @@ impl LiveCopies {
             .worker
             .iter()
             .filter(|k| k.kind == CopyKind::Run && keep.as_deref() != Some(k.host.as_str()))
+            // A copy a command runs in now stays until it ends (X89).
+            .filter(|k| !k.in_use_until.is_some_and(|t| t > moonlet_core::paths::now_ms()))
             .map(|k| k.id.clone())
             .collect();
         for id in ids {
@@ -3810,6 +3838,23 @@ impl LiveCopies {
     }
 
     /// Call holding [`LiveCopies::run_lock`].
+    /// A run in routing copy `copy` ended while this host takes no heavy
+    /// commands any more: the copy goes now, as the others went when the
+    /// switch went off (X89).
+    pub fn drop_run_copy_if_off(self: &Arc<Self>, copy: &str) {
+        let info = self.link.info();
+        if info.worker.enabled || info.worker.cloud {
+            return;
+        }
+        let me = self.clone();
+        let copy = copy.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = me.remove(&copy, CloseReason::Stopped).await {
+                tracing::warn!(%copy, "cannot remove the routing copy: {}", e.message);
+            }
+        });
+    }
+
     pub async fn reset_run(&self, copy: &str) {
         self.update_kept(copy, |k| {
             k.last_used = Some(moonlet_core::paths::now_ms());

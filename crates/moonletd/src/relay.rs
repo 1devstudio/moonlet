@@ -34,7 +34,7 @@ const PREPARED_FOR: Duration = Duration::from_secs(15 * 60);
 /// What a router may ask a runner, and a runner its router: the routing
 /// methods of X62, nothing else.
 const TO_RUNNER: [&str; 5] = [m::EXEC_PREPARE, m::EXEC_START, m::EXEC_CANCEL, m::SYNC_UPDATE, m::SYNC_CLOSING];
-const TO_ROUTER: [&str; 4] = [m::SYNC_OPEN, m::SYNC_FETCH, m::SYNC_CLOSE, m::EXEC_DONE];
+const TO_ROUTER: [&str; 5] = [m::SYNC_OPEN, m::SYNC_FETCH, m::SYNC_CLOSE, m::EXEC_DONE, m::SESSION_FILES_FETCH];
 
 /// A router and a runner it sent `exec.prepare` to: only between those
 /// do the runner's calls back go (X89).
@@ -246,6 +246,34 @@ impl Relay {
 
     /// Member `runner` went away: each router whose command it ran hears
     /// so, and runs it again itself.
+    /// Member `router` went away: the commands it routed through this host
+    /// stop where they run, as a worker stops one when its central host's
+    /// daemon stops (X62).
+    pub fn router_gone(&self, workers: &Workers, router: &str) {
+        let gone: Vec<(String, u32)> = {
+            let mut runs = self.runs.lock().unwrap();
+            let ids: Vec<u32> = runs.iter().filter(|(_, p)| p.router_id == router).map(|(id, _)| *id).collect();
+            ids.into_iter()
+                .filter_map(|id| runs.remove(&id).map(|p| (p.runner, id)))
+                .collect()
+        };
+        self.prepared.lock().unwrap().retain(|(r, _), _| r != router);
+        for (runner, id) in gone {
+            let Some(c) = workers.conn(&runner) else { continue };
+            let cancel = m::PeerCall {
+                to: None,
+                from: Some(router.to_string()),
+                method: m::EXEC_CANCEL.into(),
+                params: serde_json::json!({ "run": id }),
+            };
+            tokio::spawn(async move {
+                let _ = c
+                    .request(m::PEER_CALL, serde_json::to_value(cancel).unwrap(), Duration::from_secs(10))
+                    .await;
+            });
+        }
+    }
+
     pub fn runner_gone(&self, workers: &Workers, runner: &str) {
         let lost: Vec<(String, u32)> = {
             let mut runs = self.runs.lock().unwrap();

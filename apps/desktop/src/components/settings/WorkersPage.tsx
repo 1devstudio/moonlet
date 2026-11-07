@@ -99,7 +99,7 @@ function WorkerLine({ row, now, onApprove, onSet }: { row: WorkerRow; now: numbe
       {row.running.map((r, i) => (
         <div key={i} className="ml-[46px] flex items-center gap-2 rounded-md bg-panel-2 px-3 py-1.5 ui-text-12">
           <LoaderCircle size={12} className="animate-spin text-muted" />
-          <span className="text-muted">{r.session}</span>
+          <span className="text-muted">{r.host ? `${r.session} on ${r.host}` : r.session}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{r.command}</span>
           <span className="font-mono text-muted">{elapsed(r.since, now)}</span>
         </div>

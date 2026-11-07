@@ -3166,6 +3166,9 @@ pub struct WorkerInfo {
     /// `worker.ping` answer (X89).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used: Option<u32>,
+    /// What it runs for other hosts, from the last `worker.ping` (X89).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<Serving>,
 }
 
 /// `sync.start` params: the session's id on the central host.
@@ -3659,6 +3662,19 @@ pub struct ExecStart {
     /// Ignored paths brought back after the run.
     #[serde(default)]
     pub outputs: Vec<String>,
+    /// The session's name, for the runner's list of what it runs (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+}
+
+/// A command a host runs for another host (X89): the host whose session
+/// it is, the session's name, the command and when it started (ms).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Serving {
+    pub host: String,
+    pub session: String,
+    pub command: String,
+    pub started_at: u64,
 }
 
 /// `exec.done` params: `tree` and `head` are the copy's after the run.
@@ -3854,6 +3870,9 @@ pub struct ExecStatus {
     pub skips: Vec<ExecSkip>,
     /// Commands this machine runs for its central host.
     pub routed: u32,
+    /// Commands this machine runs for other hosts, for whom (X89).
+    #[serde(default)]
+    pub serving: Vec<Serving>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
