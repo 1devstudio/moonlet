@@ -3,6 +3,7 @@
 
 import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace } from "./protocol";
 import { agentCount } from "./subagents";
+import { parseCopyHost } from "./copyHost";
 
 export interface Group {
   key: string;
@@ -94,6 +95,9 @@ export interface SectionPart {
   sec: Section;
   projects: Project[];
   sessions: Session[];
+  /** The host a row of the part is opened under, by session id, when it
+   * is not `host`: the copy host of a session another member runs (X86). */
+  hostOf?: Record<string, string>;
 }
 
 /** A session and the host it is on. */
@@ -151,15 +155,16 @@ export function arrangeShared(
     // the projects with the picked identities.
     const projectIds =
       i === 0 || picked.length === 0 ? part.sec.project_ids : part.sec.project_ids.filter((id) => picked.includes(identityKey(part.projects.find((p) => p.id === id)?.identity)));
+    const rowHost = (s: Session) => part.hostOf?.[s.id] ?? part.host;
     const groups = arrange(
       workspaceId,
       { ...part.sec, project_ids: projectIds, view: { ...view, filter: i === 0 ? view.filter : [] } },
       part.projects,
       part.sessions,
-      (s) => o.stateOf(part.host, s),
-      (s) => o.activeAt(part.host, s),
-      (s) => o.archiving(part.host, s),
-      (s) => o.taskOf(part.host, s),
+      (s) => o.stateOf(rowHost(s), s),
+      (s) => o.activeAt(rowHost(s), s),
+      (s) => o.archiving(rowHost(s), s),
+      (s) => o.taskOf(rowHost(s), s),
     );
     for (const g of groups) {
       const project = g.projectId ? part.projects.find((p) => p.id === g.projectId) : undefined;
@@ -173,7 +178,7 @@ export function arrangeShared(
         byKey.set(key, shared);
         out.push(shared);
       }
-      shared.sessions.push(...g.sessions.map((session) => ({ host: part.host, session })));
+      shared.sessions.push(...g.sessions.map((session) => ({ host: rowHost(session), session })));
     }
   });
   // The first member's projects that no connected member has, as rows of
@@ -231,19 +236,40 @@ export function shownSections(shown: { host: string; id: string; account?: strin
   return out;
 }
 
+/** The hosts the app is connected to, as one comma-joined string. */
+export const connectedHosts = (hosts: Record<string, { id: string; status: string }>) =>
+  Object.values(hosts)
+    .filter((h) => h.status === "connected")
+    .map((h) => h.id)
+    .join(",");
+
 /** Each member's side of shared section `sec`, from what it lists: the
- * first holder's is `sec` itself. */
+ * first holder's is `sec` itself. A holder's side also has the sessions
+ * other members run that it holds copies of (X86), each under its copy
+ * host, except one a host the app is connected to (`connected`, every host
+ * when not given) lists as its own: a copy keeps its session's id (X72). */
 export function sectionParts(
   holding: string[],
   sec: Section,
-  of: { sections: Record<string, Section[]>; projects: Record<string, Project[]>; sessions: Record<string, Session[]> },
+  of: { sections: Record<string, Section[]>; projects: Record<string, Project[]>; sessions: Record<string, Session[]>; connected?: string[] },
 ): SectionPart[] {
-  return holding.map((h, i) => ({
-    host: h,
-    sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
-    projects: of.projects[h] ?? [],
-    sessions: of.sessions[h] ?? [],
-  }));
+  const own = new Set(
+    Object.entries(of.sessions)
+      .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
+      .flatMap(([, list]) => list.map((x) => x.id)),
+  );
+  return holding.map((h, i) => {
+    const copies = Object.entries(of.sessions).flatMap(([key, list]) =>
+      parseCopyHost(key)?.host === h ? list.filter((x) => !own.has(x.id)).map((x) => ({ key, session: x })) : [],
+    );
+    return {
+      host: h,
+      sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
+      projects: of.projects[h] ?? [],
+      sessions: [...(of.sessions[h] ?? []), ...copies.map((c) => c.session)],
+      ...(copies.length && { hostOf: Object.fromEntries(copies.map((c) => [c.session.id, c.key])) }),
+    };
+  });
 }
 
 /** The keys the sidebar folds a shared section and its groups under: the
@@ -259,6 +285,8 @@ export function sharedSessionOrder(o: {
   hosts: ListingHost[];
   projects: Record<string, Project[]>;
   sessions: Record<string, Session[]>;
+  /** The hosts the app is connected to, for which copies show (X86). */
+  connected?: string[];
   activeAt: (host: string, s: Session) => number;
   stateOf?: (host: string, s: Session) => AgentState | null;
   collapsed: Record<string, boolean>;
@@ -267,7 +295,7 @@ export function sharedSessionOrder(o: {
   const out: { host: string; id: string }[] = [];
   for (const { ws, sec, hosts } of shownSections(o.shown, o.hosts)) {
     if (o.collapsed[sectionCollapseKey(hosts[0], sec.id)]) continue;
-    const groups = arrangeShared(ws.id, sectionParts(hosts, sec, { sections, projects: o.projects, sessions: o.sessions }), {
+    const groups = arrangeShared(ws.id, sectionParts(hosts, sec, { sections, projects: o.projects, sessions: o.sessions, connected: o.connected }), {
       stateOf: o.stateOf ?? (() => null),
       activeAt: o.activeAt,
       archiving: () => false,
@@ -346,8 +374,11 @@ export function lastActive(terminals: Record<number, { session_id?: string; last
 
 /**
  * A session row's right-click menu. Link to task… is there for a session
- * without a task in a workspace with a task source (X46).
+ * without a task in a workspace with a task source (X46). A copy of a
+ * session another member runs (X86) has only what the central host can ask
+ * that member for: Open, and Archive while the member is reachable.
  */
-export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean }): ("open" | "link-task" | "keep-sync" | "archive")[] {
+export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean } }): ("open" | "link-task" | "keep-sync" | "archive")[] {
+  if (s.copy) return s.copy.reachable ? ["open", "archive"] : ["open"];
   return ["open", ...(!s.linked && s.sources ? (["link-task"] as const) : []), ...(s.sync ? (["keep-sync"] as const) : []), "archive"];
 }

@@ -106,6 +106,17 @@ describe("archiveSession", () => {
     expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "session.processes", "git.push", "session.archive"]);
   });
 
+  it("names the member that runs a copy where its unpushed work is (X86)", async () => {
+    const copy: Session = { ...ws, id: "s7", owner: { worker: "book-id", name: "MacBook", reachable: true } };
+    useStore.setState({ sessions: { "local#copy:s7": [copy] }, selected: { host: "local#copy:s7", session: "s7" } });
+    answers(undefined, { files: [], commits: 2, upstream: null });
+    reply = { ok: false, checked: false };
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(asked?.unpushed?.heading).toBe("This work is only on MacBook");
+  });
+
   const running = {
     processes: [
       { pid: 4100, name: "zsh", origin: { kind: "terminal", id: 1, title: "zsh" }, tab: true },

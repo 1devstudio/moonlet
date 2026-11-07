@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
@@ -407,7 +407,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
         useStore.setState({ showHistory: false });
         selectSession(host, s.id);
       }}
-      onDoubleClick={() => setRenaming(true)}
+      onDoubleClick={() => !s.owner && setRenaming(true)}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e);
@@ -609,8 +609,10 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [renaming, setRenaming] = useState(false);
   const { lines } = useContext(TaskLines);
+  // A string, so the selector's value only changes with the hosts (X86).
+  const connected = useStore((s) => connectedHosts(s.hosts));
   const groups = useMemo(() => {
-    const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions });
+    const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions, connected: connected.split(",") });
     return arrangeShared(ws.id, parts, {
       stateOf: (h, s) => sessionState(useStore.getState(), h, s.id),
       activeAt: (h, s) => activeAt(h, s),
@@ -619,7 +621,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
     });
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, terminals, archiving, host, lines]);
+  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, archiving, host, lines]);
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
@@ -754,6 +756,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
   const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  // Another member's session, through its copy here, cannot be renamed (X86).
+  const renames = !!s && !s.owner;
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -761,7 +765,7 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MenuItems items={items} onClose={onClose} />
-      {s && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
+      {renames && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
     </div>
   );
 }
@@ -855,7 +859,8 @@ function followItems(host: string, s: Session): MenuItem[] {
 }
 
 function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
-  return sessionMenu({ ...task, sync: sync.offered }).flatMap((id): MenuItem[] => {
+  const copy = s.owner ? { reachable: s.owner.reachable } : undefined;
+  return sessionMenu({ ...task, sync: sync.offered, copy }).flatMap((id): MenuItem[] => {
     switch (id) {
       case "open":
         return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];

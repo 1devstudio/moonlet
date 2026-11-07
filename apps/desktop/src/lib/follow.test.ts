@@ -51,6 +51,22 @@ describe("the central host offline (X73)", () => {
   });
 });
 
+describe("where a copy runs, on the central host (X86)", () => {
+  it("names the member that runs it, from the copy, dimmed while that member is unreachable", () => {
+    const since = new Date(2026, 9, 29, 14, 2).getTime();
+    const o = { connected: false, central: null, unreachableSince: null };
+    const owner = { worker: "book-id", name: "MacBook", reachable: true };
+    expect(rowMark({ owner }, "local#copy:s7", "local#copy:s7", o)).toEqual({ server: true, pin: false, dim: false, tooltip: "Running on MacBook" });
+    expect(rowMark({ owner, pinned: "book-id" }, "local#copy:s7", "local#copy:s7", o)).toEqual({ server: true, pin: true, dim: false, tooltip: "Kept on MacBook" });
+    expect(rowMark({ owner: { ...owner, reachable: false, unreachable_since: since } }, "local#copy:s7", "local#copy:s7", o)).toEqual({
+      server: true,
+      pin: false,
+      dim: true,
+      tooltip: "Running on MacBook · offline since 14:02",
+    });
+  });
+});
+
 describe("Run only on… (X73)", () => {
   it("offers this Mac and the central host by name, with the member the session is kept on checked", () => {
     const central = { id: "mini-id", label: "studio-mini" };

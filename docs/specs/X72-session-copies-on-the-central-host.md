@@ -78,7 +78,7 @@ Tests named here are in `crates/moonletd/tests/central_copies.rs` unless another
 ## UI
 
 - The phone's sessions list: a session another member owns ends with "on MacBook" in the muted style of the desktop sidebar (X68). While that member is unreachable, the text reads "MacBook is asleep", and the session's screen shows "MacBook is asleep. This is the copy on studio-mini, read only." under its tabs.
-- The desktop app shows no copies: it already lists every member's own sessions (X68). (Not built: the central host's copies in Settings › Machines.)
+- The desktop app on a member shows no copies: it lists the central host's sessions through its host entry (X68). The central host's own app lists them as the phone does: [X86](X86-copies-in-the-central-hosts-app.md). (Not built: the central host's copies in Settings › Machines.)
 
 ## Protocol and RPCs
 
