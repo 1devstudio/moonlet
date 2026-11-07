@@ -26,6 +26,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{Notify, oneshot};
 
 use crate::jobs::Jobs;
+use crate::peer::Peer;
 use crate::server::Conn;
 use crate::sync::LiveCopies;
 use crate::workers::Workers;
@@ -40,6 +41,8 @@ const DRAIN: Duration = Duration::from_secs(1);
 const MAX_QUEUED: usize = 4 * 1024 * 1024;
 /// How long a worker has to make its routing copy.
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long the host that routed a run has to take its changes.
+const DONE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// What to run, already checked.
 pub struct Command {
@@ -59,8 +62,9 @@ struct Remote {
     /// The `outputs` checked when the run started: the session's config
     /// may say otherwise by the time the run ends.
     outputs: Vec<String>,
-    /// The worker's connection.
-    conn: Arc<Conn>,
+    /// The worker's connection, or this member's link to its central host
+    /// (X89).
+    conn: Peer,
     done: Option<oneshot::Sender<(i32, ExecBrought, u64)>>,
 }
 
@@ -79,9 +83,10 @@ pub struct Runs {
     machines: Mutex<std::sync::Weak<crate::machines::Machines>>,
     /// Cancel signals of this machine's own runs going on here, by run.
     running: Mutex<HashMap<u32, Arc<Notify>>>,
-    /// Cancel signals of runs this machine does for its central host, by
-    /// the central host's run id: a namespace of their own.
-    routed: Mutex<HashMap<u32, Arc<Notify>>>,
+    /// Cancel signals of runs this machine does for other hosts, by the
+    /// connection they came on and that host's run id: a namespace of
+    /// each host's own (X89).
+    routed: Mutex<HashMap<(ClientId, u32), Arc<Notify>>>,
     /// Which connection started each of this central host's runs, so only
     /// it cancels one.
     owners: Mutex<HashMap<u32, ClientId>>,
@@ -301,6 +306,9 @@ impl Runs {
         };
         let mut skipped = HashSet::new();
         let mut rerun = false;
+        // A member's own central host, when it takes the member's heavy
+        // commands (X89).
+        let central = self.central_candidate(sync).await;
         // A session that asked for the cloud waits for its machine (X63).
         let mut wait_note = None;
         if plan.cloud
@@ -324,7 +332,7 @@ impl Runs {
                     // Picked and claimed at once, so two runs never both take
                     // a worker's last slot, nor its copy of the session.
                     let mut claims = self.claims.lock().unwrap();
-                    let candidates = self.candidates(plan, workers, &skipped, &claims);
+                    let candidates = self.candidates(plan, workers, &skipped, &claims, central.as_ref().map(|(c, _)| c));
                     let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
                     // None fits, the central host included: it is busy too.
                     let all_busy = chosen.is_none();
@@ -345,6 +353,7 @@ impl Runs {
                     .into_iter()
                     .find(|w| w.worker.id == chosen.id)
                     .map(|w| w.worker.name)
+                    .or_else(|| central.as_ref().filter(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
                     .unwrap_or_else(|| chosen.id.clone());
                 let machines = (chosen.kind == Kind::Cloud)
                     .then(|| self.machines())
@@ -581,14 +590,58 @@ impl Runs {
         }
     }
 
+    /// This member's central host as a candidate, with its name (X89): when
+    /// it is linked and says in `worker.status` that it takes other hosts'
+    /// heavy commands. None on a central host, and from one before X89.
+    async fn central_candidate(&self, sync: &LiveCopies) -> Option<(Candidate, String)> {
+        let peer @ Peer::Link(_) = sync.central_peer()? else {
+            return None;
+        };
+        let v = peer
+            .request(m::WORKER_STATUS, serde_json::json!({}), Duration::from_secs(2))
+            .await
+            .ok()?;
+        let s: m::WorkerStatus = serde_json::from_value(v).ok()?;
+        s.heavy.then(|| {
+            let c = Candidate {
+                id: s.id,
+                kind: Kind::Linked,
+                os: s.os,
+                cores: s.cores,
+                load: s.load,
+                slots: s.slots,
+                used: s.used,
+                rtt_ms: None,
+            };
+            (c, s.name)
+        })
+    }
+
+    /// `worker.status` on a central host, for a member (X89): whether it
+    /// takes other hosts' heavy commands, and its load and slots now.
+    pub fn status_for_members(&self, me: &m::LinkWorker) -> m::WorkerStatus {
+        m::WorkerStatus {
+            id: me.id.clone(),
+            name: me.name.clone(),
+            heavy: me.enabled,
+            os: crate::link::os().into(),
+            cores: cores(),
+            load: crate::link::load().unwrap_or(0.0),
+            slots: me.slots,
+            used: (self.routed.lock().unwrap().len() + self.running.lock().unwrap().len()) as u32,
+        }
+    }
+
     /// The machines that might run a command of `plan`: linked workers
-    /// that take heavy commands, and this central host.
+    /// that take heavy commands, this member's central host when it does
+    /// (`central`, X89), and this host, the session's.
     fn candidates(
         &self,
         plan: &Plan,
         workers: &Workers,
         skipped: &HashSet<String>,
         claims: &HashMap<u32, (String, String)>,
+        central: Option<&Candidate>,
     ) -> Vec<Candidate> {
         // Cloud machines run only their own project's commands (X63).
         let (cloud, mine) = match self.machines() {
@@ -620,6 +673,14 @@ impl Runs {
                 rtt_ms: w.rtt_ms,
             })
             .collect();
+        if let Some(c) = central
+            && !skipped.contains(&c.id)
+            && !claims.values().any(|(id, s)| *id == c.id && *s == plan.session)
+        {
+            let mut c = c.clone();
+            c.used += claims.values().filter(|(id, _)| *id == c.id).count() as u32;
+            out.push(c);
+        }
         out.push(Candidate {
             id: plan.host.clone(),
             kind: Kind::Central,
@@ -649,8 +710,8 @@ impl Runs {
         sync: &Arc<LiveCopies>,
     ) -> Result<(i32, ExecBrought, u64), Fail> {
         let worker = chosen.id.as_str();
-        let conn = workers
-            .conn(worker)
+        let conn = sync
+            .peer_for(worker)
             .ok_or_else(|| Fail::Refused("gone".into(), "it went away".into()))?;
         let prepare = m::ExecPrepare {
             session: plan.session.clone(),
@@ -774,10 +835,13 @@ impl Runs {
                 }
                 _ = tick.tick() => {
                     let gone = conn.is_gone()
-                        || workers.conn(worker).is_none_or(|c| c.id != conn.id);
+                        || match &conn {
+                            Peer::Conn(c) => workers.conn(worker).is_none_or(|w| w.id != c.id),
+                            Peer::Link(_) => false,
+                        };
                     if gone {
                         self.remote.lock().unwrap().remove(&run);
-                        let why = if workers.missed_pings(conn.id) {
+                        let why = if workers.missed_pings(conn.id()) {
                             "It missed 3 pings."
                         } else {
                             "Its link closed."
@@ -979,7 +1043,7 @@ impl Runs {
             let remote = self.remote.lock().unwrap();
             remote
                 .get(&run)
-                .filter(|r| r.conn.id == from)
+                .filter(|r| r.conn.id() == from)
                 .map(|r| (r.client.clone(), r.job.clone()))
         };
         if let Some((client, job)) = target {
@@ -994,7 +1058,7 @@ impl Runs {
             .lock()
             .unwrap()
             .get(&run)
-            .filter(|r| r.conn.id == from && r.copy == copy)
+            .filter(|r| r.conn.id() == from && r.copy == copy)
             .map(|r| r.outputs.clone())
     }
 
@@ -1002,7 +1066,7 @@ impl Runs {
     /// `back_ms` is how long bringing them in took.
     pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought, back_ms: u64) {
         let mut remote = self.remote.lock().unwrap();
-        if remote.get(&run).is_some_and(|r| r.conn.id == from)
+        if remote.get(&run).is_some_and(|r| r.conn.id() == from)
             && let Some(mut r) = remote.remove(&run)
             && let Some(tx) = r.done.take()
         {
@@ -1017,10 +1081,11 @@ impl Runs {
         self: &Arc<Self>,
         req: ExecStart,
         sync: Arc<LiveCopies>,
-        host: Arc<moonlet_link::Host>,
+        host: Peer,
         slots: u32,
         cloud: bool,
     ) -> Result<bool, RpcError> {
+        let from = host.id();
         // A cloud machine runs what the central host that made it approved
         // (X63); any other worker keeps its own approval.
         if !cloud {
@@ -1052,7 +1117,7 @@ impl Runs {
         // checked, and given back on every refusal and at the end.
         let claim = {
             let mut routed = self.routed.lock().unwrap();
-            if routed.contains_key(&req.run) {
+            if routed.contains_key(&(from, req.run)) {
                 return Err(RpcError::new("busy", "that run is going on"));
             }
             if routed.len() as u32 >= slots || load >= 0.7 * f64::from(cores) {
@@ -1061,10 +1126,10 @@ impl Runs {
             if !self.copies_in_use.lock().unwrap().insert(req.copy.clone()) {
                 return Err(RpcError::new("busy", "a command of the session runs here"));
             }
-            routed.insert(req.run, cancel.clone());
+            routed.insert((from, req.run), cancel.clone());
             Claim {
                 runs: self.clone(),
-                run: req.run,
+                run: (from, req.run),
                 copy: req.copy.clone(),
             }
         };
@@ -1137,7 +1202,7 @@ impl Runs {
                 Mutex::new(heavy::Rewriter::new(&pairs)),
                 Mutex::new(heavy::Rewriter::new(&pairs)),
             ];
-            let raw = |stream: u8, data: Vec<u8>| host.send_run_output(run, stream, data).is_ok();
+            let raw = |stream: u8, data: Vec<u8>| host.send_run_output(run, stream, data);
             let send = |stream: u8, data: Vec<u8>| {
                 let out = rewriters[usize::from(stream == 2)]
                     .lock()
@@ -1145,7 +1210,7 @@ impl Runs {
                     .push(&data);
                 out.is_empty() || raw(stream, out)
             };
-            let connected = || matches!(host.info().status, moonlet_link::HostStatus::Connected);
+            let connected = || !host.is_gone();
             // The link has no queue to read yet: a worker does not hold back.
             let status = execute(&cmd, &|| !connected(), &|| false, &cancel, &send).await;
             for (i, r) in rewriters.iter().enumerate() {
@@ -1178,9 +1243,42 @@ impl Runs {
         Ok(true)
     }
 
-    /// `exec.cancel` from the central host, on a worker.
-    pub fn cancel_here(&self, run: u32) -> bool {
-        match self.routed.lock().unwrap().get(&run) {
+    /// `exec.done` from the machine that ran run `run` for this host, on
+    /// `peer`: its changes come into the session before `moonlet exec`
+    /// hears the exit status (X62), whichever side of the link ran it
+    /// (X89). `host` is this machine's name.
+    pub async fn take_done(&self, sync: &LiveCopies, peer: &Peer, r: m::ExecDone, host: &str) -> Result<ExecBrought, RpcError> {
+        let Some(outputs) = self.runs_on(peer.id(), r.run, &r.copy) else {
+            return Err(RpcError::new("not_found", "no such run"));
+        };
+        let began = std::time::Instant::now();
+        let brought = match r.pack {
+            Some(t) => peer
+                .take_pack(t)
+                .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive")),
+            None => Ok(Vec::new()),
+        };
+        let brought = match brought {
+            Ok(pack) => {
+                let pack = r.pack.map(|_| pack);
+                sync.run_back(peer, &r, pack, host, &outputs).await
+            }
+            Err(e) => Err(e),
+        };
+        let back_ms = began.elapsed().as_millis() as u64;
+        // The run ends either way: its client is told what was lost.
+        let ended = brought.clone().unwrap_or_else(|e| ExecBrought {
+            notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
+            ..Default::default()
+        });
+        self.done(peer.id(), r.run, r.status, ended, back_ms);
+        brought
+    }
+
+    /// `exec.cancel` from the host that routed run `run` here, on the
+    /// connection `from` it came on.
+    pub fn cancel_here(&self, from: ClientId, run: u32) -> bool {
+        match self.routed.lock().unwrap().get(&(from, run)) {
             Some(n) => {
                 n.notify_one();
                 true
@@ -1193,7 +1291,7 @@ impl Runs {
 /// A run's slot and routing copy on a worker, given back when dropped.
 struct Claim {
     runs: Arc<Runs>,
-    run: u32,
+    run: (ClientId, u32),
     copy: String,
 }
 
@@ -1223,7 +1321,7 @@ fn event(j: &mut Job, text: String, detail: Option<String>) {
 #[allow(clippy::too_many_arguments)]
 async fn send_back(
     sync: &LiveCopies,
-    host: &moonlet_link::Host,
+    host: &Peer,
     run: u32,
     copy: &str,
     status: i32,
@@ -1259,7 +1357,7 @@ async fn send_back(
         outputs,
     };
     if let Err(e) = host
-        .request(m::EXEC_DONE, serde_json::to_value(done).unwrap())
+        .request(m::EXEC_DONE, serde_json::to_value(done).unwrap(), DONE_TIMEOUT)
         .await
     {
         tracing::warn!(

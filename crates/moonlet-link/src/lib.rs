@@ -172,10 +172,17 @@ pub struct Host {
     /// What takes input the daemon relays for one of this machine's
     /// terminals (X72).
     relayed_input: Mutex<Option<RelayedInput>>,
+    /// What takes the output of a command the central host runs for this
+    /// machine (X89).
+    run_output: Mutex<Option<RunOutputSink>>,
 }
 
 /// Takes input for relay `id`, from the central host (X72).
 pub type RelayedInput = Arc<dyn Fn(TerminalId, Vec<u8>) + Send + Sync>;
+
+/// Takes `(run, stream, data)` of a command the central host runs for this
+/// machine (X89).
+pub type RunOutputSink = Arc<dyn Fn(u32, u8, Vec<u8>) + Send + Sync>;
 
 /// What a new [`Host`] is called and how it introduces itself.
 pub struct HostOptions {
@@ -225,6 +232,7 @@ impl Host {
             events,
             rt: rt.clone(),
             relayed_input: Mutex::new(None),
+            run_output: Mutex::new(None),
         });
         rt.spawn(flush_loop(Arc::downgrade(&host)));
         rt.spawn(connection_loop(host.clone(), connector, stop_rx));
@@ -248,6 +256,12 @@ impl Host {
     /// terminals from now on (X72).
     pub fn set_relayed_input(&self, sink: RelayedInput) {
         *self.relayed_input.lock().unwrap() = Some(sink);
+    }
+
+    /// What takes the output of commands the central host runs for this
+    /// machine from now on (X89).
+    pub fn set_run_output(&self, sink: RunOutputSink) {
+        *self.run_output.lock().unwrap() = Some(sink);
     }
 
     /// Sends output of a terminal of this machine that the central host
@@ -691,6 +705,13 @@ fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackErr
             }
         }
         Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data)?,
+        // Output of a command the central host runs for this machine (X89).
+        Frame::RunOutput { run, stream, data } => {
+            let sink = host.run_output.lock().unwrap().clone();
+            if let Some(sink) = sink {
+                sink(run, stream, data);
+            }
+        }
         // An error no request asked for: the daemon says why it ends the link.
         Frame::Json(Message::Response {
             id: 0,
@@ -789,6 +810,10 @@ fn answer(host: &Arc<Host>, id: u64, method: String, params: Value) {
 /// is the one reported.
 fn request_timeout(method: &str) -> Duration {
     let secs = if method == moonlet_proto::methods::CLAUDE_UPDATE {
+        660
+    } else if method == moonlet_proto::methods::EXEC_PREPARE {
+        // The central host makes its routing copy of this machine's session
+        // (X89): as long as a worker of the central host gets (X62).
         660
     } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
