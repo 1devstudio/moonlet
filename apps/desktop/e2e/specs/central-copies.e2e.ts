@@ -12,7 +12,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { accountSnapshot, BIN_DIR, restoreAccount, rpc, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, restoreAccount, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "copies-book-home");
@@ -51,7 +51,9 @@ describe("the central host's copies of other members' sessions (X86)", () => {
 
   before(async () => {
     shared = accountSnapshot(w);
-    rpc(w, "mobile.set_enabled", { enabled: true });
+    // Tailnet access, for the MacBook to pair. `moonlet rpc` may not manage
+    // it; `moonletd tailnet` speaks as the app.
+    execFileSync(join(BIN_DIR, "moonletd"), ["tailnet", "on"], { env: w.env, stdio: "pipe" });
     mkdirSync(join(w.root, "book"), { recursive: true });
     execFileSync("git", ["clone", "-q", w.repo, clone], { env: w.env, stdio: "pipe" });
     mkdirSync(home, { recursive: true });
@@ -67,7 +69,12 @@ describe("the central host's copies of other members' sessions (X86)", () => {
     } catch {
       // Already gone.
     }
-    rpc(w, "mobile.set_enabled", { enabled: false });
+    // Tailnet access is the daemon's setting, kept for the rest of the run: off again.
+    try {
+      execFileSync(join(BIN_DIR, "moonletd"), ["tailnet", "off"], { env: w.env, stdio: "pipe" });
+    } catch (e) {
+      console.warn(`tailnet off: ${e}`);
+    }
     restoreAccount(w, shared);
   });
 
