@@ -34,7 +34,7 @@ const live = (state: AgentState | null) => state === "working" || state === "blo
 /** How a section orders its sessions, newest or most active first, or by
  * name; `of` finds the session in an item, `activeAt` its last activity and
  * `stateOf` its agent's state, so live agents lead the most active. */
-export function bySort<T>(sortBy: Section["view"]["sort_by"], of: (x: T) => Session, activeAt: (x: T) => number, stateOf: (x: T) => AgentState | null = () => null): (a: T, b: T) => number {
+export function bySort<T>(sortBy: Section["view"]["sort_by"], of: (x: T) => Session, activeAt: (x: T) => number, stateOf: (x: T) => AgentState | null): (a: T, b: T) => number {
   return (a, b) => {
     const [x, y] = [of(a), of(b)];
     if (sortBy === "name") return x.name.localeCompare(y.name);
@@ -196,15 +196,15 @@ export function arrangeShared(
   }
   const activeAt = (e: HostSession) => o.activeAt(e.host, e.session);
   const stateOf = (e: HostSession) => o.stateOf(e.host, e.session);
-  const sorted = bySort(view.sort_by, (e: HostSession) => e.session, activeAt, stateOf);
-  for (const g of out) g.sessions.sort(sorted);
+  const compare = bySort(view.sort_by, (e: HostSession) => e.session, activeAt, stateOf);
+  for (const g of out) g.sessions.sort(compare);
   if (view.group_by === "status") {
     const order = STATUS_ORDER.map((x) => x.label);
     out.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
   } else if (view.group_by === "task") {
     // Tasks by their first session in the section's order, sessions without
     // one last.
-    const all = out.flatMap((g) => g.sessions).sort(sorted);
+    const all = out.flatMap((g) => g.sessions).sort(compare);
     const first = (g: SharedGroup) => (g.key === "task:none" ? Infinity : Math.min(...g.sessions.map((e) => all.indexOf(e))));
     out.sort((a, b) => first(a) - first(b));
   }
