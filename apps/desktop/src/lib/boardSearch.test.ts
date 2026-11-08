@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { revealFound, searchBoard, searchFooter } from "./boardSearch";
+import { previewOf, revealFound, searchBoard, searchFooter } from "./boardSearch";
 import type { ColumnView } from "./boardColumns";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
@@ -99,8 +99,8 @@ describe("searchBoard (X93 Not on this board)", () => {
   it("lists the other boards' tasks, by description too, then what each tracker's search found, saying where each is", () => {
     const { off } = searchBoard("host", MOONLET, [CHANGEDECK], [{ connection: LINEAR, tasks: [MOON_97, MOON_118] }]);
     expect(off).toEqual([
-      expect.objectContaining({ id: "linear:acme CDK-41", key: { pre: "CDK-41", mid: "", post: "" }, title: { pre: "Changelog themes", mid: "", post: "" }, where: "Changedeck · Cycle 9 · In Progress", glyph: "in_progress", backlog: false, board: "changedeck" }),
-      expect.objectContaining({ id: "linear:acme MOON-97", title: { pre: "Ask before trusting a new SSH ", mid: "host", post: " key" }, where: "Linear · no cycle · Backlog", glyph: "todo", backlog: true, board: null }),
+      expect.objectContaining({ id: "linear:acme CDK-41", key: { pre: "CDK-41", mid: "", post: "" }, title: { pre: "Changelog themes", mid: "", post: "" }, where: "Changedeck · Cycle 9 · In Progress", state: "In Progress", glyph: "in_progress", backlog: false, board: { id: "changedeck", label: "Changedeck · Cycle 9" } }),
+      expect.objectContaining({ id: "linear:acme MOON-97", title: { pre: "Ask before trusting a new SSH ", mid: "host", post: " key" }, where: "Linear · no cycle · Backlog", state: "Backlog", glyph: "todo", backlog: true, board: null }),
       expect.objectContaining({ id: "linear:acme MOON-118", title: { pre: "", mid: "Host", post: " picker in the composer" }, where: "Linear · Cycle 12 · Canceled", glyph: "hidden", backlog: false, board: null }),
     ]);
     expect(off[1].task).toBe(MOON_97);
@@ -149,5 +149,25 @@ describe("revealFound (X93 a found card in a folded column)", () => {
     ]);
     expect(revealFound(MOONLET, "linear:acme MOON-142").map((v) => v.folded)).toEqual([false, false, false, true]);
     expect(revealFound(MOONLET, null).map((v) => v.folded)).toEqual([false, false, false, true]);
+  });
+});
+
+describe("previewOf (X93 the preview of a task not on the board)", () => {
+  const off = searchBoard("host", MOONLET, [CHANGEDECK], [{ connection: LINEAR, tasks: [MOON_97, MOON_118] }]).off;
+  const shown = "Moonlet · Cycle 14";
+
+  it("offers to switch to the other board that has it", () => {
+    expect(previewOf(off[0], shown)).toEqual({ why: "This task is on Changedeck · Cycle 9. Switching shows it there with its columns.", action: { kind: "switch", board: "changedeck", label: "Switch to Changedeck · Cycle 9" } });
+  });
+
+  it("says the board can't show a task its tracker has elsewhere, with no action", () => {
+    expect(previewOf(off[1], shown)).toEqual({ why: "This task is in Linear but not on Moonlet · Cycle 14, so the board can’t show it. You can still start a session from here.", action: null });
+  });
+
+  it("offers to reopen a finished task on no board", () => {
+    expect(previewOf(off[2], shown)).toEqual({ why: "This task is Canceled in Linear, so the board doesn’t show it.", action: { kind: "reopen", label: "Reopen in Linear" } });
+    const closed = { ...task("acme/web#9", "Old host list", { connection: "github:github.com", column: "done" }), github: { repo: "acme/web", number: 9, closingPrs: [] } };
+    const [row] = searchBoard("host", [], [], [{ connection: "github:github.com", tasks: [closed] }]).off;
+    expect(previewOf(row, shown)).toEqual({ why: "This task is Closed in GitHub, so the board doesn’t show it.", action: { kind: "reopen", label: "Reopen in GitHub" } });
   });
 });

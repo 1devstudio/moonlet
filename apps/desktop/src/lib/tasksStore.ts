@@ -82,8 +82,8 @@ interface TasksState {
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
   activity: Record<string, ActivityEntry[]>;
-  /** Find a task: the text the board is filtered by. */
-  query: string;
+  /** Find a task (X93), by `host/workspaceId`: the text typed and the task found on the board. */
+  search: Record<string, TaskSearch>;
   /** Tasks whose Keep in step switch is off, by `connection key` (X46 Task tab). */
   paused: Record<string, true>;
   /** The last action on a task that failed, with its error (X46), by `connection key`. */
@@ -163,7 +163,7 @@ export const useTasks = create<TasksState>(() => ({
   ghScopes: {},
   attention: {},
   activity: {},
-  query: "",
+  search: {},
   paused: storedPaused(),
   failures: {},
   moving: {},
@@ -211,9 +211,36 @@ export function openBoard(host: string, workspaceId: string, id: string) {
   showBoard(host, workspaceId, id);
 }
 
+/** Find a task in a workspace (X93): what is typed, and the task picked on the board, marked found. */
+export interface TaskSearch {
+  query: string;
+  found: string | null;
+}
+
+const NO_SEARCH: TaskSearch = { query: "", found: null };
+
+/** A workspace's Find a task. */
+export const searchOf = (t: Pick<TasksState, "search">, host: string, workspaceId: string): TaskSearch => t.search[wsKey(host, workspaceId)] ?? NO_SEARCH;
+
+function setSearch(host: string, workspaceId: string, change: (s: TaskSearch) => TaskSearch) {
+  useTasks.setState((t) => ({ search: { ...t.search, [wsKey(host, workspaceId)]: change(searchOf(t, host, workspaceId)) } }));
+}
+
+/** Types into Find a task; clearing it drops the found mark. */
+export function setTaskQuery(host: string, workspaceId: string, query: string) {
+  setSearch(host, workspaceId, (s) => ({ query, found: query.trim() ? s.found : null }));
+}
+
+/** Marks task `id` (`connection key`) found on the board, or none. */
+export function findTask(host: string, workspaceId: string, id: string | null) {
+  setSearch(host, workspaceId, (s) => ({ ...s, found: id }));
+}
+
 /** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */
 export function showBoard(host: string, workspaceId: string, id: string) {
   const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
+  // A task found on the board shown before is not on this one (X93).
+  findTask(host, workspaceId, null);
   useTasks.setState({ shownBoard });
   writeStored("tasks.board", JSON.stringify(shownBoard));
   void refreshTasks(host, workspaceId);

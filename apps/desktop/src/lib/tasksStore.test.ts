@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { answerTaskRequest, createIssue, pairedPhones, setColumnShow, shareTasks, workspacesToPoll } from "./tasksStore";
+import { answerTaskRequest, createIssue, findTask, pairedPhones, searchOf, setColumnShow, setTaskQuery, shareTasks, workspacesToPoll } from "./tasksStore";
 import { tasksBoard } from "./tasksBoard";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
@@ -1931,3 +1931,31 @@ describe("a board's sessions across the members of an account (X68)", () => {
   });
 });
 
+
+describe("Find a task (X93)", () => {
+  afterEach(() => useTasks.setState({ search: {}, shownBoard: {}, config: null }));
+
+  it("keeps each workspace's query and found task apart", () => {
+    setTaskQuery("local", "personal", "host");
+    findTask("local", "personal", "linear:acme MOON-127");
+    setTaskQuery("local", "work", "ops");
+    expect(searchOf(useTasks.getState(), "local", "personal")).toEqual({ query: "host", found: "linear:acme MOON-127" });
+    expect(searchOf(useTasks.getState(), "local", "work")).toEqual({ query: "ops", found: null });
+    expect(searchOf(useTasks.getState(), "local", "other")).toEqual({ query: "", found: null });
+  });
+
+  it("drops the found mark when the field is cleared, another task is found, or another board is shown", () => {
+    findTask("local", "personal", "linear:acme MOON-127");
+    findTask("local", "personal", "linear:acme MOON-142");
+    expect(searchOf(useTasks.getState(), "local", "personal").found).toBe("linear:acme MOON-142");
+    setTaskQuery("local", "personal", "hosts");
+    expect(searchOf(useTasks.getState(), "local", "personal").found).toBe("linear:acme MOON-142");
+    setTaskQuery("local", "personal", "  ");
+    expect(searchOf(useTasks.getState(), "local", "personal")).toEqual({ query: "  ", found: null });
+    findTask("local", "personal", "linear:acme MOON-142");
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    showBoard("local", "personal", "moon");
+    expect(searchOf(useTasks.getState(), "local", "personal").found).toBeNull();
+  });
+});
