@@ -593,15 +593,24 @@ async fn pulled_base_branch_is_where_new_sessions_start() {
     assert_eq!((st.ahead, st.behind), (0, 1));
     assert_eq!(st.commits[0].subject, "Merge pull request #128");
 
+    // Another app on this daemon, such as the central host's own when a
+    // member pulls there, hears of the pull and can clear its chip (X13),
+    // by the project's own path however the folder was spelt.
+    let mut app = d.client().await;
     let pulled: BasePull = c
         .request(
             methods::GIT_PULL_BASE,
-            serde_json::json!({"path": p.path, "branch": p.base_branch}),
+            serde_json::json!({"path": format!("{}/", p.path), "branch": p.base_branch}),
         )
         .await
         .unwrap();
     assert_eq!(pulled.pulled, 1);
     assert_eq!(pulled.head, merged);
+    let heard = next_event(&mut app, "git.base_pulled", |_| true).await;
+    assert_eq!(
+        heard,
+        serde_json::json!({"path": p.path, "branch": "main", "pulled": 1, "head": merged})
+    );
 
     let ws: Session = c
         .request(

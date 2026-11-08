@@ -17,6 +17,7 @@ import {
   type AgentState,
   type Attention,
   type BasePull,
+  type BasePulled,
   type BaseStatus,
   EV,
   type FsChanged,
@@ -1061,6 +1062,14 @@ export async function pullBaseEverywhere(host: string, projectId: string) {
   if (text) toast(text);
 }
 
+/** A host's daemon pulled a project's base branch, maybe for another
+ *  host's app (X13): read the branch again, without fetching, so the chip
+ *  does not keep the old count until the next fetch. */
+function basePulled(host: string, e: BasePulled) {
+  const p = get().projects[host]?.find((x) => x.path === e.path && x.base_branch === e.branch);
+  if (p) void refreshBase(host, p.id);
+}
+
 /** Fetches another host's copy of the project, as its last fetch may be
  *  old, then fast-forwards it when it is only behind. */
 async function fetchAndPull(host: string, p: Project, folder: string | null): Promise<ElsewherePull> {
@@ -1301,6 +1310,9 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.gitSettingsChanged:
       set((s) => ({ gitSettings: { ...s.gitSettings, [host]: data as GitSettings } }));
+      break;
+    case EV.gitBasePulled:
+      basePulled(host, data as BasePulled);
       break;
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
