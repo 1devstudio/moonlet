@@ -173,9 +173,16 @@ impl TerminalManager {
 
     /// Notes output now; true when clients are due to hear of it.
     fn note_output(&self, st: &mut TerminalState) -> bool {
+        st.info.last_output_at = now_ms();
+        self.activity_due(st)
+    }
+
+    /// True, once per `activity_every`, while clients have an older output
+    /// time than the terminal's.
+    fn activity_due(&self, st: &mut TerminalState) -> bool {
         let now = now_ms();
-        st.info.last_output_at = now;
-        let due = now.saturating_sub(st.announced_output_at) >= self.activity_every.load(Ordering::SeqCst);
+        let due = st.info.last_output_at > st.announced_output_at
+            && now.saturating_sub(st.announced_output_at) >= self.activity_every.load(Ordering::SeqCst);
         if due {
             st.announced_output_at = now;
         }
@@ -1088,6 +1095,9 @@ async fn quiet_watcher(mgr: std::sync::Weak<TerminalManager>) {
                 && st.agent.on_quiet(now)
             {
                 mgr.publish_agent(&mut st);
+            } else if mgr.activity_due(&mut st) {
+                // The output the throttle held back (see `note_output`).
+                mgr.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
             }
         }
     }
@@ -1248,7 +1258,7 @@ mod tests {
         let info = mgr
             .create(TerminalCreate {
                 cwd: "/tmp".into(),
-                command: vec!["/bin/sh".into(), "-c".into(), "sleep 0.5; echo busy; sleep 5".into()],
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 0.5; echo busy; sleep 30".into()],
                 ..Default::default()
             })
             .unwrap();
@@ -1263,6 +1273,43 @@ mod tests {
                 let t: TerminalInfo = serde_json::from_value(data).unwrap();
                 if t.id == info.id && t.last_output_at >= info.created_at + 400 {
                     break;
+                }
+            }
+        }
+        mgr.kill(info.id, true).unwrap();
+    }
+
+    /// Output the throttle held back still reaches clients once the
+    /// terminal goes quiet.
+    #[tokio::test]
+    async fn the_last_output_before_a_quiet_spell_reaches_clients() {
+        let mgr = manager();
+        mgr.set_activity_every(Duration::from_millis(200));
+        let mut events = mgr.subscribe_events();
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 0.5; echo one; sleep 0.05; echo two; sleep 30".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        let mut first = None;
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("the last output was never announced")
+                .unwrap();
+            if let Message::Event { name, data } = ev
+                && name == methods::EV_TERMINAL_UPDATED
+            {
+                let t: TerminalInfo = serde_json::from_value(data).unwrap();
+                if t.id != info.id || t.last_output_at < info.created_at + 400 {
+                    continue;
+                }
+                match first {
+                    None => first = Some(t.last_output_at),
+                    Some(at) if t.last_output_at > at => break,
+                    Some(_) => {}
                 }
             }
         }
