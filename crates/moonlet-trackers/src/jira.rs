@@ -105,6 +105,38 @@ pub fn parse_search(
         .collect())
 }
 
+/// Find a task (X93): JQL for the issues of `projects` whose text has
+/// `query`, newest first; `None` when there is nothing to search. The query
+/// is untrusted: quotes, backslashes and Lucene's operators become spaces,
+/// so it stays one string, and a project key that isn't one is left out.
+pub fn search_jql(projects: &[String], query: &str) -> Option<String> {
+    let keys: Vec<&str> = projects
+        .iter()
+        .map(String::as_str)
+        .filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .collect();
+    let text = query
+        .chars()
+        .map(|c| if "\"\\'+-&|!(){}[]^~*?:/".contains(c) || c.is_control() { ' ' } else { c })
+        .collect::<String>();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if keys.is_empty() || text.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "project in ({}) AND text ~ \"{text}\" ORDER BY updated DESC",
+        keys.join(", ")
+    ))
+}
+
+/// The most issues one search asks for (X93).
+pub const SEARCH_MAX: u64 = 8;
+
+/// The `/rest/api/3/search/jql` body of a [`search_jql`].
+pub fn search_body(jql: &str) -> Value {
+    json!({ "jql": jql, "fields": FIELDS, "maxResults": SEARCH_MAX })
+}
+
 /// `(accountId, displayName)` of the token's user.
 pub fn parse_myself(raw: &[u8]) -> Result<(String, String), ApiError> {
     let v = parse(raw)?;
@@ -525,6 +557,31 @@ mod tests {
             comment_body("Opened a pull request: https://github.com/acme/app/pull/57"),
             serde_json::from_slice::<serde_json::Value>(&fixture("jira-comment-request.json"))
                 .unwrap()
+        );
+    }
+    #[test]
+    fn a_search_asks_for_the_projects_issues_whose_text_has_the_query_and_nothing_else() {
+        // Find a task (X93).
+        let projects = vec!["OPS".to_string(), "PLAT".to_string()];
+        assert_eq!(
+            search_jql(&projects, "checkout button").as_deref(),
+            Some(r#"project in (OPS, PLAT) AND text ~ "checkout button" ORDER BY updated DESC"#)
+        );
+        // Quotes, backslashes and Lucene's operators can't end the string or change the query.
+        assert_eq!(
+            search_jql(&projects, r#"x" OR project = SECRET \ (a*) -b"#).as_deref(),
+            Some(r#"project in (OPS, PLAT) AND text ~ "x OR project = SECRET a b" ORDER BY updated DESC"#)
+        );
+        // A project key that isn't one is left out; nothing to search, no search.
+        assert_eq!(
+            search_jql(&["OPS) OR (1=1".to_string(), "OPS".to_string()], "x").as_deref(),
+            Some(r#"project in (OPS) AND text ~ "x" ORDER BY updated DESC"#)
+        );
+        assert_eq!(search_jql(&projects, r#" "*" "#), None);
+        assert_eq!(search_jql(&[], "x"), None);
+        assert_eq!(
+            search_body("project in (OPS) AND text ~ \"x\""),
+            json!({ "jql": "project in (OPS) AND text ~ \"x\"", "fields": FIELDS, "maxResults": 8 })
         );
     }
 }

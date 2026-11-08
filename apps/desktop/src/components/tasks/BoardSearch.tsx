@@ -10,12 +10,13 @@ import { claimKeys } from "../../lib/keys";
 import { fromOtherDialog } from "../../lib/modal";
 import { useStore } from "../../lib/store";
 import { taskId, trackerName, trackerOf } from "../../lib/tasks";
-import { composerTask, findTask, moveTask, searchOf, setTaskQuery, showBoard, useTasks } from "../../lib/tasksStore";
+import { composerTask, findTask, moveTask, searchOf, searchTrackers, setTaskQuery, showBoard, trackerSearchOf, useTasks } from "../../lib/tasksStore";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, IconButton, Kbd, StateGlyph } from "../ui";
 import { TaskGlyph } from "./TasksMode";
 
 const MARK = "rounded-[2px] bg-accent/[0.28] text-fg";
+const NONE_FOUND: Found[] = [];
 
 /** Text with its match marked. */
 function Marked({ hit }: { hit: Hit }) {
@@ -40,22 +41,24 @@ export function scrollToTask(id: string) {
  * on the board (picking one marks it found) and off it (picking one opens
  * its preview). The board itself is never filtered.
  */
-export function FindTask({ host, workspaceId, views, others, shownLabel, found = [], trackers = [], searching = [], failed = [], footer }: {
+export function FindTask({ host, workspaceId, views, others, shownLabel, footer }: {
   host: string;
   workspaceId: string;
   /** The shown board's columns as drawn, after the header's filters. */
   views: ColumnView[];
   others: OtherBoard[];
   shownLabel: string;
-  /** What each tracker's search found, the trackers searched, still searching, and failed. */
-  found?: Found[];
-  trackers?: string[];
-  searching?: string[];
-  failed?: { tracker: string; error: string }[];
   /** Shown under the results when nothing matched: Create “…” in a tracker. */
   footer?: (query: string) => React.ReactNode;
 }) {
   const { query } = useTasks((t) => searchOf(t, host, workspaceId));
+  // What the trackers' search found for this query (X93); before it answers, nothing.
+  const ts = useTasks((t) => trackerSearchOf(t, host, workspaceId));
+  const current = ts.query === query.trim();
+  const found = current ? ts.found : NONE_FOUND;
+  const searching = current ? ts.searching : [];
+  const failed = current ? ts.failed : [];
+  useEffect(() => void searchTrackers(host, workspaceId, query), [host, workspaceId, query]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [preview, setPreview] = useState<OffRow | null>(null);
@@ -65,8 +68,9 @@ export function FindTask({ host, workspaceId, views, others, shownLabel, found =
   const result: Result = useMemo(() => searchBoard(query, views, others, found), [query, views, others, found]);
   const rows = [...result.on.map((r) => ({ id: r.id, on: true as const })), ...result.off.map((r) => ({ id: r.id, on: false as const }))];
   const shown = open && !!query.trim();
-  const { count, none } = searchFooter(result, trackers);
-  const pending = searching.length > 0;
+  const { count, none } = searchFooter(result, ts.trackers);
+  // No match is only said once every search answered.
+  const pending = !current || searching.length > 0;
 
   // ⌘F in Tasks mode is Find a task (X93), not the terminal's find.
   useEffect(
@@ -237,7 +241,7 @@ export function FindTask({ host, workspaceId, views, others, shownLabel, found =
               </div>
             </>
           )}
-          {pending && <div className="px-3.5 py-2 ui-text-12 text-faint">Searching {searching.join(" and ")}…</div>}
+          {searching.length > 0 && <div className="px-3.5 py-2 ui-text-12 text-faint">Searching {searching.join(" and ")}…</div>}
           {failed.map((f) => (
             <div key={f.tracker} className="px-3.5 py-2 ui-text-12 text-error">
               Couldn’t search {f.tracker}: {f.error}

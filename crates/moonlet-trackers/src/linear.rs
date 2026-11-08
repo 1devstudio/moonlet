@@ -213,6 +213,29 @@ pub fn issue_query() -> String {
     format!("query Issue($id: String!) {{ issue(id: $id) {{ {ISSUE_FIELDS} }} }}")
 }
 
+/// The most issues one search asks for (X93).
+pub const SEARCH_FIRST: u64 = 8;
+
+/// Find a task (X93): the issues of teams `$teams` whose text matches
+/// `$term`, best first, open, finished and canceled ones alike.
+pub fn search_query() -> String {
+    format!(
+        "query Search($term: String!, $teams: [String!], $first: Int) {{ \
+         searchIssues(term: $term, first: $first, filter: {{ team: {{ key: {{ in: $teams }} }} }}) {{ nodes {{ {ISSUE_FIELDS} }} }} }}"
+    )
+}
+
+/// The variables of [`search_query`]: the text as typed, and the team keys.
+pub fn search_variables(term: &str, teams: &[String]) -> Value {
+    serde_json::json!({ "term": term, "teams": teams, "first": SEARCH_FIRST })
+}
+
+/// The issues a [`search_query`] found, as tasks of `connection`.
+pub fn parse_search(raw: &[u8], connection: &str) -> Result<Vec<TrackerTask>, ApiError> {
+    let d = data(raw)?;
+    Ok(nodes(&d["searchIssues"]).map(|i| issue_task(i, connection)).collect())
+}
+
 /// The issue of [`issue_query`], or `None` when Linear knows no such key.
 pub fn parse_issue(raw: &[u8], connection: &str) -> Result<Option<TrackerTask>, ApiError> {
     let v: Value = serde_json::from_slice(raw)
@@ -977,5 +1000,22 @@ mod tests {
         // A cycle without dates is not one to follow.
         let none = br#"{"data":{"teams":{"nodes":[{"activeCycle":{"number":7,"name":null}}]}}}"#;
         assert_eq!(parse_active_cycle(none).unwrap(), None);
+    }
+    #[test]
+    fn a_search_finds_issues_of_the_boards_teams_finished_and_canceled_ones_too() {
+        // Find a task (X93). The answer's shape is Linear's schema
+        // (searchIssues → IssueSearchPayload, linear/linear schema.graphql),
+        // not a capture: no Linear token was at hand.
+        let q = search_query();
+        assert!(q.contains("searchIssues(term: $term, first: $first, filter: { team: { key: { in: $teams } } })"), "{q}");
+        assert_eq!(
+            search_variables("host", &["MOON".into(), "CDK".into()]),
+            serde_json::json!({ "term": "host", "teams": ["MOON", "CDK"], "first": 8 })
+        );
+        let found = parse_search(&fixture("linear-search-issues.json"), "linear:acme").unwrap();
+        let keys: Vec<_> = found.iter().map(|t| (t.key.as_str(), t.tracker.state.as_str(), t.cycle)).collect();
+        assert_eq!(keys, vec![("MOON-97", "Backlog", None), ("MOON-118", "Canceled", Some(12))]);
+        assert_eq!(found[1].assignees, vec!["Sam Rivera".to_string()]);
+        assert_eq!(found[1].url, "https://linear.app/acme/issue/MOON-118/host-picker-in-the-composer");
     }
 }

@@ -1,10 +1,10 @@
 // Search the board (X93): Find a task in the board header lists the tasks
 // that match, on the shown board and off it, without filtering the board.
 
-import type { Category } from "./boards";
+import type { BoardConfig, Category } from "./boards";
 import type { ColumnView } from "./boardColumns";
 import type { AgentState } from "./protocol";
-import { type Column, type Task, taskId, trackerName, trackerOf } from "./tasks";
+import { type Column, type Task, type TrackerKind, taskId, trackerName, trackerOf } from "./tasks";
 import type { BoardSession } from "./tasksBoard";
 
 /** Text split around the first match, `mid` empty when it has none. */
@@ -171,6 +171,34 @@ export function previewOf(row: OffRow, shown: string): Preview {
     const { id, label } = row.board;
     return { why: `This task is on ${label}. Switching shows it there with its columns.`, action: { kind: "switch", board: id, label: `Switch to ${label}` } };
   }
-  if (row.glyph === "done" || row.glyph === "hidden") return { why: `This task is ${stateOf(row.task)} in ${tracker}, so the board doesn’t show it.`, action: { kind: "reopen", label: `Reopen in ${tracker}` } };
+  if (row.glyph === "done" || (row.glyph === "hidden" && !row.backlog)) return { why: `This task is ${stateOf(row.task)} in ${tracker}, so the board doesn’t show it.`, action: { kind: "reopen", label: `Reopen in ${tracker}` } };
   return { why: `This task is in ${tracker} but not on ${shown}, so the board can’t show it. You can still start a session from here.`, action: null };
+}
+
+/** A connection Find a task searches, and where in it: Linear team keys, Jira project keys, GitHub repositories. */
+export interface SearchTarget {
+  connection: string;
+  tracker: TrackerKind;
+  scope: string[];
+}
+
+/**
+ * The trackers Find a task searches (X93): each connection of the
+ * workspace's boards once, in their teams, the projects of their issues and
+ * their repositories. ClickUp has no text search, and a connection that
+ * needs attention (X44) is left out.
+ */
+export function searchTargets(boards: { board: BoardConfig; tasks: Task[] }[], attention: Record<string, string>): SearchTarget[] {
+  const targets = new Map<string, SearchTarget>();
+  for (const { board, tasks } of boards) {
+    const tracker = trackerOf(board.connection);
+    if (!tracker || tracker === "clickup" || attention[board.connection]) continue;
+    const o = board.origin;
+    const scope =
+      o.kind === "linear_team" ? [o.team] : o.kind === "github_repo" ? [o.repo] : o.kind === "github_project" ? tasks.flatMap((t) => (t.github ? [t.github.repo] : [])) : tracker === "jira" ? tasks.map((t) => t.key.slice(0, t.key.lastIndexOf("-"))) : [];
+    const target = targets.get(board.connection) ?? { connection: board.connection, tracker, scope: [] };
+    for (const s of scope) if (s && !target.scope.includes(s)) target.scope.push(s);
+    targets.set(board.connection, target);
+  }
+  return [...targets.values()].filter((t) => t.scope.length > 0);
 }

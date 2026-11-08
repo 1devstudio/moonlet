@@ -5660,6 +5660,10 @@ impl Daemon {
                 let r: m::GhTaskGet = params(p)?;
                 ok(git::gh_task(&path(&r.path), &r.repo, r.number).await.map_err(internal)?)
             }
+            m::GH_SEARCH => {
+                let r: m::GhSearch = params(p)?;
+                ok(git::gh_search(&path(&r.path), &r.repo, &r.query, r.limit).await.map_err(internal)?)
+            }
             m::GH_TASKS => {
                 let r: m::GhTasks = params(p)?;
                 ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)

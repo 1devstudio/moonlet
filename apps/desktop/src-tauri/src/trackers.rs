@@ -495,6 +495,41 @@ pub async fn tracker_task(id: String, key: String) -> Res<Option<TrackerTask>> {
     }
 }
 
+/// What `tracker_search` looks for (X93): text, in a connection's Linear
+/// teams or Jira projects.
+#[derive(Deserialize)]
+pub struct SearchRequest {
+    pub id: String,
+    pub query: String,
+    #[serde(default)]
+    pub scope: Vec<String>,
+}
+
+/// Find a task (X93): a connection's issues whose text matches `query`, in
+/// the teams or projects of `scope`, best first. ClickUp has no text search:
+/// a typed task id goes through `tracker_task`.
+#[tauri::command]
+pub async fn tracker_search(req: SearchRequest) -> Res<Vec<TrackerTask>> {
+    let s = Session::load(&req.id).await?;
+    let query = req.query.trim();
+    if query.is_empty() || req.scope.is_empty() {
+        return Ok(vec![]);
+    }
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let teams = req.scope.iter().map(|t| safe_id(t).map(String::from)).collect::<Res<Vec<_>>>()?;
+            let raw = s.linear(&linear::search_query(), linear::search_variables(query, &teams)).await?;
+            s.linear_ok(linear::parse_search(&raw, &s.conn.id))
+        }
+        TrackerKind::Jira => {
+            let Some(jql) = jira::search_jql(&req.scope, query) else { return Ok(vec![]) };
+            let raw = s.jira_send(s.jira(reqwest::Method::POST, "/rest/api/3/search/jql")?.json(&jira::search_body(&jql))).await?;
+            Ok(jira::parse_search(&raw, &s.conn.id, &s.conn.site)?)
+        }
+        TrackerKind::Clickup | TrackerKind::Github => Ok(vec![]),
+    }
+}
+
 impl Session {
     /// A ClickUp list's tasks, the user's own when `mine` (X44 Sync): open
     /// ones, and closed ones of the board's finished days, with due dates.

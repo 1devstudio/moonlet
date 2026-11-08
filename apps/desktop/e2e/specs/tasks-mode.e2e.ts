@@ -69,6 +69,12 @@ const OTHER_ISSUE = JSON.stringify({
   closedByPullRequestsReferences: [],
 });
 
+// `gh issue list --repo acme/storefront --search=coupon …` (X93): an old closed
+// issue the board's sync (the 100 most recent) doesn't read.
+const SEARCHED = JSON.stringify([
+  { number: 8, title: "Coupon field at checkout", body: "Let a coupon code take money off.", url: "https://github.com/acme/storefront/issues/8", state: "CLOSED", stateReason: "COMPLETED", assignees: [], labels: [], updatedAt: "2026-06-02T10:00:00Z", closedByPullRequestsReferences: [] },
+]);
+
 // `gh issue view <n> --json comments` (X66): the captured comments, and the
 // user's own once `gh issue comment` has kept it in ghCommentBody (before
 // it logs the call, so the body is there once the log shows it).
@@ -111,7 +117,7 @@ describe("Tasks mode", () => {
     // gh answers the issue list and records issue edits; anything else fails, as with no gh at all.
     writeFileSync(
       fakeGh,
-      `#!/bin/sh\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ] || [ "$1 $2" = "issue reopen" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2" = "issue comment" ]; then cat > "${ghCommentBody}"; echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ] && [ -e "${ghCommentBody}" ]; then cat <<'JSON'\n${COMMENTS_AFTER}\nJSON\nexit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ]; then cat '${ghFixture("gh-issue-comments.json")}'; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
+      `#!/bin/sh\ncase "$*" in *"--search=coupon"*) cat <<'JSON'\n${SEARCHED}\nJSON\nexit 0;; *"--search="*) echo "[]"; exit 0;; esac\nif [ "$1 $2" = "issue list" ] && [ -e "${ghFails}" ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\nif [ "$1 $2" = "issue list" ]; then cat <<'JSON'\n${ISSUES}\nJSON\nexit 0; fi\nif [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue close" ] || [ "$1 $2" = "issue reopen" ]; then echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2" = "issue comment" ]; then cat > "${ghCommentBody}"; echo "$@" >> "${ghLog}"; exit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ] && [ -e "${ghCommentBody}" ]; then cat <<'JSON'\n${COMMENTS_AFTER}\nJSON\nexit 0; fi\nif [ "$1 $2 $4 $5" = "issue view --json comments" ]; then cat '${ghFixture("gh-issue-comments.json")}'; exit 0; fi\nif [ "$1 $2 $3 $4 $5" = "issue view 99 --repo acme/other" ]; then cat <<'JSON'\n${OTHER_ISSUE}\nJSON\nexit 0; fi\nif [ "$1 $2" = "api graphql" ] && [ -e "${ghNoScope}" ]; then cat '${ghFixture("gh-error-read-project-scope.json")}'; exit 1; fi\nif [ "$1 $2" = "auth status" ] && [ -e "${ghNoMove}" ]; then sed "s/'project', //" '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\nif [ "$1 $2" = "auth status" ]; then cat '${ghFixture("gh-auth-status.txt")}'; exit 0; fi\ncase "$*" in *addProjectV2ItemById*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-add.json")}'; exit 0;; *"/issues -X POST"*) echo "$@" >> "${ghLog}"; sed -e 's#issues/1"#issues/57"#g' -e 's/"number": 1,/"number": 57,/' -e 's#acme/web#acme/storefront#g' '${ghFixture("gh-issue-create.json")}'; exit 0;; "api user --jq .login") echo sam-rivera; exit 0;; *"/assignees?per_page=100") cat '${ghFixture("gh-assignees.json")}'; exit 0;; *"/labels?per_page=100") cat '${ghFixture("gh-labels.json")}'; exit 0;; "api repos/acme/storefront") cat '${ghFixture("gh-repo-permissions.json")}'; exit 0;; *clearProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-clear.json")}'; exit 0;; *updateProjectV2ItemFieldValue*) echo "$@" >> "${ghLog}"; cat '${ghFixture("gh-project-move.json")}'; exit 0;; *"api graphql"*"items(first"*) cat '${ghFixture("gh-project-items.json")}'; exit 0;; *"api graphql"*projectsV2*) cat '${ghFixture("gh-projects.json")}'; exit 0;; esac\nexit 1\n`,
     );
     chmodSync(fakeGh, 0o755);
     // GIT_ALLOW_PROTOCOL=file in the e2e env keeps git from ever reaching github.com.
@@ -774,6 +780,38 @@ describe("Tasks mode", () => {
     await browser.keys("Escape");
     await expect($(field)).toHaveValue("");
     await expect($('//button[starts-with(@aria-label, "Closed: ")]')).toBeDisplayed({ wait: 10_000 });
+  });
+
+  it("finds a task the board doesn't show through gh's search, previews it with Reopen and New session, and offers Create when nothing matches (X93)", async () => {
+    const field = '//header//input[@role="combobox"][@aria-label="Find a task"]';
+    const list = '//section[@role="listbox"][@aria-label="Tasks found"]';
+    await fill(field, "coupon");
+    const row = `${list}//button[@role="option"][.//span[normalize-space()="acme/storefront#8"]]`;
+    await expect($(row)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${list}//span[normalize-space()="Not on this board · 1"]`)).toBeDisplayed();
+    await expect($(`${row}//span[normalize-space()="GitHub · Closed"]`)).toBeDisplayed();
+    await browser.keys("Enter");
+    const preview = '//section[@role="dialog"][.//h2[normalize-space()="Coupon field at checkout"]]';
+    await expect($(preview)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${preview}//span[normalize-space()="This task is Closed in GitHub, so the board doesn’t show it."]`)).toBeDisplayed();
+    await expect($(`${preview}//a[@href="https://github.com/acme/storefront/issues/8"]`)).toBeDisplayed();
+    await expect($(`${preview}//button[normalize-space()="Reopen in GitHub"]`)).toBeDisplayed();
+    // New session opens the composer with the task.
+    await $(`${preview}//button[normalize-space()="New session"]`).click();
+    await expect($('//*[@aria-label="Task acme/storefront#8"]')).toBeDisplayed({ wait: 10_000 });
+    await expect($(preview)).not.toBeExisting();
+    await browser.keys("Escape");
+    await $('//*[@aria-label="Task acme/storefront#8"]').waitForExist({ reverse: true, timeout: 10_000 });
+    // Nothing matches: it says where it looked, and Create opens the column's + form with the text as its title.
+    await fill(field, "xyzzy");
+    await expect($(`${list}//span[normalize-space()="No task matches “xyzzy”"]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(`${list}//span[normalize-space()="Searched this board, your other boards and GitHub."]`)).toBeDisplayed();
+    await $(`${list}//button[normalize-space()="Create “xyzzy” in GitHub"]`).click();
+    const newIssue = '//div[@role="dialog"][@aria-label="New issue in Open"]';
+    await expect($(`${newIssue}//input`)).toHaveValue("xyzzy", { wait: 10_000 });
+    await browser.keys("Escape");
+    await $(newIssue).waitForExist({ reverse: true, timeout: 10_000 });
+    await fill(field, "");
   });
 
   it("closes an issue from the detail's state menu", async () => {

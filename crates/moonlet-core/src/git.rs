@@ -1363,6 +1363,24 @@ pub async fn gh_tasks(repo: &Path, mine: bool) -> Result<Vec<moonlet_proto::type
     parse_gh_tasks(&gh(repo, &args).await?)
 }
 
+/// `gh issue list`'s arguments for Find a task (X93): `repo`'s issues, open
+/// or closed, that GitHub's search finds for `query`, at most `limit`. The
+/// query rides in `--search=`, so text starting with `-` is no flag.
+pub(crate) fn gh_search_args(repo: &str, query: &str, limit: u32) -> Vec<String> {
+    let mut args: Vec<String> = ["issue", "list", "--repo", repo, "--state", "all", "--limit"].map(String::from).to_vec();
+    args.extend([limit.to_string(), format!("--search={query}"), "--json".into(), GH_TASK_FIELDS.into()]);
+    args
+}
+
+/// Find a task (X93): issues of `owner/name` matching `query`. `dir` gives gh
+/// its host and sign-in; `repo` comes from a board, so it is checked first.
+pub async fn gh_search(dir: &Path, repo: &str, query: &str, limit: u32) -> Result<Vec<moonlet_proto::types::GhTask>> {
+    check_repo(repo)?;
+    let args = gh_search_args(repo, query.trim(), limit.clamp(1, 50));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    parse_gh_tasks(&gh(dir, &args).await?)
+}
+
 /// The GitHub login `gh` is signed in as (X44). Fails with gh's own message,
 /// such as "please run: gh auth login", when it is not.
 pub async fn gh_whoami() -> Result<String> {
@@ -2442,6 +2460,22 @@ pub(crate) mod tests {
     fn pr_context_without_line_comments_or_reviews_is_its_description() {
         let view = serde_json::json!({"body": "Fixes #279.", "reviews": [], "comments": []});
         assert_eq!(pr_context_text(&view, &serde_json::Value::Null), "Fixes #279.");
+    }
+
+    #[test]
+    fn a_search_lists_a_repositorys_open_and_closed_issues_that_match_the_text() {
+        // Find a task (X93): the text is one argument, never a flag of gh's.
+        assert_eq!(
+            gh_search_args("acme/web", "--repo other/x", 8),
+            [
+                "issue", "list", "--repo", "acme/web", "--state", "all", "--limit", "8",
+                "--search=--repo other/x",
+                "--json", GH_TASK_FIELDS,
+            ]
+        );
+        let tasks = parse_gh_tasks(include_bytes!("../tests/fixtures/gh-issue-search.json")).unwrap();
+        let found: Vec<_> = tasks.iter().map(|t| (t.repo.as_str(), t.number, t.title.as_str(), t.closed)).collect();
+        assert_eq!(found, vec![("acme/web", 4, "moonlet comments fixture (X66)", false)]);
     }
 
     #[test]

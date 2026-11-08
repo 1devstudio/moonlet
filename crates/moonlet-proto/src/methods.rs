@@ -244,6 +244,8 @@ pub const GH_PR_CONTEXT: &str = "gh.pr_context";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
+/// Find a task (X93): a repository's issues, open or closed, that match a text.
+pub const GH_SEARCH: &str = "gh.search";
 /// `{owners}`: the open GitHub Projects of the signed-in user and of
 /// `owners` (X50 Add a board). Needs gh's `read:project` scope.
 pub const GH_PROJECTS: &str = "gh.projects";
@@ -2102,6 +2104,21 @@ pub struct GhTasks {
     pub path: String,
     #[serde(default)]
     pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhSearch {
+    /// Any directory inside a repository, for `gh`'s host and sign-in.
+    pub path: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub query: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: u32,
+}
+
+fn default_search_limit() -> u32 {
+    8
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
