@@ -6037,13 +6037,15 @@ impl Daemon {
                 let pulled = git::pull_base(&dir, &r.branch).await.map_err(internal)?;
                 // Every app on this host re-reads the branch: a pull another
                 // host asked for would otherwise leave this app's chip behind.
+                // Apps know the project by its top folder, however the
+                // request spelt it.
+                let top = git::toplevel(&dir).await.unwrap_or(dir);
                 self.terminals.emit(Message::event(
                     m::EV_GIT_BASE_PULLED,
                     moonlet_proto::types::BasePulled {
-                        path: dir.to_string_lossy().into_owned(),
+                        path: top.to_string_lossy().into_owned(),
                         branch: r.branch,
-                        pulled: pulled.pulled,
-                        head: pulled.head.clone(),
+                        pull: pulled.clone(),
                     },
                 ));
                 ok(pulled)

@@ -1179,10 +1179,11 @@ pub struct BasePull {
 /// and what the pull did.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BasePulled {
+    /// The repository's top folder, as `Project::path` holds it.
     pub path: String,
     pub branch: String,
-    pub pulled: u32,
-    pub head: String,
+    #[serde(flatten)]
+    pub pull: BasePull,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

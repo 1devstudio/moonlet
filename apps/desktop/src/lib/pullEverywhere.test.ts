@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { baseChip } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
 import type { BaseStatus, HostInfo, Project, ProjectIdentity } from "./protocol";
-import { basePulled, projKey, pullBase, pullBaseEverywhere, refreshBase, useStore } from "./store";
+import { projKey, pullBase, pullBaseEverywhere, refreshBase, startStore, useStore } from "./store";
 
-const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
-vi.mock("./daemon", async (original) => ({ ...(await original<typeof import("./daemon")>()), rpc: daemon.rpc }));
+const daemon = vi.hoisted(() => ({ rpc: vi.fn(), emit: (_e: { host: string; name: string; data: unknown }) => {} }));
+vi.mock("./daemon", async (original) => {
+  const real = await original<typeof import("./daemon")>();
+  return {
+    ...real,
+    rpc: daemon.rpc,
+    onDaemonEvent: (cb: typeof daemon.emit) => ((daemon.emit = cb), Promise.resolve(() => {})),
+    onHostStatus: () => Promise.resolve(() => {}),
+    hostsApi: { ...real.hostsApi, list: () => Promise.resolve([]), appInfo: () => Promise.resolve({ version: "0.0.0" }) },
+  };
+});
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 
 const identity = { origin: "github.com/acme/ledger", root: "4b825dc642cb6eb9a060e54bf8d69288fbee4904" };
@@ -47,6 +56,8 @@ function daemons(state: Record<string, Daemon>) {
 
 const shown = () => useStore.getState().toasts.map((t) => t.text);
 const pulledHere = "Pulled 3 commits into main. New sessions start from 9c41e2a.";
+
+beforeAll(() => startStore());
 
 describe("pulling a project's base branch on every host that has it", () => {
   beforeEach(() => {
@@ -168,8 +179,9 @@ describe("pulling a project's base branch on every host that has it", () => {
     expect(shown()).toEqual([pulledHere]);
   });
 
-  it("clears this host's chip when another host pulled its copy", async () => {
-    const state = { local: { behind: 1 }, mini: { behind: 0 }, vps: { behind: 0 } };
+  it("clears this host's chip when another host pulled its copy, without fetching", async () => {
+    // origin has moved on again since; only a fetch would see that.
+    const state = { local: { behind: 1, fetched: 2 }, mini: { behind: 0 }, vps: { behind: 0 } };
     daemons(state);
     await refreshBase("local", "p1");
     const chip = () => {
@@ -179,7 +191,7 @@ describe("pulling a project's base branch on every host that has it", () => {
     expect(chip()).toBe("1");
     // The MacBook pulled main here; this host's daemon says so.
     state.local.behind = 0;
-    basePulled("local", { path: "/Users/me/ledger", branch: "main", pulled: 1, head: "9c41e2a7d0b5f3c18e2a9b4c6d1f0e3a5b7c9d2e" });
+    daemon.emit({ host: "local", name: "git.base_pulled", data: { path: "/Users/me/ledger", branch: "main", pulled: 1, head: "9c41e2a7d0b5f3c18e2a9b4c6d1f0e3a5b7c9d2e" } });
     await vi.waitFor(() => expect(chip()).toBeNull());
     expect(shown()).toEqual([]);
   });

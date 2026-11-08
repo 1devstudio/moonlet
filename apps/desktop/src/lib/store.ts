@@ -1063,12 +1063,11 @@ export async function pullBaseEverywhere(host: string, projectId: string) {
 }
 
 /** A host's daemon pulled a project's base branch, maybe for another
- *  host's app (X13): read the branch again, so the chip does not keep the
- *  old count until the next fetch. A pull this app runs ends on its own. */
-export function basePulled(host: string, e: BasePulled) {
+ *  host's app (X13): read the branch again, without fetching, so the chip
+ *  does not keep the old count until the next fetch. */
+function basePulled(host: string, e: BasePulled) {
   const p = get().projects[host]?.find((x) => x.path === e.path && x.base_branch === e.branch);
-  if (!p || get().base[projKey(host, p.id)]?.pulling) return;
-  void refreshBase(host, p.id);
+  if (p) void refreshBase(host, p.id);
 }
 
 /** Fetches another host's copy of the project, as its last fetch may be
