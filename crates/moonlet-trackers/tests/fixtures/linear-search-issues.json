@@ -1,0 +1,40 @@
+{
+  "data": {
+    "searchIssues": {
+      "totalCount": 2,
+      "nodes": [
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000097",
+          "identifier": "MOON-97",
+          "title": "Ask before trusting a new SSH host key",
+          "description": "The first time moonlet connects to a host, show its key fingerprint and ask before adding it to known_hosts.",
+          "url": "https://linear.app/acme/issue/MOON-97/ask-before-trusting-a-new-ssh-host-key",
+          "branchName": "sam/moon-97-ask-before-trusting-a-new-ssh-host-key",
+          "priority": 0,
+          "updatedAt": "2026-11-02T08:00:00.000Z",
+          "state": { "id": "a1000000-0000-4000-8000-000000000001", "name": "Backlog", "type": "backlog" },
+          "assignee": null,
+          "labels": { "nodes": [] },
+          "cycle": null,
+          "team": { "key": "MOON" }
+        },
+        {
+          "id": "1a2b3c4d-0000-4000-8000-000000000118",
+          "identifier": "MOON-118",
+          "title": "Host picker in the composer",
+          "description": "Choose the host a new session runs on from the composer.",
+          "url": "https://linear.app/acme/issue/MOON-118/host-picker-in-the-composer",
+          "branchName": "sam/moon-118-host-picker-in-the-composer",
+          "priority": 2,
+          "updatedAt": "2026-10-20T08:00:00.000Z",
+          "state": { "id": "a1000000-0000-4000-8000-000000000009", "name": "Canceled", "type": "canceled" },
+          "assignee": { "id": "8f1c2d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f", "name": "Sam Rivera" },
+          "labels": { "nodes": [{ "name": "Feature" }] },
+          "cycle": { "number": 12 },
+          "team": { "key": "MOON" }
+        }
+      ],
+      "pageInfo": { "hasNextPage": false, "endCursor": null }
+    }
+  }
+}

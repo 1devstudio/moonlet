@@ -122,6 +122,8 @@ export const hostsApi = {
   /** A connection's teams, projects or lists; a Linear team that uses cycles says so, a ClickUp list names its space and folder. */
   trackerSources: (id: string) => invoke<{ key: string; name: string; cycles?: boolean; group?: string }[]>("tracker_sources", { id }),
   trackerTask: (id: string, key: string) => invoke<import("./tasks").Task | null>("tracker_task", { id, key }),
+  /** Find a task (X93): a connection's issues that match `query`, in its Linear teams or Jira projects `scope`, best first. */
+  trackerSearch: (req: { id: string; query: string; scope: string[] }) => invoke<import("./tasks").Task[]>("tracker_search", { req }),
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; status?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
   /** An issue's comments, oldest first, at most 100 (X66); `task` is its id in the tracker. */

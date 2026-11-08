@@ -44,9 +44,14 @@ export interface NewIssue {
   place?: string;
 }
 
-/** The form at first: assigned to the user, with the board's label filter so the issue matches it. */
-export function newIssueDraft(board: BoardConfig): NewIssue {
-  return { title: "", description: "", assignee: "me", labels: board.labels ?? [] };
+/** The form at first: assigned to the user, with the board's label filter so the issue matches it; titled with what Find a task searched for (X93), if any. */
+export function newIssueDraft(board: BoardConfig, title = ""): NewIssue {
+  return { title: title.trim(), description: "", assignee: "me", labels: board.labels ?? [] };
+}
+
+/** The board's first column whose + creates (X93: Create “…” from Find a task), or none. */
+export function firstCreateColumn(board: BoardConfig, columns: BoardColumn[]): BoardColumn | null {
+  return createsIn(board) ? (columns.find((c) => createTarget(board, c)) ?? null) : null;
 }
 
 /** Whether Create can be pressed: a title, and the place and issue type the board needs, while nothing is being asked. */

@@ -1,11 +1,12 @@
 // Search the board (X93): Find a task in the board header lists the tasks
 // that match, on the shown board and off it, without filtering the board.
 
-import type { Category } from "./boards";
+import type { BoardConfig, Category } from "./boards";
 import type { ColumnView } from "./boardColumns";
 import type { AgentState } from "./protocol";
-import { type Column, type Task, taskId, trackerName, trackerOf } from "./tasks";
+import { type Column, type Task, type TrackerKind, taskId, trackerName, trackerOf } from "./tasks";
 import type { BoardSession } from "./tasksBoard";
+import { splitKey } from "./sessionRows";
 
 /** Text split around the first match, `mid` empty when it has none. */
 export interface Hit {
@@ -43,6 +44,8 @@ export interface OffRow {
   backlog: boolean;
   /** The workspace's other board that has it, if any: its id and label. */
   board: { id: string; label: string } | null;
+  /** On the shown board, but the header's filters leave it out. */
+  leftOut: boolean;
 }
 
 /** Another board of the workspace, drawn: its sidebar label and columns. */
@@ -50,6 +53,12 @@ export interface OtherBoard {
   id: string;
   label: string;
   views: ColumnView[];
+}
+
+/** The shown board's tasks that the header's filters leave out, with the board's label and each task's column. */
+export interface LeftOut {
+  label: string;
+  cards: { task: Task; column: string }[];
 }
 
 /** What one connection's tracker search found, best first. */
@@ -63,8 +72,8 @@ export interface BoardSearch {
   off: OffRow[];
 }
 
-/** The most rows one tracker's search adds. */
-const PER_TRACKER = 8;
+/** The most rows one tracker's search adds, and the most issues it asks for. */
+export const PER_TRACKER = 8;
 
 /** The query as matching reads it: trimmed and lower-cased. */
 const norm = (query: string) => query.trim().toLowerCase();
@@ -88,7 +97,7 @@ function viaSession(sessions: BoardSession[], q: string): OnRow["via"] {
 }
 
 /** What Find a task finds for `query` on the board drawn as `views`. */
-export function searchBoard(query: string, views: ColumnView[], others: OtherBoard[] = [], found: Found[] = []): BoardSearch {
+export function searchBoard(query: string, views: ColumnView[], others: OtherBoard[] = [], found: Found[] = [], leftOut: LeftOut = { label: "", cards: [] }): BoardSearch {
   const q = norm(query);
   if (!q) return { on: [], off: [] };
   const on: OnRow[] = [];
@@ -102,14 +111,16 @@ export function searchBoard(query: string, views: ColumnView[], others: OtherBoa
   }
   // Every task listed so far, and the shown board's, which is never off it.
   const seen = new Set(views.flatMap((v) => v.cards.map((c) => taskId(c.task))));
-  const elsewhere = new Map<string, { board: OtherBoard; column: string }>();
-  for (const b of others) for (const v of b.views) for (const c of v.cards) if (!elsewhere.has(taskId(c.task))) elsewhere.set(taskId(c.task), { board: b, column: v.name });
+  // Where a task off the board is: left out of the shown board, or on another board.
+  const elsewhere = new Map<string, { label: string; column: string; board: OtherBoard | null }>();
+  for (const c of leftOut.cards) elsewhere.set(taskId(c.task), { label: leftOut.label, column: c.column, board: null });
+  for (const b of others) for (const v of b.views) for (const c of v.cards) if (!elsewhere.has(taskId(c.task))) elsewhere.set(taskId(c.task), { label: b.label, column: v.name, board: b });
   const off: OffRow[] = [];
   const add = (task: Task) => {
     const id = taskId(task);
     if (seen.has(id)) return false;
     seen.add(id);
-    const on = elsewhere.get(id);
+    const place = elsewhere.get(id);
     const glyph: Column = task.column === "open" ? "todo" : task.column;
     const state = stateOf(task);
     off.push({
@@ -117,14 +128,16 @@ export function searchBoard(query: string, views: ColumnView[], others: OtherBoa
       task,
       key: hit(task.key, q),
       title: hit(task.title, q),
-      where: on ? `${on.board.label} · ${on.column}` : [trackerName(task.connection), ...(trackerOf(task.connection) === "linear" ? [task.cycle ? `Cycle ${task.cycle}` : "no cycle"] : []), state].join(" · "),
-      state: on ? on.column : state,
+      where: place ? `${place.label} · ${place.column}` : [trackerName(task.connection), ...(trackerOf(task.connection) === "linear" ? [task.cycle ? `Cycle ${task.cycle}` : "no cycle"] : []), state].join(" · "),
+      state: place ? place.column : state,
       glyph,
       backlog: /^backlog$/i.test(state),
-      board: on ? { id: on.board.id, label: on.board.label } : null,
+      board: place?.board ? { id: place.board.id, label: place.board.label } : null,
+      leftOut: !!place && !place.board,
     });
     return true;
   };
+  for (const c of leftOut.cards) if (matches(c.task, q)) add(c.task);
   for (const b of others) for (const v of b.views) for (const c of v.cards) if (matches(c.task, q)) add(c.task);
   for (const f of found) {
     let n = 0;
@@ -135,6 +148,19 @@ export function searchBoard(query: string, views: ColumnView[], others: OtherBoa
 
 /** Whether a task off the board matches: by key, title or description. */
 const matches = (t: Task, q: string) => [t.key, t.title, t.description].some((x) => x.toLowerCase().includes(q));
+
+/**
+ * Whether a task off every board is finished, so the preview offers Reopen:
+ * Done, a closed GitHub issue, or a hidden state named as an ending (Linear
+ * also hides Backlog and Triage, which are not).
+ */
+const finished = (row: OffRow) => row.glyph === "done" || (row.glyph === "hidden" && (!!row.task.github || /cancel|duplicate|won.?t|declined|obsolete|not planned/i.test(row.state)));
+
+/** The names of the sessions on task `id`'s card on another board, if any. */
+export function sessionsOn(others: OtherBoard[], id: string): string[] {
+  for (const b of others) for (const v of b.views) for (const c of v.cards) if (taskId(c.task) === id) return c.rows.map((r) => r.session.name);
+  return [];
+}
 
 /** A task's state as its tracker names it; Open or Closed for a GitHub issue. */
 const stateOf = (t: Task) => t.tracker?.state ?? (t.column === "open" ? "Open" : "Closed");
@@ -171,6 +197,35 @@ export function previewOf(row: OffRow, shown: string): Preview {
     const { id, label } = row.board;
     return { why: `This task is on ${label}. Switching shows it there with its columns.`, action: { kind: "switch", board: id, label: `Switch to ${label}` } };
   }
-  if (row.glyph === "done" || row.glyph === "hidden") return { why: `This task is ${stateOf(row.task)} in ${tracker}, so the board doesn’t show it.`, action: { kind: "reopen", label: `Reopen in ${tracker}` } };
+  if (row.leftOut) return { why: `This task is on ${shown}, but the header’s filters leave it out.`, action: null };
+  if (finished(row)) return { why: `This task is ${stateOf(row.task)} in ${tracker}, so the board doesn’t show it.`, action: { kind: "reopen", label: `Reopen in ${tracker}` } };
   return { why: `This task is in ${tracker} but not on ${shown}, so the board can’t show it. You can still start a session from here.`, action: null };
+}
+
+/** A connection Find a task searches, and where in it: Linear team keys, Jira project keys, GitHub repositories. */
+export interface SearchTarget {
+  connection: string;
+  tracker: TrackerKind;
+  scope: string[];
+}
+
+/**
+ * The trackers Find a task searches (X93): each connection of the
+ * workspace's boards once, in their teams, the projects of their issues and
+ * their repositories. ClickUp has no text search, and a connection that
+ * needs attention (X44) is left out.
+ */
+export function searchTargets(boards: { board: BoardConfig; tasks: Task[] }[], attention: Record<string, string>): SearchTarget[] {
+  const targets = new Map<string, SearchTarget>();
+  for (const { board, tasks } of boards) {
+    const tracker = trackerOf(board.connection);
+    if (!tracker || tracker === "clickup" || attention[board.connection]) continue;
+    const o = board.origin;
+    const scope =
+      o.kind === "linear_team" ? [o.team] : o.kind === "github_repo" ? [o.repo] : o.kind === "github_project" ? tasks.flatMap((t) => (t.github ? [t.github.repo] : [])) : tracker === "jira" ? tasks.map((t) => splitKey(t.key).prefix.replace(/-$/, "")) : [];
+    const target = targets.get(board.connection) ?? { connection: board.connection, tracker, scope: [] };
+    for (const s of scope) if (s && !target.scope.includes(s)) target.scope.push(s);
+    targets.set(board.connection, target);
+  }
+  return [...targets.values()].filter((t) => t.scope.length > 0);
 }

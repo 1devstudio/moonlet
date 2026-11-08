@@ -14,7 +14,8 @@ import { modeOf, setMode, toggleMode } from "./mode";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerName, trackerOf } from "./tasks";
+import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTargets } from "./boardSearch";
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -84,6 +85,8 @@ interface TasksState {
   activity: Record<string, ActivityEntry[]>;
   /** Find a task (X93), by `host/workspaceId`: the text typed and the task found on the board. */
   search: Record<string, TaskSearch>;
+  /** What Find a task's search in the trackers found (X93), by `host/workspaceId`. */
+  trackerSearch: Record<string, TrackerSearch>;
   /** Tasks whose Keep in step switch is off, by `connection key` (X46 Task tab). */
   paused: Record<string, true>;
   /** The last action on a task that failed, with its error (X46), by `connection key`. */
@@ -164,6 +167,7 @@ export const useTasks = create<TasksState>(() => ({
   attention: {},
   activity: {},
   search: {},
+  trackerSearch: {},
   paused: storedPaused(),
   failures: {},
   moving: {},
@@ -234,6 +238,133 @@ export function setTaskQuery(host: string, workspaceId: string, query: string) {
 /** Marks task `id` (`connection key`) found on the board, or none. */
 export function findTask(host: string, workspaceId: string, id: string | null) {
   setSearch(host, workspaceId, (s) => ({ ...s, found: id }));
+}
+
+/** Find a task's search in a workspace's trackers (X93): for `query`, what each found, those still searching and those that failed. */
+export interface TrackerSearch {
+  query: string;
+  found: Found[];
+  /** The trackers searched, by name. */
+  trackers: string[];
+  searching: string[];
+  failed: { tracker: string; error: string }[];
+}
+
+const NO_TRACKER_SEARCH: TrackerSearch = { query: "", found: [], trackers: [], searching: [], failed: [] };
+
+/** A workspace's tracker search. */
+export const trackerSearchOf = (t: Pick<TasksState, "trackerSearch">, host: string, workspaceId: string): TrackerSearch => t.trackerSearch[wsKey(host, workspaceId)] ?? NO_TRACKER_SEARCH;
+
+/** The latest tracker search of each workspace; an older one's answers are dropped. */
+const searchSeq = new Map<string, number>();
+
+/** The tasks a sync read for board `id`. */
+function boardTasks(data: TasksData | undefined, id: string): Task[] {
+  const keys = new Set(data?.boards?.[id]?.keys ?? []);
+  return (data?.tasks ?? []).filter((t) => keys.has(taskId(t)));
+}
+
+/** One connection's search: Linear and Jira through the app, each GitHub repository through `gh` on `host`. */
+async function searchIn(host: string, workspaceId: string, target: SearchTarget, query: string): Promise<Task[]> {
+  if (target.tracker !== "github") return hostsApi.trackerSearch({ id: target.connection, query, scope: target.scope });
+  const lists = await Promise.all(
+    target.scope.map(async (repo) => {
+      // Any project's directory gives gh its host and sign-in; --repo names the repository.
+      const path = repoPath(host, workspaceId, repo) ?? anyProjectPath(host);
+      if (!path) return [];
+      const found = await rpc<GhTask[]>(host, M.ghSearch, { path, repo, query, limit: SEARCH_LIMIT });
+      return found.map((gh) => ({ ...taskFromGh(gh, target.connection), mine: undefined }));
+    }),
+  );
+  return lists.flat();
+}
+
+/**
+ * Find a task's search in the trackers (X93): after a pause of `delayMs`,
+ * once at least 2 characters are typed, each connection of the workspace's
+ * boards is searched, and a typed key or URL is looked up in its tracker.
+ * A newer query drops what an older one finds.
+ */
+export async function searchTrackers(host: string, workspaceId: string, query: string, delayMs = 250): Promise<void> {
+  const key = wsKey(host, workspaceId);
+  const seq = (searchSeq.get(key) ?? 0) + 1;
+  searchSeq.set(key, seq);
+  const live = () => searchSeq.get(key) === seq;
+  const set = (s: TrackerSearch) => {
+    if (live()) useTasks.setState((t) => ({ trackerSearch: { ...t.trackerSearch, [key]: s } }));
+  };
+  const q = query.trim();
+  if (q.length < 2) return set({ ...NO_TRACKER_SEARCH, query: q });
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  if (!live()) return;
+  const t = useTasks.getState();
+  const data = t.data[key];
+  const boards = (trackersConfig(t).boards ?? []).filter((b) => b.workspace === key).map((board) => ({ board, tasks: boardTasks(data, board.id) }));
+  const targets = searchTargets(boards, t.attention);
+  // A typed key or URL is also looked up in its tracker, ClickUp too.
+  const pasted = await hostsApi.parsePasted(q).catch(() => null);
+  if (!live()) return;
+  const path = anyProjectPath(host);
+  // The typed key's lookup counts as a search of its tracker: the board's connection of that kind, else the tracker alone.
+  const typedConn = pasted && path ? (pasted.kind ? (targets.find((x) => x.tracker === pasted.kind)?.connection ?? `${pasted.kind}:`) : (targets[0]?.connection ?? null)) : null;
+  const labels = searchLabels([...new Set([...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])])]);
+  const label = (connection: string) => labels.get(connection) ?? trackerName(connection);
+  const results: (Found | null)[] = targets.map(() => null);
+  let typed: Task | null = null;
+  // Searches under way, by connection; one connection may have two (its search and the typed key's).
+  const pending = [...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])];
+  const settle = (connection: string) => pending.splice(pending.indexOf(connection), 1);
+  const failed: TrackerSearch["failed"] = [];
+  const show = () =>
+    set({
+      query: q,
+      found: [...(typed ? [{ connection: typed.connection, tasks: [typed] }] : []), ...results.filter((r): r is Found => !!r)],
+      trackers: [...new Set(labels.values())],
+      searching: [...new Set(pending.map(label))],
+      failed: [...failed],
+    });
+  show();
+  const lookUpTyped = async () => {
+    if (!pasted || !path || !typedConn) return;
+    try {
+      typed = await lookUpPasted(host, path, pasted, null).catch(() => null);
+    } finally {
+      settle(typedConn);
+      show();
+    }
+  };
+  await Promise.all([
+    lookUpTyped(),
+    ...targets.map(async (target, i) => {
+      try {
+        results[i] = { connection: target.connection, tasks: await searchIn(host, workspaceId, target, q) };
+      } catch (e) {
+        failed.push({ tracker: label(target.connection), error: errorMessage(e) });
+      } finally {
+        settle(target.connection);
+        show();
+      }
+    }),
+  ]);
+}
+
+/** Any of `host`'s projects' folders: where gh learns its host and sign-in. */
+const anyProjectPath = (host: string): string | undefined => useStore.getState().projects[host]?.[0]?.path;
+
+/**
+ * How Find a task names each connection it searches (X93): by its tracker,
+ * and by tracker and site when two of one tracker are searched. A bare
+ * `<kind>:` stands for a tracker known only from a typed key.
+ */
+function searchLabels(connections: string[]): Map<string, string> {
+  const kinds = connections.map((c) => trackerOf(c));
+  return new Map(
+    connections.map((c, i) => {
+      const site = c.slice(c.indexOf(":") + 1);
+      const twice = kinds.filter((k) => k === kinds[i]).length > 1;
+      return [c, twice && site ? `${trackerName(c)} (${site})` : trackerName(c)];
+    }),
+  );
 }
 
 /** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */

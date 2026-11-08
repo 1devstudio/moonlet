@@ -1496,6 +1496,8 @@ export const M = {
   ghProjectMove: "gh.project_move",
   ghScopes: "gh.scopes",
   ghTask: "gh.task",
+  /** Find a task (X93): a repository's issues, open or closed, that gh's search finds. */
+  ghSearch: "gh.search",
   ghTaskUpdate: "gh.task_update",
   ghIssueComments: "gh.issue_comments",
   ghIssueComment: "gh.issue_comment",

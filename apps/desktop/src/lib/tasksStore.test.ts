@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { answerTaskRequest, createIssue, findTask, pairedPhones, searchOf, setColumnShow, setTaskQuery, shareTasks, workspacesToPoll } from "./tasksStore";
+import { answerTaskRequest, createIssue, findTask, pairedPhones, searchOf, searchTrackers, setColumnShow, setTaskQuery, shareTasks, trackerSearchOf, workspacesToPoll } from "./tasksStore";
 import { tasksBoard } from "./tasksBoard";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
@@ -30,6 +30,9 @@ vi.mock("./daemon", () => ({
     trackerComments: (id: string, task: string) => Promise.resolve(answers[`tracker_comments ${id} ${task}`]?.({}) ?? { comments: [], more: false }),
     trackerComment: (id: string, task: string, body: string) => (posted.push({ id, task, body }), Promise.resolve()),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
+    // Find a task (X93): a tracker's search, and what a typed key names.
+    trackerSearch: (req: { id: string; query: string; scope: string[] }) => (searches.push(req), Promise.resolve().then(() => answers[`tracker_search ${req.id}`]?.(req as object) ?? [])),
+    parsePasted: (input: string) => Promise.resolve(answers["task_parse_pasted"]?.({ id: input }) ?? null),
     // A Linear team's or ClickUp list's board (X50): that source's issues
     // from the tracker_tasks answers, and its columns when a test gives them.
     // The app's command, tested in Rust (states.rs a_github_projects_columns_start_with_no_status).
@@ -80,6 +83,7 @@ const creates = vi.hoisted(() => [] as object[]);
 const posted = vi.hoisted(() => [] as object[]);
 /** The tracker_board_tasks queries made, in order. */
 const boardQueries = vi.hoisted(() => [] as { id: string; mine: boolean; sync?: number }[]);
+const searches = vi.hoisted(() => [] as { id: string; query: string; scope: string[] }[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
   requestPermission: () => Promise.resolve("granted"),
@@ -1957,5 +1961,107 @@ describe("Find a task (X93)", () => {
     answers["project.worktrees"] = () => [];
     showBoard("local", "personal", "moon");
     expect(searchOf(useTasks.getState(), "local", "personal").found).toBeNull();
+  });
+});
+
+describe("Find a task searching the trackers (X93)", () => {
+  const LINEAR_BOARD = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" } };
+  const REPO_BOARD = { id: "web", name: "acme/web", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_repo" as const, repo: "acme/web" } };
+  const lt = (key: string, title: string) => ({ connection: "linear:acme", key, title, url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: key, state: "Backlog", source: "MOON" } });
+  const found = () => trackerSearchOf(useTasks.getState(), "local", "personal");
+  beforeEach(() => {
+    searches.length = 0;
+    const config = { ...DEFAULT_CONFIG, connections: [{ id: "linear:acme", kind: "linear" as const, site: "acme", account: "Sam", auth: "api_key" as const, sources: [] }], boards: [LINEAR_BOARD, REPO_BOARD] };
+    // The file says the same, so a load still on its way from an earlier test keeps these boards.
+    file.config = config;
+    useTasks.setState({ config, attention: {}, trackerSearch: {} });
+  });
+  afterEach(() => {
+    file.config = null;
+    useTasks.setState({ config: null, trackerSearch: {} });
+  });
+
+  it("searches each tracker of the workspace's boards once 2 characters are typed, in their teams and repositories", async () => {
+    answers["tracker_search linear:acme"] = () => [lt("MOON-97", "Ask before trusting a new SSH host key")];
+    answers["gh.search"] = () => [{ ...issue, number: 30, title: "Host list" }];
+    await searchTrackers("local", "personal", "h", 0);
+    expect(searches).toEqual([]);
+    expect(found()).toMatchObject({ found: [], searching: [] });
+    await searchTrackers("local", "personal", "host", 0);
+    expect(searches).toEqual([{ id: "linear:acme", query: "host", scope: ["MOON"] }]);
+    expect(vi.mocked(rpc)).toHaveBeenCalledWith("local", "gh.search", { path: "/r/web", repo: "acme/web", query: "host", limit: 8 });
+    expect(found()).toMatchObject({ query: "host", trackers: ["Linear", "GitHub"], searching: [], failed: [] });
+    expect(found().found.map((f) => [f.connection, f.tasks.map((t) => t.key)])).toEqual([
+      ["linear:acme", ["MOON-97"]],
+      ["github:github.com", ["acme/web#30"]],
+    ]);
+  });
+
+  it("drops what an older query found once a newer one is typed", async () => {
+    let release = () => {};
+    answers["tracker_search linear:acme"] = (req) => ((req as { query: string }).query === "ho" ? new Promise((r) => (release = () => r([lt("MOON-1", "ho")]))) : [lt("MOON-2", "host")]);
+    answers["gh.search"] = () => [];
+    const older = searchTrackers("local", "personal", "ho", 0);
+    await vi.waitFor(() => expect(found().searching).toEqual(["Linear"]));
+    await searchTrackers("local", "personal", "host", 0);
+    release();
+    await older;
+    expect(found().query).toBe("host");
+    expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["MOON-2"]);
+  });
+
+  it("says which tracker's search failed and keeps the others' results", async () => {
+    answers["tracker_search linear:acme"] = () => {
+      throw new Error("Linear: rate limited");
+    };
+    answers["gh.search"] = () => [{ ...issue, number: 30, title: "Host list" }];
+    await searchTrackers("local", "personal", "host", 0);
+    expect(found().failed).toEqual([{ tracker: "Linear", error: "Linear: rate limited" }]);
+    expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["acme/web#30"]);
+  });
+
+  it("waits for the pause, and searches only the query typed last", async () => {
+    answers["tracker_search linear:acme"] = (req) => [lt("MOON-9", (req as { query: string }).query)];
+    answers["gh.search"] = () => [];
+    const first = searchTrackers("local", "personal", "ho", 30);
+    const last = searchTrackers("local", "personal", "host", 30);
+    expect(searches).toEqual([]);
+    await Promise.all([first, last]);
+    expect(searches.map((x) => x.query)).toEqual(["host"]);
+  });
+
+  it("keeps searching until each connection answered, naming two of one tracker by their sites", async () => {
+    let release = () => {};
+    const BETA = { ...LINEAR_BOARD, id: "ops", connection: "linear:beta", origin: { kind: "linear_team" as const, team: "OPS" } };
+    useTasks.setState((t) => ({ config: { ...t.config!, boards: [LINEAR_BOARD, BETA] } }));
+    answers["tracker_search linear:acme"] = () => [lt("MOON-97", "host")];
+    answers["tracker_search linear:beta"] = () => new Promise((r) => (release = () => r([])));
+    const done = searchTrackers("local", "personal", "host", 0);
+    await vi.waitFor(() => expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["MOON-97"]));
+    expect(found()).toMatchObject({ trackers: ["Linear (acme)", "Linear (beta)"], searching: ["Linear (beta)"] });
+    release();
+    await done;
+    expect(found().searching).toEqual([]);
+  });
+
+  it("counts a typed key's lookup as a search of its tracker, ClickUp too", async () => {
+    let release = () => {};
+    const LIST = { id: "list", name: "Sprint", connection: "clickup:9001", workspace: "local/personal", origin: { kind: "clickup_list" as const, list: "901" } };
+    useTasks.setState((t) => ({ config: { ...t.config!, connections: [...(t.config!.connections ?? []), { id: "clickup:9001", kind: "clickup", site: "9001", account: "Sam", auth: "api_key", sources: [] }], boards: [LIST] } }));
+    answers["task_parse_pasted"] = () => ({ kind: "clickup", key: "86a1b2" });
+    answers["tracker_task clickup:9001 86a1b2"] = () => new Promise((r) => (release = () => r({ ...lt("86a1b2", "Host list"), connection: "clickup:9001" })));
+    const done = searchTrackers("local", "personal", "86a1b2", 0);
+    await vi.waitFor(() => expect(found()).toMatchObject({ trackers: ["ClickUp"], searching: ["ClickUp"] }));
+    release();
+    await done;
+    expect(found()).toMatchObject({ searching: [], found: [{ connection: "clickup:9001", tasks: [{ key: "86a1b2" }] }] });
+  });
+
+  it("also looks up a typed key in its tracker", async () => {
+    answers["task_parse_pasted"] = () => ({ kind: "linear", key: "MOON-300" });
+    answers["tracker_task linear:acme MOON-300"] = () => lt("MOON-300", "Outside every team");
+    answers["gh.search"] = () => [];
+    await searchTrackers("local", "personal", "MOON-300", 0);
+    expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["MOON-300"]);
   });
 });

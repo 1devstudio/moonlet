@@ -7,7 +7,7 @@ import { errorToast, selectSession, shownWorkspace, toast, useStore, designHostO
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
-import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
+import { createLockOn, createsIn, createTarget, firstCreateColumn } from "../../lib/newIssue";
 import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, outOfSync } from "../../lib/tasksBoard";
@@ -453,8 +453,9 @@ export function TasksMode() {
   const attention = useTasks((t) => t.attention);
   const hosts = useStore((s) => s.hosts);
   const ghScopes = useTasks((t) => t.ghScopes);
-  // The column whose + opened New issue (X52).
+  // The column whose + opened New issue (X52), and its title from Find a task's Create (X93).
   const [creating, setCreating] = useState<BoardColumn | null>(null);
+  const [creatingTitle, setCreatingTitle] = useState("");
   // The card being dragged, and the column under it that takes it (X53).
   const [dragging, setDragging] = useState<Card | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -529,6 +530,9 @@ export function TasksMode() {
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
+  // The shown board's tasks the header's filters leave out: Find a task says they are on it (X93).
+  const drawnIds = new Set(views.flatMap((v) => v.cards.map((c) => taskId(c.task))));
+  const leftOut = { label: header.title, cards: shown.views.flatMap((v) => v.cards.filter((c) => !drawnIds.has(taskId(c.task))).map((c) => ({ task: c.task, column: v.name }))) };
   const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
   // The + on a column (X52): where it creates, and why it can't.
@@ -573,7 +577,31 @@ export function TasksMode() {
         {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
         <header data-tauri-drag-region className="drag @container flex min-h-[52px] shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4 py-2">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
-          <FindTask host={ws.host} workspaceId={ws.id} views={views} others={others} shownLabel={header.title} />
+          <FindTask
+            host={ws.host}
+            workspaceId={ws.id}
+            views={views}
+            leftOut={leftOut}
+            others={others}
+            shownLabel={header.title}
+            footer={(q) => {
+              // No match: Create “…” in the board's first column that takes new issues (X93).
+              const column = createLocked ? null : firstCreateColumn(shown.board, savedColumns);
+              return (
+                column && (
+                  <button
+                    className="self-start ui-text-12.5 text-accent hover:underline"
+                    onClick={() => {
+                      setCreatingTitle(q);
+                      setCreating(column);
+                    }}
+                  >
+                    Create “{q}” in {trackerName(shown.board.connection)}
+                  </button>
+                )
+              );
+            }}
+          />
           <div className="ml-auto flex shrink-0 items-center gap-2.5">
             {layout === "list" && <ExpandAll cards={listCards} />}
             <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
@@ -617,7 +645,11 @@ export function TasksMode() {
                         <IconButton
                           title={createLocked ?? `New issue in ${v.name}`}
                           aria-disabled={!!createLocked || undefined}
-                          onClick={() => !createLocked && setCreating(plusFor(v.name))}
+                          onClick={() => {
+                            if (createLocked) return;
+                            setCreatingTitle("");
+                            setCreating(plusFor(v.name));
+                          }}
                           className="opacity-0 focus-visible:opacity-100 group-hover/column:opacity-100 aria-disabled:cursor-default aria-disabled:text-faint [@media(hover:none)]:opacity-100"
                         >
                           <Plus size={14} />
@@ -666,7 +698,19 @@ export function TasksMode() {
         )}
       </div>
       {detail && <TaskDetail host={ws.host} workspaceId={ws.id} card={detail} />}
-      {creating && <NewIssue host={ws.host} workspaceId={ws.id} board={shown.board} column={creating} onClose={() => setCreating(null)} />}
+      {creating && (
+        <NewIssue
+          host={ws.host}
+          workspaceId={ws.id}
+          board={shown.board}
+          column={creating}
+          title={creatingTitle}
+          onClose={() => {
+            setCreating(null);
+            setCreatingTitle("");
+          }}
+        />
+      )}
     </div>
   );
 }

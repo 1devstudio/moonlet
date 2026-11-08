@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { previewOf, revealFound, searchBoard, searchFooter } from "./boardSearch";
+import { previewOf, revealFound, searchBoard, searchFooter, searchTargets, sessionsOn } from "./boardSearch";
+import type { BoardConfig } from "./boards";
 import type { ColumnView } from "./boardColumns";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
@@ -164,10 +165,81 @@ describe("previewOf (X93 the preview of a task not on the board)", () => {
     expect(previewOf(off[1], shown)).toEqual({ why: "This task is in Linear but not on Moonlet · Cycle 14, so the board can’t show it. You can still start a session from here.", action: null });
   });
 
+  it("offers nothing more for a backlog issue, which Linear's mapping hides like a canceled one", () => {
+    const backlog = { ...MOON_97, column: "hidden" as const };
+    const [row] = searchBoard("host", [], [], [{ connection: LINEAR, tasks: [backlog] }]).off;
+    expect(row).toMatchObject({ glyph: "hidden", backlog: true });
+    expect(previewOf(row, shown).action).toBeNull();
+  });
+
   it("offers to reopen a finished task on no board", () => {
     expect(previewOf(off[2], shown)).toEqual({ why: "This task is Canceled in Linear, so the board doesn’t show it.", action: { kind: "reopen", label: "Reopen in Linear" } });
     const closed = { ...task("acme/web#9", "Old host list", { connection: "github:github.com", column: "done" }), github: { repo: "acme/web", number: 9, closingPrs: [] } };
     const [row] = searchBoard("host", [], [], [{ connection: "github:github.com", tasks: [closed] }]).off;
     expect(previewOf(row, shown)).toEqual({ why: "This task is Closed in GitHub, so the board doesn’t show it.", action: { kind: "reopen", label: "Reopen in GitHub" } });
+  });
+});
+
+describe("searchTargets (X93 which trackers Find a task searches)", () => {
+  const board = (id: string, connection: string, origin: BoardConfig["origin"]): BoardConfig => ({ id, name: id, connection, workspace: "local/w", origin });
+  const JIRA = "jira:acme.atlassian.net";
+  const GH = "github:github.com";
+  const gh = (repo: string, n: number) => ({ ...task(`${repo}#${n}`, "x", { connection: GH }), github: { repo, number: n, closingPrs: [] } });
+
+  it("searches each connection of the workspace's boards once, in the boards' teams, projects and repositories", () => {
+    const targets = searchTargets(
+      [
+        { board: board("moon", LINEAR, { kind: "linear_team", team: "MOON" }), tasks: [] },
+        { board: board("cdk", LINEAR, { kind: "linear_team", team: "CDK" }), tasks: [] },
+        { board: board("ops", JIRA, { kind: "jira_board", board: 1 }), tasks: [task("OPS-12", "x", { connection: JIRA }), task("OPS-3", "y", { connection: JIRA }), task("PLAT-1", "z", { connection: JIRA })] },
+        { board: board("web", GH, { kind: "github_repo", repo: "acme/web" }), tasks: [] },
+        { board: board("site", GH, { kind: "github_project", owner: "acme", number: 4 }), tasks: [gh("acme/web", 3), gh("acme/docs", 9)] },
+        { board: board("list", "clickup:9001", { kind: "clickup_list", list: "901" }), tasks: [] },
+      ],
+      {},
+    );
+    expect(targets).toEqual([
+      { connection: LINEAR, tracker: "linear", scope: ["MOON", "CDK"] },
+      { connection: JIRA, tracker: "jira", scope: ["OPS", "PLAT"] },
+      { connection: GH, tracker: "github", scope: ["acme/web", "acme/docs"] },
+    ]);
+  });
+
+  it("skips a connection that needs attention, and one with nothing to search in", () => {
+    const targets = searchTargets(
+      [
+        { board: board("moon", LINEAR, { kind: "linear_team", team: "MOON" }), tasks: [] },
+        { board: board("q", JIRA, { kind: "jql", query: "project = OPS" }), tasks: [] },
+      ],
+      { [LINEAR]: "Reconnect Linear" },
+    );
+    expect(targets).toEqual([]);
+  });
+});
+
+describe("review fixes (X93)", () => {
+  const shown = "Moonlet · Cycle 14";
+  const preview = (t: Task) => previewOf(searchBoard("host", [], [], [{ connection: LINEAR, tasks: [t] }]).off[0], shown);
+
+  it("offers Reopen only for a finished state: Done, or one named canceled, duplicate or won't do; not Triage or a backlog by another name", () => {
+    const hidden = (state: string) => task("MOON-5", "Host x", { column: "hidden", tracker: { id: "m5", state, source: "MOON" } });
+    expect(preview(hidden("Canceled")).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(hidden("Duplicate")).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(task("MOON-6", "Host y", { column: "done", tracker: { id: "m6", state: "Released", source: "MOON" } })).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(hidden("Triage")).action).toBeNull();
+    expect(preview(hidden("Icebox")).action).toBeNull();
+  });
+
+  it("says a task of the shown board that the header's filters leave out is on it, with no action", () => {
+    const mine = task("MOON-150", "Host health of someone else", { assignees: ["Kim Park"] });
+    const { off } = searchBoard("host", MOONLET, [], [{ connection: LINEAR, tasks: [mine] }], { label: shown, cards: [{ task: mine, column: "Todo" }] });
+    expect(off).toEqual([expect.objectContaining({ id: "linear:acme MOON-150", where: "Moonlet · Cycle 14 · Todo", state: "Todo", leftOut: true })]);
+    expect(previewOf(off[0], shown)).toEqual({ why: "This task is on Moonlet · Cycle 14, but the header’s filters leave it out.", action: null });
+  });
+
+  it("names the sessions on a task's card on another board", () => {
+    const board = { id: "x", label: "X", views: [column("Todo", "todo", [card(task("CDK-1", "a"), [session("Notion sync retries", "cdk-1-retries")])])] };
+    expect(sessionsOn([board], "linear:acme CDK-1")).toEqual(["Notion sync retries"]);
+    expect(sessionsOn([board], "linear:acme CDK-2")).toEqual([]);
   });
 });
