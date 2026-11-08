@@ -36,11 +36,13 @@ export interface OffRow {
   title: Hit;
   /** `<board> · <column>`, or `<tracker> · [<cycle> · ]<state>`. */
   where: string;
+  /** Its state as the tracker or its board's column names it. */
+  state: string;
   /** Its state's glyph, dashed for a backlog state. */
   glyph: Column;
   backlog: boolean;
-  /** The workspace's other board that has it, if any. */
-  board: string | null;
+  /** The workspace's other board that has it, if any: its id and label. */
+  board: { id: string; label: string } | null;
 }
 
 /** Another board of the workspace, drawn: its sidebar label and columns. */
@@ -116,9 +118,10 @@ export function searchBoard(query: string, views: ColumnView[], others: OtherBoa
       key: hit(task.key, q),
       title: hit(task.title, q),
       where: on ? `${on.board.label} · ${on.column}` : [trackerName(task.connection), ...(trackerOf(task.connection) === "linear" ? [task.cycle ? `Cycle ${task.cycle}` : "no cycle"] : []), state].join(" · "),
+      state: on ? on.column : state,
       glyph,
       backlog: /^backlog$/i.test(state),
-      board: on?.board.id ?? null,
+      board: on ? { id: on.board.id, label: on.board.label } : null,
     });
     return true;
   };
@@ -153,4 +156,21 @@ export function revealFound(views: ColumnView[], found: string | null): (ColumnV
     const card = v.folded && found ? v.cards.find((c) => taskId(c.task) === found) : undefined;
     return card ? { ...v, folded: false, note: `unfolded to show ${card.task.key}` } : v;
   });
+}
+
+/** What the preview of a task off the board says about it, and the action it offers beside New session. */
+export interface Preview {
+  why: string;
+  action: { kind: "switch"; board: string; label: string } | { kind: "reopen"; label: string } | null;
+}
+
+/** Why the shown board (`shown`, its label) doesn't show `row`'s task, and what the preview offers. */
+export function previewOf(row: OffRow, shown: string): Preview {
+  const tracker = trackerName(row.task.connection);
+  if (row.board) {
+    const { id, label } = row.board;
+    return { why: `This task is on ${label}. Switching shows it there with its columns.`, action: { kind: "switch", board: id, label: `Switch to ${label}` } };
+  }
+  if (row.glyph === "done" || row.glyph === "hidden") return { why: `This task is ${stateOf(row.task)} in ${tracker}, so the board doesn’t show it.`, action: { kind: "reopen", label: `Reopen in ${tracker}` } };
+  return { why: `This task is in ${tracker} but not on ${shown}, so the board can’t show it. You can still start a session from here.`, action: null };
 }

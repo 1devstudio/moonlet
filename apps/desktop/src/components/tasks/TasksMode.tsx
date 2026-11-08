@@ -1,6 +1,6 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore, designHostOf } from "../../lib/store";
@@ -9,7 +9,7 @@ import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
 import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
-import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
+import { enterOpensFirst, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
@@ -27,6 +27,7 @@ import {
   retryTask,
   rulesFor,
   runAutoFixes,
+  searchOf,
   setColumnShow,
   setExpanded,
   setAssignee,
@@ -51,6 +52,8 @@ import { TaskComments } from "./TaskComments";
 import { parseWsKey, wsKey, type WorkspaceRef } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
+import { revealFound } from "../../lib/boardSearch";
+import { FindTask } from "./BoardSearch";
 import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateChoices } from "../../lib/boardScreen";
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
@@ -85,13 +88,13 @@ const TONE: Record<CardRow["meta"]["tone"], string> = {
 };
 
 /** Task state by shape: ring Todo, half In Progress, three quarters In Review, filled check Done. */
-export function TaskGlyph({ column, size = 14 }: { column: Column; size?: number }) {
+export function TaskGlyph({ column, size = 14, dashed = false }: { column: Column; size?: number; dashed?: boolean }) {
   const shape = glyphShape(column);
   const done = shape === "check";
   const pie = shape === "half" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : shape === "three-quarters" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
   return (
     <svg viewBox="0 0 14 14" width={size} height={size} className={cx("shrink-0", done ? "text-merged" : column === "todo" ? "text-muted" : "text-fg")} aria-hidden="true">
-      <circle cx="7" cy="7" r="5.5" fill={done ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="7" cy="7" r="5.5" fill={done ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeDasharray={dashed ? "2 2" : undefined} />
       {pie && <path d={pie} fill="currentColor" />}
       {done && <path d="M4.6 7.1 L6.3 8.8 L9.4 5.4" fill="none" stroke="var(--color-bg)" strokeWidth="1.5" />}
     </svg>
@@ -142,26 +145,15 @@ export function useWorkspaceBoard(ws: WorkspaceRef | null) {
   return workspaceBoard(store, ws, data, { notNow, config, paused, moving, shownId });
 }
 
-/** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
+/** The sidebar body in Tasks mode (X50): the workspace's pinned boards, then the sync line. Find a task is in the board header (X93). */
 export function TasksSidebar() {
   const { ws, data, shown } = useWorkspaceTasks();
-  const query = useTasks((t) => t.query);
   const config = useTasks((t) => trackersConfig(t));
   const attention = useTasks((t) => t.attention);
   const now = useNow(true);
   const rows = useMemo(() => (ws ? sidebarBoards(config.boards, wsKey(ws.host, ws.id), shown?.board.id ?? null, data) : []), [ws, config, shown, data]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <label className="mx-2 mb-2.5 flex h-[30px] items-center gap-2 rounded-md px-2 text-muted focus-within:bg-panel-2">
-        <Search size={14} />
-        <span className="sr-only">Find a task</span>
-        <input
-          className="min-w-0 flex-1 bg-transparent ui-text-13 text-fg outline-none placeholder:text-muted"
-          placeholder="Find a task"
-          value={query}
-          onChange={(e) => useTasks.setState({ query: e.target.value })}
-        />
-      </label>
       <div className="mx-2 mt-1.5 flex h-7 items-center px-2">
         <span className="flex-1 ui-text-11.5 uppercase tracking-[0.08em] text-faint">Boards</span>
         <IconButton title="Add a board" onClick={() => ws && openAddBoard(ws.host, ws.id)}>
@@ -227,7 +219,7 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean; onDrag: (card: Card | null) => void }) {
+function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, onDrag }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean; found: boolean; onDrag: (card: Card | null) => void }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   const face = cardFace(card.task, fields, estimate);
   // A Project's item moves only with gh's project scope, as its State menu (X50, X53).
@@ -235,6 +227,7 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
   return (
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
+      data-task-id={taskId(card.task)}
       // Dragged onto another column, the card moves there (X53).
       draggable={!locked}
       onDragStart={(e) => {
@@ -247,9 +240,10 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
       onDragEnd={(e) => e.target === e.currentTarget && onDrag(null)}
       className={cx(
         "flex flex-col gap-2 rounded-[10px] border px-3 py-2.5",
-        selected ? "border-accent/60 bg-selected" : card.needsYou ? "border-blocked/35 bg-panel" : "border-border bg-panel",
+        // Found by Find a task (X93): an accent border and ring.
+        found ? "border-accent/80 bg-selected ring-4 ring-accent/[0.18]" : selected ? "border-accent/60 bg-selected" : card.needsYou ? "border-blocked/35 bg-panel" : "border-border bg-panel",
         // Someone else's issue, shown under Assignee: anyone (X50).
-        isDimmed(card) && !selected && "opacity-[0.72]",
+        isDimmed(card) && !selected && !found && "opacity-[0.72]",
       )}
     >
       <div className="flex items-center gap-2">
@@ -257,6 +251,7 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
         {face.type && <span className="ui-text-11 text-faint">{face.type}</span>}
         {card.task.priority > 0 && <PriorityBars n={card.task.priority} />}
         <span className="flex-1" />
+        {found && <span className="ui-text-11 text-accent">Found</span>}
         {face.points && <span className="font-mono ui-text-10.5 text-faint">{face.points}</span>}
         {face.assignee && (
           <span title={`Assigned to ${face.assignee.name}`} className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full border border-border-strong bg-raised px-0.5 ui-text-8.5 font-semibold text-muted">
@@ -449,8 +444,10 @@ export function TasksMode() {
   const { ws, data, board, unlinked, shown, all } = useWorkspaceTasks();
   const connections = useTasks((t) => t.config?.connections);
   const layout = useTasks((t) => t.layout);
-  const query = useTasks((t) => t.query);
   const filters = useTasks((t) => t.filters);
+  const boards = useTasks((t) => trackersConfig(t).boards);
+  // The task Find a task found on the board (X93).
+  const found = useTasks((t) => (ws ? searchOf(t, ws.host, ws.id).found : null));
   const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
   const attention = useTasks((t) => t.attention);
@@ -520,9 +517,14 @@ export function TasksMode() {
       </div>
     );
   }
-  // The header's filters and Find a task (X45), column by column.
+  // The header's filters (X45), column by column; Find a task filters nothing (X93).
   // Assignee is the shown board's own (X50).
-  const views = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: assigneeOf(shown.board, assignee) === "me" }) && findsTask(c.task, query) ? c : null));
+  const views = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: assigneeOf(shown.board, assignee) === "me" }) ? c : null));
+  // The found card's folded column, open for the moment (X93).
+  const drawn = revealFound(views, found);
+  // The workspace's other boards, for Find a task's Not on this board.
+  const labels = Object.fromEntries(sidebarBoards(boards, wsKey(ws.host, ws.id), shown.board.id, data).map((r) => [r.id, r.label]));
+  const others = all.filter((b) => b.board.id !== shown.board.id).map((b) => ({ id: b.board.id, label: labels[b.board.id] ?? b.board.name, views: b.views }));
   const cards = board ? Object.values(board).flat() : [];
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
@@ -571,6 +573,7 @@ export function TasksMode() {
         {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
         <header data-tauri-drag-region className="drag @container flex min-h-[52px] shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4 py-2">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
+          <FindTask host={ws.host} workspaceId={ws.id} views={views} others={others} shownLabel={header.title} />
           <div className="ml-auto flex shrink-0 items-center gap-2.5">
             {layout === "list" && <ExpandAll cards={listCards} />}
             <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
@@ -596,10 +599,10 @@ export function TasksMode() {
           </div>
         )}
         {layout === "list" ? (
-          <TasksList host={ws.host} workspaceId={ws.id} views={views} unlinked={unlinked} />
+          <TasksList host={ws.host} workspaceId={ws.id} views={drawn} unlinked={unlinked} found={found} />
         ) : (
           <div className="flex min-h-0 flex-1 gap-2.5 overflow-x-auto px-4 py-3.5">
-            {views.map((v) =>
+            {drawn.map((v) =>
               v.folded ? (
                 <FoldedColumn key={v.name} boardId={shown.board.id} view={v} over={over === v.name} {...dropOn(v.name)} />
               ) : (
@@ -641,6 +644,7 @@ export function TasksMode() {
                     <div className="flex items-center gap-[5px] ui-text-11 text-faint">
                       <TaskGlyph column={v.category} size={10} />
                       {CATEGORY_LABEL[v.category]}
+                      {v.note && <span className="ml-auto truncate ui-text-11.5 text-accent">{v.note}</span>}
                       {v.wip && (
                         <span className={cx(v.wip.full && "text-blocked")}>
                           · {v.wip.count} of {v.wip.max}
@@ -652,7 +656,7 @@ export function TasksMode() {
                   <div aria-hidden="true" className={cx("h-[2px] shrink-0 rounded-[1px]", COLUMN_RULE[v.category])} />
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
-                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} onDrag={drag} />
+                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} found={taskId(c.task) === found} onDrag={drag} />
                     ))}
                   </div>
                 </section>
@@ -735,7 +739,7 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   ];
   return (
     // The tile, title and subtitle are one button, as the design draws it.
-    <div className="min-w-0">
+    <div className="min-w-[110px] max-w-[45%] shrink">
       <Menu
         width={360}
         search={{ placeholder: "Find a board, team or project", query, onQuery: setQuery }}
@@ -879,10 +883,12 @@ const PR_TONE = { open: "text-done", merged: "text-merged", error: "text-error",
 const NOTE_TONE = { blocked: "text-blocked", accent: "text-accent", faint: "text-faint" } as const;
 
 /** The List layout (X45, X50): a group per board column, rows that open into their sessions and worktrees, then sessions without a task. */
-function TasksList({ host, workspaceId, views, unlinked }: { host: string; workspaceId: string; views: ColumnView[]; unlinked: { session: Card["rows"][number]["session"]; hint: string }[] }) {
+function TasksList({ host, workspaceId, views, unlinked, found }: { host: string; workspaceId: string; views: (ColumnView & { note?: string })[]; unlinked: { session: Card["rows"][number]["session"]; hint: string }[]; found: string | null }) {
   const expanded = useTasks((t) => t.expanded);
   const now = useNow(true);
   const groups = boardListGroups(views);
+  // A folded group opened to show the found task (X93).
+  const reveal = Object.fromEntries(views.flatMap((v) => (v.note ? [[v.name, v.note]] : [])));
   const keyOf = (c: Card) => taskId(c.task);
   const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
@@ -894,18 +900,20 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
             {g.name}
             <span className="font-mono ui-text-12 text-faint">{g.cards.length}</span>
             {g.note && <span className={cx("ml-auto ui-text-12", NOTE_TONE[g.noteTone])}>{g.note}</span>}
+            {reveal[g.name] && <span className={cx("ui-text-12 text-accent", !g.note && "ml-auto")}>{reveal[g.name]}</span>}
           </div>
           {!g.folded &&
             g.cards.map((c) => {
               const r = listRow(c, now);
               const open = !!expanded[keyOf(c)];
               return (
-                <div key={keyOf(c)} role="row" aria-label={`${c.task.key} ${c.task.title}`} className={cx("border-b border-border", r.needsYou && "bg-blocked/[0.04]")}>
+                <div key={keyOf(c)} role="row" aria-label={`${c.task.key} ${c.task.title}`} data-task-id={keyOf(c)} className={cx("border-b border-border", keyOf(c) === found ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : r.needsYou && "bg-blocked/[0.04]")}>
                   <div className="flex items-center gap-3 py-2">
                     <button aria-label={`${open ? "Collapse" : "Expand"} ${c.task.key}`} aria-expanded={open} onClick={() => toggle(c)} className="text-muted hover:text-fg">
                       {open ? "▾" : "▸"}
                     </button>
                     <span className="font-mono ui-text-12 text-faint">{c.task.key}</span>
+                    {keyOf(c) === found && <span className="ui-text-11 text-accent">Found</span>}
                     <button className="min-w-0 flex-1 truncate text-left ui-text-13.5 text-fg hover:underline" onClick={() => useTasks.setState({ selected: keyOf(c) })}>
                       {c.task.title}
                     </button>

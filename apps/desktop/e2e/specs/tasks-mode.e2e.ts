@@ -730,12 +730,53 @@ describe("Tasks mode", () => {
     }
   });
 
-  it("finds a task by its title, and closes an issue from the detail's state menu", async () => {
+  it("finds a task from the header's Find a task (⌘F) without filtering the board, by title or a session's branch, and finds one in the folded Closed column (X93)", async () => {
     await tasksButton().click();
-    await fill('//input[@placeholder="Find a task"]', "Gift");
-    await expect(card("acme/storefront#15", "Open")).toBeDisplayed({ wait: 10_000 });
-    await expect(card("acme/storefront#12", "Open")).not.toBeExisting();
-    await fill('//input[@placeholder="Find a task"]', "");
+    await expect(card("acme/storefront#19", "Open")).toBeDisplayed({ wait: 15_000 });
+    const field = '//header//input[@role="combobox"][@aria-label="Find a task"]';
+    // The sidebar has no Find a task any more.
+    await expect($('//input[@placeholder="Find a task"]')).not.toBeExisting();
+    // WebKit's WebDriver can't send ⌘ with a key: dispatch it.
+    await browser.execute(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, bubbles: true, cancelable: true })));
+    await browser.waitUntil(() => browser.execute(() => document.activeElement?.getAttribute("aria-label") === "Find a task"), { timeout: 5_000, timeoutMsg: "⌘F did not focus Find a task" });
+    await fill(field, "checkout");
+    const list = '//section[@role="listbox"][@aria-label="Tasks found"]';
+    await expect($(`${list}//span[normalize-space()="On this board · 2"]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${list}//button[@role="option"][.//span[normalize-space()="acme/storefront#12"]][.//span[normalize-space()="Fix checkout button"]]`)).toBeDisplayed();
+    await expect($(`${list}//button[@role="option"][.//span[normalize-space()="Gift cards at checkout"]]`)).toBeDisplayed();
+    await expect($(`${list}//mark[normalize-space()="checkout"]`)).toBeDisplayed();
+    await expect($(`${list}//span[normalize-space()="2 results"]`)).toBeDisplayed();
+    // The board keeps every card.
+    await expect(card("acme/storefront#19", "Open")).toBeDisplayed();
+    // A session's branch finds its task, named on a second line.
+    const spike = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: "Saved carts spike", branch: "19-cart-storage", agent: "none" }).id;
+    try {
+      await expect(card("acme/storefront#19", "Open").$('.//span[normalize-space()="Saved carts spike"]')).toBeDisplayed({ wait: 15_000 });
+      await fill(field, "cart-storage");
+      await expect($(`${list}//button[@role="option"][.//span[normalize-space()="acme/storefront#19"]]//span[normalize-space()="branch 19-cart-storage"]`)).toBeDisplayed({ wait: 10_000 });
+    } finally {
+      rpc(w, "session.archive", { id: spike });
+    }
+    // ↵ picks a task in the folded Closed column: it opens for the moment, and the card is marked found.
+    await fill(field, "typo");
+    await expect($(`${list}//button[@role="option"][@aria-selected="true"][.//span[normalize-space()="Typo in footer"]]`)).toBeDisplayed({ wait: 10_000 });
+    await browser.keys("Enter");
+    await expect($(list)).not.toBeExisting();
+    const found = card("acme/storefront#17", "Closed");
+    await expect(found).toBeDisplayed({ wait: 10_000 });
+    await expect(found.$('.//span[normalize-space()="Found"]')).toBeDisplayed();
+    await expect($('//section[@aria-label="Closed"]//span[normalize-space()="unfolded to show acme/storefront#17"]')).toBeDisplayed();
+    // Found is not selected: the detail doesn't open on it.
+    await expect($('//aside[@aria-label="Task detail"]//*[normalize-space()="Typo in footer"]')).not.toBeExisting();
+    // Esc with the dropdown closed clears the field: the column folds again.
+    await $(field).click();
+    await browser.keys("Escape");
+    await browser.keys("Escape");
+    await expect($(field)).toHaveValue("");
+    await expect($('//button[starts-with(@aria-label, "Closed: ")]')).toBeDisplayed({ wait: 10_000 });
+  });
+
+  it("closes an issue from the detail's state menu", async () => {
     await card("acme/storefront#15", "Open").$('//button[normalize-space()="Gift cards at checkout"]').click();
     await choose('//select[@aria-label="State of acme/storefront#15"]', "1");
     await browser.waitUntil(() => asked().includes("issue close 15 --reason completed"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });

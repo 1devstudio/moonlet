@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { appendActivity, enterOpensFirst, findTasks, glyphShape, initials, sessionCard, stateOptions } from "./taskDetails";
+import { appendActivity, enterOpensFirst, glyphShape, initials, sessionCard, stateOptions } from "./taskDetails";
 import type { Task } from "./tasks";
-import { tasksBoard } from "./tasksBoard";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
   connection: "linear:acme",
@@ -36,16 +35,6 @@ describe("stateOptions (X45 detail, X46 task bar)", () => {
       { label: "Open", column: null, current: true },
       { label: "Closed", column: "done", current: false },
     ]);
-  });
-});
-
-describe("findTasks (X45 Find a task)", () => {
-  it("keeps the cards whose key or title has the text", () => {
-    const board = tasksBoard({ tasks: [task("MOON-142", "Remote hosts sidebar"), task("MOON-144", "File tabs")], sessions: [], worktrees: [], sessionStartRule: "auto" });
-    const keys = (q: string) => Object.values(findTasks(board, q)).flat().map((c) => c.task.key);
-    expect(keys("tabs")).toEqual(["MOON-144"]);
-    expect(keys("moon-142")).toEqual(["MOON-142"]);
-    expect(keys("")).toEqual(["MOON-142", "MOON-144"]);
   });
 });
 
