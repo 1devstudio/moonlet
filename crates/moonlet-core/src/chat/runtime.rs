@@ -1320,6 +1320,10 @@ impl ChatManager {
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
         let mut state_changed = false;
+        // What the agent shows is its activity, as a PTY's output is.
+        if outs.iter().any(|o| !matches!(o, Out::Write(_))) {
+            self.terms.touch(chat.id);
+        }
         for o in outs {
             match o {
                 Out::Write(line) => {
@@ -1959,6 +1963,20 @@ done
         }
         let sock = dir.path().join("sock");
         assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("{}\n{}\n", sock.display(), info.id));
+        chats.shutdown().await;
+    }
+
+    /// A structured agent has no PTY output: its turns are its activity, for
+    /// the sidebar's recent activity sort.
+    #[tokio::test]
+    async fn a_turn_moves_the_agents_activity_time() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+        assert!(terms.get(info.id).unwrap().info().last_output_at >= info.created_at + 50);
         chats.shutdown().await;
     }
 

@@ -88,6 +88,9 @@ struct TerminalState {
     subscribers: HashMap<ClientId, ClientTx>,
     agent: AgentTracker,
     last_output: Instant,
+    /// The `last_output_at` clients last got for output alone, so they hear
+    /// of activity every `activity_every` and not on every chunk.
+    announced_output_at: u64,
     remove_on_exit: bool,
     /// The shell's PATH as its prompt hook last reported it (T8).
     shell_path: Option<String>,
@@ -118,7 +121,13 @@ pub struct TerminalManager {
     base_env: BTreeMap<String, String>,
     /// Stops (and with `true`, forgets) a structured agent (X6).
     chat_stop: Mutex<Option<ChatStop>>,
+    /// How often output alone sends `terminal.updated`, in ms, for the
+    /// sidebar's recent activity sort.
+    activity_every: AtomicU64,
 }
+
+/// How often clients hear of a terminal's output time by default.
+const ACTIVITY_EVERY: Duration = Duration::from_secs(10);
 
 pub type ChatStop = Arc<dyn Fn(TerminalId, bool) + Send + Sync>;
 
@@ -133,6 +142,7 @@ impl TerminalManager {
             socket,
             base_env,
             chat_stop: Mutex::new(None),
+            activity_every: AtomicU64::new(ACTIVITY_EVERY.as_millis() as u64),
         });
         tokio::spawn(quiet_watcher(Arc::downgrade(&mgr)));
         mgr
@@ -154,6 +164,32 @@ impl TerminalManager {
 
     pub fn emit(&self, message: Message) {
         let _ = self.events.send(message);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_activity_every(&self, every: Duration) {
+        self.activity_every.store(every.as_millis() as u64, Ordering::SeqCst);
+    }
+
+    /// Notes output now; true when clients are due to hear of it.
+    fn note_output(&self, st: &mut TerminalState) -> bool {
+        let now = now_ms();
+        st.info.last_output_at = now;
+        let due = now.saturating_sub(st.announced_output_at) >= self.activity_every.load(Ordering::SeqCst);
+        if due {
+            st.announced_output_at = now;
+        }
+        due
+    }
+
+    /// Notes that a structured agent (X6) showed something, telling clients
+    /// now and then, as PTY output does.
+    pub fn touch(&self, id: TerminalId) {
+        let Some(t) = self.get(id) else { return };
+        let mut st = t.state.lock().unwrap();
+        if self.note_output(&mut st) {
+            self.emit(Message::event(methods::EV_TERMINAL_UPDATED, &st.info));
+        }
     }
 
     pub fn set_chat_stop(&self, f: ChatStop) {
@@ -190,6 +226,7 @@ impl TerminalManager {
                 subscribers: HashMap::new(),
                 agent,
                 last_output: Instant::now(),
+                announced_output_at: info.last_output_at,
                 remove_on_exit: false,
                 shell_path: None,
             }),
@@ -394,6 +431,7 @@ impl TerminalManager {
     /// Registers a running PTY (fresh or adopted) and starts its I/O tasks.
     pub fn install(self: &Arc<Self>, info: TerminalInfo, term: TermState, pty: Pty) -> Result<()> {
         let id = info.id;
+        let announced_output_at = info.last_output_at;
         self.next_id.fetch_max(id + 1, Ordering::Relaxed);
         let (input_tx, _) = mpsc::unbounded_channel();
         let terminal = Arc::new(Terminal {
@@ -407,6 +445,7 @@ impl TerminalManager {
                 subscribers: HashMap::new(),
                 agent: AgentTracker::default(),
                 last_output: Instant::now(),
+                announced_output_at,
                 remove_on_exit: false,
                 shell_path: None,
             }),
@@ -951,7 +990,7 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
     let mut st = terminal.state.lock().unwrap();
     let now = Instant::now();
     st.last_output = now;
-    st.info.last_output_at = now_ms();
+    let activity_due = mgr.note_output(&mut st);
     let signals = st.term.process(data);
     let alt = st.term.screen().alternate_screen();
     let alt_changed = alt != st.info.alt_screen;
@@ -971,7 +1010,7 @@ fn on_output(mgr: &TerminalManager, terminal: &Terminal, data: &[u8]) {
         })
     });
 
-    let mut info_changed = alt_changed;
+    let mut info_changed = alt_changed || activity_due;
     let mut agent_changed = false;
     for signal in signals {
         match signal {
@@ -1196,6 +1235,37 @@ mod tests {
         mgr.write(info.id, b"second\n".to_vec()).unwrap();
         let live = read_until(&mut rx, "second").await;
         assert!(!live.contains("first"), "no duplicate of pre-attach output");
+        mgr.kill(info.id, true).unwrap();
+    }
+
+    /// The sidebar's recent activity sort reads `last_output_at` from
+    /// `terminal.updated`; output alone has to bring it, now and then.
+    #[tokio::test]
+    async fn output_tells_clients_the_terminals_activity_time() {
+        let mgr = manager();
+        mgr.set_activity_every(Duration::from_millis(200));
+        let mut events = mgr.subscribe_events();
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec!["/bin/sh".into(), "-c".into(), "sleep 0.5; echo busy; sleep 5".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("no terminal.updated with a newer activity time")
+                .unwrap();
+            if let Message::Event { name, data } = ev
+                && name == methods::EV_TERMINAL_UPDATED
+            {
+                let t: TerminalInfo = serde_json::from_value(data).unwrap();
+                if t.id == info.id && t.last_output_at >= info.created_at + 400 {
+                    break;
+                }
+            }
+        }
         mgr.kill(info.id, true).unwrap();
     }
 
