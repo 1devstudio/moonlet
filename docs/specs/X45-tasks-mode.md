@@ -32,7 +32,7 @@ The sidebar gains a second mode next to Sessions: **Tasks**. It shows the issues
 
 ### Sidebar in Tasks mode
 
-- [x] *(Since X50 the sidebar lists the workspace's Boards instead of Views and Trackers.)* Rows: workspace switcher, mode switch, a "Find a task" field, **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button (since X50 the refresh button is in the header). "Find a task" filters the board by key or title. (`tasksView.test.ts` syncedLabel, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`)
+- [x] *(Since X50 the sidebar lists the workspace's Boards instead of Views and Trackers.)* Rows: workspace switcher, mode switch, a "Find a task" field, **Views**, **Trackers**, and a footer `<tracker> synced <age>` with a refresh button (since X50 the refresh button is in the header). "Find a task" filters the board by key or title *(since X93 it is in the board header and finds tasks without filtering the board)*. (`tasksView.test.ts` syncedLabel, `taskDetails.test.ts` findTasks, `tasks-mode.e2e.ts`)
 - [x] After a failed sync the footer reads `Sync failed · <error>` instead. (`tasks-mode.e2e.ts`)
 - [x] ~~Views, each with a count: My issues, In review, Out of sync (count in the accent colour), Sessions without a task.~~ Replaced by X50: the sidebar lists boards; Sessions without a task is the List's last group, out of sync is on the cards and the Tasks button. (`tasks-mode.e2e.ts` lists sessions without a task, with the issue their name looks like)
 - [x] *(Replaced by X50's Boards.)* Trackers lists each source of the workspace as `<tracker> · <source>`, with a red dot when its connection needs attention. (`trackerSources.test.ts` lists the workspace's boards by tracker and name, marking a board whose connection needs attention, `task-trackers.e2e.ts`)
@@ -107,7 +107,7 @@ Titles, descriptions and labels from trackers are untrusted. Titles and labels a
 ## Out of scope
 
 - A Current cycle view (Linear cycle, Jira active sprint): it needs each tracker's cycle or sprint dates, which moonlet does not read yet.
-- ⌘K searching tasks: ⌘K stays the Run action palette; "Find a task" in the Tasks sidebar filters the board, and the link dialog (X46) takes pasted keys and URLs.
+- ⌘K searching tasks: ⌘K stays the Run action palette; "Find a task" (in the board header since [X93](X93-search-the-board.md)) finds tasks, and the link dialog (X46) takes pasted keys and URLs.
 - A connect popover on the Tasks button; a `Connect…` row and key prefixes in the Trackers list; the tracker's mark and a "more" menu in the detail header.
 - Creating tasks ("New task in this column", now [X52](X52-new-issue-from-a-column.md)) and drag and drop between columns (now [X53](X53-drag-tasks-between-columns.md)).
 - Activity from the tracker's own history. The tracker's comments are [X66](X66-task-comments.md).

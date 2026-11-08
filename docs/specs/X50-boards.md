@@ -127,7 +127,7 @@ Tasks mode shows one **board** at a time. A board is a named view of one tracker
 ### Sidebar and header
 
 - [x] The Tasks sidebar shows:
-  - "Find a task"
+  - "Find a task" *(moved to the board header by [X93](X93-search-the-board.md))*
   - **Boards** with a `+` that opens Add a board, then one row per pinned board of the workspace: mark, name with the sprint or cycle it follows (`OPS · Sprint 42`), open-task count
   - the footer `<tracker> synced <age>` with a dot (green, or red after a failed sync)
 
