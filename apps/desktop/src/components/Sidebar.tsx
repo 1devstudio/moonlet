@@ -601,6 +601,8 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const allSessions = useStore((s) => s.sessions);
   const terminals = useStore((s) => s.terminals);
   const archiving = useStore((s) => s.archiving);
+  // An agent waiting for a terminal to be shared needs input (X31).
+  const reads = useStore((s) => s.reads);
   const projects = allProjects[host] ?? [];
   // Select the stored array and filter outside: a selector returning a new
   // array on every call makes zustand re-render forever.
@@ -619,9 +621,9 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
       archiving: (h, s) => !!archiving[sesKey(h, s.id)],
       taskOf: (_h, s) => lines[s.id] ?? null,
     });
-    // `terminals` changes agent states and activity times.
+    // `terminals` and `reads` change agent states, `terminals` activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, archiving, host, lines]);
+  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, reads, archiving, host, lines]);
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);

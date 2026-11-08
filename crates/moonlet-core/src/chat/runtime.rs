@@ -1320,6 +1320,11 @@ impl ChatManager {
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
         let mut state_changed = false;
+        // What the chat shows is its activity, as a PTY's output is; a new
+        // model or mode alone is not.
+        if outs.iter().any(|o| matches!(o, Out::Item(_))) {
+            self.terms.touch(chat.id);
+        }
         for o in outs {
             match o {
                 Out::Write(line) => {
@@ -1959,6 +1964,34 @@ done
         }
         let sock = dir.path().join("sock");
         assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("{}\n{}\n", sock.display(), info.id));
+        chats.shutdown().await;
+    }
+
+    /// A structured agent has no PTY output: its turns are its activity, for
+    /// the sidebar's recent activity sort.
+    #[tokio::test]
+    async fn a_turn_moves_the_agents_activity_time() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        let started = terms.get(info.id).unwrap().info().last_output_at;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+        assert!(terms.get(info.id).unwrap().info().last_output_at >= started + 50);
+        chats.shutdown().await;
+    }
+
+    /// A new model, effort or mode is the user's doing, not the agent's.
+    #[tokio::test]
+    async fn changing_a_chats_settings_leaves_its_activity_time() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        let before = terms.get(info.id).unwrap().info().last_output_at;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        chats.settings(info.id, Some("opus".into()), Some("high".into()), Some("plan".into())).unwrap();
+        assert_eq!(terms.get(info.id).unwrap().info().last_output_at, before);
         chats.shutdown().await;
     }
 

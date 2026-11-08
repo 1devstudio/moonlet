@@ -64,6 +64,17 @@ describe("sessionGroups", () => {
     expect(groups[0].letter).toBe("S");
   });
 
+  it("lists live agents first, working or needing you, then the rest by their last output", () => {
+    const w = world();
+    // The done session printed last; the working one and the one that needs
+    // you have been quiet longer.
+    w.data.mac.terminals[1] = terminal(1, "add-search", { agent_state: "blocked", last_output_at: NOW - 20 * MIN });
+    w.data.mac.terminals[2] = terminal(2, "checkout", { agent_state: "done", last_output_at: NOW - MIN });
+    w.data.mac.terminals[3] = terminal(3, "dark", { agent_state: "working", last_output_at: NOW - 10 * MIN });
+    const groups = sessionGroups(w.hosts, w.data, null, NOW);
+    expect(groups[0].rows.map((r) => r.session.name)).toEqual(["Dark mode for account pages", "Add search to the product list", "Fix checkout button on mobile"]);
+  });
+
   it("gives each row its state and word", () => {
     const w = world();
     const rows = sessionGroups(w.hosts, w.data, null, NOW).flatMap((g) => g.rows);

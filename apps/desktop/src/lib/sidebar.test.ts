@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { arrange, arrangeShared, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
+import { taskGroups } from "./sessionRows";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
 const s = (id: string, project: string, extra: Partial<Session> = {}): Session => ({
@@ -118,6 +119,28 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
     const g = arrangeShared("personal", [filtered, mini], none);
     // Nor does a project no member has, which was not picked either.
     expect(g.map((x) => [x.label, x.sessions.map((e) => e.session.id)])).toEqual([["shop", ["s4", "s3", "s1"]]]);
+  });
+
+  it("puts live agents first by recent activity, working or needing input, then the rest by their last output", () => {
+    const recent = { ...here, sec: { ...here.sec, view: { ...here.sec.view, sort_by: "recent" as const } }, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a"), s("s6", "a")] };
+    // s1 works and s5 needs input but printed long ago; s4 and s6 are at rest
+    // with fresher output.
+    const state = (_h: string, x: Session) => (x.id === "s1" ? "working" : x.id === "s5" ? "blocked" : x.id === "s4" ? "done" : null);
+    const at: Record<string, number> = { s1: 10, s4: 90, s5: 20, s6: 50 };
+    const g = arrangeShared("personal", [recent], { ...none, stateOf: state, activeAt: (_h, x) => at[x.id] });
+    expect(g[0].sessions.map((e) => e.session.id)).toEqual(["s5", "s1", "s4", "s6"]);
+  });
+
+  it("lists a task with a live agent first in the task sub-header layout, sessions without a task still last (X48)", () => {
+    const recent = { ...here, sec: { ...here.sec, view: { ...here.sec.view, sort_by: "recent" as const } }, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a")] };
+    const g = arrangeShared("personal", [recent], { ...none, stateOf: (_h, x) => (x.id === "s1" ? "working" : "idle"), activeAt: (_h, x) => ({ s1: 10, s4: 90, s5: 50 })[x.id]! });
+    const lines = { s1: { key: "MOON-144", title: "File tabs", column: "in_progress" as const, outOfSync: false }, s5: { key: "MOON-142", title: "Remote hosts", column: "todo" as const, outOfSync: false } };
+    const groups = taskGroups(g[0].sessions.map((e) => e.session.id), lines, { sources: true, groupedByTask: false });
+    expect(groups?.map((t) => [t.key, t.ids])).toEqual([
+      ["MOON-144", ["s1"]],
+      ["MOON-142", ["s5"]],
+      ["", ["s4"]],
+    ]);
   });
 });
 

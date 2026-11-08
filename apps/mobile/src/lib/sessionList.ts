@@ -75,8 +75,8 @@ function row(host: string, d: HostData, s: Session, now: number, on: string | nu
   return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "", on };
 }
 
-/** The phone groups every section by project, most recently active first,
- * whatever view the desktop gives it. */
+/** The phone groups every section by project, live agents then the most
+ * recently active first, whatever view the desktop gives it. */
 const BY_PROJECT: Section["view"] = { group_by: "project", sort_by: "recent", filter: [] };
 
 /** The shown workspace's groups, or every workspace's for null: each shared
@@ -96,7 +96,7 @@ export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<str
     for (const { ws, sec, hosts: holding } of shownSections(ref, list)) {
       const sectionKey = `${ref.account ?? ref.host}:${ws.id}:${sec.id}`;
       const shared = arrangeShared(ws.id, sectionParts(holding, { ...sec, view: BY_PROJECT }, of), {
-        stateOf: () => null,
+        stateOf: (h, s) => sessionState(data[h], s),
         activeAt: (h, s) => lastActive(data[h].terminals, s),
         archiving: () => false,
         taskOf: () => null,
