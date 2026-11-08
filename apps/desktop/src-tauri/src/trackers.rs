@@ -517,8 +517,7 @@ pub async fn tracker_search(req: SearchRequest) -> Res<Vec<TrackerTask>> {
     }
     match s.conn.kind {
         TrackerKind::Linear => {
-            let teams = req.scope.iter().map(|t| safe_id(t).map(String::from)).collect::<Res<Vec<_>>>()?;
-            let raw = s.linear(&linear::search_query(), linear::search_variables(query, &teams)).await?;
+            let raw = s.linear(&linear::search_query(), linear::search_variables(query, &req.scope)).await?;
             s.linear_ok(linear::parse_search(&raw, &s.conn.id))
         }
         TrackerKind::Jira => {

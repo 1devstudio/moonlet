@@ -107,8 +107,9 @@ pub fn parse_search(
 
 /// Find a task (X93): JQL for the issues of `projects` whose text has
 /// `query`, newest first; `None` when there is nothing to search. The query
-/// is untrusted: quotes, backslashes and Lucene's operators become spaces,
-/// so it stays one string, and a project key that isn't one is left out.
+/// is untrusted: quotes, backslashes and Lucene's operator characters become
+/// spaces and it is lower-cased, so it stays one string of words, and a
+/// project key that isn't one is left out.
 pub fn search_jql(projects: &[String], query: &str) -> Option<String> {
     let keys: Vec<&str> = projects
         .iter()
@@ -119,7 +120,8 @@ pub fn search_jql(projects: &[String], query: &str) -> Option<String> {
         .chars()
         .map(|c| if "\"\\'+-&|!(){}[]^~*?:/".contains(c) || c.is_control() { ' ' } else { c })
         .collect::<String>();
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Lower-cased so OR, AND and NOT stay words to find (Jira's text search ignores case).
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     if keys.is_empty() || text.is_empty() {
         return None;
     }
@@ -570,7 +572,12 @@ mod tests {
         // Quotes, backslashes and Lucene's operators can't end the string or change the query.
         assert_eq!(
             search_jql(&projects, r#"x" OR project = SECRET \ (a*) -b"#).as_deref(),
-            Some(r#"project in (OPS, PLAT) AND text ~ "x OR project = SECRET a b" ORDER BY updated DESC"#)
+            Some(r#"project in (OPS, PLAT) AND text ~ "x or project = secret a b" ORDER BY updated DESC"#)
+        );
+        // Lower-cased, Lucene's OR, AND and NOT are words to find, not operators.
+        assert_eq!(
+            search_jql(&projects, "Retry AND NOT Host").as_deref(),
+            Some(r#"project in (OPS, PLAT) AND text ~ "retry and not host" ORDER BY updated DESC"#)
         );
         // A project key that isn't one is left out; nothing to search, no search.
         assert_eq!(

@@ -244,7 +244,8 @@ pub const GH_PR_CONTEXT: &str = "gh.pr_context";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
-/// Find a task (X93): a repository's issues, open or closed, that match a text.
+/// `{path, repo, query, limit}` → `GhTask[]`: Find a task (X93), a
+/// repository's issues, open or closed, that gh's search finds for the text.
 pub const GH_SEARCH: &str = "gh.search";
 /// `{owners}`: the open GitHub Projects of the signed-in user and of
 /// `owners` (X50 Add a board). Needs gh's `read:project` scope.

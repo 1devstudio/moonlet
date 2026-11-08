@@ -530,6 +530,9 @@ export function TasksMode() {
   const detail = cards.find((c) => taskId(c.task) === selected);
   const site = connections?.find((c) => c.id === shown.board.connection)?.site ?? "";
   const header = boardHeader(shown.board, data.boards?.[shown.board.id]?.sprint, site, views.flatMap((v) => v.cards));
+  // The shown board's tasks the header's filters leave out: Find a task says they are on it (X93).
+  const drawnIds = new Set(views.flatMap((v) => v.cards.map((c) => taskId(c.task))));
+  const leftOut = { label: header.title, cards: shown.views.flatMap((v) => v.cards.filter((c) => !drawnIds.has(taskId(c.task))).map((c) => ({ task: c.task, column: v.name }))) };
   const problem = boardProblem(shown.board, data.boards?.[shown.board.id]);
   const fields = cardFields(shown.board);
   // The + on a column (X52): where it creates, and why it can't.
@@ -578,6 +581,7 @@ export function TasksMode() {
             host={ws.host}
             workspaceId={ws.id}
             views={views}
+            leftOut={leftOut}
             others={others}
             shownLabel={header.title}
             footer={(q) => {

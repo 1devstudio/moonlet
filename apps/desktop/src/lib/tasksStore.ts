@@ -15,7 +15,7 @@ import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
 import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerName, trackerOf } from "./tasks";
-import { type Found, type SearchTarget, searchTargets } from "./boardSearch";
+import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTargets } from "./boardSearch";
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -270,7 +270,7 @@ async function searchIn(host: string, workspaceId: string, target: SearchTarget,
   const lists = await Promise.all(
     target.scope.map(async (repo) => {
       // Any project's directory gives gh its host and sign-in; --repo names the repository.
-      const path = repoPath(host, workspaceId, repo) ?? useStore.getState().projects[host]?.[0]?.path;
+      const path = repoPath(host, workspaceId, repo) ?? anyProjectPath(host);
       if (!path) return [];
       const found = await rpc<GhTask[]>(host, M.ghSearch, { path, repo, query, limit: SEARCH_LIMIT });
       return found.map((gh) => ({ ...taskFromGh(gh, target.connection), mine: undefined }));
@@ -278,9 +278,6 @@ async function searchIn(host: string, workspaceId: string, target: SearchTarget,
   );
   return lists.flat();
 }
-
-/** The most issues one search asks a tracker or repository for. */
-const SEARCH_LIMIT = 8;
 
 /**
  * Find a task's search in the trackers (X93): after a pause of `delayMs`,
@@ -304,26 +301,37 @@ export async function searchTrackers(host: string, workspaceId: string, query: s
   const data = t.data[key];
   const boards = (trackersConfig(t).boards ?? []).filter((b) => b.workspace === key).map((board) => ({ board, tasks: boardTasks(data, board.id) }));
   const targets = searchTargets(boards, t.attention);
-  const names = targets.map((x) => trackerName(x.connection));
+  // A typed key or URL is also looked up in its tracker, ClickUp too.
+  const pasted = await hostsApi.parsePasted(q).catch(() => null);
+  if (!live()) return;
+  const path = anyProjectPath(host);
+  // The typed key's lookup counts as a search of its tracker: the board's connection of that kind, else the tracker alone.
+  const typedConn = pasted && path ? (pasted.kind ? (targets.find((x) => x.tracker === pasted.kind)?.connection ?? `${pasted.kind}:`) : (targets[0]?.connection ?? null)) : null;
+  const labels = searchLabels([...new Set([...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])])]);
+  const label = (connection: string) => labels.get(connection) ?? trackerName(connection);
   const results: (Found | null)[] = targets.map(() => null);
   let typed: Task | null = null;
-  const searching = new Set(names);
+  // Searches under way, by connection; one connection may have two (its search and the typed key's).
+  const pending = [...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])];
+  const settle = (connection: string) => pending.splice(pending.indexOf(connection), 1);
   const failed: TrackerSearch["failed"] = [];
   const show = () =>
     set({
       query: q,
       found: [...(typed ? [{ connection: typed.connection, tasks: [typed] }] : []), ...results.filter((r): r is Found => !!r)],
-      trackers: [...new Set(names)],
-      searching: [...searching],
+      trackers: [...new Set(labels.values())],
+      searching: [...new Set(pending.map(label))],
       failed: [...failed],
     });
   show();
   const lookUpTyped = async () => {
-    const p = await hostsApi.parsePasted(q).catch(() => null);
-    const path = useStore.getState().projects[host]?.[0]?.path;
-    if (!p || !path) return;
-    typed = await lookUpPasted(host, path, p, null).catch(() => null);
-    if (typed) show();
+    if (!pasted || !path || !typedConn) return;
+    try {
+      typed = await lookUpPasted(host, path, pasted, null).catch(() => null);
+    } finally {
+      settle(typedConn);
+      show();
+    }
   };
   await Promise.all([
     lookUpTyped(),
@@ -331,13 +339,32 @@ export async function searchTrackers(host: string, workspaceId: string, query: s
       try {
         results[i] = { connection: target.connection, tasks: await searchIn(host, workspaceId, target, q) };
       } catch (e) {
-        failed.push({ tracker: names[i], error: errorMessage(e) });
+        failed.push({ tracker: label(target.connection), error: errorMessage(e) });
       } finally {
-        searching.delete(names[i]);
+        settle(target.connection);
         show();
       }
     }),
   ]);
+}
+
+/** Any of `host`'s projects' folders: where gh learns its host and sign-in. */
+const anyProjectPath = (host: string): string | undefined => useStore.getState().projects[host]?.[0]?.path;
+
+/**
+ * How Find a task names each connection it searches (X93): by its tracker,
+ * and by tracker and site when two of one tracker are searched. A bare
+ * `<kind>:` stands for a tracker known only from a typed key.
+ */
+function searchLabels(connections: string[]): Map<string, string> {
+  const kinds = connections.map((c) => trackerOf(c));
+  return new Map(
+    connections.map((c, i) => {
+      const site = c.slice(c.indexOf(":") + 1);
+      const twice = kinds.filter((k) => k === kinds[i]).length > 1;
+      return [c, twice && site ? `${trackerName(c)} (${site})` : trackerName(c)];
+    }),
+  );
 }
 
 /** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */

@@ -225,8 +225,14 @@ pub fn search_query() -> String {
     )
 }
 
-/// The variables of [`search_query`]: the text as typed, and the team keys.
+/// The variables of [`search_query`]: the text as typed, and the team keys;
+/// a key that isn't one is left out.
 pub fn search_variables(term: &str, teams: &[String]) -> Value {
+    let teams: Vec<&str> = teams
+        .iter()
+        .map(String::as_str)
+        .filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .collect();
     serde_json::json!({ "term": term, "teams": teams, "first": SEARCH_FIRST })
 }
 
@@ -1011,6 +1017,11 @@ mod tests {
         assert_eq!(
             search_variables("host", &["MOON".into(), "CDK".into()]),
             serde_json::json!({ "term": "host", "teams": ["MOON", "CDK"], "first": 8 })
+        );
+        // A team key that isn't one is left out, as Jira's project keys are.
+        assert_eq!(
+            search_variables("host", &["MOON\" } }".into(), "CDK".into()]),
+            serde_json::json!({ "term": "host", "teams": ["CDK"], "first": 8 })
         );
         let found = parse_search(&fixture("linear-search-issues.json"), "linear:acme").unwrap();
         let keys: Vec<_> = found.iter().map(|t| (t.key.as_str(), t.tracker.state.as_str(), t.cycle)).collect();

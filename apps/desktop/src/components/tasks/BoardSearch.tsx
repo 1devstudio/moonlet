@@ -3,13 +3,13 @@
 
 import { ExternalLink, Play, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { type BoardSearch as Result, type Found, type Hit, type OffRow, type OtherBoard, previewOf, searchBoard, searchFooter } from "../../lib/boardSearch";
+import { type BoardSearch as Result, type Found, type Hit, type LeftOut, type OffRow, type OtherBoard, previewOf, searchBoard, searchFooter, sessionsOn } from "../../lib/boardSearch";
 import type { ColumnView } from "../../lib/boardColumns";
 import { moveHighlight } from "../../lib/addProject";
 import { claimKeys } from "../../lib/keys";
 import { fromOtherDialog } from "../../lib/modal";
 import { useStore } from "../../lib/store";
-import { taskId, trackerName, trackerOf } from "../../lib/tasks";
+import { trackerName, trackerOf } from "../../lib/tasks";
 import { composerTask, findTask, moveTask, searchOf, searchTrackers, setTaskQuery, showBoard, trackerSearchOf, useTasks } from "../../lib/tasksStore";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, IconButton, Kbd, StateGlyph } from "../ui";
@@ -41,11 +41,13 @@ export function scrollToTask(id: string) {
  * on the board (picking one marks it found) and off it (picking one opens
  * its preview). The board itself is never filtered.
  */
-export function FindTask({ host, workspaceId, views, others, shownLabel, footer }: {
+export function FindTask({ host, workspaceId, views, leftOut, others, shownLabel, footer }: {
   host: string;
   workspaceId: string;
   /** The shown board's columns as drawn, after the header's filters. */
   views: ColumnView[];
+  /** The shown board's tasks the header's filters leave out. */
+  leftOut: LeftOut;
   others: OtherBoard[];
   shownLabel: string;
   /** Shown under the results when nothing matched: Create “…” in a tracker. */
@@ -65,7 +67,7 @@ export function FindTask({ host, workspaceId, views, others, shownLabel, footer 
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const list = useId();
-  const result: Result = useMemo(() => searchBoard(query, views, others, found), [query, views, others, found]);
+  const result: Result = useMemo(() => searchBoard(query, views, others, found, leftOut), [query, views, others, found, leftOut]);
   const rows = [...result.on.map((r) => ({ id: r.id, on: true as const })), ...result.off.map((r) => ({ id: r.id, on: false as const }))];
   const shown = open && !!query.trim();
   const { count, none } = searchFooter(result, ts.trackers);
@@ -87,11 +89,12 @@ export function FindTask({ host, workspaceId, views, others, shownLabel, footer 
   // A click outside closes the dropdown.
   useEffect(() => {
     if (!shown) return;
-    const onDown = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    const onClick = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
   }, [shown]);
-  useEffect(() => setActive(0), [query]);
+  // The first row is active whenever the dropdown opens or the query changes.
+  useEffect(() => setActive(0), [query, shown]);
 
   const pickOn = (id: string) => {
     findTask(host, workspaceId, id);
@@ -106,6 +109,13 @@ export function FindTask({ host, workspaceId, views, others, shownLabel, footer 
     setPreview(result.off.find((r) => r.id === row.id) ?? null);
   };
   const onKey = (e: React.KeyboardEvent) => {
+    // ⌘F in the field itself: the app's shortcuts leave text fields alone, so select its text here.
+    if (e.metaKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      input.current?.select();
+      setOpen(true);
+      return;
+    }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!shown) return setOpen(true);
@@ -281,12 +291,6 @@ function GroupHead({ name, hint, divided }: { name: string; hint: string; divide
       <span className="normal-case tracking-normal">{hint}</span>
     </div>
   );
-}
-
-/** The names of the sessions on task `id`'s card on another board, if any. */
-function sessionsOn(others: OtherBoard[], id: string): string[] {
-  for (const b of others) for (const v of b.views) for (const c of v.cards) if (taskId(c.task) === id) return c.rows.map((r) => r.session.name);
-  return [];
 }
 
 /** The preview of a task the board doesn't show (X93), over the board. */

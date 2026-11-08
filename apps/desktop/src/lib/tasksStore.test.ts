@@ -2020,6 +2020,43 @@ describe("Find a task searching the trackers (X93)", () => {
     expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["acme/web#30"]);
   });
 
+  it("waits for the pause, and searches only the query typed last", async () => {
+    answers["tracker_search linear:acme"] = (req) => [lt("MOON-9", (req as { query: string }).query)];
+    answers["gh.search"] = () => [];
+    const first = searchTrackers("local", "personal", "ho", 30);
+    const last = searchTrackers("local", "personal", "host", 30);
+    expect(searches).toEqual([]);
+    await Promise.all([first, last]);
+    expect(searches.map((x) => x.query)).toEqual(["host"]);
+  });
+
+  it("keeps searching until each connection answered, naming two of one tracker by their sites", async () => {
+    let release = () => {};
+    const BETA = { ...LINEAR_BOARD, id: "ops", connection: "linear:beta", origin: { kind: "linear_team" as const, team: "OPS" } };
+    useTasks.setState((t) => ({ config: { ...t.config!, boards: [LINEAR_BOARD, BETA] } }));
+    answers["tracker_search linear:acme"] = () => [lt("MOON-97", "host")];
+    answers["tracker_search linear:beta"] = () => new Promise((r) => (release = () => r([])));
+    const done = searchTrackers("local", "personal", "host", 0);
+    await vi.waitFor(() => expect(found().found.flatMap((f) => f.tasks.map((t) => t.key))).toEqual(["MOON-97"]));
+    expect(found()).toMatchObject({ trackers: ["Linear (acme)", "Linear (beta)"], searching: ["Linear (beta)"] });
+    release();
+    await done;
+    expect(found().searching).toEqual([]);
+  });
+
+  it("counts a typed key's lookup as a search of its tracker, ClickUp too", async () => {
+    let release = () => {};
+    const LIST = { id: "list", name: "Sprint", connection: "clickup:9001", workspace: "local/personal", origin: { kind: "clickup_list" as const, list: "901" } };
+    useTasks.setState((t) => ({ config: { ...t.config!, connections: [...(t.config!.connections ?? []), { id: "clickup:9001", kind: "clickup", site: "9001", account: "Sam", auth: "api_key", sources: [] }], boards: [LIST] } }));
+    answers["task_parse_pasted"] = () => ({ kind: "clickup", key: "86a1b2" });
+    answers["tracker_task clickup:9001 86a1b2"] = () => new Promise((r) => (release = () => r({ ...lt("86a1b2", "Host list"), connection: "clickup:9001" })));
+    const done = searchTrackers("local", "personal", "86a1b2", 0);
+    await vi.waitFor(() => expect(found()).toMatchObject({ trackers: ["ClickUp"], searching: ["ClickUp"] }));
+    release();
+    await done;
+    expect(found()).toMatchObject({ searching: [], found: [{ connection: "clickup:9001", tasks: [{ key: "86a1b2" }] }] });
+  });
+
   it("also looks up a typed key in its tracker", async () => {
     answers["task_parse_pasted"] = () => ({ kind: "linear", key: "MOON-300" });
     answers["tracker_task linear:acme MOON-300"] = () => lt("MOON-300", "Outside every team");

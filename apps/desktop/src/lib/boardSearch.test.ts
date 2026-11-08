@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewOf, revealFound, searchBoard, searchFooter, searchTargets } from "./boardSearch";
+import { previewOf, revealFound, searchBoard, searchFooter, searchTargets, sessionsOn } from "./boardSearch";
 import type { BoardConfig } from "./boards";
 import type { ColumnView } from "./boardColumns";
 import type { Task } from "./tasks";
@@ -214,5 +214,32 @@ describe("searchTargets (X93 which trackers Find a task searches)", () => {
       { [LINEAR]: "Reconnect Linear" },
     );
     expect(targets).toEqual([]);
+  });
+});
+
+describe("review fixes (X93)", () => {
+  const shown = "Moonlet · Cycle 14";
+  const preview = (t: Task) => previewOf(searchBoard("host", [], [], [{ connection: LINEAR, tasks: [t] }]).off[0], shown);
+
+  it("offers Reopen only for a finished state: Done, or one named canceled, duplicate or won't do; not Triage or a backlog by another name", () => {
+    const hidden = (state: string) => task("MOON-5", "Host x", { column: "hidden", tracker: { id: "m5", state, source: "MOON" } });
+    expect(preview(hidden("Canceled")).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(hidden("Duplicate")).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(task("MOON-6", "Host y", { column: "done", tracker: { id: "m6", state: "Released", source: "MOON" } })).action).toEqual({ kind: "reopen", label: "Reopen in Linear" });
+    expect(preview(hidden("Triage")).action).toBeNull();
+    expect(preview(hidden("Icebox")).action).toBeNull();
+  });
+
+  it("says a task of the shown board that the header's filters leave out is on it, with no action", () => {
+    const mine = task("MOON-150", "Host health of someone else", { assignees: ["Kim Park"] });
+    const { off } = searchBoard("host", MOONLET, [], [{ connection: LINEAR, tasks: [mine] }], { label: shown, cards: [{ task: mine, column: "Todo" }] });
+    expect(off).toEqual([expect.objectContaining({ id: "linear:acme MOON-150", where: "Moonlet · Cycle 14 · Todo", state: "Todo", leftOut: true })]);
+    expect(previewOf(off[0], shown)).toEqual({ why: "This task is on Moonlet · Cycle 14, but the header’s filters leave it out.", action: null });
+  });
+
+  it("names the sessions on a task's card on another board", () => {
+    const board = { id: "x", label: "X", views: [column("Todo", "todo", [card(task("CDK-1", "a"), [session("Notion sync retries", "cdk-1-retries")])])] };
+    expect(sessionsOn([board], "linear:acme CDK-1")).toEqual(["Notion sync retries"]);
+    expect(sessionsOn([board], "linear:acme CDK-2")).toEqual([]);
   });
 });

@@ -754,6 +754,11 @@ describe("Tasks mode", () => {
     await expect($(`${list}//span[normalize-space()="2 results"]`)).toBeDisplayed();
     // The board keeps every card.
     await expect(card("acme/storefront#19", "Open")).toBeDisplayed();
+    // A click outside closes the dropdown; a click in the field opens it again, on its first row.
+    await $('//section[@aria-label="Open"]//span[normalize-space()="Open"]').click();
+    await expect($(list)).not.toBeExisting();
+    await $(field).click();
+    await expect($(`${list}//button[@role="option"][@aria-selected="true"][.//span[normalize-space()="acme/storefront#12"]]`)).toBeDisplayed({ wait: 5_000 });
     // A session's branch finds its task, named on a second line.
     const spike = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: "Saved carts spike", branch: "19-cart-storage", agent: "none" }).id;
     try {
@@ -774,6 +779,9 @@ describe("Tasks mode", () => {
     await expect($('//section[@aria-label="Closed"]//span[normalize-space()="unfolded to show acme/storefront#17"]')).toBeDisplayed();
     // Found is not selected: the detail doesn't open on it.
     await expect($('//aside[@aria-label="Task detail"]//*[normalize-space()="Typo in footer"]')).not.toBeExisting();
+    // ⌘F with the field focused selects its text.
+    await browser.execute(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, bubbles: true, cancelable: true })));
+    expect(await browser.execute(() => { const el = document.activeElement as HTMLInputElement; return [el.getAttribute("aria-label"), el.selectionStart, el.selectionEnd]; })).toEqual(["Find a task", 0, 4]);
     // Esc with the dropdown closed clears the field: the column folds again.
     await $(field).click();
     await browser.keys("Escape");
@@ -796,7 +804,25 @@ describe("Tasks mode", () => {
     await expect($(`${preview}//span[normalize-space()="This task is Closed in GitHub, so the board doesn’t show it."]`)).toBeDisplayed();
     await expect($(`${preview}//a[@href="https://github.com/acme/storefront/issues/8"]`)).toBeDisplayed();
     await expect($(`${preview}//button[normalize-space()="Reopen in GitHub"]`)).toBeDisplayed();
+    // Esc and Back to the board close it.
+    await browser.keys("Escape");
+    await expect($(preview)).not.toBeExisting();
+    const reopenPreview = async () => {
+      await $(field).click();
+      await $(row).waitForDisplayed({ timeout: 10_000 });
+      await browser.keys("Enter");
+      await expect($(preview)).toBeDisplayed({ wait: 10_000 });
+    };
+    await reopenPreview();
+    await $(`${preview}//button[normalize-space()="Back to the board"]`).click();
+    await expect($(preview)).not.toBeExisting();
+    // Reopen reopens the issue through gh.
+    await reopenPreview();
+    await $(`${preview}//button[normalize-space()="Reopen in GitHub"]`).click();
+    await browser.waitUntil(() => asked().includes("issue reopen 8"), { timeout: 10_000, timeoutMsg: `gh was asked: ${asked()}` });
+    await expect($(preview)).not.toBeExisting();
     // New session opens the composer with the task.
+    await reopenPreview();
     await $(`${preview}//button[normalize-space()="New session"]`).click();
     await expect($('//*[@aria-label="Task acme/storefront#8"]')).toBeDisplayed({ wait: 10_000 });
     await expect($(preview)).not.toBeExisting();
