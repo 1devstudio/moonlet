@@ -675,6 +675,10 @@ pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 /// A host's Git settings after a change: the whole `GitSettings` (X55).
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
+/// A project's base branch was fast-forwarded by `git.pull_base`, by any
+/// client: [`BasePulled`](crate::types::BasePulled) (X13). Another host's
+/// pull reaches this host's app only through it.
+pub const EV_GIT_BASE_PULLED: &str = "git.base_pulled";
 /// A workspace's board snapshot after a change: [`WorkspaceSnapshot`] (X76).
 pub const EV_TASKS_CHANGED: &str = "tasks.changed";
 /// A phone's request for the app to answer: [`TasksRequestEvent`] (X76).

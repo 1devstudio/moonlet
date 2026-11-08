@@ -6033,9 +6033,20 @@ impl Daemon {
             }
             m::GIT_PULL_BASE => {
                 let r: m::GitBase = params(p)?;
-                ok(git::pull_base(&path(&r.path), &r.branch)
-                    .await
-                    .map_err(internal)?)
+                let dir = path(&r.path);
+                let pulled = git::pull_base(&dir, &r.branch).await.map_err(internal)?;
+                // Every app on this host re-reads the branch: a pull another
+                // host asked for would otherwise leave this app's chip behind.
+                self.terminals.emit(Message::event(
+                    m::EV_GIT_BASE_PULLED,
+                    moonlet_proto::types::BasePulled {
+                        path: dir.to_string_lossy().into_owned(),
+                        branch: r.branch,
+                        pulled: pulled.pulled,
+                        head: pulled.head.clone(),
+                    },
+                ));
+                ok(pulled)
             }
             m::GH_PR_CREATE => {
                 let r: m::PrCreate = params(p)?;

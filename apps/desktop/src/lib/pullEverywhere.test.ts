@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { baseChip } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
 import type { BaseStatus, HostInfo, Project, ProjectIdentity } from "./protocol";
-import { pullBase, pullBaseEverywhere, refreshBase, useStore } from "./store";
+import { basePulled, projKey, pullBase, pullBaseEverywhere, refreshBase, useStore } from "./store";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", async (original) => ({ ...(await original<typeof import("./daemon")>()), rpc: daemon.rpc }));
@@ -165,5 +166,21 @@ describe("pulling a project's base branch on every host that has it", () => {
     await vi.waitFor(() => expect(shown()).toEqual([pulledHere]));
     await new Promise((r) => setTimeout(r, 20));
     expect(shown()).toEqual([pulledHere]);
+  });
+
+  it("clears this host's chip when another host pulled its copy", async () => {
+    const state = { local: { behind: 1 }, mini: { behind: 0 }, vps: { behind: 0 } };
+    daemons(state);
+    await refreshBase("local", "p1");
+    const chip = () => {
+      const b = useStore.getState().base[projKey("local", "p1")];
+      return baseChip(b?.status, !!b?.pulling)?.text ?? null;
+    };
+    expect(chip()).toBe("1");
+    // The MacBook pulled main here; this host's daemon says so.
+    state.local.behind = 0;
+    basePulled("local", { path: "/Users/me/ledger", branch: "main", pulled: 1, head: "9c41e2a7d0b5f3c18e2a9b4c6d1f0e3a5b7c9d2e" });
+    await vi.waitFor(() => expect(chip()).toBeNull());
+    expect(shown()).toEqual([]);
   });
 });

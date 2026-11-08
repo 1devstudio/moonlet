@@ -1175,6 +1175,16 @@ pub struct BasePull {
     pub head: String,
 }
 
+/// The `git.base_pulled` event: which project's base branch a pull moved,
+/// and what the pull did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BasePulled {
+    pub path: String,
+    pub branch: String,
+    pub pulled: u32,
+    pub head: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DirEntry {
     pub name: String,

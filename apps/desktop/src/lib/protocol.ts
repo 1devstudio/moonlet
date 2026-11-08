@@ -921,6 +921,13 @@ export interface BasePull {
   head: string;
 }
 
+/** The `git.base_pulled` event: a `git.pull_base` on that host, by any
+ *  client, moved this project's base branch (X13). */
+export interface BasePulled extends BasePull {
+  path: string;
+  branch: string;
+}
+
 export interface DirEntry {
   name: string;
   path: string;
@@ -1636,6 +1643,8 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
+  /** A project's base branch was pulled on that host, by any client (X13). */
+  gitBasePulled: "git.base_pulled",
   /** A workspace's board snapshot changed (X76). */
   tasksChanged: "tasks.changed",
   /** A phone asks the app to change tasks (X76). */
