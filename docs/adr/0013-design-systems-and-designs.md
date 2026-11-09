@@ -1,7 +1,7 @@
 # ADR 0013: Design systems and designs are files, laid out like design-sync's, rendered in the app's WebKit
 
 - **Status:** proposed (2026-10-23); to be built in [X64](../specs/X64-design-systems.md) and [X65](../specs/X65-design-mode.md)
-- **Changed by:** [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). A member without the app renders for its design agent with a helper of its own (WKWebView on a Mac, WPE WebKit on Linux).
+- **Changed by:** [X95](../specs/X95-design-library.md) (2026-11-09): design systems live in the account's library, `~/.moonlet/design/library/`, not per workspace, and a workspace design can be shared there. [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). A member without the app renders for its design agent with a helper of its own (WKWebView on a Mac, WPE WebKit on Linux).
 - **Builds on:** [ADR 0005](0005-workspace-project-session-terminal.md) (workspaces, projects, sessions) and [X22](../specs/X22-agent-opens-session.md) (the `moonlet` skill)
 
 ## Context
@@ -33,7 +33,7 @@ Three questions had to be settled:
   - layouts in `ui_kits/`
 - Because static cards are look-alikes, the sync is to grade them against the project's real render when the project has a Storybook or a dev server. X64's entry 6 ships design-sync's absolute rubric (Styled, Complete, Plausible) from moonlet's own screenshots; grading against the real render (`design snap --url`) is a follow-up.
 
-**Design systems and workspace designs are daemon-owned files per workspace**, under `~/.moonlet/design/<workspace id>/`:
+**Design systems and workspace designs are daemon-owned files per workspace**, under `~/.moonlet/design/<workspace id>/` (since X95, design systems and shared designs are in `~/.moonlet/design/library/`, laid out the same way):
 - `systems/<slug>/` for design systems
 - `designs/<slug>/` for workspace designs
 
