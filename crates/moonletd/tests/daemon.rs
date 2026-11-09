@@ -1177,6 +1177,12 @@ impl HomeDaemon {
     async fn client(&self) -> Client {
         Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
+
+    /// A connection the daemon counts as the app's: its credential is in
+    /// the daemon's home, `.moonlet` under this one (X75).
+    async fn app(&self) -> Client {
+        Client::connect_app(&self.socket, &self.home.path().join(".moonlet")).await.unwrap()
+    }
 }
 
 impl Drop for HomeDaemon {
@@ -5775,4 +5781,180 @@ async fn an_open_sessions_design_follows_its_system_renamed_by_the_move_into_the
     let designs: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     let ours = designs.iter().find(|d| d["kind"] == "session").expect("the session's design");
     assert_eq!((&ours["slug"], &ours["system"]), (&serde_json::json!("settings-page"), &serde_json::json!("moonlet-desktop-2")));
+}
+
+/// Each design `design.list` gives a workspace, by slug, and whether it is
+/// shared (X95).
+async fn shared_listing(c: &mut Client, ws: String) -> Vec<(String, bool)> {
+    let list: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    list.into_iter().map(|d| (d["slug"].as_str().unwrap().to_string(), d["shared"].as_bool().unwrap_or(false))).collect()
+}
+
+/// X95: a workspace design shared with every workspace moves into the
+/// library: every workspace lists it as shared, and only the app shares
+/// it. Stopping sharing it moves it into the workspace the user is in.
+#[tokio::test]
+async fn a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let app = workspace_with_system(&d, &mut c).await;
+    let site: moonlet_proto::types::Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "blue"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": app, "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_SHARE, serde_json::json!({"workspace": app, "slug": "pricing"})).await;
+    assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("forbidden")), "{refused:?}");
+
+    let mut c = d.app().await;
+    // Refused while its agent works on its first message.
+    let mut shared = Err(anyhow::anyhow!("not tried"));
+    for _ in 0..100 {
+        shared = c.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": app, "slug": "pricing"})).await;
+        if !shared.as_ref().is_err_and(|e| e.to_string().starts_with("busy")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let shared = shared.unwrap();
+    assert_eq!(shared, "pricing");
+    assert_eq!(shared_listing(&mut c, app.clone()).await, vec![("pricing".to_string(), true)]);
+    assert_eq!(shared_listing(&mut c, site.id.clone()).await, vec![("pricing".to_string(), true)]);
+    std::fs::write(d.home.path().join(".moonlet/design/library/designs/pricing/pages/index.html"), "<p>plans</p>\n").unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"workspace": "library", "path": "designs/pricing/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page["content_type"], "text/html; charset=utf-8");
+
+    let back: String = c.request(methods::DESIGN_UNSHARE, serde_json::json!({"workspace": "library", "slug": "pricing", "into": site.id})).await.unwrap();
+    assert_eq!(back, "pricing");
+    assert_eq!(shared_listing(&mut c, app.clone()).await, vec![]);
+    assert_eq!(shared_listing(&mut c, site.id.clone()).await, vec![("pricing".to_string(), false)]);
+}
+
+/// X95: Build it on a shared design starts the session in the workspace the
+/// user is in, on one of that workspace's projects; the design is copied
+/// into its worktree as a workspace design's is.
+#[tokio::test]
+async fn a_shared_design_is_built_in_a_session_of_the_workspace_the_user_is_in() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = d
+        .app()
+        .await
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let page = d.home.path().join(".moonlet/design/library/designs/pricing/pages/index.html");
+    std::fs::write(&page, "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">plans</body>\n").unwrap();
+    let create = |workspace: Option<&str>| {
+        serde_json::json!({
+            "project_id": project.id, "name": "Build pricing", "workspace_id": workspace, "agent": "none",
+            "design": {"workspace": "library", "slug": "pricing", "pages": ["index"]}
+        })
+    };
+
+    let refused = c.request::<_, Session>(methods::SESSION_CREATE, create(None)).await;
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: a session building a shared design names its workspace");
+
+    let session: Session = c.request(methods::SESSION_CREATE, create(Some(&ws))).await.unwrap();
+    assert_eq!(session.workspace_id.as_deref(), Some(ws.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&session.path).join("docs/design/pricing/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">plans</body>\n"
+    );
+}
+
+/// X95: a shared design's agent runs in the Claude profile of the
+/// workspace that holds its design system's first source project.
+#[tokio::test]
+async fn a_shared_designs_agent_runs_in_the_profile_of_its_systems_first_sources_workspace() {
+    use moonlet_proto::types::{ClaudeProfile, Project, Section, Workspace};
+    let d = fake_claude_daemon(FAKE_CLAUDE_PROFILE).await;
+    let repo = d.home.path().join("acme-web");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let profile: ClaudeProfile = c
+        .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")}))
+        .await
+        .unwrap();
+    let app: Workspace = c
+        .request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay", "claude_profile": profile.id}))
+        .await
+        .unwrap();
+    let section: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": app.id, "name": "Acme"})).await.unwrap();
+    let web: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": section.id, "path": repo})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": app.id, "name": "Acme web", "sources": [{"project": web.id}], "agent": false}))
+        .await
+        .unwrap();
+
+    let _: serde_json::Value = d
+        .app()
+        .await
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "acme-web", "brief": "b"}))
+        .await
+        .unwrap();
+
+    let file = d.home.path().join(".moonlet/design/library/designs/pricing/claude-profile");
+    let seen = until_contains(|| std::fs::read_to_string(&file).unwrap_or_default(), "\n").await;
+    assert_eq!(seen, format!("{}\n", profile.path));
+}
+
+/// X95: a design whose agent is working is neither shared nor moved: its
+/// agent works in its folder.
+#[tokio::test]
+async fn a_design_whose_agent_works_is_not_shared() {
+    // Takes its first message and never ends the turn.
+    const WORKING: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+  esac
+done
+"#;
+    let d = fake_claude_daemon(WORKING).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let mut app = d.app().await;
+    let mut refused = String::new();
+    for _ in 0..50 {
+        refused = match app.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": ws, "slug": "pricing"})).await {
+            Ok(slug) => format!("shared as {slug}"),
+            Err(e) => e.to_string(),
+        };
+        if refused.starts_with("busy") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(refused, "busy: its agent is working: try again when it is done");
+    assert_eq!(shared_listing(&mut c, ws).await, vec![("pricing".to_string(), false)]);
+}
+
+/// X95: a design is made in the library only by the app; an agent's CLI
+/// could otherwise put its work in every workspace without Share.
+#[tokio::test]
+async fn only_the_app_makes_a_design_in_the_library() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    workspace_with_system(&d, &mut c).await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli
+        .request::<_, serde_json::Value>(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "forbidden: only the moonlet app manages a shared design");
 }

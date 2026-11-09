@@ -391,6 +391,10 @@ pub const DESIGN_FETCH: &str = "design.fetch";
 /// owner's latest snapshot, and with `busy` while the owner's agent works,
 /// unless `force`.
 pub const DESIGN_MOVE: &str = "design.move";
+/// Shares a workspace design with every workspace (X95): app only.
+pub const DESIGN_SHARE: &str = "design.share";
+/// Moves a shared design into one workspace (X95): app only.
+pub const DESIGN_UNSHARE: &str = "design.unshare";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -3361,6 +3365,22 @@ pub struct DesignMove {
     pub slug: String,
     #[serde(default)]
     pub force: bool,
+}
+
+/// `design.share`: the workspace design to share with every workspace (X95).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignShare {
+    pub workspace: String,
+    pub slug: String,
+}
+
+/// `design.unshare`: the shared design (`workspace` is `library`) and the
+/// workspace it moves into (X95).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignUnshare {
+    pub workspace: String,
+    pub slug: String,
+    pub into: String,
 }
 
 /// `design.fetch`: a tree, and the trees the member's copies hold already.

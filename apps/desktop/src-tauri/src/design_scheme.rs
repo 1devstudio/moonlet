@@ -471,6 +471,21 @@ mod tests {
         );
     }
 
+    // X95: a shared design's page is framed on the library's host, and asks
+    // the daemon for the library's files.
+    #[test]
+    fn a_shared_designs_page_is_on_the_librarys_host() {
+        assert_eq!(
+            target("moonlet-design://5a1c3e0f9b2d4c67.library/designs/pricing/pages/index.html"),
+            Some(Target {
+                host: "5a1c3e0f9b2d4c67.library".to_string(),
+                key: Some("5a1c3e0f9b2d4c67".to_string()),
+                place: Place::Workspace("library".to_string()),
+                path: "designs/pricing/pages/index.html".to_string(),
+            })
+        );
+    }
+
     #[test]
     fn a_cards_own_host_names_its_key_and_its_workspace() {
         assert_eq!(

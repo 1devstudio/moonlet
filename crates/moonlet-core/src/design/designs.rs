@@ -605,6 +605,7 @@ created_at = 1761200000000
                     project: None,
                     built_in: None,
                     system_updated: false,
+                    shared: false,
                 },
                 DesignInfo {
                     slug: "settings-page".into(),
@@ -629,6 +630,7 @@ created_at = 1761200000000
                     project: None,
                     built_in: None,
                     system_updated: false,
+                    shared: false,
                 },
             ]
         );
