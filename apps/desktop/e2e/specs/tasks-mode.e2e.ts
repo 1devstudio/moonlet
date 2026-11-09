@@ -653,6 +653,10 @@ describe("Tasks mode", () => {
       (document.querySelector('[role="region"][aria-label="Task"]') as HTMLElement).style.width = "520px";
     });
     await expect(pill.$('./span[2]')).not.toBeDisplayed();
+    // The state menu still opens from the dot: its select covers the pill.
+    const select = bar.$('.//select[@aria-label="State of acme/storefront#12"]');
+    await expect(select).toBeEnabled();
+    expect((await select.getSize()).width).toBeGreaterThan(0);
     await browser.execute(() => {
       (document.querySelector('[role="region"][aria-label="Task"]') as HTMLElement).style.width = "";
     });

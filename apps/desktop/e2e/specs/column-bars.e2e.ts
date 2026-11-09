@@ -102,6 +102,14 @@ describe("column bars (X94)", () => {
     for (const x of [tabRow, viewRow]) {
       expect(await box(x)).toMatchObject({ top: 44, height: 36 });
     }
+    // Two tabs at their full 184 px, 2 px apart.
+    const tabs = (await browser.execute(() => [...document.querySelectorAll("[data-tab]")].map((t) => t.getBoundingClientRect()).map((r) => ({ left: r.left, right: r.right, width: r.width })))) as {
+      left: number;
+      right: number;
+      width: number;
+    }[];
+    expect(tabs.map((t) => t.width)).toEqual([184, 184]);
+    expect(tabs[1].left - tabs[0].right).toBe(2);
   });
 
   it("draws no lines: the bars sit on the window's tone, what a column shows in a rounded pane 6 px from the next", async () => {
@@ -140,12 +148,30 @@ describe("column bars (X94)", () => {
     expect(await style(sel.sessionRow(SESSION), ["height"])).toEqual({ height: "38px" });
   });
 
+  it("shows Run as its icon only in a right panel header under 340 px", async () => {
+    const label = () =>
+      browser.execute((x: string) => {
+        const run = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+        return getComputedStyle([...run.querySelectorAll("span")].find((e) => e.textContent === "Run")!).display;
+      }, `${rightHeader}/button[1]`);
+    expect(await label()).not.toBe("none");
+    await browser.execute((x: string) => {
+      (document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement).style.width = "330px";
+    }, rightHeader);
+    await browser.waitUntil(async () => (await label()) === "none", { timeoutMsg: "Run kept its label under 340 px" });
+    await browser.execute((x: string) => {
+      (document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement).style.width = "";
+    }, rightHeader);
+  });
+
   it("fades a scrolling view's edges with more to show, only those edges, and keeps its overscroll in", async () => {
     await openSettings("Appearance");
     const view = "//*[@data-settings-scroll]";
     const fadeOf = (edge: string) => $(`${view}/../span[@data-fade="${edge}"]`);
     await expect(fadeOf("bottom")).toBeExisting({ wait: 5_000 });
     await expect(fadeOf("top")).not.toBeExisting();
+    // Settings' page sits in a pane too.
+    expect(await style(`${view}/ancestor::div[contains(@class, "rounded-[10px]")][1]`, ["background-color", "border-top-left-radius"])).toEqual({ "background-color": PANE, "border-top-left-radius": "10px" });
     expect(await style(view, ["overscroll-behavior-y"])).toEqual({ "overscroll-behavior-y": "contain" });
     await browser.execute((x: string) => {
       const el = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
@@ -189,7 +215,16 @@ describe("column bars (X94)", () => {
     // The row starts at its first tab: tabs are hidden on the right only.
     await expect($(scrollRight)).toBeDisplayed({ wait: 5_000 });
     await expect($(scrollLeft)).not.toBeExisting();
-    await expect($('//button[@aria-label="All tabs"]/span[@aria-label]')).toHaveText(/^\d+$/);
+    // The badge counts the tabs wholly or partly out of the row's view.
+    const out = await browser.execute(() => {
+      const row = document.querySelector('[aria-label="Session tabs"]')!.getBoundingClientRect();
+      return [...document.querySelectorAll("[data-tab]")].filter((t) => {
+        const r = t.getBoundingClientRect();
+        return r.left < row.left - 1 || r.right > row.right + 1;
+      }).length;
+    });
+    expect(out).toBeGreaterThan(0);
+    await expect($('//button[@aria-label="All tabs"]/span[@aria-label]')).toHaveText(String(out));
   });
 
   it("lists every tab in All tabs, filters them, and shows the one picked", async () => {
@@ -217,7 +252,8 @@ describe("column bars (X94)", () => {
     await setFontSize("24");
     // 24 / 13 of the design's heights: 44 → 81, 36 → 66.
     await browser.waitUntil(async () => ((await box(rightHeader))?.height ?? 0) > 80, { timeoutMsg: "the header never grew" });
-    for (const x of [sidebarHeader, rightHeader]) expect((await box(x))!.height).toBeGreaterThan(80);
+    for (const x of [sidebarHeader, sessionHeader, rightHeader]) expect((await box(x))!.height).toBeGreaterThan(80);
+    expect((await box(tabRow))!.height).toBeGreaterThan(65);
     expect((await box(viewRow))!.height).toBeGreaterThan(65);
     // The sidebar's New session, Run action and History each keep to one line, one under the other.
     const rows = (await browser.execute(() =>

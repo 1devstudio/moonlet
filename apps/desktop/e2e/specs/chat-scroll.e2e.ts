@@ -75,12 +75,18 @@ describe("a chat's transcript in its pane (X94)", () => {
     writeFileSync(FAKE, blocked);
   });
 
-  it("pads the transcript 24 px above and below and 28 at the sides, at most 880 wide", async () => {
+  it("pads the transcript 24 px above and below and 28 at the sides, at most 880 wide, and the composer 4 above, 14 below and 16 at the sides", async () => {
     const pad = await browser.execute((x: string) => {
       const c = getComputedStyle(document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement);
       return { top: c.paddingTop, bottom: c.paddingBottom, left: c.paddingLeft, right: c.paddingRight, max: c.maxWidth };
     }, content);
     expect(pad).toEqual({ top: "24px", bottom: "24px", left: "28px", right: "28px", max: "880px" });
+    // The composer: 4 px above, 14 below, 16 at the sides.
+    const composer = await browser.execute(() => {
+      const c = getComputedStyle(document.querySelector('section[aria-label="Chat input"]') as HTMLElement);
+      return { top: c.paddingTop, bottom: c.paddingBottom, left: c.paddingLeft, right: c.paddingRight };
+    });
+    expect(composer).toEqual({ top: "4px", bottom: "14px", left: "16px", right: "16px" });
   });
 
   it("fades only the top at the end, keeps the overscroll in, and offers no Latest", async () => {

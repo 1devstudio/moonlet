@@ -18,7 +18,7 @@ const tabFontSizes = () =>
     [...document.querySelectorAll<HTMLElement>('button[role="tab"][id^="right-tab-"], button[aria-label^="More views"]')].map((t) => getComputedStyle(t).fontSize),
   );
 
-const all = (sizes: string[], size: string) => sizes.length > 0 && sizes.every((s) => s === size);
+const allAre = (sizes: string[], size: string) => sizes.length > 0 && sizes.every((s) => s === size);
 
 describe("font size", () => {
   before(async () => {
@@ -32,9 +32,9 @@ describe("font size", () => {
 
   it("scales the right panel's text with the terminal font size", async () => {
     // 13px tabs (X24) at the default size.
-    expect(all(await tabFontSizes(), "13px")).toBe(true);
+    expect(allAre(await tabFontSizes(), "13px")).toBe(true);
 
     await setFontSize("19.5");
-    await browser.waitUntil(async () => all(await tabFontSizes(), "19.5px"), { timeoutMsg: "the views never grew to 19.5px" });
+    await browser.waitUntil(async () => allAre(await tabFontSizes(), "19.5px"), { timeoutMsg: "the views never grew to 19.5px" });
   });
 });
