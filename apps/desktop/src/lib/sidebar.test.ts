@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -330,5 +330,14 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
     expect(sessionMenu({ linked: false, sources: true, sync: true })).toEqual(["open", "link-task", "keep-sync", "archive"]);
     expect(sessionMenu({ linked: true, sources: false, sync: true })).toEqual(["open", "keep-sync", "archive"]);
     expect(sessionMenu({ linked: true, sources: false, sync: false })).toEqual(["open", "archive"]);
+  });
+});
+
+describe("clampSidebarWidth", () => {
+  it("keeps the sidebar wide enough for the workspace switcher beside the mode switch, and at most 420px", () => {
+    expect(clampSidebarWidth(200)).toBe(260);
+    expect(clampSidebarWidth(259)).toBe(260);
+    expect(clampSidebarWidth(300)).toBe(300);
+    expect(clampSidebarWidth(500)).toBe(420);
   });
 });
