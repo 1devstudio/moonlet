@@ -753,7 +753,7 @@ mod tests {
                 1,
             )
             .unwrap();
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         for (path, text) in SYSTEM {
             std::fs::create_dir_all(system.join(path).parent().unwrap()).unwrap();
             std::fs::write(system.join(path), text).unwrap();
@@ -1156,7 +1156,7 @@ created_at = 1761200000000
             .unwrap();
         assert!(!store.session_system_updated(&at, "w1").unwrap());
         // The design system synced again.
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         std::fs::write(
             system.join("tokens/colors.css"),
             ":root { --color-accent: #2563eb; }\n",
@@ -1251,7 +1251,7 @@ created_at = 1
         };
         let before = both();
         // The design system synced again.
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
         std::fs::write(
             system.join("components/buttons/button/button.html"),
@@ -1298,7 +1298,7 @@ created_at = 1
         let at = store
             .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
             .unwrap();
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         std::fs::write(
             system.join("components/buttons/button/button.html"),
             "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
@@ -1338,7 +1338,7 @@ created_at = 1
         let at = store
             .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
             .unwrap();
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
         std::fs::write(
             system.join("components/buttons/button/button.html"),
@@ -1379,7 +1379,7 @@ created_at = 1
             .unwrap();
         let (pinned, side) = (worktree.path().join("docs/design/settings-page/system"), worktree.path().join(".moonlet/design/settings-page/system"));
         let before = (files(&pinned), files(&side));
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
         std::fs::write(
             system.join("components/buttons/button/button.html"),

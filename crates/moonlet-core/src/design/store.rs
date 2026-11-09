@@ -12,6 +12,7 @@ use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
 use super::check;
+use super::library::LIBRARY;
 use super::{anchor, card, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
@@ -304,18 +305,19 @@ impl Store {
     pub(super) fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
         let path = self.record_path(workspace, slug)?;
         fsx::write_inside(
-            &self.workspace(workspace)?,
+            &self.workspace(LIBRARY)?,
             &path,
             toml::to_string(record)?.as_bytes(),
         )
     }
 
-    fn record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
+    /// In the library (X95), whatever workspace asks.
+    fn record_path(&self, _workspace: &str, slug: &str) -> Result<PathBuf> {
         if !is_name(slug) {
             bail!("bad design system \"{slug}\"");
         }
         Ok(self
-            .workspace(workspace)?
+            .workspace(LIBRARY)?
             .join(".records")
             .join(format!("{slug}.toml")))
     }
@@ -464,18 +466,26 @@ impl Store {
     }
 
     /// A file under the workspace's design folder (`design.file`): never one
-    /// outside it, through `..`, an absolute path or a symlink.
+    /// outside it, through `..`, an absolute path or a symlink. A
+    /// workspace's `systems/<path>` is the library's (X95), so the pages of
+    /// its designs keep linking `../../../systems/<slug>/styles.css`; it
+    /// stays inside the library's `systems/`.
     pub fn resolve(&self, workspace: &str, rel: &str) -> Result<PathBuf> {
-        let base = self.workspace(workspace)?;
         // A snapshot's page or asset, at its design's depth (X65).
         let rel = &super::history::snapshot_file(rel)?.unwrap_or_else(|| rel.to_string());
+        let (place, bound) = if rel.starts_with("systems/") {
+            (LIBRARY, Path::new(LIBRARY).join("systems"))
+        } else {
+            (workspace, PathBuf::from(workspace))
+        };
+        let base = self.workspace(place)?;
         let Some(path) = inside_dir(&base, rel) else {
             bail!("{rel} is outside the design folder");
         };
         // Against the design folder itself, so a linked workspace folder does
         // not move the bounds with it.
         let real_root = std::fs::canonicalize(&self.root)?;
-        if !std::fs::canonicalize(&path)?.starts_with(real_root.join(workspace)) {
+        if !std::fs::canonicalize(&path)?.starts_with(real_root.join(bound)) {
             bail!("{rel} is outside the design folder");
         }
         Ok(path)
@@ -679,10 +689,11 @@ impl Store {
         Ok(dir)
     }
 
-    /// `<workspace>/systems`, never through a link; with `create`, made
-    /// (with the workspace's folder) when missing.
-    fn systems_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
-        self.kind_dir(workspace, "systems", create)
+    /// `library/systems`, whatever workspace asks: every workspace sees
+    /// every design system (X95). Never through a link; with `create`, made
+    /// (with the library's folder) when missing.
+    fn systems_dir(&self, _workspace: &str, create: bool) -> Result<PathBuf> {
+        self.kind_dir(LIBRARY, "systems", create)
     }
 
     /// `<workspace>/<kind>` (`systems` or `designs`), never through a link;
@@ -1132,7 +1143,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(
                 home.path()
-                    .join("design/w-1devstudio/systems/moonlet-desktop/config.toml")
+                    .join("design/library/systems/moonlet-desktop/config.toml")
             )
             .unwrap(),
             "name = \"moonlet desktop\"\ncreated_at = 1761200000000\ncover = \"core\"\n"
@@ -1141,7 +1152,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(
                 home.path()
-                    .join("design/w-1devstudio/.records/moonlet-desktop.toml")
+                    .join("design/library/.records/moonlet-desktop.toml")
             )
             .unwrap(),
             "[[sources]]
@@ -1167,7 +1178,7 @@ root = \"9c1e0a2\"
         );
         let second = std::fs::read_to_string(
             home.path()
-                .join("design/w-1devstudio/systems/moonlet-desktop-2/config.toml"),
+                .join("design/library/systems/moonlet-desktop-2/config.toml"),
         )
         .unwrap();
         assert!(second.starts_with("name = \"moonlet desktop 2\"\n"));
@@ -1195,7 +1206,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "moonlet desktop", vec![src], Cover::Core, 5)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -1271,7 +1282,8 @@ root = \"9c1e0a2\"
                 ],
             }]
         );
-        assert_eq!(store.systems("w-none").unwrap(), vec![]);
+        // Every workspace lists the library's systems (X95).
+        assert_eq!(store.systems("w-none").unwrap().len(), 1);
     }
 
     #[test]
@@ -1282,30 +1294,37 @@ root = \"9c1e0a2\"
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
         put(
-            &home.path().join("design/w1/systems/storefront"),
+            &home.path().join("design/library/systems/storefront"),
             &[("styles.css", "")],
         );
         std::fs::write(home.path().join("secret.txt"), "no").unwrap();
         std::os::unix::fs::symlink(
             home.path().join("secret.txt"),
-            home.path().join("design/w1/systems/storefront/link.css"),
+            home.path().join("design/library/systems/storefront/link.css"),
         )
         .unwrap();
         assert_eq!(
             store
                 .resolve("w1", "systems/storefront/styles.css")
                 .unwrap(),
-            home.path().join("design/w1/systems/storefront/styles.css")
+            home.path().join("design/library/systems/storefront/styles.css")
+        );
+        // The library's other folders stay out of a workspace's `systems/`.
+        put(
+            &home.path().join("design/library/designs/shared"),
+            &[("design.toml", "")],
         );
         for bad in [
             "systems/storefront/../../../../secret.txt",
+            "systems/../designs/shared/design.toml",
+            "systems/../.records/storefront.toml",
             "/etc/hosts",
             "systems/storefront/link.css",
         ] {
             assert!(store.resolve("w1", bad).is_err(), "{bad} resolved");
         }
         store.remove_system("w1", &slug).unwrap();
-        assert!(!home.path().join("design/w1/systems/storefront").exists());
+        assert!(!home.path().join("design/library/systems/storefront").exists());
         assert!(store.remove_system("w1", "..").is_err());
     }
 
@@ -1316,7 +1335,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -1371,7 +1390,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let mine = "<!-- @dsCard group=\"Custom\" -->\n<div>mine</div>\n";
         let synced = "<!-- @dsCard group=\"Custom\" -->\n<div>synced</div>\n";
         let row = "components/custom/row/row.html";
@@ -1412,7 +1431,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let row = "components/custom/row/row.html";
         let mine = [
             (
@@ -1507,7 +1526,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let (row, chip) = (
             "components/custom/row/row.html",
             "components/custom/chip/chip.html",
@@ -1583,7 +1602,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let row = "components/custom/row/row.html";
         let look = || {
             let roots = source_roots(&store.record("w1", &slug).unwrap());
@@ -1673,7 +1692,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let row = "components/custom/row/row.html";
         put(
             &dir,
@@ -1714,7 +1733,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let row = "components/custom/row/row.html";
         put(
             &dir,
@@ -1789,7 +1808,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[(
@@ -1908,7 +1927,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[(
@@ -1971,7 +1990,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "moonlet mobile", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2007,7 +2026,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[(
@@ -2052,7 +2071,7 @@ root = \"9c1e0a2\"
             .create_system("w1", "beta", vec![], Cover::Core, 1)
             .unwrap();
         put(
-            &home.path().join("design/w1/systems").join(&a),
+            &home.path().join("design/library/systems").join(&a),
             &[("_ds_sync.json", "{ not json")],
         );
         let got: Vec<(String, bool)> = store
@@ -2079,7 +2098,7 @@ root = \"9c1e0a2\"
         store
             .create_system("w1", "alpha", vec![], Cover::Core, 1)
             .unwrap();
-        let systems = home.path().join("design/w1/systems");
+        let systems = home.path().join("design/library/systems");
         std::fs::set_permissions(&systems, std::fs::Permissions::from_mode(0o000)).unwrap();
         let listed = store.systems("w1");
         std::fs::set_permissions(&systems, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2112,7 +2131,7 @@ root = \"9c1e0a2\"
             .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         store.set_agent("w1", &slug, 7, "l").unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         // The agent works in `dir` and may write anything there.
         put(
             &dir,
@@ -2145,7 +2164,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2183,7 +2202,7 @@ root = \"9c1e0a2\"
             .unwrap();
         std::fs::write(
             home.path()
-                .join("design/w1/.records")
+                .join("design/library/.records")
                 .join(format!("{slug}.toml")),
             "sources = 3 = 4\n",
         )
@@ -2212,10 +2231,15 @@ root = \"9c1e0a2\"
                 ("storefront/keep.txt", "keep\n"),
             ],
         );
-        let store = Store::new(home.path());
-        // `design/w1/systems` links out.
-        std::fs::create_dir_all(home.path().join("design/w1")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w1/systems")).unwrap();
+        // `design/library/systems` links out.
+        let linked_systems = tempfile::tempdir().unwrap();
+        let store = Store::new(linked_systems.path());
+        std::fs::create_dir_all(linked_systems.path().join("design/library")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path(),
+            linked_systems.path().join("design/library/systems"),
+        )
+        .unwrap();
         assert!(store.remove_system("w1", "storefront").is_err());
         assert!(store.config("w1", "storefront").is_err());
         assert!(store.check_system("w1", "storefront").is_err());
@@ -2225,20 +2249,24 @@ root = \"9c1e0a2\"
                 .is_err()
         );
         assert!(store.systems("w1").is_err());
-        // `design/w2` links out.
-        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w2")).unwrap();
+        // `design/library` links out.
+        let linked_library = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(linked_library.path().join("design")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), linked_library.path().join("design/library"))
+            .unwrap();
         assert!(
-            store
+            Store::new(linked_library.path())
                 .create_system("w2", "pricing", vec![], Cover::Core, 1)
                 .is_err()
         );
         // A system folder that is a link.
+        let store = Store::new(home.path());
         store
             .create_system("w3", "alpha", vec![], Cover::Core, 1)
             .unwrap();
         std::os::unix::fs::symlink(
             outside.path().join("storefront"),
-            home.path().join("design/w3/systems/storefront"),
+            home.path().join("design/library/systems/storefront"),
         )
         .unwrap();
         assert!(store.remove_system("w3", "storefront").is_err());
@@ -2273,7 +2301,7 @@ root = \"9c1e0a2\"
         let b = store
             .create_system("w1", "beta", vec![], Cover::Core, 1)
             .unwrap();
-        let systems = home.path().join("design/w1/systems");
+        let systems = home.path().join("design/library/systems");
         // alpha's config.toml links out: alpha is not read, nor written.
         std::fs::remove_file(systems.join(&a).join(CONFIG)).unwrap();
         std::os::unix::fs::symlink(
@@ -2316,7 +2344,7 @@ root = \"9c1e0a2\"
             .create_system("w1", "alpha", vec![], Cover::Core, 1)
             .unwrap();
         // The record cannot be written: `.records` is a file.
-        let records = home.path().join("design/w1/.records");
+        let records = home.path().join("design/library/.records");
         std::fs::remove_dir_all(&records).unwrap();
         std::fs::write(&records, "").unwrap();
         assert!(
@@ -2324,7 +2352,7 @@ root = \"9c1e0a2\"
                 .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
                 .is_err()
         );
-        assert!(!home.path().join("design/w1/systems/storefront").exists());
+        assert!(!home.path().join("design/library/systems/storefront").exists());
         std::fs::remove_file(&records).unwrap();
         assert_eq!(
             store
@@ -2342,7 +2370,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
-        let records = home.path().join("design/w1/.records");
+        let records = home.path().join("design/library/.records");
         // Opened before the write, as by a read that the write interrupts.
         let mut reader = std::fs::File::open(records.join("storefront.toml")).unwrap();
         store.set_agent("w1", &slug, 7, "l").unwrap();
@@ -2380,7 +2408,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[(
@@ -2407,7 +2435,7 @@ root = \"9c1e0a2\"
             )
         };
         // The record cannot be written: the anchor stays unwritten.
-        let records = home.path().join("design/w1/.records");
+        let records = home.path().join("design/library/.records");
         mode(&records, 0o555);
         mode(&records.join("storefront.toml"), 0o444);
         let failed = sync(&store);
@@ -2480,7 +2508,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2532,7 +2560,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let card = |body: &str| {
             format!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n{body}\n")
         };
@@ -2602,7 +2630,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2670,7 +2698,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let card = |name: &str, token: &str| {
             format!(
                 "<!-- @dsCard group=\"Buttons\" name=\"{name}\" -->\n<p style=\"color: var({token})\">x</p>\n"
@@ -2725,7 +2753,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let head = "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"../../../styles.css\"></head>\n";
         put(
             &dir,
@@ -2821,7 +2849,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2923,7 +2951,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         put(
             &dir,
             &[
@@ -2988,7 +3016,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         let card = |body: &str| {
             format!("<!-- @dsCard group=\"Forms\" source=\"src/ui.tsx\" -->\n{body}\n")
         };
@@ -3066,7 +3094,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems").join(&slug);
+        let dir = home.path().join("design/library/systems").join(&slug);
         store.begin_sync("w1", &slug).unwrap();
         put(
             &dir,

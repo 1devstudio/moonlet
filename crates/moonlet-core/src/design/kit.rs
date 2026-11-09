@@ -87,7 +87,7 @@ mod tests {
         store
             .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
             .unwrap();
-        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        let system = home.path().join("design/library/systems/moonlet-desktop");
         let write = |rel: &str, text: &str| {
             let p = system.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -110,7 +110,7 @@ mod tests {
         // Another system's card is not this design's.
         let other = home
             .path()
-            .join("design/w1/systems/storefront/components/cart/Cart/Cart.html");
+            .join("design/library/systems/storefront/components/cart/Cart/Cart.html");
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         std::fs::write(&other, BUTTON.replace("Buttons", "Cart")).unwrap();
 

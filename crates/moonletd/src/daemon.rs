@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use moonlet_core::design::history::Take;
+use moonlet_core::design::library::LIBRARY;
 use moonlet_core::design::place::{DesignAt, Place};
 use moonlet_core::fs::Watchers;
 use moonlet_core::hooks::{self, HookPaths};
@@ -3040,9 +3041,10 @@ impl Daemon {
         blocking(move || store.write_render_check(&ws, &sl, &results)).await.map_err(RenderError::Failed)
     }
 
-    /// The lock of one design system (see `design_locks`).
-    fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.design_locks.lock().unwrap().entry(design_key(workspace, slug)).or_default().clone()
+    /// The lock of one design system (see `design_locks`): the library's
+    /// (X95), one lock whatever workspace a call names.
+    fn design_lock(&self, _workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_locks.lock().unwrap().entry(design_key(LIBRARY, slug)).or_default().clone()
     }
 
     /// One of a design's locks (X65), by what it guards (see [`DesignLock`]).
@@ -3069,9 +3071,10 @@ impl Daemon {
         }
     }
 
-    /// Refuses a workspace moonlet does not have.
+    /// Refuses a workspace moonlet does not have. The library (X95) is one:
+    /// its systems' agents run in its folders and name it.
     fn workspace_exists(&self, workspace: &str) -> Result<(), RpcError> {
-        if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
+        if workspace != LIBRARY && !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
             return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
         }
         Ok(())
@@ -3358,8 +3361,9 @@ impl Daemon {
     /// writes could go with them; none does on a design with edits waiting
     /// (the first message comes as the design is made, and a queued one
     /// after the turn's snapshot). Runs for the daemon's life.
-    /// Moves the design systems and designs of each merged workspace into
-    /// the one it merged into (X71): now, and whenever the workspaces
+    /// Moves the designs of each merged workspace into the one it merged
+    /// into (X71), after any design system still kept per workspace moved
+    /// into the library (X95): now, and whenever the workspaces
     /// change, as they do when a merge comes from another member. Runs for
     /// the daemon's life.
     pub fn follow_merges(self: &Arc<Self>) {
@@ -3386,7 +3390,35 @@ impl Daemon {
         });
     }
 
+    /// Moves the design systems kept under workspaces before X95 into the
+    /// library (X95), in the account's order of workspaces, and stops the
+    /// sync agent each one's record named: it ran in the folder that moved.
+    /// Its next Sync starts a new one in the library. Nothing to move is
+    /// quick, so it runs again with each look at merges, for a move that
+    /// failed.
+    pub async fn move_systems_to_library(&self) {
+        let order: Vec<String> = self.sessions.list_workspaces().into_iter().map(|w| w.id).collect();
+        let root = moonlet_core::paths::home().join("design");
+        let root = root.canonicalize().unwrap_or(root);
+        match self.copies.to_library(order).await {
+            Ok(moved) if !moved.is_empty() => {
+                let terminals = self.terminals.list();
+                for mv in &moved {
+                    let old = root.join(&mv.workspace).join("systems").join(&mv.from);
+                    if let Some(id) = folder_agent(&terminals, mv.agent, &old) {
+                        let _ = self.terminals.kill(id, true);
+                    }
+                }
+                tracing::info!("moved {} design systems into the library", moved.len());
+                self.copies.kick();
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("cannot move design systems into the library: {e:#}"),
+        }
+    }
+
     async fn move_merged_designs(&self) {
+        self.move_systems_to_library().await;
         for (from, into) in self.sessions.merged_workspaces() {
             self.stop_agents_in(&from).await;
             match self.copies.merge(&from, &into).await {
@@ -3400,24 +3432,18 @@ impl Daemon {
         }
     }
 
-    /// Stops the agents of workspace `from`'s design systems and designs,
-    /// whose folders a merge is about to move: their records forget them,
-    /// and a new one starts in the new place.
+    /// Stops the agents of workspace `from`'s designs, whose folders a
+    /// merge is about to move: their records forget them, and a new one
+    /// starts in the new place. Design systems are the library's (X95) and
+    /// stay, with their agents.
     async fn stop_agents_in(&self, from: &str) {
         let store = self.design.clone();
         let ws = from.to_string();
-        let (systems, designs) = blocking(move || {
-            let systems: Vec<String> = store.systems(&ws).unwrap_or_default().into_iter().map(|s| s.slug).collect();
-            let designs: Vec<String> = store.designs(&ws).unwrap_or_default().into_iter().map(|d| d.slug).collect();
-            Ok((systems, designs))
-        })
-        .await
-        .unwrap_or_default();
-        // Each only while it is still that item's agent, as its terminal
+        let designs = blocking(move || Ok(store.designs(&ws).unwrap_or_default().into_iter().map(|d| d.slug).collect::<Vec<String>>()))
+            .await
+            .unwrap_or_default();
+        // Each only while it is still that design's agent, as its terminal
         // says: a record's id may name a terminal since given to another.
-        for slug in systems {
-            self.stop_sync_agent(from, &slug);
-        }
         for slug in designs {
             let store = self.design.clone();
             let (ws, s) = (from.to_string(), slug.clone());

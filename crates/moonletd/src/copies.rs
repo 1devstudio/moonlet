@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use moonlet_core::design::library::{LIBRARY, ToLibrary};
 use moonlet_core::design::replica::{Item, Kind, Replicas};
 use moonlet_core::design::store::Store;
 use moonlet_core::session::SessionManager;
@@ -186,8 +187,26 @@ pub fn late(
 
 /// What to do, given the account's records (by id), what this member keeps
 /// (by id) and the items whose folders are on its disk. `me` is this
-/// member's worker id.
+/// member's worker id. A design system kept under a workspace, as members
+/// older than X95 keep them, is left out: the library holds every system,
+/// and that one comes once its owner moves it there.
 pub fn plan(
+    me: &str,
+    records: &BTreeMap<String, Rec>,
+    kept: &BTreeMap<String, Local>,
+    folders: &BTreeSet<Item>,
+    merged: &BTreeMap<String, String>,
+) -> Vec<Step> {
+    let current = |item: &Item| item.kind != Kind::System || item.workspace == LIBRARY;
+    let records: BTreeMap<String, Rec> =
+        records.iter().filter(|(_, r)| current(&r.item)).map(|(k, r)| (k.clone(), r.clone())).collect();
+    let kept: BTreeMap<String, Local> =
+        kept.iter().filter(|(_, l)| current(&l.item())).map(|(k, l)| (k.clone(), l.clone())).collect();
+    let folders: BTreeSet<Item> = folders.iter().filter(|i| current(i)).cloned().collect();
+    plan_current(me, &records, &kept, &folders, merged)
+}
+
+fn plan_current(
     me: &str,
     records: &BTreeMap<String, Rec>,
     kept: &BTreeMap<String, Local>,
@@ -740,13 +759,17 @@ impl DesignCopies {
             item.slug.clone(),
             to.to_string(),
         );
-        let copies: BTreeSet<String> = kept
+        // A renamed system is the library's (X95): designs of any workspace
+        // follow it, but not this member's copies of other members' designs.
+        let copies: BTreeSet<(String, String)> = kept
             .values()
-            .filter(|l| !l.owned && l.workspace == ws && l.kind == "design")
-            .map(|l| l.slug.clone())
+            .filter(|l| !l.owned && l.kind == "design")
+            .map(|l| (l.workspace.clone(), l.slug.clone()))
             .collect();
         let moved = tokio::task::spawn_blocking(move || {
-            store.rename_item(&ws, kind, &slug, Some(&to), &|d| !copies.contains(d))
+            store.rename_item(&ws, kind, &slug, Some(&to), &|w, d| {
+                !copies.contains(&(w.to_string(), d.to_string()))
+            })
         })
         .await??;
         Ok(Item {
@@ -1094,6 +1117,44 @@ impl DesignCopies {
         self.save(&kept)?;
         Ok(moved)
     }
+
+    /// Moves the design systems this member keeps under its workspaces, as
+    /// members older than X95 kept them, into the library (X95), between
+    /// rounds: its own, in the account's `order`, with their records
+    /// re-keyed to the library and their new slug; its copies of other
+    /// members' systems are deleted, and come again once their owner moves
+    /// them. Gives what moved.
+    pub async fn to_library(&self, order: Vec<String>) -> Result<Vec<ToLibrary>> {
+        let _one = self.round.lock().await;
+        let mut kept = self.load()?;
+        let old_copy = |l: &Local| !l.owned && l.kind == Kind::System.as_str() && l.workspace != LIBRARY;
+        let theirs: BTreeSet<(String, String)> = kept
+            .values()
+            .filter(|l| old_copy(l))
+            .map(|l| (l.workspace.clone(), l.slug.clone()))
+            .collect();
+        let store = self.store.clone();
+        let moved = tokio::task::spawn_blocking(move || {
+            store.move_systems_to_library(&order, &|ws, slug| !theirs.contains(&(ws.to_string(), slug.to_string())))
+        })
+        .await??;
+        kept.retain(|_, l| !old_copy(l));
+        for mv in &moved {
+            let Some((id, l)) = kept.iter_mut().find(|(_, l)| {
+                l.workspace == mv.workspace && l.kind == Kind::System.as_str() && l.slug == mv.from
+            }) else {
+                continue;
+            };
+            l.workspace = LIBRARY.to_string();
+            l.slug = mv.to.clone();
+            if l.owned {
+                self.sessions
+                    .set_design(id, &[("workspace", json!(LIBRARY)), ("slug", json!(mv.to))]);
+            }
+        }
+        self.save(&kept)?;
+        Ok(moved)
+    }
 }
 
 /// What one round knows as it goes.
@@ -1183,6 +1244,10 @@ mod tests {
         Item::system("w-1", "acme-web")
     }
 
+    fn checkout() -> Item {
+        Item::design("w-1", "checkout")
+    }
+
     fn rec(item: Item, owner: &str, tree: Option<&str>) -> Rec {
         Rec {
             item,
@@ -1207,6 +1272,28 @@ mod tests {
 
     fn folders(list: &[Item]) -> BTreeSet<Item> {
         list.iter().cloned().collect()
+    }
+
+    // X95: a member older than X95 keeps its systems under a workspace.
+    // Neither its record nor such a folder is copied, claimed or dropped:
+    // the system comes once its owner moves it into the library.
+    #[test]
+    fn a_system_kept_under_a_workspace_is_neither_copied_nor_claimed() {
+        let old = Item {
+            workspace: "w-1".into(),
+            kind: Kind::System,
+            slug: "acme-web".into(),
+        };
+        assert_eq!(
+            plan(
+                ME,
+                &records(&[("d-1", rec(old.clone(), MINI, Some("t1")))]),
+                &kept(&[]),
+                &folders(&[])
+            ),
+            vec![]
+        );
+        assert_eq!(plan(ME, &records(&[]), &kept(&[]), &folders(&[old])), vec![]);
     }
 
     #[test]
@@ -1299,28 +1386,29 @@ mod tests {
 
     #[test]
     fn a_copy_takes_a_newer_tree_follows_a_move_and_goes_with_its_record() {
-        let moved = Item::system("w-2", "acme-web");
-        let kept = kept(&[("d-1", Local::of(&acme(), Some("t1".into()), false))]);
+        // A design: a design system never moves workspace since X95.
+        let moved = Item::design("w-2", "checkout");
+        let kept = kept(&[("d-1", Local::of(&checkout(), Some("t1".into()), false))]);
         // Up to date: nothing to do.
         assert_eq!(
             plan(
                 ME,
-                &records(&[("d-1", rec(acme(), MINI, Some("t1")))]),
+                &records(&[("d-1", rec(checkout(), MINI, Some("t1")))]),
                 &kept,
-                &folders(&[acme()])
+                &folders(&[checkout()])
             ),
             vec![]
         );
         assert_eq!(
             plan(
                 ME,
-                &records(&[("d-1", rec(acme(), MINI, Some("t2")))]),
+                &records(&[("d-1", rec(checkout(), MINI, Some("t2")))]),
                 &kept,
-                &folders(&[acme()])
+                &folders(&[checkout()])
             ),
             vec![Step::Copy {
                 id: "d-1".into(),
-                item: acme(),
+                item: checkout(),
                 tree: "t2".into(),
                 from: None
             }]
@@ -1330,35 +1418,35 @@ mod tests {
                 ME,
                 &records(&[("d-1", rec(moved.clone(), MINI, Some("t1")))]),
                 &kept,
-                &folders(&[acme()])
+                &folders(&[checkout()])
             ),
             vec![Step::Copy {
                 id: "d-1".into(),
                 item: moved,
                 tree: "t1".into(),
-                from: Some(acme())
+                from: Some(checkout())
             }]
         );
         // A copy removed by hand comes back.
         assert_eq!(
             plan(
                 ME,
-                &records(&[("d-1", rec(acme(), MINI, Some("t1")))]),
+                &records(&[("d-1", rec(checkout(), MINI, Some("t1")))]),
                 &kept,
                 &folders(&[])
             ),
             vec![Step::Copy {
                 id: "d-1".into(),
-                item: acme(),
+                item: checkout(),
                 tree: "t1".into(),
                 from: None
             }]
         );
         assert_eq!(
-            plan(ME, &records(&[]), &kept, &folders(&[acme()])),
+            plan(ME, &records(&[]), &kept, &folders(&[checkout()])),
             vec![Step::Drop {
                 id: "d-1".into(),
-                item: acme(),
+                item: checkout(),
                 owned: false
             }]
         );
@@ -1442,16 +1530,17 @@ mod tests {
     #[test]
     fn an_owned_item_of_a_merged_workspace_follows_its_folder_instead_of_going() {
         // w-1 merged into w-2, which had studio-mini's acme-web, so this
-        // member's acme-web moved to acme-web-2.
-        let theirs = Item::system("w-2", "acme-web");
-        let moved = Item::system("w-2", "acme-web-2");
+        // member's checkout moved to checkout-2. (A design system is the
+        // library's since X95, and never moves with a workspace.)
+        let theirs = Item::design("w-2", "checkout");
+        let moved = Item::design("w-2", "checkout-2");
         let records = records(&[
             ("d-0", rec(theirs.clone(), MINI, Some("t0"))),
-            ("d-1", rec(acme(), ME, Some("t1"))),
+            ("d-1", rec(checkout(), ME, Some("t1"))),
         ]);
         let kept = kept(&[
             ("d-0", Local::of(&theirs, Some("t0".into()), false)),
-            ("d-1", Local::of(&acme(), Some("t1".into()), true)),
+            ("d-1", Local::of(&checkout(), Some("t1".into()), true)),
         ]);
         let merged = BTreeMap::from([("w-1".to_string(), "w-2".to_string())]);
         assert_eq!(

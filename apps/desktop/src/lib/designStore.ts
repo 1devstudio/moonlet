@@ -22,6 +22,7 @@ import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 import { cardsReloaded } from "./designView";
+import { changedWorkspaces } from "./designLibrary";
 import { changePlace, designRef, isSession, placeOfDesign, type DesignPlace } from "./designPlace";
 
 interface DesignState {
@@ -866,6 +867,30 @@ function onChatState(host: string, id: number, state: ChatState) {
   }
 }
 
+/** A Design mode change, one workspace's: its systems and designs are
+ *  listed again, and a system's cards load again, when shown. */
+function onDesignModeChange(host: string, d: DesignChanged) {
+  if (systemListing.wanted.has(wsKey(host, d.workspace))) reload(host, d.workspace);
+  if (!d.system) return;
+  const key = itemKey(host, d.workspace, d.system);
+  // Its cards load again only for what they show (X64).
+  const toLoad = cardsReloaded(d);
+  useDesign.setState((s) => {
+    const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
+    const cards = { ...revs.cards };
+    for (const path of toLoad.cards) cards[path] = (cards[path] ?? 0) + 1;
+    return {
+      changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
+      cardRevs: toLoad.all || toLoad.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (toLoad.all ? 1 : 0), cards } } : s.cardRevs,
+    };
+  });
+  // Its cards are listed again when asked for (a newer request always
+  // lands last).
+  if (cardListing.wanted.has(key)) void loadCards(host, d.workspace, d.system).catch(() => {});
+  // A session design on it may now be pinned to an older sync (X65).
+  if (designListing.wanted.has(wsKey(host, d.workspace))) reloadDesigns(host, d.workspace);
+}
+
 let started = false;
 
 export async function startDesign() {
@@ -875,27 +900,13 @@ export async function startDesign() {
     if (e.name === EV.designOpen) onDesignOpen(e.host, e.data as DesignOpen);
     else if (e.name === EV.designChanged && !isDesignModeChange(e.data as DesignChanged)) onDesignChange(e.host, e.data as DesignChanged);
     else if (e.name === EV.designChanged) {
-      const d = e.data as DesignChanged;
-      onDesignChange(e.host, d);
-      if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
-      if (d.system) {
-        const key = itemKey(e.host, d.workspace, d.system);
-        // Its cards load again only for what they show (X64).
-        const toLoad = cardsReloaded(d);
-        useDesign.setState((s) => {
-          const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
-          const cards = { ...revs.cards };
-          for (const path of toLoad.cards) cards[path] = (cards[path] ?? 0) + 1;
-          return {
-            changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
-            cardRevs: toLoad.all || toLoad.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (toLoad.all ? 1 : 0), cards } } : s.cardRevs,
-          };
-        });
-        // Its cards are listed again when asked for (a newer request always
-        // lands last).
-        if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
-        // A session design on it may now be pinned to an older sync (X65).
-        if (designListing.wanted.has(wsKey(e.host, d.workspace))) reloadDesigns(e.host, d.workspace);
+      const change = e.data as DesignChanged;
+      // A library design system's change is every workspace's (X95).
+      const workspaces = (useStore.getState().workspaces[e.host] ?? []).map((w) => w.id);
+      for (const workspace of changedWorkspaces(change, workspaces)) {
+        const d = { ...change, workspace };
+        onDesignChange(e.host, d);
+        onDesignModeChange(e.host, d);
       }
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };

@@ -318,7 +318,8 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
                 return reply(404, "no such design file");
             };
             let design = moonlet_core::paths::home().join("design");
-            match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await {
+            let rel = path.clone();
+            match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &rel, &real)).await {
                 Ok(Ok(body)) => body,
                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return reply(404, "the file is missing"),
                 _ => return reply(404, "the file cannot be read"),
@@ -349,13 +350,22 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
 /// The bytes of `path`, opened first and then checked: the file opened must
 /// be inside `workspace`'s folder of the design root `design`, measured from
 /// the design root's real path, so neither a link in the folder nor a
-/// workspace folder that is itself a link leads anywhere else.
+/// workspace folder that is itself a link leads anywhere else. A file asked
+/// as `systems/…` (`rel`, the path in the address) is the library's (X95),
+/// and must be inside the library's `systems/` instead.
 pub fn read_inside(
     design: &std::path::Path,
     workspace: &str,
+    rel: &str,
     path: &std::path::Path,
 ) -> std::io::Result<Vec<u8>> {
-    read_opened(&std::fs::canonicalize(design)?.join(workspace), path)
+    let root = std::fs::canonicalize(design)?;
+    let bound = if rel.starts_with("systems/") {
+        root.join(moonlet_core::design::library::LIBRARY).join("systems")
+    } else {
+        root.join(workspace)
+    };
+    read_opened(&bound, path)
 }
 
 /// The bytes `design.file` gives with a file, its `content` in base64 (a
@@ -765,13 +775,53 @@ mod tests {
         std::fs::create_dir(design.path().join("w3")).unwrap();
         std::fs::write(design.path().join("w3/card.html"), "<p>w3</p>").unwrap();
         assert_eq!(
-            read_inside(design.path(), "w1", &w1.join("card.html")).unwrap(),
+            read_inside(design.path(), "w1", "card.html", &w1.join("card.html")).unwrap(),
             b"<p>card</p>"
         );
-        assert!(read_inside(design.path(), "w1", &w1.join("link.html")).is_err());
-        assert!(read_inside(design.path(), "w1", &w1.join("dir/secret.txt")).is_err());
-        assert!(read_inside(design.path(), "w2", &design.path().join("w2/secret.txt")).is_err());
-        assert!(read_inside(design.path(), "w1", &design.path().join("w3/card.html")).is_err());
+        assert!(read_inside(design.path(), "w1", "link.html", &w1.join("link.html")).is_err());
+        assert!(read_inside(design.path(), "w1", "dir/secret.txt", &w1.join("dir/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w2", "secret.txt", &design.path().join("w2/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w1", "card.html", &design.path().join("w3/card.html")).is_err());
+    }
+
+    #[test]
+    fn a_workspaces_systems_file_is_read_from_the_librarys_systems_and_no_other_library_file() {
+        let design = tempfile::tempdir().unwrap();
+        let library = design.path().join("library");
+        std::fs::create_dir_all(library.join("systems/acme-web")).unwrap();
+        std::fs::create_dir_all(library.join("designs/pricing")).unwrap();
+        std::fs::write(library.join("systems/acme-web/styles.css"), "a{}").unwrap();
+        std::fs::write(library.join("designs/pricing/index.html"), "<p>shared</p>").unwrap();
+        std::fs::create_dir(design.path().join("w1")).unwrap();
+        // A design page of w1 links ../../../systems/acme-web/styles.css (X95).
+        assert_eq!(
+            read_inside(
+                design.path(),
+                "w1",
+                "systems/acme-web/styles.css",
+                &library.join("systems/acme-web/styles.css")
+            )
+            .unwrap(),
+            b"a{}"
+        );
+        assert!(
+            read_inside(
+                design.path(),
+                "w1",
+                "systems/../designs/pricing/index.html",
+                &library.join("designs/pricing/index.html")
+            )
+            .is_err()
+        );
+        assert!(
+            read_inside(
+                design.path(),
+                "w1",
+                "designs/pricing/index.html",
+                &library.join("designs/pricing/index.html")
+            )
+            .is_err()
+        );
     }
 
     #[test]

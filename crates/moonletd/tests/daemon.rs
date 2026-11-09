@@ -2370,7 +2370,7 @@ async fn design_systems_over_rpc() {
         .await
         .unwrap();
     assert_eq!((created["slug"].as_str(), created["agent"].as_u64()), (Some("moonlet-desktop"), None));
-    let config = std::fs::read_to_string(d.home.path().join("design").join(w).join("systems/moonlet-desktop/config.toml")).unwrap();
+    let config = std::fs::read_to_string(d.home.path().join("design").join("library").join("systems/moonlet-desktop/config.toml")).unwrap();
     assert!(config.contains("cover = \"all\""), "{config}");
     let bad = c
         .request::<_, serde_json::Value>(
@@ -2380,7 +2380,7 @@ async fn design_systems_over_rpc() {
         .await;
     assert!(bad.is_err());
     let slug = "moonlet-desktop".to_string();
-    let dir = d.home.path().join("design").join(w).join("systems/moonlet-desktop");
+    let dir = d.home.path().join("design").join("library").join("systems/moonlet-desktop");
     for (path, text) in [
         ("styles.css", "@import \"components.css\";\n"),
         ("components.css", ".btn { color: var(--color-fg); }\n"),
@@ -2506,7 +2506,7 @@ async fn a_new_design_system_starts_its_sync_agent() {
     assert_eq!(created["agent_error"], serde_json::Value::Null);
     let agent = created["agent"].as_u64().expect("an agent") as u32;
 
-    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    let dir = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     let real_repo = repo.canonicalize().unwrap().display().to_string();
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
@@ -2564,7 +2564,7 @@ async fn a_new_design_system_starts_its_sync_agent() {
         .await
         .unwrap();
     let other_agent = other["agent"].as_u64().expect("an agent");
-    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/moonlet-desktop.toml");
+    let record = d.home.path().join(".moonlet/design").join("library").join(".records/moonlet-desktop.toml");
     let text = std::fs::read_to_string(&record).unwrap();
     let text = text.replace(&format!("agent = {agent}"), &format!("agent = {other_agent}"));
     std::fs::write(&record, text).unwrap();
@@ -2639,7 +2639,7 @@ async fn workspace_with_system(d: &HomeDaemon, c: &mut Client) -> String {
         )
         .await
         .unwrap();
-    let system = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::write(system.join("README.md"), "# moonlet desktop\n\nLink styles.css; buttons are .btn.\n").unwrap();
     ws.id
 }
@@ -2674,7 +2674,7 @@ async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
         .unwrap();
     let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
     let real_dir = dir.canonicalize().unwrap().display().to_string();
-    let real_system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop").canonicalize().unwrap().display().to_string();
+    let real_system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop").canonicalize().unwrap().display().to_string();
     assert_eq!(
         (&created["slug"], &created["name"], &created["kind"], &created["system"], &created["agent_error"]),
         (&serde_json::json!("settings-page"), &serde_json::json!("Settings page"), &serde_json::json!("workspace"), &serde_json::json!("moonlet-desktop"), &serde_json::Value::Null)
@@ -3028,7 +3028,7 @@ async fn a_designs_kit_gives_its_systems_tokens_and_snippet_cards() {
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
         .await
         .unwrap();
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::create_dir_all(system.join("tokens")).unwrap();
     std::fs::write(system.join("styles.css"), "@import \"tokens/scale.css\";\n").unwrap();
     std::fs::write(system.join("tokens/scale.css"), ":root { --space-4: 16px; }\n").unwrap();
@@ -3194,7 +3194,7 @@ async fn a_design_source_never_reaches_outside_its_project() {
     let created: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, create("mobile", "apps/mobile")).await.unwrap();
     assert_eq!(created["slug"], "mobile");
     // A record that names a folder outside the project anyway.
-    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/mobile.toml");
+    let record = d.home.path().join(".moonlet/design").join("library").join(".records/mobile.toml");
     let text = std::fs::read_to_string(&record).unwrap();
     assert!(text.contains("subdir = \"apps/mobile\""), "{text}");
     std::fs::write(&record, text.replace("subdir = \"apps/mobile\"", "subdir = \"apps/out\"")).unwrap();
@@ -3226,7 +3226,7 @@ async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_
         .unwrap();
     let agent = created["agent"].as_u64().expect("an agent");
     // The agent renames the system in the file it may edit.
-    let config = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/storefront/config.toml");
+    let config = d.home.path().join(".moonlet/design").join("library").join("systems/storefront/config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     std::fs::write(&config, text.replace("name = \"storefront\"", "name = \"shop\"")).unwrap();
     let again: serde_json::Value =
@@ -3261,7 +3261,7 @@ async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
         .await
         .unwrap();
     // Enough files that recording the sync takes a while.
-    let assets = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing/assets");
+    let assets = d.home.path().join(".moonlet/design").join("library").join("systems/pricing/assets");
     std::fs::create_dir_all(&assets).unwrap();
     let body = "x".repeat(16 * 1024);
     for i in 0..2000 {
@@ -3302,7 +3302,7 @@ async fn a_card_edited_by_hand_before_sync_is_not_changed_by_that_sync() {
         )
         .await
         .unwrap();
-    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing");
+    let dir = d.home.path().join(".moonlet/design").join("library").join("systems/pricing");
     let put = |path: &str, body: &str| {
         std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
         std::fs::write(dir.join(path), format!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n{body}\n")).unwrap();
@@ -3376,11 +3376,12 @@ async fn a_file_written_in_a_design_system_is_announced() {
         .await
         .unwrap();
     let mut listener = d.client().await;
-    let card = d.home.path().join("design").join(&ws.id).join("systems/storefront/components/buttons/button/button.html");
+    let card = d.home.path().join("design").join("library").join("systems/storefront/components/buttons/button/button.html");
     std::fs::create_dir_all(card.parent().unwrap()).unwrap();
     std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
     let data = next_change_of(&mut listener, "components/buttons/button/button.html").await;
-    assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
+    // A design system is the library's (X95).
+    assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some("library"), Some("storefront")));
 }
 
 /// X65: a page written in a workspace design reaches every client as
@@ -3413,7 +3414,7 @@ async fn render_fixture(d: &TestDaemon) -> (Client, String, PathBuf) {
         .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}))
         .await
         .unwrap();
-    let dir = d.home.path().join("design").join(&ws.id).join("systems/storefront");
+    let dir = d.home.path().join("design").join("library").join("systems/storefront");
     for (path, text) in [
         ("styles.css", "@import \"components.css\";\n"),
         ("components.css", ".btn { color: red; }\n"),
@@ -4393,7 +4394,7 @@ async fn a_design_removed_while_its_edits_by_hand_wait_for_quiet_does_not_come_b
 async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, &str)]) -> (String, moonlet_proto::types::Project, moonlet_proto::types::Session) {
     use moonlet_proto::types::{Project, Section, Session};
     let ws = workspace_with_system(d, c).await;
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     for (path, text) in [
         ("styles.css", "@import \"tokens/colors.css\";\n"),
         ("tokens/colors.css", ":root { --color-accent: #3b82f6; }\n"),
@@ -4847,7 +4848,7 @@ async fn a_session_design_is_marked_when_its_design_system_syncs_and_update_brin
     let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     assert_eq!(session_design(&list).get("system_updated"), None);
 
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
     std::fs::write(system.join("components/buttons/button/button.html"), "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n").unwrap();
     std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
@@ -5153,7 +5154,7 @@ async fn a_design_file_is_found_only_through_a_workspace_or_a_session_moonlet_ha
     let (_, _, session) = workspace_with_session(&d, &mut c, &[]).await;
     let gone = workspace_with_system(&d, &mut c).await;
     let _: bool = c.request(methods::WORKSPACE_DELETE, serde_json::json!({"id": gone})).await.unwrap();
-    let left = d.home.path().join(".moonlet/design").join(&gone).join("systems/moonlet-desktop/README.md");
+    let left = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop/README.md");
     assert!(left.is_file(), "the gone workspace's design folder is still there");
     let path = "systems/moonlet-desktop/README.md";
     for (call, refusal) in [
@@ -5642,4 +5643,40 @@ async fn a_workers_link_neither_lists_nor_stops_a_sessions_processes() {
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
     let listed: serde_json::Value = cli.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
     assert!(listed["processes"].is_array(), "{listed}");
+}
+
+/// X95: a daemon started on a home whose design systems are still kept per
+/// workspace moves them into the library. The account's first workspace
+/// keeps a slug both use; the other's becomes `<slug>-2`, and its designs
+/// follow it.
+#[tokio::test]
+async fn systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts() {
+    use moonlet_proto::types::Workspace;
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let first: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay"})).await.unwrap();
+    let second: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "clay"})).await.unwrap();
+    drop(c);
+    let design = d.home.path().join(".moonlet/design");
+    for ws in [&first.id, &second.id] {
+        let dir = design.join(ws).join("systems/acme-web");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "name = \"Acme web\"\ncreated_at = 1\n").unwrap();
+        std::fs::write(dir.join("styles.css"), format!("/* {} */\n", if ws == &first.id { "app" } else { "site" })).unwrap();
+    }
+    let pricing = design.join(&second.id).join("designs/pricing");
+    std::fs::create_dir_all(pricing.join("pages")).unwrap();
+    std::fs::write(pricing.join("design.toml"), "name = \"Pricing\"\nsystem = \"acme-web\"\n").unwrap();
+
+    d.restart().await;
+
+    let mut c = d.client().await;
+    let systems: Vec<serde_json::Value> = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": second.id})).await.unwrap();
+    let names: Vec<(&str, &str)> = systems.iter().map(|s| (s["slug"].as_str().unwrap(), s["name"].as_str().unwrap())).collect();
+    assert_eq!(names, vec![("acme-web", "Acme web"), ("acme-web-2", "Acme web 2")]);
+    assert_eq!(std::fs::read_to_string(design.join("library/systems/acme-web/styles.css")).unwrap(), "/* app */\n");
+    assert_eq!(std::fs::read_to_string(design.join("library/systems/acme-web-2/styles.css")).unwrap(), "/* site */\n");
+    let designs: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": second.id})).await.unwrap();
+    assert_eq!(designs[0]["system"], "acme-web-2");
+    assert!(!design.join(&second.id).join("systems").exists());
 }

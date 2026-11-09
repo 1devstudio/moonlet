@@ -326,7 +326,10 @@ fn run_daemon(
         mobile::spawn(daemon.clone());
         // A design's snapshot when its agent ends a turn (X65).
         daemon.snapshot_agent_turns();
-        // Design systems and designs follow a merged workspace (X71).
+        // Design systems kept per workspace move into the library (X95),
+        // before their copies are looked at.
+        daemon.move_systems_to_library().await;
+        // Designs follow a merged workspace (X71).
         daemon.follow_merges();
         // Design systems and designs on every member of the account (X71).
         daemon.keep_design_copies();
