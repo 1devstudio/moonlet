@@ -70,7 +70,7 @@ The hierarchy becomes **Workspace › Section › Project › Session › Termin
 
 Taken from the design:
 
-- **Switcher button:** an 18 px rounded square in the workspace colour with the initial (the name's first letter, upper case), the name in 13 px semibold, and an up-down chevron. It shows the hover background while the menu is open. In a narrow sidebar the name truncates, and the button never runs under the mode switch beside it; at the sidebar's narrowest (200 px) it clips the square and chevron inside its own box. Its tooltip gives the full name. (`workspace-switcher-layout.e2e.ts`)
+- **Switcher button:** an 18 px rounded square in the workspace colour with the initial (the name's first letter, upper case), the name in 13 px semibold, and an up-down chevron. It shows the hover background while the menu is open. In a narrow sidebar the name truncates, and the button never runs under the mode switch beside it. The sidebar is 260 to 420 px wide, so at its narrowest the square, the attention dot and the chevron still fit; a width saved narrower opens at 260 px. Its tooltip gives the full name. (`sidebar.test.ts` clampSidebarWidth; `workspace-switcher-layout.e2e.ts`)
 - **Switcher menu:** 256 px wide, under the button. A "Workspaces" label, then one row per workspace: a 26 px colour square with the initial, the name, a summary line ("2 sections · 7 sessions · work profile"), a check on the current one, and its shortcut (⌃⌘1). Then a divider, **New workspace…**, **Workspace settings…**, and a footer line "Switch ⌃⌘1–9". Clicking outside or Escape closes it.
 - **New workspace dialog:** 440 px.
   - Name, with a 36 px colour square showing the initial next to it.

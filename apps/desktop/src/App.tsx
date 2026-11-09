@@ -28,6 +28,7 @@ import { loadTrackersConfig, shareTasksWithPhones } from "./lib/tasksStore";
 import { modeOf } from "./lib/mode";
 import { sessionDesignsOf, startDesign, useDesign } from "./lib/designStore";
 import { designPanelWidth } from "./lib/sessionDesign";
+import { clampSidebarWidth } from "./lib/sidebar";
 import { startEditor } from "./lib/designEditor";
 import { DesignMain } from "./components/design/DesignMode";
 import { OlderHostsAnnouncer } from "./components/HostUpdate";
@@ -179,7 +180,6 @@ export default function App() {
     document.documentElement.style.setProperty("--ui-scale", String(scale));
   }, [scale]);
 
-  const clampSide = (w: number) => Math.max(200, Math.min(420, w));
   const clampRight = (w: number) => Math.max(320, Math.min(window.innerWidth * 0.6, w));
   // A session's Design tab (X65) takes more room: its canvas beside the chat.
   const rightWidth = designTab ? designPanelWidth(designWidth, window.innerWidth) : s.rightWidth;
@@ -194,7 +194,7 @@ export default function App() {
           <div style={{ width: s.sidebarWidth }} className="shrink-0" inert={!!s.settingsPage}>
             <Sidebar />
           </div>
-          <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSide(st.sidebarWidth + d) }))} />
+          <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSidebarWidth(st.sidebarWidth + d) }))} />
         </>
       )}
       <main className="relative min-w-0 flex-1" inert={!!s.settingsPage}>

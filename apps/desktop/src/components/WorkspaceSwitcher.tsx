@@ -75,9 +75,10 @@ export function WorkspaceSwitcher() {
   if (!cur) return null;
   return (
     // A flex row, so the button shrinks with a narrow sidebar and truncates
-    // the name instead of running under the mode switch. At the sidebar's
-    // narrowest (200px) there is less room than the mark and chevron take, so
-    // the button clips them inside its own box; the title gives the full name.
+    // the name instead of running under the mode switch; the title gives the
+    // full name. The sidebar's minimum leaves room for the square and chevron
+    // (clampSidebarWidth); where it doesn't, as at a large interface scale,
+    // the button clips them inside its own box.
     <div className="no-drag relative flex min-w-0">
       <button
         aria-haspopup="menu"

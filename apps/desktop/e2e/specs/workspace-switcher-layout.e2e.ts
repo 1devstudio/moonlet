@@ -51,13 +51,16 @@ describe("workspace switcher layout", () => {
     await sidebarWidth(width);
   });
 
-  it("truncates the workspace name beside the mode switch in a narrow sidebar", async () => {
-    // The narrowest the sidebar goes.
+  it("truncates the workspace name beside the mode switch in the narrowest sidebar, keeping its square and chevron whole", async () => {
+    // A width saved before the minimum went up opens at the minimum.
     await sidebarWidth(200);
     await expect($(switcher)).toBeDisplayed({ wait: 30_000 });
-    expect((await box("//aside")).width).toBe(200);
+    expect((await box("//aside")).width).toBe(260);
 
-    const mode = await box('//div[@role="group"][@aria-label="Mode"]');
-    expect((await box(switcher)).right).toBeLessThanOrEqual(mode.left);
+    const button = await box(switcher);
+    expect(button.right).toBeLessThanOrEqual((await box('//div[@role="group"][@aria-label="Mode"]')).left);
+    // The square and the chevron are inside the button, not clipped by it.
+    expect((await box(`${switcher}/span[1]`)).left).toBeGreaterThanOrEqual(button.left);
+    expect((await box(`${switcher}/*[name()="svg"][last()]`)).right).toBeLessThanOrEqual(button.right);
   });
 });

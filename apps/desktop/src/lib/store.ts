@@ -3,6 +3,7 @@
 
 import { create } from "zustand";
 import type { RowStyle } from "./sessionRows";
+import { clampSidebarWidth } from "./sidebar";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -128,6 +129,8 @@ function loadJson<T>(key: string, fallback: T): T {
     // Defaults from older versions (wider review panel).
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
     if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
+    // A width saved before the sidebar's minimum went up (X32).
+    if (key === UI_KEY && typeof (v as { sidebarWidth?: unknown }).sidebarWidth === "number") (v as { sidebarWidth: number }).sidebarWidth = clampSidebarWidth((v as { sidebarWidth: number }).sidebarWidth);
     // Tasks mode from older versions, a flag per workspace (X45).
     if (v && typeof v === "object" && "tasksMode" in v) {
       const old = v as { tasksMode?: Record<string, boolean>; mode?: Record<string, string> };

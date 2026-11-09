@@ -5,6 +5,13 @@ import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace 
 import { agentCount } from "./subagents";
 import { parseCopyHost } from "./copyHost";
 
+/**
+ * The sidebar's width, from 260px, where the workspace switcher's square,
+ * attention dot and chevron fit beside the traffic lights and the mode
+ * switch (X32), to 420px.
+ */
+export const clampSidebarWidth = (w: number) => Math.max(260, Math.min(420, w));
+
 export interface Group {
   key: string;
   kind: "project" | "status" | "task" | "all";
