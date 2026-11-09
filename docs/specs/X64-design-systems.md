@@ -346,7 +346,7 @@ Every call names an existing moonlet workspace, or fails with `invalid_params` (
 - Design systems on remote hosts. Sources must be on this Mac.
 - Agents other than Claude Code. The sync relies on Claude Code's skills, subagents, `--add-dir` and its reading of screenshots (ADR 0013).
 - Screenshots from outside the app (headless Chrome, Playwright).
-- Sharing a design system between workspaces. Copying the folder works, but moonlet offers no UI for it.
+- Sharing a design system between workspaces. Since X95, every workspace sees every design system.
 
 ## Test plan
 
