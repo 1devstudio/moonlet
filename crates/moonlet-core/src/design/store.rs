@@ -316,10 +316,7 @@ impl Store {
         if !is_name(slug) {
             bail!("bad design system \"{slug}\"");
         }
-        Ok(self
-            .workspace(LIBRARY)?
-            .join(".records")
-            .join(format!("{slug}.toml")))
+        Ok(record_file(&self.workspace(LIBRARY)?.join(".records"), slug))
     }
 
     /// The chat of the system's sync agent, kept for the app's Open agent
@@ -974,6 +971,12 @@ pub(super) fn not_a_link(dir: &Path) -> Result<()> {
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
+/// The record of item `slug` in a records folder (`.records`, or
+/// `.records/designs` for designs).
+pub(super) fn record_file(records: &Path, slug: &str) -> PathBuf {
+    records.join(format!("{slug}.toml"))
+}
+
 pub(super) fn is_name(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\'])
 }

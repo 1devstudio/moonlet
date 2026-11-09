@@ -197,12 +197,11 @@ pub fn plan(
     folders: &BTreeSet<Item>,
     merged: &BTreeMap<String, String>,
 ) -> Vec<Step> {
-    let current = |item: &Item| item.kind != Kind::System || item.workspace == LIBRARY;
     let records: BTreeMap<String, Rec> =
-        records.iter().filter(|(_, r)| current(&r.item)).map(|(k, r)| (k.clone(), r.clone())).collect();
+        records.iter().filter(|(_, r)| !r.item.kept_per_workspace()).map(|(k, r)| (k.clone(), r.clone())).collect();
     let kept: BTreeMap<String, Local> =
-        kept.iter().filter(|(_, l)| current(&l.item())).map(|(k, l)| (k.clone(), l.clone())).collect();
-    let folders: BTreeSet<Item> = folders.iter().filter(|i| current(i)).cloned().collect();
+        kept.iter().filter(|(_, l)| !l.item().kept_per_workspace()).map(|(k, l)| (k.clone(), l.clone())).collect();
+    let folders: BTreeSet<Item> = folders.iter().filter(|i| !i.kept_per_workspace()).cloned().collect();
     plan_current(me, &records, &kept, &folders, merged)
 }
 
@@ -1127,7 +1126,7 @@ impl DesignCopies {
     pub async fn to_library(&self, order: Vec<String>) -> Result<Vec<ToLibrary>> {
         let _one = self.round.lock().await;
         let mut kept = self.load()?;
-        let old_copy = |l: &Local| !l.owned && l.kind == Kind::System.as_str() && l.workspace != LIBRARY;
+        let old_copy = |l: &Local| !l.owned && l.item().kept_per_workspace();
         let theirs: BTreeSet<(String, String)> = kept
             .values()
             .filter(|l| old_copy(l))

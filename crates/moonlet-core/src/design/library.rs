@@ -8,19 +8,20 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::fsx;
-use super::merge::{folders, follow_system};
-use super::store::{CONFIG, Record, Store, is_name, read_config, read_record};
+use super::merge::{folders, follow_system, number};
+use super::store::{CONFIG, Record, Store, is_name, read_config, read_record, record_file};
 
 /// The folder of the library under `~/.moonlet/design`. A workspace id is
 /// 12 hex digits, so it is never this.
 pub const LIBRARY: &str = "library";
 
-/// Where the move from workspaces keeps the systems it renamed, by
-/// workspace, until that workspace's designs follow them.
+/// Where the move from workspaces keeps each system it moved, until the
+/// daemon has finished what follows the move (see
+/// [`Store::library_move_done`]).
 const JOURNAL: &str = "move.toml";
 
 /// One system the move took from a workspace into the library.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToLibrary {
     pub workspace: String,
     pub from: String,
@@ -28,13 +29,14 @@ pub struct ToLibrary {
     pub to: String,
     /// The chat of its sync agent, which its record named before the move
     /// forgot it: it ran in the folder that moved away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<u32>,
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Journal {
     #[serde(default)]
-    renamed: BTreeMap<String, BTreeMap<String, String>>,
+    moved: Vec<ToLibrary>,
 }
 
 impl Store {
@@ -45,44 +47,61 @@ impl Store {
     /// it and a later one takes the next free number (`acme-web-2`, named
     /// "Acme web 2"); that workspace's designs follow it. A system `owns`
     /// says is not this member's (a copy of another member's, X71) is
-    /// deleted, not moved: its owner moves it. A move stopped midway
-    /// finishes on the next call, and nothing to move is not an error.
+    /// deleted, not moved: its owner moves it. Each move is noted in a
+    /// journal before it is made, so a move stopped midway finishes on the
+    /// next call, and every call gives every move the journal holds, until
+    /// [`Store::library_move_done`] says what follows them is done too.
+    /// Nothing to move is not an error.
     pub fn move_systems_to_library(
         &self,
         order: &[String],
         owns: &dyn Fn(&str, &str) -> bool,
     ) -> Result<Vec<ToLibrary>> {
         let root = self.root()?.to_path_buf();
-        let journal = self.workspace(LIBRARY)?.join(".records").join(JOURNAL);
-        let mut renamed = read_journal(&journal)?;
-        let mut moved = Vec::new();
+        let library = self.workspace(LIBRARY)?;
+        let journal = library.join(".records").join(JOURNAL);
+        let mut moved = read_journal(&journal)?;
         for ws in self.workspace_folders(order)? {
             let src = self.workspace(&ws)?;
             for slug in folders(&src.join("systems"))? {
+                let record = record_file(&src.join(".records"), &slug);
                 if !owns(&ws, &slug) {
                     fsx::remove_dir_inside(&root, &src.join("systems").join(&slug))?;
-                    let record = src.join(".records").join(format!("{slug}.toml"));
                     if std::fs::symlink_metadata(&record).is_ok() {
                         fsx::remove_file_inside(&root, &record)?;
                     }
                     continue;
                 }
-                let taken = renamed.get(&ws).and_then(|r| r.get(&slug)).cloned();
-                let to = match taken {
-                    Some(to) => to,
-                    None => self.free_slug(LIBRARY, "systems", ".records", &slug)?,
+                let noted = moved
+                    .iter()
+                    .find(|m| m.workspace == ws && m.from == slug)
+                    .cloned();
+                let mv = match noted {
+                    Some(mv) => mv,
+                    None => {
+                        let agent = match std::fs::symlink_metadata(&record) {
+                            Ok(_) => read_record::<Record>(&record)?.agent,
+                            Err(_) => None,
+                        };
+                        let mv = ToLibrary {
+                            workspace: ws.clone(),
+                            to: self.free_slug(LIBRARY, "systems", ".records", &slug)?,
+                            from: slug.clone(),
+                            agent,
+                        };
+                        moved.push(mv.clone());
+                        // The library's folder, for the journal's first note.
+                        self.kind_dir(LIBRARY, "systems", true)?;
+                        write_journal(&library, &journal, &moved)?;
+                        mv
+                    }
                 };
-                if to != slug {
-                    renamed
-                        .entry(ws.clone())
-                        .or_default()
-                        .insert(slug.clone(), to.clone());
-                    write_journal(&self.workspace(LIBRARY)?, &journal, &renamed)?;
+                if mv.to != slug {
                     // Named before it moves, so a stop midway leaves the
                     // number on it once.
                     let dir = src.join("systems").join(&slug);
                     let mut config = read_config(&dir)?;
-                    let suffix = format!(" {}", &to[slug.len() + 1..]);
+                    let suffix = format!(" {}", number(&slug, &mv.to));
                     if !config.name.ends_with(&suffix) {
                         config.name.push_str(&suffix);
                         fsx::write_inside(
@@ -92,32 +111,34 @@ impl Store {
                         )?;
                     }
                 }
-                let record = src.join(".records").join(format!("{slug}.toml"));
-                let agent = match std::fs::symlink_metadata(&record) {
-                    Ok(_) => read_record::<Record>(&record)?.agent,
-                    Err(_) => None,
-                };
-                self.move_item(&root, &ws, LIBRARY, "systems", &slug, &to, ".records")?;
-                moved.push(ToLibrary {
-                    workspace: ws.clone(),
-                    from: slug,
-                    to,
-                    agent,
-                });
+                self.move_item(&root, &ws, LIBRARY, "systems", &slug, &mv.to, ".records")?;
             }
-            if let Some(names) = renamed.get(&ws) {
+            let names: BTreeMap<String, String> = moved
+                .iter()
+                .filter(|m| m.workspace == ws && m.to != m.from)
+                .map(|m| (m.from.clone(), m.to.clone()))
+                .collect();
+            if !names.is_empty() {
                 for design in folders(&src.join("designs"))? {
-                    follow_system(&src.join("designs").join(&design), names)?;
+                    follow_system(&src.join("designs").join(&design), &names)?;
                 }
             }
             // Only a folder left empty goes.
             let _ = std::fs::remove_dir(src.join("systems"));
         }
-        match std::fs::remove_file(&journal) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
-        }
         Ok(moved)
+    }
+
+    /// Ends the move into the library: what follows each move (its record
+    /// re-keyed, its agent stopped, open sessions' designs following a new
+    /// slug) is done, so the next call to
+    /// [`Store::move_systems_to_library`] gives it no more.
+    pub fn library_move_done(&self) -> Result<()> {
+        let journal = self.workspace(LIBRARY)?.join(".records").join(JOURNAL);
+        match std::fs::remove_file(&journal) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
     }
 
     /// The workspaces' folders under `~/.moonlet/design`: those in `order`
@@ -135,21 +156,17 @@ impl Store {
     }
 }
 
-fn read_journal(path: &Path) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+fn read_journal(path: &Path) -> Result<Vec<ToLibrary>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(toml::from_str::<Journal>(&text)?.renamed),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Ok(text) => Ok(toml::from_str::<Journal>(&text)?.moved),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e.into()),
     }
 }
 
-fn write_journal(
-    library: &Path,
-    path: &Path,
-    renamed: &BTreeMap<String, BTreeMap<String, String>>,
-) -> Result<()> {
+fn write_journal(library: &Path, path: &Path, moved: &[ToLibrary]) -> Result<()> {
     let journal = Journal {
-        renamed: renamed.clone(),
+        moved: moved.to_vec(),
     };
     fsx::write_inside(library, path, toml::to_string(&journal)?.as_bytes())
 }
@@ -301,8 +318,15 @@ mod tests {
         );
         assert_eq!(store.designs("f6e5d4c3b2a1").unwrap()[0].system, "acme-web");
         assert!(!h.join("design/a1b2c3d4e5f6/systems").exists());
-        assert!(!h.join("design/library/.records/move.toml").exists());
-        // Nothing is left to move.
+        // Until the daemon says it finished what follows, the next call
+        // gives the same moves again; then nothing is left to move.
+        assert_eq!(
+            store
+                .move_systems_to_library(&["a1b2c3d4e5f6".into()], &|_, _| true)
+                .unwrap(),
+            moved
+        );
+        store.library_move_done().unwrap();
         assert_eq!(
             store
                 .move_systems_to_library(&["a1b2c3d4e5f6".into()], &|_, _| true)
@@ -321,7 +345,7 @@ mod tests {
         old_design(h, "a1b2c3d4e5f6", "pricing", "acme-web");
         std::fs::write(
             h.join("design/library/.records/move.toml"),
-            "[renamed.a1b2c3d4e5f6]\nacme-web = \"acme-web-2\"\n",
+            "[[moved]]\nworkspace = \"a1b2c3d4e5f6\"\nfrom = \"acme-web\"\nto = \"acme-web-2\"\n",
         )
         .unwrap();
         let store = Store::new(h);
@@ -352,7 +376,7 @@ mod tests {
         old_design(h, "a1b2c3d4e5f6", "pricing", "acme-web");
         std::fs::write(
             h.join("design/library/.records/move.toml"),
-            "[renamed.a1b2c3d4e5f6]\nacme-web = \"acme-web-2\"\n",
+            "[[moved]]\nworkspace = \"a1b2c3d4e5f6\"\nfrom = \"acme-web\"\nto = \"acme-web-2\"\n",
         )
         .unwrap();
         let store = Store::new(h);
@@ -361,12 +385,20 @@ mod tests {
             .move_systems_to_library(&["a1b2c3d4e5f6".into()], &|_, _| true)
             .unwrap();
 
-        assert_eq!(moved, vec![]);
+        // The move done before the stop is given again, for what follows it.
+        assert_eq!(
+            moved,
+            vec![ToLibrary {
+                workspace: "a1b2c3d4e5f6".into(),
+                from: "acme-web".into(),
+                to: "acme-web-2".into(),
+                agent: None
+            }]
+        );
         assert_eq!(
             store.designs("a1b2c3d4e5f6").unwrap()[0].system,
             "acme-web-2"
         );
-        assert!(!h.join("design/library/.records/move.toml").exists());
     }
 
     #[test]

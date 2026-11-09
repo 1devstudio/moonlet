@@ -66,6 +66,12 @@ impl Item {
         }
     }
 
+    /// A design system kept under a workspace, as members older than X95
+    /// keep them: the library holds every system now (X95).
+    pub fn kept_per_workspace(&self) -> bool {
+        self.kind == Kind::System && self.workspace != LIBRARY
+    }
+
     pub fn design(workspace: &str, slug: &str) -> Item {
         Item {
             workspace: workspace.into(),

@@ -3409,6 +3409,11 @@ impl Daemon {
                         let _ = self.terminals.kill(id, true);
                     }
                 }
+                // Only now: until then, the next look gives these moves again.
+                let store = self.design.clone();
+                if let Err(e) = blocking(move || store.library_move_done()).await {
+                    tracing::warn!("cannot end the move into the library: {}", e.message);
+                }
                 tracing::info!("moved {} design systems into the library", moved.len());
                 self.copies.kick();
             }

@@ -12,7 +12,7 @@ use super::designs::{DESIGN_FILE, read_design_config};
 use super::fsx;
 use super::library::LIBRARY;
 use super::place::DesignAt;
-use super::store::{CONFIG, Store, is_name, read_config};
+use super::store::{CONFIG, Store, is_name, read_config, record_file};
 
 /// Which items a move took, and the slug each has now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +85,7 @@ impl Store {
         let recs = self.workspace(workspace)?.join(records);
         let taken = |s: &str| {
             std::fs::symlink_metadata(dest.join(s)).is_ok()
-                || std::fs::symlink_metadata(recs.join(format!("{s}.toml"))).is_ok()
+                || std::fs::symlink_metadata(record_file(&recs, s)).is_ok()
         };
         let mut n = 1;
         loop {
@@ -119,14 +119,8 @@ impl Store {
     ) -> Result<()> {
         let src = self.kind_dir(from, kind, false)?.join(slug);
         let dest = self.kind_dir(into, kind, true)?.join(to);
-        let record = self
-            .workspace(from)?
-            .join(records)
-            .join(format!("{slug}.toml"));
-        let moved_record = self
-            .workspace(into)?
-            .join(records)
-            .join(format!("{to}.toml"));
+        let record = record_file(&self.workspace(from)?.join(records), slug);
+        let moved_record = record_file(&self.workspace(into)?.join(records), to);
         let bytes = match std::fs::read(&record) {
             Ok(b) => Some(without_agent(&b)?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -264,7 +258,7 @@ pub(super) fn folders(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// The number a renamed slug took: `3` for `acme` → `acme-3`.
-fn number<'a>(slug: &str, to: &'a str) -> &'a str {
+pub(super) fn number<'a>(slug: &str, to: &'a str) -> &'a str {
     &to[slug.len() + 1..]
 }
 
