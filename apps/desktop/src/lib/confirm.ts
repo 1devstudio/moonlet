@@ -18,11 +18,11 @@ let nextId = 1;
  * Shows the confirm modal. Resolves with the checkbox state when confirmed,
  * or null when cancelled. A newer request cancels one still open.
  *
- * `later` replaces the options in the same modal once it resolves, such as
+ * `ready` replaces the options in the same modal once it resolves, such as
  * the archive prompt once the host said what would be lost (X55); a modal
  * closed by then stays closed. One that fails just stops `checking`.
  */
-export function askConfirm(options: ConfirmOptions, later?: Promise<ConfirmOptions>): Promise<ConfirmResult | null> {
+export function askConfirm(options: ConfirmOptions, ready?: Promise<ConfirmOptions>): Promise<ConfirmResult | null> {
   const id = nextId++;
   const answer = new Promise<ConfirmResult | null>((resolve) => {
     useStore.getState().confirm?.resolve(null);
@@ -32,7 +32,7 @@ export function askConfirm(options: ConfirmOptions, later?: Promise<ConfirmOptio
     const open = useStore.getState().confirm;
     if (open?.id === id) useStore.setState({ confirm: { ...open, options: next } });
   };
-  later?.then(replace, () => replace({ ...options, checking: undefined }));
+  ready?.then(replace, () => replace({ ...options, checking: undefined }));
   return answer;
 }
 

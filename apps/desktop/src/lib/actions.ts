@@ -334,7 +334,7 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const params = unpushedParams(c.ws, pr);
   // What still runs in it, beyond its tabs, is named and stopped too (X83);
   // a daemon that cannot say archives as before.
-  const checked = Promise.all([
+  const found = Promise.all([
     git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
     rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
       (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
@@ -342,14 +342,14 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
     ),
   ]);
   // The prompt opens at once and fills in what the host found (X55).
-  const prompt = checked.then(([work, running]) => {
+  const prompt = found.then(([work, running]) => {
     const view = work && unpushedView(work, plan, c.ws.branch, where);
     return withRunning(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan), runningLine(running));
   });
   const checking = git.warn_unpushed ? "Checking for unpushed work…" : "Checking what still runs…";
   const answer = await askConfirm({ ...archivePrompt(c.ws.name, plan), checking }, prompt);
   if (!answer) return;
-  const [, running] = await checked;
+  const [, running] = await found;
   // A daemon that cannot list processes cannot stop them either.
   const stops = running !== null;
   const flags = archiveFlags(plan, answer.checked, !!answer.alt);

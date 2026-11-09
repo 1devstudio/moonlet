@@ -77,6 +77,15 @@ describe("archiveSession", () => {
     expect(archived()).toEqual([]);
   });
 
+  it("says it checks what still runs when the unpushed-work warning is off (X55)", async () => {
+    useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, archive_branch: "ask", warn_unpushed: false } } });
+    daemon.rpc.mockImplementation((_h: string, method: string) => (method === "session.processes" ? new Promise(() => {}) : Promise.resolve(true)));
+    void archiveSession();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useStore.getState().confirm?.options.checking).toBe("Checking what still runs…");
+    answerConfirm(false, false);
+  });
+
   it("keeps the branch unless the modal's box is checked", async () => {
     const done = archiveSession();
     await vi.runAllTimersAsync();

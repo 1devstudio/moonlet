@@ -44,8 +44,7 @@ describe("askConfirm", () => {
     const answer = askConfirm(checking, new Promise((r) => (arrive = r)));
     const id = useStore.getState().confirm?.id;
     arrive(ready);
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
     expect(useStore.getState().confirm).toMatchObject({ id, options: ready });
     answerConfirm(true, false);
     await expect(answer).resolves.toEqual({ checked: false });
@@ -54,9 +53,18 @@ describe("askConfirm", () => {
     void askConfirm(checking, new Promise((r) => (late = r)));
     answerConfirm(false, false);
     late(ready);
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
     expect(useStore.getState().confirm).toBeNull();
+  });
+
+  it("stops checking with the options it opened with when they can't be found out", async () => {
+    const checking = { ...archivePrompt("s1"), checking: "Checking for unpushed work…" };
+    const answer = askConfirm(checking, Promise.reject(new Error("host gone")));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useStore.getState().confirm?.options.checking).toBeUndefined();
+    expect(useStore.getState().confirm?.options.action).toBe("Archive");
+    answerConfirm(true, false);
+    await expect(answer).resolves.toEqual({ checked: false });
   });
 
   it("can't be confirmed while it checks, only cancelled", async () => {

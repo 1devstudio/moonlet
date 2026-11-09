@@ -1,7 +1,7 @@
 import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
 import { GitBranch, Loader2, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
-import { fromOtherDialog, tabWrap } from "../lib/modal";
+import { confirmFocus, fromOtherDialog, tabWrap } from "../lib/modal";
 
 import { cx } from "../lib/cx";
 import { type TrackerKind, trackerOf } from "../lib/tasks";
@@ -275,9 +275,9 @@ export function ConfirmDialog({
   /** Shown under the message, such as the text an agent would read. */
   children?: ReactNode;
 }) {
-  // The button Enter presses: the alt when it can be used; Cancel when a
-  // disabled alt sits next to a danger action, so Enter never archives anyway.
-  const first = alt ? (alt.disabled ? "cancel" : "alt") : "action";
+  const first = confirmFocus(alt);
+  // The button Enter presses, once the dialog is not checking.
+  const focus = (which: typeof first) => ({ autoFocus: !checking && first === which, "data-first": first === which || undefined });
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const d = dialog.current;
@@ -340,15 +340,15 @@ export function ConfirmDialog({
               {checkbox}
             </label>
           )}
-          <Button variant="ghost" className={ring} autoFocus={!checking && first === "cancel"} data-first={first === "cancel" || undefined} onClick={onCancel}>
+          <Button variant="ghost" className={ring} {...focus("cancel")} onClick={onCancel}>
             {cancel}
           </Button>
           {alt && (
-            <Button variant="primary" className={ring} autoFocus={!checking && first === "alt"} data-first={first === "alt" || undefined} disabled={!!checking || !!alt.disabled} title={alt.disabled} onClick={onAlt}>
+            <Button variant="primary" className={ring} {...focus("alt")} disabled={!!checking || !!alt.disabled} title={alt.disabled} onClick={onAlt}>
               {alt.label}
             </Button>
           )}
-          <Button variant={variant} className={ring} autoFocus={!checking && first === "action"} data-first={first === "action" || undefined} disabled={!!checking} onClick={onConfirm}>
+          <Button variant={variant} className={ring} {...focus("action")} disabled={!!checking} onClick={onConfirm}>
             {action}
           </Button>
         </div>
