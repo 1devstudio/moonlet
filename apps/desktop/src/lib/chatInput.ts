@@ -32,7 +32,8 @@ export function inputLayout(width: number, scale = 1): InputLayout {
   const compact = tier === "compact";
   return {
     tier,
-    padX: compact ? 12 : tier === "narrow" ? 16 : 24,
+    // 16 px at the sides of the composer, as in the design (X94); 12 when compact.
+    padX: compact ? 12 : 16,
     insetX: compact ? 12 : 16,
     escHint: roomy,
     asideHint: roomy,

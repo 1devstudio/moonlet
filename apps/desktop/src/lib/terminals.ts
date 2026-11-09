@@ -14,7 +14,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { registerSink, rpc, sendInput } from "./daemon";
 import { M } from "./protocol";
-import { THEME } from "./terminalTheme";
+import { DESKTOP_THEME } from "./terminalTheme";
 import { type BlockContext, blockCopy, blockForAgent, blockHeader, blockLayout, commandFromRows, markTime, rerunInput } from "./blockText";
 
 export { type BlockContext, blockCopy, blockForAgent, blockHeader, blockLayout, commandFromRows, markTime, rerunInput, shortPath } from "./blockText";
@@ -287,7 +287,7 @@ export class TermEntry {
       macOptionClickForcesSelection: true,
       // Same depth as the daemon, so in-view search finds what it keeps.
       scrollback: 10_000,
-      theme: THEME,
+      theme: DESKTOP_THEME,
       // xterm sizes its scrollbar from the ruler (14px when unset): thin, like
       // the agent view's. The ruler also shows block exit status and matches.
       overviewRuler: { width: 6 },

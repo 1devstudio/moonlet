@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import type { StateStack } from "shiki/textmate";
 import { createSyntax, editorLanguage, resolveEditorTheme } from "./syntax";
 import { serial } from "./serial";
+import { PANE } from "./terminalTheme";
 import { useStore } from "./store";
 
 declare global {
@@ -26,7 +27,7 @@ monaco.editor.defineTheme("moonlet", {
   base: "vs-dark",
   inherit: true,
   rules: [],
-  colors: { "editor.background": "#121212", "editorGutter.background": "#121212" },
+  colors: { "editor.background": PANE, "editorGutter.background": PANE },
 });
 
 const syntax = createSyntax();
