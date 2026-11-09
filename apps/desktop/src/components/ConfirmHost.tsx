@@ -36,6 +36,7 @@ function OpenConfirm({ pending }: { pending: PendingConfirm }) {
       onCheck={setChecked}
       alt={o.alt}
       onAlt={() => answerConfirm(true, checked, true)}
+      checking={o.checking}
       width={o.unpushed ? 520 : undefined}
       onConfirm={() => answerConfirm(true, checked)}
       onCancel={() => answerConfirm(false, checked)}

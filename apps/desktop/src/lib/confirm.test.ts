@@ -36,6 +36,40 @@ describe("askConfirm", () => {
     answerConfirm(true, false);
     await expect(second).resolves.toEqual({ checked: false });
   });
+
+  it("shows options that arrive later in the same modal, unless it closed", async () => {
+    const checking = { ...discard, checking: "Checking for unpushed work…" };
+    const ready = { title: "Archive session", message: 'Archive "s1"?', action: "Archive anyway" };
+    let arrive!: (o: typeof ready) => void;
+    const answer = askConfirm(checking, new Promise((r) => (arrive = r)));
+    const id = useStore.getState().confirm?.id;
+    arrive(ready);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useStore.getState().confirm).toMatchObject({ id, options: ready });
+    answerConfirm(true, false);
+    await expect(answer).resolves.toEqual({ checked: false });
+
+    let late!: (o: typeof ready) => void;
+    void askConfirm(checking, new Promise((r) => (late = r)));
+    answerConfirm(false, false);
+    late(ready);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useStore.getState().confirm).toBeNull();
+  });
+
+  it("can't be confirmed while it checks, only cancelled", async () => {
+    const checking = { ...discard, checking: "Checking for unpushed work…" };
+    void askConfirm(checking);
+    answerConfirm(true, false);
+    answerConfirm(true, false, true);
+    expect(useStore.getState().confirm?.options).toEqual(checking);
+    const second = askConfirm(checking);
+    answerConfirm(false, false);
+    await expect(second).resolves.toBeNull();
+    expect(useStore.getState().confirm).toBeNull();
+  });
 });
 
 describe("archivePrompt", () => {

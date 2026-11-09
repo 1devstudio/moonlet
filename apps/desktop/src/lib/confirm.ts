@@ -17,12 +17,23 @@ let nextId = 1;
 /**
  * Shows the confirm modal. Resolves with the checkbox state when confirmed,
  * or null when cancelled. A newer request cancels one still open.
+ *
+ * `later` replaces the options in the same modal once it resolves, such as
+ * the archive prompt once the host said what would be lost (X55); a modal
+ * closed by then stays closed. One that fails just stops `checking`.
  */
-export function askConfirm(options: ConfirmOptions): Promise<ConfirmResult | null> {
-  return new Promise((resolve) => {
+export function askConfirm(options: ConfirmOptions, later?: Promise<ConfirmOptions>): Promise<ConfirmResult | null> {
+  const id = nextId++;
+  const answer = new Promise<ConfirmResult | null>((resolve) => {
     useStore.getState().confirm?.resolve(null);
-    useStore.setState({ confirm: { id: nextId++, options, resolve } });
+    useStore.setState({ confirm: { id, options, resolve } });
   });
+  const replace = (next: ConfirmOptions) => {
+    const open = useStore.getState().confirm;
+    if (open?.id === id) useStore.setState({ confirm: { ...open, options: next } });
+  };
+  later?.then(replace, () => replace({ ...options, checking: undefined }));
+  return answer;
 }
 
 /**
@@ -50,10 +61,11 @@ export function whenNoConfirm(): Promise<void> {
   });
 }
 
-/** Answers the open confirm: `ok` confirms, otherwise it is cancelled. */
+/** Answers the open confirm: `ok` confirms, otherwise it is cancelled.
+ * While it is `checking`, it can only be cancelled. */
 export function answerConfirm(ok: boolean, checked: boolean, alt = false) {
   const pending = useStore.getState().confirm;
-  if (!pending) return;
+  if (!pending || (ok && pending.options.checking)) return;
   useStore.setState({ confirm: null });
   pending.resolve(ok ? (alt ? { checked, alt: true } : { checked }) : null);
 }

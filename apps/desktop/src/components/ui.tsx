@@ -1,5 +1,5 @@
 import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
-import { GitBranch, SquareTerminal, X } from "lucide-react";
+import { GitBranch, Loader2, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
 import { fromOtherDialog, tabWrap } from "../lib/modal";
 
@@ -247,6 +247,7 @@ export function ConfirmDialog({
   width,
   alt,
   onAlt,
+  checking,
   children,
 }: {
   title: string;
@@ -267,9 +268,23 @@ export function ConfirmDialog({
    * of it; `disabled` is why it can't be used (X55). */
   alt?: { label: string; disabled?: string };
   onAlt?: () => void;
+  /** Shown while the dialog waits for what to ask (X55): the confirming
+   * buttons are disabled and the dialog holds the focus, so Enter does
+   * nothing; they take it once it is ready. */
+  checking?: string;
   /** Shown under the message, such as the text an agent would read. */
   children?: ReactNode;
 }) {
+  // The button Enter presses: the alt when it can be used; Cancel when a
+  // disabled alt sits next to a danger action, so Enter never archives anyway.
+  const first = alt ? (alt.disabled ? "cancel" : "alt") : "action";
+  const dialog = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const d = dialog.current;
+    if (checking) d?.focus();
+    // Checked: the button takes the focus, unless the user moved it.
+    else if (d && document.activeElement === d) d.querySelector<HTMLElement>("[data-first]")?.focus();
+  }, [checking]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -285,6 +300,7 @@ export function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onCancel}>
       <div
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -309,6 +325,12 @@ export function ConfirmDialog({
         </div>
         <div className="p-4">
           <p className="whitespace-pre-line ui-text-12.5 leading-[1.55] text-pretty text-muted">{message}</p>
+          {checking && (
+            <p role="status" className="mt-3 flex items-center gap-2 ui-text-12 text-muted">
+              <Loader2 size={13} className="animate-spin" />
+              {checking}
+            </p>
+          )}
           {children}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border bg-panel-2 px-4 py-2.5">
@@ -318,17 +340,15 @@ export function ConfirmDialog({
               {checkbox}
             </label>
           )}
-          {/* With a disabled alt (a danger action next to it), Enter must not
-              archive anyway: Cancel takes the focus. */}
-          <Button variant="ghost" className={ring} autoFocus={!!alt?.disabled} onClick={onCancel}>
+          <Button variant="ghost" className={ring} autoFocus={!checking && first === "cancel"} data-first={first === "cancel" || undefined} onClick={onCancel}>
             {cancel}
           </Button>
           {alt && (
-            <Button variant="primary" className={ring} autoFocus={!alt.disabled} disabled={!!alt.disabled} title={alt.disabled} onClick={onAlt}>
+            <Button variant="primary" className={ring} autoFocus={!checking && first === "alt"} data-first={first === "alt" || undefined} disabled={!!checking || !!alt.disabled} title={alt.disabled} onClick={onAlt}>
               {alt.label}
             </Button>
           )}
-          <Button variant={variant} className={ring} autoFocus={!alt} onClick={onConfirm}>
+          <Button variant={variant} className={ring} autoFocus={!checking && first === "action"} data-first={first === "action" || undefined} disabled={!!checking} onClick={onConfirm}>
             {action}
           </Button>
         </div>

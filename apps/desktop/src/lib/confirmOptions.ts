@@ -22,6 +22,9 @@ export interface ConfirmOptions {
   unpushed?: UnpushedView;
   /** A command shown exactly, in a code block under the message, such as a setup to approve (X60). */
   code?: string;
+  /** Shown while the modal waits for what it should ask, such as "Checking
+   * for unpushed work…" (X55): until then it can only be cancelled. */
+  checking?: string;
 }
 
 export interface ConfirmResult {
