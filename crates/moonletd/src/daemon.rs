@@ -2865,8 +2865,9 @@ impl Daemon {
     }
 
     /// Asks a design system's sync agent to build it, or to sync it again
-    /// (X64). Its chat is reused while it exists; otherwise a new one starts in
-    /// the workspace's Claude profile, with the sources read only.
+    /// (X64). Its chat is reused while it exists; otherwise a new one starts,
+    /// with the sources read only, in the Claude profile of the workspace
+    /// that holds its first source (X95).
     async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
         use moonlet_core::design::{agent, anchor, store};
         // One start or sync at a time per system, so two never make two agents.
@@ -2913,10 +2914,23 @@ impl Daemon {
             slug: slug.to_string(),
             name,
         };
-        self.agent_chat(&launch, tag, |id| match id {
+        let profile = record.sources.first().and_then(|s| self.workspace_holding(&s.project));
+        self.agent_chat(&launch, tag, profile, |id| match id {
             Some(id) => self.design.set_agent(workspace, slug, id, &fingerprint),
             None => self.design.clear_agent(workspace, slug),
         })
+    }
+
+    /// The first workspace, in the account's order, whose sections hold
+    /// `project`: whose Claude profile a library system's agent runs in
+    /// (X95). None when no workspace holds it.
+    fn workspace_holding(&self, project: &str) -> Option<String> {
+        let sections = self.sessions.list_sections();
+        self.sessions
+            .list_workspaces()
+            .into_iter()
+            .find(|w| sections.iter().any(|s| w.section_ids.contains(&s.id) && s.project_ids.iter().any(|p| p == project)))
+            .map(|w| w.id)
     }
 
     /// A design as `design.list` gives it (X65): its agent only while that
@@ -2970,17 +2984,24 @@ impl Daemon {
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.clone(), slug: slug.clone(), name };
-        self.agent_chat(&launch, tag, |id| self.design.set_design_agent(at, id))
+        let profile = Some(workspace.clone());
+        self.agent_chat(&launch, tag, profile, |id| self.design.set_design_agent(at, id))
     }
 
     /// Starts the chat of a Design mode agent (X64, X65): Claude Code, with
-    /// no session, in the Claude profile of the workspace its tag names,
-    /// started as `launch` says and tagged so. `record` saves the chat as its
+    /// no session, in the Claude profile of workspace `profile` (the default
+    /// one without), started as `launch` says and tagged so. `record` saves the chat as its
     /// system's or design's agent (`Some`), or forgets it (`None`); then the
     /// chat gets `launch.prompt` as its first message. When saving the record
     /// or sending that message fails, the chat is stopped and removed and the
     /// record forgotten, so a failed start leaves no agent behind.
-    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent, record: impl Fn(Option<u32>) -> anyhow::Result<()>) -> anyhow::Result<u32> {
+    fn agent_chat(
+        &self,
+        launch: &moonlet_core::design::agent::Launch,
+        tag: moonlet_proto::types::DesignAgent,
+        profile: Option<String>,
+        record: impl Fn(Option<u32>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<u32> {
         let info = self.chats.create(ChatCreate {
             cwd: launch.cwd.clone(),
             agent: "claude".into(),
@@ -2993,7 +3014,7 @@ impl Daemon {
             env: Default::default(),
             add_dirs: launch.add_dirs.clone(),
             settings: Some(launch.settings.clone()),
-            workspace: Some(tag.workspace.clone()),
+            workspace: profile,
             design: Some(tag),
         })?;
         let id = info.id;
@@ -3408,6 +3429,9 @@ impl Daemon {
                     if let Some(id) = folder_agent(&terminals, mv.agent, &old) {
                         let _ = self.terminals.kill(id, true);
                     }
+                    if mv.to != mv.from {
+                        self.follow_renamed_system(mv).await;
+                    }
                 }
                 // Only now: until then, the next look gives these moves again.
                 let store = self.design.clone();
@@ -3419,6 +3443,23 @@ impl Daemon {
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("cannot move design systems into the library: {e:#}"),
+        }
+    }
+
+    /// Points the session designs of workspace `mv.workspace`'s open
+    /// sessions at the slug its system took in the library (X95). One that
+    /// cannot be changed is logged, and keeps the old slug.
+    async fn follow_renamed_system(&self, mv: &moonlet_core::design::library::ToLibrary) {
+        for s in self.sessions.list_sessions() {
+            if s.archived || s.workspace_id.as_deref() != Some(mv.workspace.as_str()) {
+                continue;
+            }
+            for at in self.session_designs_at(&s.id).await {
+                let (store, from, to, slug) = (self.design.clone(), mv.from.clone(), mv.to.clone(), at.slug.clone());
+                if let Err(e) = blocking(move || store.follow_renamed_system(&at, &from, &to)).await {
+                    tracing::warn!("cannot point design {slug} of session {} at {}: {}", s.id, mv.to, e.message);
+                }
+            }
         }
     }
 

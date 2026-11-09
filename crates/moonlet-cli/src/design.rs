@@ -55,7 +55,7 @@ pub fn workspace_of_terminal(
 }
 
 /// The design system a session design made with `design new --here` is
-/// on (X65): `named` when given, else the workspace's one design system
+/// on (X65): `named` when given, else the library's one design system (X95)
 /// whose sources include the session's project at `project`. `systems` are
 /// each system's slug and source folders. Several, or none, is an error
 /// saying what to do.
@@ -63,7 +63,7 @@ pub fn pick_system(systems: &[(String, Vec<String>)], project: &str, named: Opti
     if let Some(named) = named {
         return match systems.iter().any(|(slug, _)| slug == named) {
             true => Ok(named.to_string()),
-            false => Err(format!("no design system \"{named}\" in this workspace")),
+            false => Err(format!("no design system \"{named}\" in the library")),
         };
     }
     let built: Vec<&str> = systems
@@ -262,7 +262,7 @@ mod tests {
         );
         assert_eq!(
             pick_system(&one, "/Users/alex/code/blog", Some("nope")),
-            Err("no design system \"nope\" in this workspace".into())
+            Err("no design system \"nope\" in the library".into())
         );
     }
 }
