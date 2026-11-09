@@ -3433,7 +3433,9 @@ impl Daemon {
                         self.follow_renamed_system(mv).await;
                     }
                 }
-                // Only now: until then, the next look gives these moves again.
+                // Only once each moved system's agent stopped and the open
+                // sessions' designs followed it: until then, the next look
+                // gives these moves again, and each step is safe to repeat.
                 let store = self.design.clone();
                 if let Err(e) = blocking(move || store.library_move_done()).await {
                     tracing::warn!("cannot end the move into the library: {}", e.message);
