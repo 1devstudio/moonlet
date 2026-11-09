@@ -23,7 +23,7 @@ Every "are you sure?" in moonlet was a native macOS sheet from the Tauri dialog 
 - [x] A second confirm asked while one is open cancels the first, so two never stack.
 - [x] While the modal is open, the global ⌘ shortcuts do nothing, ⌘K included.
 - [x] Esc in a modal opened over Settings or Project settings closes only the modal.
-- [x] The action button has focus when the modal opens.
+- [x] The action button has focus when the modal opens. A modal that is still checking what to ask, as the archive prompt does (X55), holds the focus itself until it is ready. (`lib/modal.test.ts` "focuses the action, a usable alt instead, and Cancel next to a disabled alt (X23, X55)")
 - [x] Tab and Shift+Tab stay inside the modal, and the modal sits above the toasts.
 - [x] Closing Project settings while a save runs asks nothing; the save closes it.
 
