@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardList, changedStates, connectedText, disconnectText, parseTrackerLink, projectTrackers, trackerLink, sourceChoices, sourceNoun } from "./trackerSources";
+import { boardList, boardWorkspaces, changedStates, connectedText, disconnectText, parseTrackerLink, projectTrackers, trackerLink, sourceChoices, sourceNoun } from "./trackerSources";
 import type { BoardConfig } from "./boards";
 
 describe("boardList (X50 Settings › Task trackers › Boards)", () => {
@@ -14,6 +14,46 @@ describe("boardList (X50 Settings › Task trackers › Boards)", () => {
       { id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined },
       { id: "eng", connection: "linear:acme", name: "Engineering", origin: "Linear team ENG", pinned: false, attention: undefined },
       { id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: "Jira no longer accepts the API token" },
+    ]);
+  });
+});
+
+describe("boardWorkspaces (X50 Settings › Boards, X68 shared workspaces)", () => {
+  const host = (id: string, account: string, workspaces: [string, string][]) => ({
+    host: id,
+    label: id,
+    account,
+    workspaces: workspaces.map(([wid, name]) => ({ id: wid, name, color: "clay" as const, section_ids: [], claude_profile: null, created_at: 0 })),
+    sections: [],
+    sessions: [],
+    profiles: [],
+  });
+  const hosts = [
+    host("local", "acct", [["personal", "Personal"], ["notes", "Notes"]]),
+    host("studio-mini", "acct", [["personal", "Personal"], ["notes", "Notes"]]),
+    host("devbox", "devbox", [["personal", "Personal"]]),
+  ];
+  const boards: BoardConfig[] = [
+    { id: "web", name: "acme/web", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_repo", repo: "acme/web" } },
+    { id: "ops", name: "Operations", connection: "jira:ops.atlassian.net", workspace: "studio-mini/notes", origin: { kind: "jira_board", board: 10 } },
+    { id: "gone", name: "Old", connection: "jira:ops.atlassian.net", workspace: "studio-mini/deleted", origin: { kind: "jira_board", board: 11 } },
+  ];
+
+  it("lists a workspace the hosts of one account share once, with the boards kept under any of them", () => {
+    expect(boardWorkspaces(hosts, boards, {})).toEqual([
+      {
+        key: "local/personal",
+        name: "Personal",
+        addTo: { host: "local", id: "personal" },
+        boards: [{ id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined, workspace: "local/personal" }],
+      },
+      {
+        key: "local/notes",
+        name: "Notes",
+        addTo: { host: "studio-mini", id: "notes" },
+        boards: [{ id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: undefined, workspace: "studio-mini/notes" }],
+      },
+      { key: "devbox/personal", name: "Personal", addTo: { host: "devbox", id: "personal" }, boards: [] },
     ]);
   });
 });

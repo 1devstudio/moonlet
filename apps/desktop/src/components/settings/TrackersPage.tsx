@@ -2,13 +2,13 @@
 // names and sync. Saves to ~/.moonlet/trackers.toml as soon as a setting changes.
 
 import { Lock, RotateCw } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { hostsApi, rpc } from "../../lib/daemon";
 import type { RuleSetting } from "../../lib/keepInStep";
 import { M } from "../../lib/protocol";
-import { errorToast, shownWorkspace, useStore } from "../../lib/store";
-import { type BoardEntry, boardList } from "../../lib/trackerSources";
+import { errorToast, hostWorkspaces, shownWorkspace, useStore } from "../../lib/store";
+import { type BoardEntry, boardWorkspaces } from "../../lib/trackerSources";
 import { branchUser, loadTrackersConfig, openAddBoard, removeBoard, saveTrackersConfig, type TrackerSettings, type TrackersConfig, trackersConfig, trackerSettings, useTasks } from "../../lib/tasksStore";
 import { GITHUB_RULES, githubConnection, previewTask, RULE_SETTINGS as SETTINGS, SYNC_INTERVALS as INTERVALS, trackerRules } from "../../lib/trackersPage";
 import { AddTracker, ConnectionRow } from "./TrackerConnections";
@@ -16,7 +16,7 @@ import { BoardMark, Button, cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, Switch, SwitchRow } from "./controls";
 import { withPinned } from "../../lib/boards";
 import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
-import { parseWsKey, wsKey } from "../../lib/workspaces";
+import { parseWsKey } from "../../lib/workspaces";
 
 
 const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
@@ -48,14 +48,11 @@ export function TrackersPage() {
   const save = (update: (c: TrackersConfig) => TrackersConfig) => void saveTrackersConfig(update).catch(errorToast);
   const github = config.github;
   const link = config.link ?? DEFAULT_LINK;
+  const hosts = useStore((s) => s.hosts);
+  const accounts = useStore((s) => s.accounts);
   const workspaces = useStore((s) => s.workspaces);
   const attention = useTasks((t) => t.attention);
-  const wsRows = Object.entries(workspaces).flatMap(([host, list]) =>
-    list.map((w) => {
-      const key = wsKey(host, w.id);
-      return { key, name: w.name, boards: boardList(key, config.boards, attention) };
-    }),
-  );
+  const wsRows = useMemo(() => boardWorkspaces(hostWorkspaces(useStore.getState()), config.boards, attention), [hosts, accounts, workspaces, config.boards, attention]);
   const setGithub = (patch: Partial<TrackersConfig["github"]>) => save((c) => ({ ...c, github: { ...c.github, ...patch } }));
   const templateId = useId();
   const maxId = useId();
@@ -161,21 +158,19 @@ export function TrackersPage() {
       </Section>
       <div data-setting="boards">
         <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in; a pinned one is in its sidebar.">
-          {wsRows.map((w) => {
-            const { host, id } = parseWsKey(w.key);
-            return (
-              <Card key={w.key}>
-                <Row label={w.name} hint={w.boards.length ? undefined : "No board yet"} setting={`ws-boards-${w.key}`}>
-                  <Button size="sm" className="field-height" onClick={() => openAddBoard(host, id)}>
-                    Add a board
-                  </Button>
-                </Row>
-                {w.boards.map((x) => (
-                  <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, { board: x.id })} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />
-                ))}
-              </Card>
-            );
-          })}
+          {wsRows.map((w) => (
+            <Card key={w.key}>
+              <Row label={w.name} hint={w.boards.length ? undefined : "No board yet"} setting={`ws-boards-${w.key}`}>
+                <Button size="sm" className="field-height" onClick={() => openAddBoard(w.addTo.host, w.addTo.id)}>
+                  Add a board
+                </Button>
+              </Row>
+              {w.boards.map((x) => {
+                const { host, id } = parseWsKey(x.workspace);
+                return <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, { board: x.id })} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />;
+              })}
+            </Card>
+          ))}
         </Section>
       </div>
       <Section title="Sync">
