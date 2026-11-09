@@ -68,7 +68,7 @@ describe("The visual editor", () => {
     chmodSync(FAKE, 0o755);
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Editor kit", sources: [], agent: false });
-    writeFileSync(join(w.home, "design", ws, "systems", SYSTEM, "styles.css"), "h2 { color: #d97757; }\n");
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), "h2 { color: #d97757; }\n");
     rpc(w, "design.create", { workspace: ws, name: "Settings page", system: SYSTEM, brief: "A settings page" });
     writeFileSync(file(), PAGE);
     await mode("Design").click();

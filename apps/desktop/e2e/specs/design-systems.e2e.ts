@@ -32,7 +32,7 @@ describe("Design system view", () => {
     original = readFileSync(readme, "utf8");
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Storefront kit", sources: [{ project: projectId(w) }], agent: false });
-    const dir = join(w.home, "design", ws, "systems", "storefront-kit");
+    const dir = join(w.home, "design", "library", "systems", "storefront-kit");
     for (const [path, text] of FILES) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), text);

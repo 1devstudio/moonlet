@@ -55,12 +55,12 @@ describe("Design mode", () => {
     await expect(dialog().$(`.//label[.//span[normalize-space()="${PROJECT}"]]//input[@type="checkbox"]`)).toBeSelected();
     await expect(dialog().$(sel.text("Read only. The agent writes nothing in these projects."))).toBeDisplayed();
     await fill('//div[@role="dialog"]//input[@placeholder="moonlet desktop"]', "Storefront UI");
-    await expect(dialog().$(sel.text(`~/.moonlet/design/${workspaceId()}/systems/storefront-ui`))).toBeDisplayed();
+    await expect(dialog().$(sel.text(`~/.moonlet/design/library/systems/storefront-ui`))).toBeDisplayed();
     await dialog().$('.//button[@role="radio"][starts-with(normalize-space(), "Everything")]').click();
     await dialog().$(sel.button("Build design system")).click();
     await expect(dialog()).not.toBeExisting();
     await expect(systemRow("Storefront UI")).toBeDisplayed();
-    const config = join(w.home, "design", workspaceId(), "systems", "storefront-ui", "config.toml");
+    const config = join(w.home, "design", "library", "systems", "storefront-ui", "config.toml");
     expect(existsSync(config)).toBe(true);
     expect(readFileSync(config, "utf8")).toContain('cover = "all"');
   });

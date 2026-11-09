@@ -20,7 +20,7 @@ const FAKE = join(w.root, "bin", "claude");
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
 const mode = (label: string) => $(`//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "${label}")]`);
 const SYSTEM = "styling-kit";
-const system = () => join(w.home, "design", workspaceId(), "systems", SYSTEM);
+const system = () => join(w.home, "design", "library", "systems", SYSTEM);
 // A design of its own: the editor keeps the highest id each page has had for
 // the app's life, so design-editor.e2e.ts's Settings page gets its own ids.
 const file = () => join(w.home, "design", workspaceId(), "designs", "styled-page", "pages", "index.html");

@@ -22,7 +22,7 @@ import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 import { cardsReloaded } from "./designView";
-import { changedWorkspaces } from "./designLibrary";
+import { changedWorkspaces, LIBRARY } from "./designLibrary";
 import { changePlace, designRef, isSession, placeOfDesign, type DesignPlace } from "./designPlace";
 
 interface DesignState {
@@ -62,6 +62,9 @@ interface DesignState {
   unseen: string[];
   /** The design shown as the design screen in each workspace, by slug; else its design system. */
   designShown: Record<string, string | null>;
+  /** Whether the design shown in each workspace is a shared one, the
+   *  library's (X95). */
+  sharedShown: Record<string, boolean>;
   /** How many times each design page (`wsKey/slug/page`) changed, so its frame loads again. */
   pageRevs: Record<string, number>;
   /** The pages the latest change of each design (`wsKey/slug`) wrote. */
@@ -85,7 +88,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, cardRevs: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, cardRevs: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, sharedShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -333,10 +336,33 @@ export function unseenOf(s: DesignState, host: string, workspace: string): numbe
   return s.unseen.filter((k) => placeKeyOfItem(k) === place && (!listed || listed.some((d) => itemKey(host, workspace, d.slug) === k))).length;
 }
 
-/** The design shown as the design screen in a workspace, or null. */
+/** The design shown as the design screen in a workspace, or null: the
+ *  workspace's own, or a shared one (X95). */
 export function shownDesign(s: DesignState, host: string, workspace: string): Design | null {
   const slug = s.designShown[wsKey(host, workspace)];
-  return (slug && designsOf(s, host, workspace)?.find((d) => d.slug === slug)) || null;
+  return (slug && designsOf(s, host, shownDesignPlace(s, host, workspace))?.find((d) => d.slug === slug)) || null;
+}
+
+/** Where the design shown in a workspace is: the library for a shared
+ *  one (X95), else the workspace. Its calls and frames name this. */
+export function shownDesignPlace(s: DesignState, host: string, workspace: string): string {
+  return s.sharedShown[wsKey(host, workspace)] ? LIBRARY : workspace;
+}
+
+/** **Share with every workspace** (X95): moves workspace `workspace`'s
+ *  design into the library, and shows it there. */
+export async function shareDesign(host: string, workspace: string, slug: string): Promise<void> {
+  const shared = await rpc<string>(host, M.designShare, { workspace, slug });
+  await Promise.all([loadDesigns(host, workspace, true), loadDesigns(host, LIBRARY, true)]);
+  showDesign(host, workspace, shared, true);
+}
+
+/** **Stop sharing** (X95): moves the shared design into `workspace`, the
+ *  one it is viewed from, and shows it there. */
+export async function unshareDesign(host: string, workspace: string, slug: string): Promise<void> {
+  const moved = await rpc<string>(host, M.designUnshare, { workspace: LIBRARY, slug, into: workspace });
+  await Promise.all([loadDesigns(host, workspace, true), loadDesigns(host, LIBRARY, true)]);
+  showDesign(host, workspace, moved);
 }
 
 /** The visual editor's say over a page changed on disk: true when it
@@ -502,20 +528,31 @@ export async function resolveComment(host: string, place: DesignPlace, slug: str
   mergePins(host, place, slug, [await rpc<DesignComment>(host, M.designCommentResolve, { ...designRef(place, slug), n })]);
 }
 
-/** Shows a design as the design screen (X65), and its agent as seen. */
-export function showDesign(host: string, workspace: string, slug: string) {
+/** Shows a design as the design screen (X65), and its agent as seen;
+ *  `shared`: one of the library's, shown in `workspace` (X95). */
+export function showDesign(host: string, workspace: string, slug: string, shared = false) {
   const key = wsKey(host, workspace);
-  const item = itemKey(host, workspace, slug);
-  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, indexShown: { ...s.indexShown, [key]: false }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
-  const agent = designsOf(useDesign.getState(), host, workspace)?.find((d) => d.slug === slug)?.agent;
+  const place = shared ? LIBRARY : workspace;
+  const item = itemKey(host, place, slug);
+  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, sharedShown: { ...s.sharedShown, [key]: shared }, indexShown: { ...s.indexShown, [key]: false }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
+  const agent = designsOf(useDesign.getState(), host, place)?.find((d) => d.slug === slug)?.agent;
   if (agent !== undefined && agent !== null) agentSeen(host, agent);
-  void checkDesign(host, workspace, slug);
+  void checkDesign(host, place, slug);
 }
 
-/** Switches the app to a design: its workspace, Design mode and its screen. */
+/** Switches the app to a design: its workspace, Design mode and its screen.
+ *  A shared design (X95), the library's, opens in the workspace shown. */
 export async function openDesign(host: string, workspace: string, slug: string) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
+  if (workspace === LIBRARY) {
+    if (!ws) return;
+    setMode("design");
+    const at = designHostOf(useStore.getState()) ?? host;
+    await loadDesigns(at, LIBRARY, true).catch(() => {});
+    showDesign(at, ws.id, slug, true);
+    return;
+  }
   if (!isShown(ws, host, workspace, s.accounts[host]?.account)) switchWorkspace({ host, id: workspace, account: s.accounts[host]?.account });
   setMode("design");
   // Shown where Design mode reads the workspace's designs: this Mac's copy

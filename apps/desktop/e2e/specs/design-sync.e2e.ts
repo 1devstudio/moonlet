@@ -12,7 +12,7 @@ const FAKE = join(w.root, "bin", "claude");
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
 const mode = (label: string) => $(`//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "${label}")]`);
 const SLUG = "checkout-kit";
-const dir = () => join(w.home, "design", workspaceId(), "systems", SLUG);
+const dir = () => join(w.home, "design", "library", "systems", SLUG);
 
 // A sync agent that stays at work on every message until it is interrupted.
 // printf, because /bin/sh's echo expands the \n in the JSON.

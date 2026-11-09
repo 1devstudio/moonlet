@@ -123,3 +123,26 @@ describe("designsIndex (X65 Designs index)", () => {
     ]);
   });
 });
+
+describe("designsIndex's shared designs (X95)", () => {
+  it("lists them as Shared designs after the workspace's own, framed from the library", () => {
+    const list = [
+      design({ slug: "onboarding", name: "Onboarding", pages: [] }),
+      design({ slug: "pricing", name: "Pricing", shared: true, pages: [{ name: "index", label: null }], path: "/Users/alex/.moonlet/design/library/designs/pricing" }),
+    ];
+    expect(shown(list).map((g) => g.title)).toEqual(["Workspace designs", "Shared designs"]);
+    expect(shown(list)[1]).toEqual({
+      title: "Shared designs",
+      note: "Listed in every workspace",
+      cards: [
+        {
+          name: "Pricing",
+          line: "moonlet desktop · 1 page",
+          action: "Open",
+          thumb: "moonlet-design://e117abcb685f4608.library/designs/pricing/pages/index.html",
+          placeholder: null,
+        },
+      ],
+    });
+  });
+});

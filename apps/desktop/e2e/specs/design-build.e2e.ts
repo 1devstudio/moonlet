@@ -72,7 +72,7 @@ describe("Build it and the Designs index", () => {
     const ws = workspaceId();
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     rpc(w, "design.system.create", { workspace: ws, name: "Build kit", sources: [{ project: project.id }], agent: false });
-    writeFileSync(join(w.home, "design", ws, "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
     rpc(w, "design.create", { workspace: ws, name: "Settings page", system: SYSTEM, brief: "A settings page" });
     for (const [name, title] of [["index", "Settings"], ["git-a", "Git as cards"], ["git-b", "Git, compact"]]) writeFileSync(join(designDir(), "pages", `${name}.html`), page(title));
     const toml = join(designDir(), "design.toml");

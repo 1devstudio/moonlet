@@ -143,7 +143,7 @@ describe("Design copies", () => {
       agent: false,
     });
     writeFileSync(
-      join(home, "design", ws, "systems", "acme-web", "styles.css"),
+      join(home, "design", "library", "systems", "acme-web", "styles.css"),
       ":root { --brand: #0a66ff; }\n",
     );
 

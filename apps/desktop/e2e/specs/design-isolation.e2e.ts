@@ -38,7 +38,7 @@ describe("A design card that never stops running", () => {
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Looping kit", sources: [{ project: projectId(w) }], agent: false });
-    const dir = join(w.home, "design", ws, "systems", SLUG);
+    const dir = join(w.home, "design", "library", "systems", SLUG);
     for (const [path, text] of FILES) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), text);
@@ -117,7 +117,7 @@ describe("A design system with more cards than a screen shows", () => {
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Many kit", sources: [{ project: projectId(w) }], agent: false });
-    const dir = join(w.home, "design", ws, "systems", MANY);
+    const dir = join(w.home, "design", "library", "systems", MANY);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "styles.css"), ".c { color: #e6e6e6; }\n");
     for (let i = 1; i <= N; i++) {

@@ -29,7 +29,7 @@ const SLUG = "settings-page";
 // makes the chat narrow.
 const EDITOR = '//main//section[@aria-label="Chat input"]//textarea';
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
-const systemDir = () => join(w.home, "design", workspaceId(), "systems", SYSTEM);
+const systemDir = () => join(w.home, "design", "library", "systems", SYSTEM);
 const PAGE = [
   "<!doctype html>",
   '<html><head><meta charset="utf-8"><link rel="stylesheet" href="../system/styles.css"></head>',

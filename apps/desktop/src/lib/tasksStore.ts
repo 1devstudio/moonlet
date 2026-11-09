@@ -549,9 +549,20 @@ export function leaveTasksMode() {
 
 /** The projects in a workspace's sections. */
 export function workspaceProjects(s: StoreState, host: string, workspaceId: string): Project[] {
-  const ws = s.workspaces[host]?.find((w) => w.id === workspaceId);
-  const ids = new Set((s.sections[host] ?? []).filter((sec) => ws?.section_ids.includes(sec.id)).flatMap((sec) => sec.project_ids));
-  return (s.projects[host] ?? []).filter((p) => ids.has(p.id));
+  return projectsOfWorkspace(s.workspaces[host] ?? [], s.sections[host] ?? [], s.projects[host] ?? [], workspaceId);
+}
+
+/** The projects in workspace `workspaceId`'s sections, from a host's
+ *  workspaces, sections and projects. */
+export function projectsOfWorkspace(
+  workspaces: { id: string; section_ids: string[] }[],
+  sections: { id: string; project_ids: string[] }[],
+  projects: Project[],
+  workspaceId: string,
+): Project[] {
+  const ws = workspaces.find((w) => w.id === workspaceId);
+  const ids = new Set(sections.filter((sec) => ws?.section_ids.includes(sec.id)).flatMap((sec) => sec.project_ids));
+  return projects.filter((p) => ids.has(p.id));
 }
 
 const syncs = latestPerKey();

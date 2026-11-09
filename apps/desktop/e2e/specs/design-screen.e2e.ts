@@ -49,7 +49,7 @@ describe("A design's screen", () => {
     writeFileSync(FAKE, WORKING_CLAUDE);
     chmodSync(FAKE, 0o755);
     rpc(w, "design.system.create", { workspace: workspaceId(), name: "Screen kit", sources: [], agent: false });
-    writeFileSync(join(w.home, "design", workspaceId(), "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
   });
 
   after(async () => {

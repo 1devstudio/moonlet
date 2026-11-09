@@ -29,6 +29,7 @@ export function DesignsIndex({
   name,
   systems,
   inSessions: across,
+  shared: sharedList,
   inset,
 }: {
   host: string;
@@ -37,6 +38,8 @@ export function DesignsIndex({
   systems: DesignSystem[] | undefined;
   /** Every member's session designs, with the host each session runs on (X71). */
   inSessions: { host: string; design: Design }[] | undefined;
+  /** The designs shared with every workspace, the library's (X95). */
+  shared?: Design[];
   inset: number;
 }) {
   const own = useDesign((d) => designsOf(d, host, workspace));
@@ -46,7 +49,8 @@ export function DesignsIndex({
   const hostsOfSessions = useMemo(() => [...new Set([host, ...(across ?? []).map((e) => e.host)])], [host, across]);
   const sessions = useStore(useShallow((s) => hostsOfSessions.flatMap((h) => s.sessions[h] ?? [])));
   const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
-  const list = useMemo(() => (own ? [...inSessions, ...own, ...inProjects] : undefined), [own, inSessions, inProjects]);
+  const shared = useMemo(() => (sharedList ?? NO_DESIGNS).map((d) => ({ ...d, shared: true })), [sharedList]);
+  const list = useMemo(() => (own ? [...inSessions, ...own, ...shared, ...inProjects] : undefined), [own, inSessions, shared, inProjects]);
   // A changed first page is framed again: its thumbnail's address carries its revision.
   const pageRevs = useDesign((d) => d.pageRevs);
   const groups = useMemo(
@@ -60,6 +64,7 @@ export function DesignsIndex({
   const acts: { [K in CardAction["kind"]]: (a: Extract<CardAction, { kind: K }>, key: string) => void } = {
     session: (a) => void openSessionDesign(across?.find((e) => e.design.session === a.session)?.host ?? host, workspace, a.session, a.slug, true),
     workspace: (a) => showDesign(host, workspace, a.slug),
+    shared: (a) => showDesign(host, workspace, a.slug, true),
     project: (a, key) => {
       setStarting(key);
       void startFromProjectDesign(host, workspace, a.design)
