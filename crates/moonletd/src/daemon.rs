@@ -2677,6 +2677,10 @@ impl Daemon {
             }
             m::DESIGN_CREATE => {
                 let r: m::DesignCreate = params(p)?;
+                // A shared design is the user's choice (X95), as Share is.
+                if r.workspace == LIBRARY {
+                    app_only(conn, "a shared design")?;
+                }
                 // A session design: the session's agent writes it (X65).
                 if let Some(session) = r.session.clone() {
                     let (s, folder) = self.design_session(&session)?;

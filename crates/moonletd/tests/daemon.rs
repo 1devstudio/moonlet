@@ -1177,6 +1177,12 @@ impl HomeDaemon {
     async fn client(&self) -> Client {
         Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
+
+    /// A connection the daemon counts as the app's: its credential is in
+    /// the daemon's home, `.moonlet` under this one (X75).
+    async fn app(&self) -> Client {
+        Client::connect_app(&self.socket, &self.home.path().join(".moonlet")).await.unwrap()
+    }
 }
 
 impl Drop for HomeDaemon {
@@ -5802,8 +5808,7 @@ async fn a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_mov
     let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_SHARE, serde_json::json!({"workspace": app, "slug": "pricing"})).await;
     assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("forbidden")), "{refused:?}");
 
-    // The app, with its credential from the daemon's home (X75).
-    let mut c = Client::connect_app(&d.socket, &d.home.path().join(".moonlet")).await.unwrap();
+    let mut c = d.app().await;
     // Refused while its agent works on its first message.
     let mut shared = Err(anyhow::anyhow!("not tried"));
     for _ in 0..100 {
@@ -5839,7 +5844,9 @@ async fn a_shared_design_is_built_in_a_session_of_the_workspace_the_user_is_in()
     let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
-    let _: serde_json::Value = c
+    let _: serde_json::Value = d
+        .app()
+        .await
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
         .await
         .unwrap();
@@ -5891,7 +5898,9 @@ async fn a_shared_designs_agent_runs_in_the_profile_of_its_systems_first_sources
         .await
         .unwrap();
 
-    let _: serde_json::Value = c
+    let _: serde_json::Value = d
+        .app()
+        .await
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "acme-web", "brief": "b"}))
         .await
         .unwrap();
@@ -5920,7 +5929,7 @@ done
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
         .await
         .unwrap();
-    let mut app = Client::connect_app(&d.socket, &d.home.path().join(".moonlet")).await.unwrap();
+    let mut app = d.app().await;
     let mut refused = String::new();
     for _ in 0..50 {
         refused = match app.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": ws, "slug": "pricing"})).await {
@@ -5934,4 +5943,18 @@ done
     }
     assert_eq!(refused, "busy: its agent is working: try again when it is done");
     assert_eq!(shared_listing(&mut c, ws).await, vec![("pricing".to_string(), false)]);
+}
+
+/// X95: a design is made in the library only by the app; an agent's CLI
+/// could otherwise put its work in every workspace without Share.
+#[tokio::test]
+async fn only_the_app_makes_a_design_in_the_library() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    workspace_with_system(&d, &mut c).await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli
+        .request::<_, serde_json::Value>(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "forbidden: only the moonlet app manages a shared design");
 }

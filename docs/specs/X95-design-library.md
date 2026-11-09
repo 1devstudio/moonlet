@@ -62,6 +62,7 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 - [ ] A shared design is addressed as `{workspace: "library", slug}` in every design RPC, and framed on the `library` host. (`moonletd/tests/daemon.rs` a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one; `src-tauri/src/design_scheme.rs` a_shared_designs_page_is_on_the_librarys_host)
 - [ ] **Build it** on a shared design starts the session in the workspace the user is in, on one of that workspace's projects. A session design made from it records the library as its design's place. (`moonletd/tests/daemon.rs` a_shared_design_is_built_in_a_session_of_the_workspace_the_user_is_in)
 - [ ] Removing a shared design removes it for every workspace, after the same confirmation as today.
+- [ ] Only the app makes a design in the library (`design.create {workspace: "library"}`): an agent's CLI gets `forbidden`, as for Share. (`moonletd/tests/daemon.rs` only_the_app_makes_a_design_in_the_library)
 
 ### The app
 
@@ -114,7 +115,7 @@ The New design system dialog groups its project picker by workspace, the shown w
 - The scheme's mapping of `<workspace>/systems/` to `library/systems/` resolves inside `~/.moonlet/design/library/systems/` only, never through a link, and never for any other folder of the library. A workspace host still serves no other workspace's files.
 - A library system's sources may now come from projects of other workspaces. Each is still a project of this member, resolved by id, with its `subdir` inside it (X64), and the sync agent still cannot edit them.
 - The sync agent's profile comes from the record's first source, which the agent cannot edit (`.records` is outside its folder).
-- `design.share` and `design.unshare` are app-only: an agent's CLI and a phone get `forbidden`, so a design agent cannot move its own design into another workspace.
+- `design.share`, `design.unshare` and `design.create` in the library are app-only: an agent's CLI and a phone get `forbidden`, so a design agent cannot move its own design, or put a new one, into every workspace.
 
 ## Out of scope
 
