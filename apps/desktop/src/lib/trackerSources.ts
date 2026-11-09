@@ -2,7 +2,7 @@
 // Connect dialogs' words and choices (X44).
 
 import { originText } from "./addBoard";
-import { type BoardConfig, sourceKeyOf, taskWorkspace } from "./boards";
+import { type BoardConfig, sourceKeyOf } from "./boards";
 import type { Column } from "./tasks";
 import { trackerName, trackerOf } from "./tasks";
 import type { Connection, Source } from "./tasksStore";
@@ -22,36 +22,33 @@ export interface BoardEntry {
 
 /** A workspace's boards with their origin and pin, and why a board's connection needs attention (X44, X50). */
 export function boardList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardEntry[] {
-  return (boards ?? [])
-    .filter((b) => b.workspace === wsKey)
-    .map((b) => ({ id: b.id, connection: b.connection, name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] }));
+  return (boards ?? []).filter((b) => b.workspace === wsKey).map((b) => boardEntry(b, attention));
 }
 
-/** A workspace in Settings › Task trackers › Boards (X50). */
+const boardEntry = (b: BoardConfig, attention: Record<string, string>): BoardEntry => ({ id: b.id, connection: b.connection, name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] });
+
+/** A workspace in Settings › Task trackers › Boards (X50): `host` is the
+ * one it shows from, as the switcher lists it, where Add a board saves. */
 export interface BoardWorkspace {
-  /** The workspace as the switcher lists it: `host/id`. */
-  key: string;
+  host: string;
+  id: string;
   name: string;
-  /** Where Add a board saves: the member already holding its boards, else its own host. */
-  addTo: { host: string; id: string };
-  /** Its boards, each with the `host/id` it is kept under. */
-  boards: (BoardEntry & { workspace: string })[];
+  /** Its boards, each with the host it is kept under (X68). */
+  boards: (BoardEntry & { host: string })[];
 }
 
 /** Settings › Boards' workspaces: one shared by the hosts of an account
  * shows once, as the switcher shows it, with the boards kept under any of
- * those hosts (X50, X68). */
+ * those hosts in the order they were added (X50, X68). */
 export function boardWorkspaces(hosts: HostWorkspaces[], boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardWorkspace[] {
   return ownWorkspaces(hosts).flatMap(({ h, list }) =>
     list.map((w) => {
-      const members = workspaceMembers({ host: h.host, id: w.id, account: accountOf(h) }, hosts);
-      const add = taskWorkspace(h.host, w.id, hosts, boards);
-      return {
-        key: wsKey(h.host, w.id),
-        name: w.name,
-        addTo: { host: add.host, id: w.id },
-        boards: members.flatMap((m) => boardList(wsKey(m, w.id), boards, attention).map((b) => ({ ...b, workspace: wsKey(m, w.id) }))),
-      };
+      const keys = new Map(workspaceMembers({ host: h.host, id: w.id, account: accountOf(h) }, hosts).map((m) => [wsKey(m, w.id), m]));
+      const kept = (boards ?? []).flatMap((b) => {
+        const host = keys.get(b.workspace);
+        return host ? [{ ...boardEntry(b, attention), host }] : [];
+      });
+      return { host: h.host, id: w.id, name: w.name, boards: kept };
     }),
   );
 }

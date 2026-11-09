@@ -16,7 +16,7 @@ import { BoardMark, Button, cx, IconButton } from "../ui";
 import { Card, fieldCls, PageHeading, Row, Section, Segmented, Status, Switch, SwitchRow } from "./controls";
 import { withPinned } from "../../lib/boards";
 import { DEFAULT_LINK, type TrackerKind } from "../../lib/tasks";
-import { parseWsKey } from "../../lib/workspaces";
+import { wsKey } from "../../lib/workspaces";
 
 
 const NAME = { linear: "Linear", jira: "Jira", clickup: "ClickUp" } as const;
@@ -159,16 +159,15 @@ export function TrackersPage() {
       <div data-setting="boards">
         <Section title="Boards" hint="Tasks mode shows the boards of the workspace you are in; a pinned one is in its sidebar.">
           {wsRows.map((w) => (
-            <Card key={w.key}>
-              <Row label={w.name} hint={w.boards.length ? undefined : "No board yet"} setting={`ws-boards-${w.key}`}>
-                <Button size="sm" className="field-height" onClick={() => openAddBoard(w.addTo.host, w.addTo.id)}>
+            <Card key={wsKey(w.host, w.id)}>
+              <Row label={w.name} hint={w.boards.length ? undefined : "No board yet"} setting={`ws-boards-${wsKey(w.host, w.id)}`}>
+                <Button size="sm" className="field-height" onClick={() => openAddBoard(w.host, w.id)}>
                   Add a board
                 </Button>
               </Row>
-              {w.boards.map((x) => {
-                const { host, id } = parseWsKey(x.workspace);
-                return <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(host, id, { board: x.id })} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />;
-              })}
+              {w.boards.map((x) => (
+                <BoardRow key={x.id} entry={x} onSettings={() => openAddBoard(x.host, w.id, { board: x.id })} onPin={(pinned) => save((c) => ({ ...c, boards: withPinned(c.boards ?? [], x.id, pinned) }))} />
+              ))}
             </Card>
           ))}
         </Section>

@@ -42,19 +42,27 @@ describe("boardWorkspaces (X50 Settings › Boards, X68 shared workspaces)", () 
   it("lists a workspace the hosts of one account share once, with the boards kept under any of them", () => {
     expect(boardWorkspaces(hosts, boards, {})).toEqual([
       {
-        key: "local/personal",
+        host: "local",
+        id: "personal",
         name: "Personal",
-        addTo: { host: "local", id: "personal" },
-        boards: [{ id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined, workspace: "local/personal" }],
+        boards: [{ id: "web", connection: "github:github.com", name: "acme/web", origin: "GitHub acme/web", pinned: true, attention: undefined, host: "local" }],
       },
       {
-        key: "local/notes",
+        host: "local",
+        id: "notes",
         name: "Notes",
-        addTo: { host: "studio-mini", id: "notes" },
-        boards: [{ id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: undefined, workspace: "studio-mini/notes" }],
+        boards: [{ id: "ops", connection: "jira:ops.atlassian.net", name: "Operations", origin: "Jira board 10", pinned: true, attention: undefined, host: "studio-mini" }],
       },
-      { key: "devbox/personal", name: "Personal", addTo: { host: "devbox", id: "personal" }, boards: [] },
+      { host: "devbox", id: "personal", name: "Personal", boards: [] },
     ]);
+  });
+
+  it("keeps a shared workspace's boards in the order they were added, whichever host they are kept under", () => {
+    const added: BoardConfig[] = [
+      { id: "ops", name: "Operations", connection: "jira:ops.atlassian.net", workspace: "studio-mini/personal", origin: { kind: "jira_board", board: 10 } },
+      { id: "web", name: "acme/web", connection: "github:github.com", workspace: "local/personal", origin: { kind: "github_repo", repo: "acme/web" } },
+    ];
+    expect(boardWorkspaces(hosts, added, {})[0].boards.map((b) => `${b.host} ${b.name}`)).toEqual(["studio-mini Operations", "local acme/web"]);
   });
 });
 
