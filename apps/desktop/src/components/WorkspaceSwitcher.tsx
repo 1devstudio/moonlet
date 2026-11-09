@@ -74,13 +74,15 @@ export function WorkspaceSwitcher() {
 
   if (!cur) return null;
   return (
-    <div className="no-drag relative min-w-0">
+    // A flex row, so the button shrinks with a narrow sidebar and truncates
+    // the name instead of running under the mode switch.
+    <div className="no-drag relative flex min-w-0">
       <button
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Switch workspace, current: ${cur.ws.name}`}
         onClick={() => setOpen(!open)}
-        className={cx("flex h-[30px] min-w-0 max-w-[180px] items-center gap-[7px] rounded-[7px] pl-[5px] pr-[7px] hover:bg-[#222]", open && "bg-[#222]")}
+        className={cx("flex h-[30px] min-w-0 max-w-[180px] items-center overflow-hidden gap-[7px] rounded-[7px] pl-[5px] pr-[7px] hover:bg-[#222]", open && "bg-[#222]")}
       >
         <WorkspaceMark name={cur.ws.name} color={cur.ws.color} size={18} />
         <span className="truncate ui-text-13 font-semibold text-fg">{cur.ws.name}</span>
