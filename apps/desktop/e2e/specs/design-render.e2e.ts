@@ -11,7 +11,7 @@ import { projectId, rpc, world } from "../fixtures";
 const w = world();
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
 const SLUG = "render-kit";
-const dir = () => join(w.home, "design", workspaceId(), "systems", SLUG);
+const dir = () => join(w.home, "design", "library", "systems", SLUG);
 
 const style =
   "<style>body{margin:0;padding:24px}.ds-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;align-items:start}.ds-cell{border:1px solid rgb(127 127 127 / .3);border-radius:8px;padding:12px;overflow:hidden;transform:translateZ(0)}.ds-cell h4{margin:0 0 8px;font:600 12px system-ui;text-transform:uppercase;opacity:.7}</style>";

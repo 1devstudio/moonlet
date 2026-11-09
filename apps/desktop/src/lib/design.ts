@@ -67,15 +67,15 @@ export function designSlug(name: string): string {
   return out || "design-system";
 }
 
-/** Where `design.system.create` will put a system named `name`: a used
- * folder makes it `<name> 2`, `<name> 3`, as the daemon does. Unknown (null)
- * until the workspace's systems are listed. */
-export function systemFolder(workspace: string, name: string, taken: string[] | undefined): string | null {
+/** Where `design.system.create` will put a system named `name`, in the
+ * library (X95): a used folder makes it `<name> 2`, `<name> 3`, as the
+ * daemon does. Unknown (null) until the systems are listed. */
+export function systemFolder(name: string, taken: string[] | undefined): string | null {
   if (!taken) return null;
   let n = 1;
   let slug = designSlug(name);
   while (taken.includes(slug)) slug = designSlug(`${name} ${++n}`);
-  return `~/.moonlet/design/${workspace}/systems/${slug}`;
+  return `~/.moonlet/design/library/systems/${slug}`;
 }
 
 /** The picked projects still in the workspace, in the order they were picked. */
@@ -136,9 +136,10 @@ export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: s
 /** The designs Design mode lists and opens on its design screen: the
  *  workspace designs of `design.list`. Its session designs belong to their
  *  sessions' Design tabs and its project designs to the Designs index (X65
- *  entries 12b and 12c). */
+ *  entries 12b and 12c); its shared designs are the library's, listed
+ *  under Shared designs (X95). */
 export function workspaceDesigns(list: Design[]): Design[] {
-  return list.filter((d) => d.kind === "workspace");
+  return list.filter((d) => d.kind === "workspace" && !d.shared);
 }
 
 /** Whether a `design.changed` is Design mode's: its workspace's design

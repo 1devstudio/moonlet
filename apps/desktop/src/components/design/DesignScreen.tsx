@@ -5,7 +5,8 @@
 // Palette, Comments and History tabs; a snapshot picked in History is
 // previewed on the canvas, read only.
 
-import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { LIBRARY } from "../../lib/designLibrary";
+import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Share2, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatHasItem, chatKey, revealInChat, useChat } from "../../lib/chat";
@@ -25,6 +26,8 @@ import {
   problemsOf,
   reloadPage,
   removeDesign,
+  shareDesign,
+  unshareDesign,
   kitRevOf,
   resolveComment,
   saveViewport,
@@ -98,15 +101,19 @@ export function useDesignBasics(host: string, workspace: string, design: Design)
 }
 
 /** The design screen of workspace design `design`, in workspace
- *  `workspace` of `host`: its agent's chat beside its canvas. */
-export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
+ *  `workspace` of `host`: its agent's chat beside its canvas. A shared
+ *  design (X95) is the library's (`workspace` is `library`), shown in
+ *  workspace `viewedIn`, where Build it starts its session. */
+export function DesignScreen({ host, workspace, viewedIn = workspace, design, inset }: { host: string; workspace: string; viewedIn?: string; design: Design; inset: number }) {
   const { agent, systemName } = useDesignBasics(host, workspace, design);
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
   // Build it (X65): the New session composer, in the design system's first source.
-  const systems = useDesign((d) => systemsOf(d, host, workspace));
-  const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  const systems = useDesign((d) => systemsOf(d, host, viewedIn));
+  const projects = useStore(useShallow((s) => workspaceProjects(s, host, viewedIn)));
+  const viewedName = useStore((s) => s.workspaces[host]?.find((w) => w.id === viewedIn)?.name ?? "this workspace");
+  const shared = workspace === LIBRARY;
   const sessions = useStore((s) => s.sessions[host]);
   const allProjects = useStore((s) => s.projects[host]);
   const building = buildingIn(design, sessions ?? [], allProjects ?? []);
@@ -114,7 +121,19 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const buildIt = () => {
     if (!("project" in target)) return;
     const build: BuildDesign = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
-    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: target.project, design: build } });
+    useStore.setState({ dialog: { kind: "new-session", host, workspace: viewedIn, project: target.project, design: build } });
+  };
+  const share = async () => {
+    const ok = await askConfirm({
+      title: `Share ${design.name} with every workspace?`,
+      message: `It moves out of ${viewedName}'s designs and is listed under Shared designs in each workspace.`,
+      action: "Share",
+    });
+    if (ok) void shareDesign(host, viewedIn, design.slug).catch(errorToast);
+  };
+  const unshare = async () => {
+    const ok = await askConfirm({ title: `Move ${design.name} into ${viewedName}?`, message: "It is no longer listed in the other workspaces.", action: "Stop sharing" });
+    if (ok) void unshareDesign(host, viewedIn, design.slug).catch(errorToast);
   };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
@@ -139,12 +158,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             {!design.owner && (
               <Menu
                 align="right"
+                width={260}
                 trigger={(open) => (
                   <IconButton title="More" className="no-drag" onClick={open}>
                     <MoreHorizontal size={14} />
                   </IconButton>
                 )}
-                items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+                items={[
+                  shared
+                    ? { label: "Stop sharing", icon: <Share2 size={14} />, onSelect: () => void unshare() }
+                    : { label: "Share with every workspace", icon: <Share2 size={14} />, onSelect: () => void share() },
+                  { label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() },
+                ]}
               />
             )}
             <IconButton title="Hide chat (⌘\)" className="no-drag" onClick={() => setChatOpen(false)}>
@@ -158,7 +183,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             <button
               title="Open the session it is building in"
               className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border bg-panel-2 px-4 text-left ui-text-12.5 text-muted hover:text-fg"
-              onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
+              onClick={() => void openSessionDesign(host, viewedIn, building.session, design.slug, true)}
             >
               <GitBranch size={12} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{building.text}</span>

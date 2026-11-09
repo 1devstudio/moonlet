@@ -1,6 +1,6 @@
 # X95 — One design library for the account: every workspace sees every design system, and a design can be shared
 
-- **Status:** draft
+- **Status:** implemented (untried between two real Macs)
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X64 (design systems), X65 (Design mode), X71 (designs on every member), X33 (Claude profiles), X32 (workspaces)
 - **Related ADRs:** [0013](../adr/0013-design-systems-and-designs.md) (changed by this spec: design systems are no longer per workspace), [0014](../adr/0014-one-account-across-hosts.md)
@@ -66,13 +66,13 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 
 ### The app
 
-- [ ] Design mode lists the library's design systems in every workspace, the same list in each. A system's row, view, cards and sync work as before.
-- [ ] The New design system dialog offers the projects of every workspace as sources, the shown workspace's first, each under its workspace's name.
+- [ ] Design mode lists the library's design systems in every workspace, the same list in each. A system's row, view, cards and sync work as before. (`e2e/specs/design-library.e2e.ts` lists a design system built in one workspace in another)
+- [ ] The New design system dialog offers the projects of every workspace as sources, the shown workspace's first, each under its workspace's name, and shows the system's folder in the library. (`lib/designLibrary.test.ts` are every workspace's, the shown one's first, each project once and a workspace without any left out; `lib/design.test.ts` shows where it will be, in the library (X95), numbered as the daemon numbers a used name)
 - [ ] The New design dialog offers every library system.
-- [ ] A design's `⋯` menu has **Share with every workspace** for a workspace design, and **Stop sharing** for a shared one. Stop sharing says "Move <name> into <workspace>?".
-- [ ] The sidebar shows **Shared designs** after **Designs**, when there is at least one. The Designs index has a **Shared designs** group after **Workspace designs**.
+- [ ] A design's `⋯` menu has **Share with every workspace** for a workspace design, and **Stop sharing** for a shared one. Stop sharing says "Move <name> into <workspace>?". (`lib/designStore.test.ts` Share with every workspace moves the design into the library and shows it there, Stop sharing moves it into the workspace it is viewed from, and shows it there; `e2e/specs/design-library.e2e.ts` shares a design with every workspace: both list it under Shared designs, Stop sharing moves it into the workspace shown, and the other lists it no more)
+- [ ] The sidebar shows **Shared designs** after **Designs**, when there is at least one. The Designs index has a **Shared designs** group after **Workspace designs**. (`lib/designStore.test.ts` a workspace's own designs leave out the shared ones, which the library lists; `lib/designsIndex.test.ts` lists them as Shared designs after the workspace's own, framed from the library)
 - [ ] A change to a library system reloads the pages that use it, in every workspace's open design. (`lib/designLibrary.test.ts` is every workspace's when it is in a library design system; `moonletd/tests/daemon.rs` a_file_written_in_a_design_system_is_announced)
-- [ ] Cards and shared design pages are framed on `moonlet-design://<key>.library/<path>`, and a workspace design's pages on their workspace's host, as today.
+- [ ] A design system's cards and a workspace design's pages are framed on the shown workspace's host, as today, which serves `systems/` from the library; a shared design's pages on `moonlet-design://<key>.library/<path>`. (`lib/designsIndex.test.ts` lists them as Shared designs after the workspace's own, framed from the library; `src-tauri/src/design_scheme.rs` a_shared_designs_page_is_on_the_librarys_host)
 
 ## UI
 

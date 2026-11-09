@@ -3,7 +3,8 @@
 // it is and what its button does. Pure: the listing is designStore.ts, the
 // view components/design/DesignsIndex.tsx.
 
-import type { Design, DesignKind } from "./protocol";
+import type { Design } from "./protocol";
+import { LIBRARY } from "./designLibrary";
 import type { DesignPlace } from "./designPlace";
 import { inWorktree } from "./sessionDesign";
 import { pageUrl, projectPageUrl } from "./designView";
@@ -15,6 +16,7 @@ import { builtSession } from "./buildIt";
 export type CardAction =
   | { label: "Open session"; kind: "session"; session: string; slug: string }
   | { label: "Open"; kind: "workspace"; slug: string }
+  | { label: "Open"; kind: "shared"; slug: string }
   | { label: "Use as a start"; kind: "project"; design: Design };
 
 /** A design's card in the index. `thumb`: its first page's address, framed
@@ -33,7 +35,7 @@ export interface IndexCard {
 }
 
 export interface IndexGroup {
-  title: "In sessions" | "Workspace designs" | "In projects";
+  title: "In sessions" | "Workspace designs" | "Shared designs" | "In projects";
   note: string;
   cards: IndexCard[];
 }
@@ -55,9 +57,9 @@ const revOf = (at: IndexNames, place: DesignPlace, slug: string, page: string) =
 const pages = (n: number) => (n === 0 ? "no pages yet" : `${n} page${n === 1 ? "" : "s"}`);
 
 /** Each kind of design's group and card, in the index's order. */
-const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card: (d: Design, at: IndexNames) => Omit<IndexCard, "design" | "name" | "placeholder"> | null }[] = [
+const KINDS: { is: (d: Design) => boolean; title: IndexGroup["title"]; note: string; card: (d: Design, at: IndexNames) => Omit<IndexCard, "design" | "name" | "placeholder"> | null }[] = [
   {
-    kind: "session",
+    is: (d) => d.kind === "session",
     title: "In sessions",
     note: "Their pages live in the session's branch; open the session to change them",
     card: (d, at) => {
@@ -74,7 +76,7 @@ const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card:
     },
   },
   {
-    kind: "workspace",
+    is: (d) => d.kind === "workspace" && !d.shared,
     title: "Workspace designs",
     note: "Their own agent, no branch",
     card: (d, at) => {
@@ -90,7 +92,23 @@ const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card:
     },
   },
   {
-    kind: "project",
+    // The library's (X95), listed in every workspace.
+    is: (d) => d.kind === "workspace" && !!d.shared,
+    title: "Shared designs",
+    note: "Listed in every workspace",
+    card: (d, at) => {
+      const system = at.systems.find((x) => x.slug === d.system)?.name ?? d.system;
+      return {
+        key: `shared/${d.slug}`,
+        line: `${system} · ${pages(d.pages.length)}`,
+        act: { label: "Open", kind: "shared", slug: d.slug },
+        thumb: d.pages[0] ? pageUrl(LIBRARY, d.slug, d.pages[0].name, revOf(at, LIBRARY, d.slug, d.pages[0].name)) : null,
+        updated_at: d.updated_at,
+      };
+    },
+  },
+  {
+    is: (d) => d.kind === "project",
     title: "In projects",
     note: "Merged to main: found under docs/design/. Read only; reuse them as a start",
     card: (d, at) => ({
@@ -108,11 +126,11 @@ const projectName = (at: IndexNames, id: string | undefined) => at.projects.find
 /** The Designs index of `list`, `design.list`'s answer: its groups in
  *  order, each in the listing's order, a group with no designs left out. */
 export function designsIndex(list: Design[], at: IndexNames): IndexGroup[] {
-  return KINDS.map(({ kind, title, note, card }) => ({
+  return KINDS.map(({ is, title, note, card }) => ({
     title,
     note,
     cards: list.flatMap((d) => {
-      const c = d.kind === kind ? card(d, at) : null;
+      const c = is(d) ? card(d, at) : null;
       return c ? [{ ...c, design: d, name: d.name, placeholder: c.thumb ? null : "No pages yet" }] : [];
     }),
   })).filter((g) => g.cards.length);

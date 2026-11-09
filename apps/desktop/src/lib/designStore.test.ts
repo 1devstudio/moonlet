@@ -5,6 +5,7 @@ import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
 import { cardUrl } from "./designView";
 import { pageRevReader, startFromProjectDesign } from "./designStore";
+import { shareDesign, unshareDesign, shownDesignPlace } from "./designStore";
 import { cardRevOf, cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -947,5 +948,41 @@ describe("design.open of a design an agent made (X65)", () => {
     removed = false;
     await loadDesigns("local", "w-1devstudio", true);
     expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
+  });
+});
+
+describe("shared designs (X95)", () => {
+  beforeEach(() => {
+    answers["design.check"] = () => [];
+  });
+
+  it("Share with every workspace moves the design into the library and shows it there", async () => {
+    answers["design.share"] = () => "pricing";
+    answers["design.list"] = (p) => ((p as { workspace: string }).workspace === "library" ? [design({ slug: "pricing", name: "Pricing" })] : []);
+    await shareDesign("local", "w-1devstudio", "pricing");
+    expect(calls.find((c) => c.method === "design.share")?.params).toEqual({ workspace: "w-1devstudio", slug: "pricing" });
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.name).toBe("Pricing");
+    expect(shownDesignPlace(useDesign.getState(), "local", "w-1devstudio")).toBe("library");
+    expect(designsOf(useDesign.getState(), "local", "w-1devstudio")).toEqual([]);
+  });
+
+  it("Stop sharing moves it into the workspace it is viewed from, and shows it there", async () => {
+    answers["design.unshare"] = () => "pricing-2";
+    answers["design.list"] = (p) => ((p as { workspace: string }).workspace === "w-site" ? [design({ slug: "pricing-2", name: "Pricing 2" })] : []);
+    await unshareDesign("local", "w-site", "pricing");
+    expect(calls.find((c) => c.method === "design.unshare")?.params).toEqual({ workspace: "library", slug: "pricing", into: "w-site" });
+    expect(shownDesign(useDesign.getState(), "local", "w-site")?.name).toBe("Pricing 2");
+    expect(shownDesignPlace(useDesign.getState(), "local", "w-site")).toBe("w-site");
+  });
+
+  it("a workspace's own designs leave out the shared ones, which the library lists", async () => {
+    answers["design.list"] = (p) =>
+      (p as { workspace: string }).workspace === "library"
+        ? [design({ slug: "onboarding", name: "Onboarding" })]
+        : [design({ slug: "pricing", name: "Pricing" }), design({ slug: "onboarding", name: "Onboarding", shared: true })];
+    await loadDesigns("local", "w-1devstudio");
+    await loadDesigns("local", "library");
+    expect(designsOf(useDesign.getState(), "local", "w-1devstudio")?.map((d) => d.slug)).toEqual(["pricing"]);
+    expect(designsOf(useDesign.getState(), "local", "library")?.map((d) => d.slug)).toEqual(["onboarding"]);
   });
 });

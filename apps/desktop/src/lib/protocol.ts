@@ -1253,6 +1253,9 @@ export interface Design {
   built_in?: { session: string; project?: string };
   /** A session design whose design system was synced since it pinned it. */
   system_updated?: boolean;
+  /** Shared with every workspace (X95): the library's, addressed as
+   *  `{workspace: "library", slug}`. */
+  shared?: boolean;
 }
 
 /** `design.system.update`'s answer: the new anchor, and the cards that
@@ -1626,6 +1629,8 @@ export const M = {
   designSystemUpdate: "design.system.update",
   designCopy: "design.copy",
   designMove: "design.move",
+  designShare: "design.share",
+  designUnshare: "design.unshare",
 } as const;
 
 export const EV = {
