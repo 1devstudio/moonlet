@@ -17,7 +17,7 @@ export interface McpActions {
   onCopy: (name: string) => Promise<void>;
 }
 
-const panel = "rounded-xl border border-border-strong bg-[#1a1a1a] shadow-[0_12px_32px_rgba(0,0,0,.5)]";
+const panel = "rounded-xl border border-border-strong bg-panel-2 shadow-[0_12px_32px_rgba(0,0,0,.5)]";
 
 /** The MCP server list and the selected server's card (X29). */
 export function McpPanels({ servers, error, ...actions }: McpActions) {

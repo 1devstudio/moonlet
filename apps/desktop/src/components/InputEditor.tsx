@@ -8,6 +8,7 @@ import { firstWord, historyFor, knownCommands, rememberCommand, suggest } from "
 import { type TokenKind, tokenize } from "../lib/shellTokens";
 import { findEntry, getEntry, shortPath } from "../lib/terminals";
 import { setClassic } from "../lib/actions";
+import { useStore } from "../lib/store";
 
 const drafts = new Map<string, string>();
 
@@ -98,12 +99,20 @@ export function InputEditor({
   }, [focused]);
 
   // Grow with content, up to ~10 lines.
-  useLayoutEffect(() => {
+  const fit = () => {
     const el = ta.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
-  }, [text]);
+  };
+  useLayoutEffect(fit, [text]);
+  // Again at a new font size (X94), once the app has set the new scale: its
+  // effect runs after this component's.
+  const fontSize = useStore((s) => s.settings.term.fontSize);
+  useEffect(() => {
+    const id = window.setTimeout(fit, 0);
+    return () => window.clearTimeout(id);
+  }, [fontSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ghost = walk === null ? suggest(history, text) : null;
   const atEnd = () => {

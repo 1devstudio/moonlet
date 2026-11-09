@@ -12,6 +12,7 @@ import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
 import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobCount, useJobLines, useJobStderr } from "./JobsPanel";
 import { cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
 
@@ -126,7 +127,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
               Follow
             </label>
           </div>
-          <div ref={box} data-job-output className="selectable min-h-0 flex-1 overflow-y-auto px-7 py-3 font-mono ui-text-12.5 leading-[1.6]">
+          <ScrollArea ref={box} latest data-job-output className="selectable px-7 py-3 font-mono ui-text-12.5 leading-[1.6]">
             <EarlierLines job={id} earlier={earlier} onShow={showEarlier} />
             {rendered.map((l) => (
               <div key={l.n} className="flex gap-4">
@@ -134,7 +135,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
                 <span className={cx("min-w-0 flex-1 whitespace-pre-wrap break-all", l.tone ? LINE_TONE[l.tone] : "text-fg")}>{l.text || " "}</span>
               </div>
             ))}
-          </div>
+          </ScrollArea>
         </div>
         <aside className="flex w-[300px] shrink-0 flex-col gap-6 overflow-y-auto border-l border-border px-6 py-5 ui-text-12.5">
           {job.worker && (

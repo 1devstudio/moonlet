@@ -1,237 +1,31 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, FileDiff, GitPullRequest, LoaderCircle, Plus, X } from "lucide-react";
-import { rpc } from "../lib/daemon";
-import { diffModeLabel } from "../lib/changes";
-import { leaves, type DiffMode } from "../lib/layout";
-import { M, type ProjectConfig, type Session } from "../lib/protocol";
-import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { closeDiffTab, closeFileTab, closeJobTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
-import { FileIcon } from "./FileIcon";
-import { WorkerIcon, going } from "./JobsPanel";
-import { chipFromJob } from "../lib/jobs";
-import { useSessionJob } from "../lib/jobsStore";
+import { useEffect, useRef, useState } from "react";
+import { GitBranch, GitPullRequest, X } from "lucide-react";
+import { type Session } from "../lib/protocol";
+import { focusTerminal, getLayout, useStore, sesKey } from "../lib/store";
+import { newSessionAgentTab, newTab, sendToAgent } from "../lib/actions";
 import { quietWhen } from "../lib/motion";
 import { PaneTree } from "./PaneTree";
-import { AgentIcon, Kbd, cx } from "./ui";
+import { AgentIcon, Kbd, Pane, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
-import { TaskBar } from "./tasks/SessionTask";
-import { copyOffers } from "../lib/centralCopies";
+import { TaskBar, useSessionTask } from "./tasks/SessionTask";
+import { TabStrip } from "./SessionTabs";
 import { CopyLine } from "./CopyLine";
 
-
-function AddMenu({ host, ws }: { host: string; ws: Session }) {
-  const [open, setOpen] = useState(false);
-  const repo = useStore((s) => projectOf(s, host, ws));
-  const [agents, setAgents] = useState<string[]>(["claude", "codex"]);
-  useEffect(() => {
-    if (!open || !repo) return;
-    void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id })
-      .then((c) => setAgents(["claude", "codex", ...Object.keys(c.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")]))
-      .catch(() => {});
-  }, [open, host, repo]);
-  const item = (key: string, content: ReactNode, run: () => void, kbd?: string) => (
-    <button
-      key={key}
-      className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left ui-text-13 hover:bg-hover"
-      onClick={() => {
-        setOpen(false);
-        run();
-      }}
-    >
-      {content}
-      {kbd && (
-        <span className="ml-auto">
-          <Kbd>{kbd}</Kbd>
-        </span>
-      )}
-    </button>
-  );
-  return (
-    <div className="no-drag relative flex items-center">
-      <button title="New agent (⌘T)" className="flex h-8 items-center rounded-l-md pl-2.5 pr-1 text-muted hover:bg-raised hover:text-fg" onClick={() => void newSessionAgentTab()}>
-        <Plus size={15} strokeWidth={1.75} />
-      </button>
-      <button title="New agent or split" className="flex h-8 items-center rounded-r-md pl-0.5 pr-2 text-muted hover:bg-raised hover:text-fg" onClick={() => setOpen(!open)}>
-        <ChevronDown size={13} />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-9 z-40 w-56 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
-            {agents.map((a) =>
-              item(
-                a,
-                <>
-                  <AgentIcon agent={a} size={13} /> {agentLabel(a)}
-                </>,
-                () => void newAgentTab(a),
-              ),
-            )}
-            <div className="my-1 border-t border-border" />
-            {item("term", <>Terminal</>, () => void newTab(), "⇧⌘T")}
-            {item("split-r", <>Split right</>, () => void split("row"), "⌘D")}
-            {item("split-d", <>Split down</>, () => void split("col"), "⌥⌘D")}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function Tab({ host, ws, id, ids, active }: { host: string; ws: Session; id: string; ids: number[]; active: boolean }) {
-  const info = useStore((s) => s.terminals[host]?.[ids[0]]);
-  const unread = useStore((s) => ids.some((x) => s.unread[termKey(host, x)]));
-  const state = info?.kind === "agent" && !info.exit ? info.agent_state : null;
-  const name = info ? (info.agent ?? info.title) : "…";
-  return (
-    <div
-      aria-current={active || undefined}
-      className={cx(
-        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
-        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
-      )}
-      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: ids[0] })}
-    >
-      <AgentIcon agent={info?.kind === "agent" ? info.agent : null} size={15} />
-      <span className={cx("truncate", unread && "font-semibold text-fg")}>{name}</span>
-      {ids.length > 1 && <span className="font-mono ui-text-11 text-faint">+{ids.length - 1}</span>}
-      {state === "blocked" && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blocked" title="needs input" />}
-      {state === "working" && (
-        <span className="moonlet-dots shrink-0" title="working">
-          <i />
-          <i />
-          <i />
-        </span>
-      )}
-      {info?.exit && <span className="font-mono ui-text-11 text-faint">exited</span>}
-      <button
-        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-        title="Close tab"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => void closeTab(host, ids)}
-      >
-        <X size={12} />
-      </button>
-    </div>
-  );
-}
-
-/** A file's editor tab (X26): a dot while it has unsaved edits. */
-function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id: string; path: string; active: boolean }) {
-  const dirty = useStore((s) => !!s.dirtyFiles[`${host}|${path}`]);
-  const name = path.split("/").pop() ?? path;
-  return (
-    <div
-      aria-current={active || undefined}
-      title={path}
-      className={cx(
-        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
-        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
-      )}
-      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
-    >
-      <FileIcon name={name} />
-      <span className="truncate">{name}</span>
-      {dirty && <span aria-label="unsaved" className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg group-hover:hidden" />}
-      <button
-        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-        title="Close tab"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => void closeFileTab(host, ws.id, path)}
-      >
-        <X size={12} />
-      </button>
-    </div>
-  );
-}
-
-/** A changed file's diff tab (X77): the name, and which changes it compares. */
-function DiffTab({ host, ws, id, path, mode, active }: { host: string; ws: Session; id: string; path: string; mode: DiffMode; active: boolean }) {
-  const name = path.split("/").pop() ?? path;
-  return (
-    <div
-      aria-current={active || undefined}
-      title={`${path} — ${diffModeLabel(mode, ws.base)}`}
-      className={cx(
-        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
-        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
-      )}
-      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
-    >
-      <FileDiff size={14} strokeWidth={1.5} className="shrink-0" />
-      <span className="truncate">{name}</span>
-      {mode === "head" && <span className="shrink-0 ui-text-11 text-faint group-hover:hidden">uncommitted</span>}
-      <button
-        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-        title="Close tab"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => closeDiffTab(host, ws.id, path, mode)}
-      >
-        <X size={12} />
-      </button>
-    </div>
-  );
-}
-
-/** A job's tab (X62): where it runs, its command and how it is going. */
-function JobTab({ host, ws, id, job, active }: { host: string; ws: Session; id: string; job: string; active: boolean }) {
-  const j = useSessionJob(host, ws.id, job);
-  const s = j?.state;
-  return (
-    <div
-      aria-current={active || undefined}
-      title={j?.command}
-      className={cx(
-        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
-        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
-      )}
-      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
-    >
-      {j && <WorkerIcon icon={chipFromJob(j).icon} size={14} />}
-      <span className="truncate font-mono ui-text-13">{j?.command ?? "Job"}</span>
-      <span className="ml-auto flex shrink-0 items-center group-hover:hidden">
-        {j && going(j) ? (
-          <LoaderCircle aria-label="running" size={12} className="animate-spin text-accent" />
-        ) : s?.kind === "done" && s.exit === 0 ? (
-          <Check aria-label="done" size={13} className="text-done" />
-        ) : s ? (
-          <X aria-label="failed" size={13} className="text-error" />
-        ) : null}
-      </span>
-      <button
-        className="ml-auto hidden rounded p-0.5 text-faint hover:bg-hover hover:text-fg focus-visible:flex group-hover:flex"
-        title="Close tab"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => closeJobTab(host, ws.id, job)}
-      >
-        <X size={12} />
-      </button>
-    </div>
-  );
-}
-
-function TabStrip({ host, ws }: { host: string; ws: Session }) {
-  const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
+/** A session without a task heads its column with its name and branch (X94). */
+function SessionHeader({ ws }: { ws: Session }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
-    <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-stretch bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }}>
-      <div className="flex min-w-0 items-stretch overflow-x-auto">
-        {layout?.tabs.map((t) =>
-          t.root.type === "file" ? (
-            <FileTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} active={t.id === layout.active} />
-          ) : t.root.type === "diff" ? (
-            <DiffTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} mode={t.root.mode} active={t.id === layout.active} />
-          ) : t.root.type === "job" ? (
-            <JobTab key={t.id} host={host} ws={ws} id={t.id} job={t.root.job} active={t.id === layout.active} />
-          ) : (
-            <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />
-          ),
-        )}
-      </div>
-      <div className="flex items-center px-2">
-        {copyOffers(host).newTabs && <AddMenu host={host} ws={ws} />}
-      </div>
-    </div>
+    <header
+      data-tauri-drag-region
+      aria-label="Session"
+      className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
+      // Clear of the traffic lights when the sidebar is closed.
+      style={{ paddingLeft: sidebarOpen ? 12 : 84 }}
+    >
+      <GitBranch size={14} strokeWidth={1.75} className="shrink-0 text-muted" />
+      <h1 className="min-w-0 truncate ui-text-13.5 font-medium text-fg">{ws.name}</h1>
+      {ws.branch && <span className="min-w-0 truncate font-mono ui-text-12 text-faint">{ws.branch}</span>}
+    </header>
   );
 }
 
@@ -331,10 +125,12 @@ function AgentCard({ host, ws }: { host: string; ws: Session }) {
 export function SessionView({ host, ws }: { host: string; ws: Session }) {
   const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const hostInfo = useStore((s) => s.hosts[host]);
+  const task = useSessionTask(host, ws);
   return (
-    <div className="flex h-full min-w-0 flex-col bg-bg">
+    <div className="flex h-full min-w-0 flex-col">
+      {task ? <TaskBar host={host} ws={ws} linked={task} /> : <SessionHeader ws={ws} />}
       <TabStrip host={host} ws={ws} />
-      <TaskBar host={host} ws={ws} />
+      <Pane className="flex flex-col">
       <CopyLine host={host} />
       {hostInfo && hostInfo.status !== "connected" && (
         <div className="shrink-0 bg-[#221d12] px-7 py-1.5 font-mono ui-text-12 text-blocked">
@@ -368,6 +164,7 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
         <AgentCard host={host} ws={ws} />
       </div>
       <PromptLine host={host} ws={ws} />
+      </Pane>
     </div>
   );
 }

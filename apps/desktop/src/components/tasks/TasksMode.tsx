@@ -57,13 +57,14 @@ import { FindTask } from "./BoardSearch";
 import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateChoices } from "../../lib/boardScreen";
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
-import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
+import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, Pane, StateGlyph } from "../ui";
 import { ArchivedSessions } from "./ArchivedSessions";
 import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
 import { NewIssue } from "./NewIssue";
 import { unseenOf, useDesign } from "../../lib/designStore";
+import { ScrollArea } from "../ScrollArea";
 
 
 /** The Columns button's glyph: four upright lines, as the design draws it. */
@@ -321,7 +322,8 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
     return () => window.removeEventListener("keydown", onKey);
   }, [host, first, firstHost]);
   return (
-    <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
+    <aside aria-label="Task detail" className="ml-[6px] mt-ui-44 flex w-[360px] shrink-0 flex-col overflow-hidden rounded-[10px] bg-bg">
+      <ScrollArea className="flex flex-col">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <span className="font-mono ui-text-12 text-muted">{card.task.key}</span>
         <IconButton title="Copy issue key" onClick={() => void navigator.clipboard.writeText(card.task.key).then(() => toast(`Copied ${card.task.key}`))}>
@@ -434,6 +436,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
         </div>
         <Activity task={card.task} />
       </div>
+    </ScrollArea>
     </aside>
   );
 }
@@ -460,10 +463,11 @@ export function TasksMode() {
   const [dragging, setDragging] = useState<Card | null>(null);
   const [over, setOver] = useState<string | null>(null);
   if (!ws) return null;
-  if (!data) return <Empty title="Loading tasks…" />;
+  if (!data) return <Framed><Empty title="Loading tasks…" /></Framed>;
   if (!shown) {
     const connected = (connections ?? []).length > 0;
     return (
+      <Framed>
       <div className="flex h-full items-start justify-center pt-[12vh]">
         <section role="dialog" aria-labelledby="connect-tracker" className="w-[440px] rounded-xl border border-border-strong bg-panel p-5">
           <h2 id="connect-tracker" className="ui-text-15 font-medium text-fg">
@@ -516,6 +520,7 @@ export function TasksMode() {
           </div>
         </section>
       </div>
+      </Framed>
     );
   }
   // The header's filters (X45), column by column; Find a task filters nothing (X93).
@@ -575,7 +580,7 @@ export function TasksMode() {
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
         {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
-        <header data-tauri-drag-region className="drag @container flex min-h-[52px] shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4 py-2">
+        <header data-tauri-drag-region className="drag @container flex min-h-ui-44 shrink-0 items-center gap-2.5 px-4 py-1.5">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
           <FindTask
             host={ws.host}
@@ -617,6 +622,7 @@ export function TasksMode() {
             </IconButton>
           </div>
         </header>
+        <Pane className="flex flex-col">
         {problem && (
           // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
           <div role="alert" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
@@ -696,6 +702,7 @@ export function TasksMode() {
             )}
           </div>
         )}
+        </Pane>
       </div>
       {detail && <TaskDetail host={ws.host} workspaceId={ws.id} card={detail} />}
       {creating && (
@@ -936,7 +943,7 @@ function TasksList({ host, workspaceId, views, unlinked, found }: { host: string
   const keyOf = (c: Card) => taskId(c.task);
   const toggle = (c: Card) => toggleExpanded(keyOf(c));
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3.5">
+    <ScrollArea className="px-4 pb-4 pt-3.5">
       {groups.map((g) => (
         <section key={g.name} aria-label={g.name} className="mb-4">
           <div className="flex items-center gap-2 border-b border-border pb-1.5 ui-text-13 text-fg">
@@ -1037,14 +1044,49 @@ function TasksList({ host, workspaceId, views, unlinked, found }: { host: string
           </div>
         ))}
       </section>
-    </div>
+    </ScrollArea>
   );
 }
 
 const PRIORITY = ["No priority", "Low", "Medium", "High"];
 
-/** The state menu as a chip in a row of text, the task bar's (X46). */
-const CHIP_SELECT = "chip-select shrink-0 rounded-full border border-border-strong bg-transparent pl-[7px] ui-text-11.5 text-muted outline-none hover:text-fg focus:border-accent";
+/** A Tasks screen with no board header: the window's drag row over a pane (X94). */
+function Framed({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-full flex-col">
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" />
+      <Pane className="flex flex-col">{children}</Pane>
+    </div>
+  );
+}
+
+/** The state menu in a session's task header (X46, X94): an unseen select over the pill, which draws it. */
+const CHIP_SELECT = "absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default";
+
+/** The dot of a task's state, by its column (X94). */
+const STATE_DOT: Record<Column, string> = {
+  todo: "bg-idle",
+  in_progress: "bg-working",
+  in_review: "bg-blocked",
+  done: "bg-merged",
+  hidden: "bg-idle",
+};
+
+/**
+ * The task header's state pill (X94): its dot, the state's name and a
+ * chevron, 26 px high; under 560 px of header, only the dot. The select over
+ * it opens the state menu.
+ */
+function StatePill({ column, label, children }: { column: Column; label: string; children: React.ReactNode }) {
+  return (
+    <span className="relative flex h-ui-26 shrink-0 items-center gap-[7px] rounded-full bg-raised pl-2.5 pr-2 ui-text-12 text-fg hover:bg-hover focus-within:ring-1 focus-within:ring-accent @max-[560px]:w-[28px] @max-[560px]:justify-center @max-[560px]:bg-transparent @max-[560px]:p-0">
+      <span aria-hidden="true" className={cx("h-[7px] w-[7px] shrink-0 rounded-full", STATE_DOT[column])} />
+      <span className="whitespace-nowrap @max-[560px]:hidden">{label}</span>
+      <ChevronDown size={12} className="shrink-0 text-muted @max-[560px]:hidden" />
+      {children}
+    </span>
+  );
+}
 
 /** Priority as 0–3 bars (X44). */
 function PriorityBars({ n }: { n: number }) {
@@ -1062,7 +1104,7 @@ function PriorityBars({ n }: { n: number }) {
  * tracker board, the board's columns by name, each moving to its first
  * status (X50); otherwise the four columns, or Open and Closed on GitHub.
  */
-export function StateMenu({ host, workspaceId, task, chip = false }: { host: string; workspaceId: string; task: Task; chip?: boolean }) {
+export function StateMenu({ host, workspaceId, task, chip }: { host: string; workspaceId: string; task: Task; chip?: Column }) {
   // The board's columns as saved, and the task's board after each sync.
   const boards = useTasks((t) => t.config?.boards);
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
@@ -1094,6 +1136,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
         ))}
       </select>
     );
+    if (chip) return <StatePill column={chip} label={current < 0 ? "Not shown" : choices[current].label}>{select}</StatePill>;
     if (!locked) return select;
     return (
       <span className="flex flex-col gap-1">
@@ -1106,7 +1149,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
   if (task.github?.project) return <span className={cx("ui-text-12.5 text-muted", chip && "shrink-0 whitespace-nowrap")}>{task.github.project.status ?? NO_STATUS}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
-  return (
+  const select = (
     <select
       aria-label={`State of ${task.key}`}
       className={chip ? CHIP_SELECT : "rounded-md border border-border-strong bg-panel-2 px-1.5 py-0.5 ui-text-12.5 text-fg"}
@@ -1121,6 +1164,7 @@ export function StateMenu({ host, workspaceId, task, chip = false }: { host: str
       ))}
     </select>
   );
+  return chip ? <StatePill column={chip} label={current < 0 ? "Not shown" : options[current].label}>{select}</StatePill> : select;
 }
 
 /** What moonlet did about the task (X45 Activity). */

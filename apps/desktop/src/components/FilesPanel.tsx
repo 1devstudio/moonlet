@@ -10,6 +10,7 @@ import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
 import { Menu } from "./Menu";
 import { IconButton, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 /** What a row needs from the panel: where it lives and what its actions do. */
 interface Tree {
@@ -121,11 +122,11 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
           {showIgnored ? <EyeOff size={12} /> : <Eye size={12} />}
         </IconButton>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+      <ScrollArea className="py-1.5">
         <div role="tree" aria-label="Files">
           <Dir path={ws.path} depth={0} tree={{ host, root: ws.path, showIgnored, version, selected, targets, onOpen }} />
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 }

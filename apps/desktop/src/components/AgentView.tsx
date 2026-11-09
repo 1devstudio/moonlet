@@ -109,6 +109,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 import { useCopyReadOnly } from "./CopyLine";
 import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
@@ -1710,16 +1711,19 @@ export function AgentView({
           <PlanPanel view={plan} />
         </Dialog>
       )}
-      <div
+      {/* The transcript (X94): 24 px above and below, 28 at the sides, at most 880 wide; fades and Latest. */}
+      <ScrollArea
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto"
+        latest
+        // Wide tables scroll sideways, as before.
+        x
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
         <FileLinks.Provider value={fileLinks}>
-          <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
+          <div className="flex max-w-[880px] flex-col gap-0.5 px-[28px] py-[24px]">
             {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
@@ -1805,8 +1809,9 @@ export function AgentView({
             })}
           </div>
         </FileLinks.Provider>
-      </div>
-      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", PAD_X[layout.padX])}>
+      </ScrollArea>
+      {/* 4 px above the composer, 14 below (X94). */}
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-[14px] pt-[4px]", PAD_X[layout.padX])}>
         {replies && !working && (
           <div role="group" aria-label="Suggested replies" className="mb-2 flex flex-wrap items-center gap-1.5">
             {replies.map((r, i) => (

@@ -110,7 +110,7 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
 
   const rel = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
   return (
-    <div className="flex h-full flex-col bg-[#121212]">
+    <div className="flex h-full flex-col bg-bg">
       <div className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border px-4 ui-text-12">
         <span className="truncate font-mono text-muted" title={path}>
           {rel}

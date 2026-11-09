@@ -14,6 +14,7 @@ import { useSize } from "../../lib/useSize";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { CardFrame } from "./Frame";
 import { cx } from "../../lib/cx";
+import { ScrollArea } from "../ScrollArea";
 
 /** Design and build of `design`: each screenshot tried by its image, and
  *  again, its address carrying `builtRev`, as its agent saves some in
@@ -39,11 +40,11 @@ export function DesignAndBuild({ host, ws, design, onBack }: { host: string; ws:
           <ArrowLeft size={12} /> Canvas
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4" {...{ [NEAR_ROOT]: "" }}>
+      <ScrollArea className="p-4" {...{ [NEAR_ROOT]: "" }}>
         {view.rows.map((r) => (
           <BuildRow key={r.page} host={host} place={place} slug={design.slug} row={r} viewport={view.viewport} builtRev={builtRev} seen={seen} />
         ))}
-      </div>
+      </ScrollArea>
     </section>
   );
 }

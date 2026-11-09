@@ -14,11 +14,12 @@ import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, StateGlyph, inputCls } from "../ui";
+import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, Pane, StateGlyph, inputCls } from "../ui";
 import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
 import { DesignsIndex } from "./DesignsIndex";
+import { ScrollArea } from "../ScrollArea";
 
 /** The shown workspace, its design systems and designs, and the ones shown;
  * `load` lists them when the workspace is shown (the sidebar does, so a
@@ -114,7 +115,7 @@ export function DesignSidebar() {
           <Kbd>⌘K</Kbd>
         </button>
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <ScrollArea tone="window" className="pb-3">
         <Heading label="Design systems" add={{ title: "New design system", run: () => openNewSystem(ws) }} />
         <nav aria-label="Design systems" className="px-2">
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
@@ -173,7 +174,7 @@ export function DesignSidebar() {
             );
           })}
         </nav>
-      </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -187,30 +188,30 @@ export function DesignMain() {
   const now = useNow(true);
   if (design && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
+      <div className="flex h-full flex-col">
         <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }
   if (indexed && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
+      <div className="flex h-full flex-col">
         <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }
   if (shown && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
+      <div className="flex h-full flex-col">
         <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }
   return (
-    <div className="flex h-full flex-col bg-bg">
-      <div data-tauri-drag-region className="drag h-[52px] shrink-0 border-b border-border bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+    <div className="flex h-full flex-col">
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       {systems?.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-[10px] bg-bg p-6 text-center">
           <SwatchBook size={18} className="text-muted" />
           <div className="ui-text-14 font-semibold text-fg">No design system yet</div>
           <p className="max-w-md ui-text-13 text-muted">
@@ -229,7 +230,9 @@ export function DesignMain() {
             ))}
           </ol>
         </div>
-      ) : null}
+      ) : (
+        <Pane />
+      )}
     </div>
   );
 }

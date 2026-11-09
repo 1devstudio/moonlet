@@ -123,8 +123,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   return (
     <div className="flex min-h-0 flex-1">
       {chatOpen ? (
-        <section ref={chatRef} aria-label={`Design · ${design.name}`} className="flex w-[360px] shrink-0 flex-col border-r border-border">
-          <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1.5 border-b border-border bg-panel pr-2" style={{ paddingLeft: inset + 16 }}>
+        <section ref={chatRef} aria-label={`Design · ${design.name}`} className="mr-[6px] flex w-[360px] shrink-0 flex-col">
+          <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-1.5 pr-2" style={{ paddingLeft: inset + 16 }}>
             <div className="min-w-0 flex-1">
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
@@ -151,6 +151,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <PanelLeftClose size={14} />
             </IconButton>
           </header>
+          {/* The chat's pane (X94). */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-bg">
           {building && (
             // Built (X65): its session design is the one that changes now.
             <button
@@ -184,9 +186,10 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <p className="p-5 ui-text-13 text-muted">This design's agent is not running.</p>
             )}
           </div>
+          </div>
         </section>
       ) : (
-        <div className="flex w-11 shrink-0 flex-col items-center gap-2 border-r border-border" style={{ paddingTop: inset ? 60 : 14 }}>
+        <div className="mr-[6px] flex w-11 shrink-0 flex-col items-center gap-2" style={{ paddingTop: inset ? 60 : 14 }}>
           <IconButton title="Show chat (⌘\)" onClick={() => setChatOpen(true)}>
             <PanelLeftOpen size={14} />
           </IconButton>
@@ -666,7 +669,7 @@ export function DesignCanvas({
   return (
     <div ref={own} className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 border-b border-border bg-panel px-3", session ? "h-10" : "drag h-[52px]")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
+        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 px-3", session ? "h-10 border-b border-border" : "drag h-ui-44")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
           <nav aria-label="Pages" className="no-drag flex min-w-0 items-center gap-0.5 overflow-x-auto">
             {(names.length ? names : ["index"]).map((name) => (
               <button
@@ -691,6 +694,8 @@ export function DesignCanvas({
           </nav>
           {aside}
         </div>
+        {/* The canvas's pane (X94); in a session's Design tab, the right panel's. */}
+        <div className={cx("flex min-h-0 flex-1 flex-col", !session && "overflow-hidden rounded-[10px] bg-bg")}>
         <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
@@ -806,10 +811,11 @@ export function DesignCanvas({
             )
           )}
         </div>
+        </div>
       </div>
       {railOpen && (
-        <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
-          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-2 overflow-x-auto border-b border-border px-3">
+        <aside aria-label="Right rail" className={cx("flex w-[300px] shrink-0 flex-col", session ? "border-l border-border" : "ml-[6px]")}>
+          <div role="tablist" className={cx("flex shrink-0 items-end gap-2 overflow-x-auto px-3", session ? "h-10 border-b border-border" : "h-ui-44")}>
             {RAIL_TABS.map(({ tab: t, label }) => (
               <button
                 key={t}
@@ -823,6 +829,7 @@ export function DesignCanvas({
               </button>
             ))}
           </div>
+          <div className={cx("flex min-h-0 flex-1 flex-col", !session && "overflow-hidden rounded-[10px] bg-bg")}>
           {railTab === "layers" ? (
             <LayersTab
               layers={page === null ? NO_LAYERS : layers}
@@ -867,6 +874,7 @@ export function DesignCanvas({
             onPick={openPin}
           />
           )}
+          </div>
         </aside>
       )}
       {details && <DetailsDialog page={page} problems={problems} onClose={() => setDetails(false)} />}

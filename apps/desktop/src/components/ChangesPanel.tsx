@@ -10,6 +10,7 @@ import { openDiffTab } from "../lib/actions";
 import type { DiffMode } from "../lib/layout";
 import { askConfirm } from "../lib/confirm";
 import { Button, Empty, IconButton, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 type FileAction = "stage" | "unstage" | "revert";
 
@@ -237,7 +238,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           {mode === "base" ? `Nothing differs from ${ws.base}.` : "The working tree is clean."}
         </Empty>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <ScrollArea>
           {total && <SummaryLine status={total} />}
           {groups ? (
             <GroupedChanges groups={groups} view={view} onSelect={open} onAction={(f, a) => void fileAction(f, a)} />
@@ -246,7 +247,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           ) : (
             <ChangeListView files={files} onSelect={open} onAction={(f, a) => void fileAction(f, a)} />
           )}
-        </div>
+        </ScrollArea>
       )}
     </div>
   );
