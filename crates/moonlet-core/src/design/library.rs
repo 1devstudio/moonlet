@@ -159,6 +159,45 @@ impl Store {
 }
 
 impl Store {
+    /// Shares workspace `workspace`'s design `slug` with every workspace
+    /// (X95): it moves into the library with its pages, comments, history
+    /// and record, which forgets its agent. A slug the library has gets the
+    /// next free number (`pricing-2`, named "Pricing 2"). Gives its slug
+    /// there.
+    pub fn share_design(&self, workspace: &str, slug: &str) -> Result<String> {
+        self.move_design(workspace, LIBRARY, slug)
+    }
+
+    /// Moves the library's shared design `slug` into workspace `into`, the
+    /// one the user stops sharing it from (X95), under the next free slug
+    /// there. Gives its slug there.
+    pub fn unshare_design(&self, slug: &str, into: &str) -> Result<String> {
+        self.move_design(LIBRARY, into, slug)
+    }
+
+    fn move_design(&self, from: &str, into: &str, slug: &str) -> Result<String> {
+        if from == into {
+            anyhow::bail!("the design is there already");
+        }
+        // It must be a design there.
+        self.workspace_design(from, slug)?;
+        let root = self.root()?.to_path_buf();
+        let to = self.free_slug(into, "designs", ".records/designs", slug)?;
+        self.move_item(&root, from, into, "designs", slug, &to, ".records/designs")?;
+        if to != slug {
+            let dir = self.kind_dir(into, "designs", false)?.join(&to);
+            fsx::update_inside(&dir, Path::new(DESIGN_FILE), |text| {
+                let mut doc: toml_edit::DocumentMut = text
+                    .parse()
+                    .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+                let name = doc["name"].as_str().unwrap_or(slug).to_string();
+                doc["name"] = toml_edit::value(format!("{name} {}", &to[slug.len() + 1..]));
+                Ok(doc.to_string())
+            })?;
+        }
+        Ok(to)
+    }
+
     /// Points a session design at the library slug `to` of its design
     /// system, when its `design.toml` names `from`: the move into the library
     /// renamed that system (X95). The rest of the file is left as the agent
@@ -478,5 +517,65 @@ mod tests {
                 .exists()
         );
         assert!(!h.join("design/library/systems/acme-web").exists());
+    }
+
+    #[test]
+    fn a_shared_design_moves_into_the_library_with_its_pages_and_history_and_back_into_a_workspace()
+    {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let store = Store::new(h);
+        store
+            .create_system("a1b2c3d4e5f6", "Acme web", vec![], Cover::Core, 1)
+            .unwrap();
+        store
+            .create_design("a1b2c3d4e5f6", "Pricing", "acme-web", "a pricing page", 2)
+            .unwrap();
+        // The library already shares a "Pricing".
+        store
+            .create_design(LIBRARY, "Pricing", "acme-web", "", 3)
+            .unwrap();
+        let page = "<link rel=\"stylesheet\" href=\"../../../systems/acme-web/styles.css\">\n";
+        std::fs::write(
+            h.join("design/a1b2c3d4e5f6/designs/pricing/pages/index.html"),
+            page,
+        )
+        .unwrap();
+        let at = store.workspace_design("a1b2c3d4e5f6", "pricing").unwrap();
+        store
+            .take_snapshot(&at, crate::design::history::Take::AgentTurn, 4)
+            .unwrap()
+            .unwrap();
+
+        let shared = store.share_design("a1b2c3d4e5f6", "pricing").unwrap();
+
+        assert_eq!(shared, "pricing-2");
+        assert_eq!(store.designs("a1b2c3d4e5f6").unwrap(), vec![]);
+        let names: Vec<(String, String)> = store
+            .designs(LIBRARY)
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.slug, d.name))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("pricing".into(), "Pricing".into()),
+                ("pricing-2".into(), "Pricing 2".into())
+            ]
+        );
+        assert_eq!(read(h, "library/designs/pricing-2/pages/index.html"), page);
+        let at = store.workspace_design(LIBRARY, "pricing-2").unwrap();
+        assert_eq!(store.history(&at).unwrap().len(), 1);
+
+        let back = store.unshare_design("pricing-2", "f6e5d4c3b2a1").unwrap();
+
+        assert_eq!(back, "pricing-2");
+        assert_eq!(store.designs("f6e5d4c3b2a1").unwrap()[0].name, "Pricing 2");
+        assert_eq!(
+            read(h, "f6e5d4c3b2a1/designs/pricing-2/pages/index.html"),
+            page
+        );
+        assert_eq!(store.designs(LIBRARY).unwrap().len(), 1);
     }
 }

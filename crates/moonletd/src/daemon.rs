@@ -2640,7 +2640,15 @@ impl Daemon {
             m::DESIGN_LIST => {
                 let r: m::DesignWorkspace = params(p)?;
                 let ws = r.workspace.clone();
-                let mut designs = blocking(move || store.designs(&ws)).await?;
+                let mut designs = blocking(move || {
+                    let mut designs = store.designs(&ws)?;
+                    // Then the designs shared with every workspace (X95).
+                    if ws != LIBRARY {
+                        designs.extend(store.designs(LIBRARY)?.into_iter().map(|d| moonlet_proto::types::DesignInfo { shared: true, ..d }));
+                    }
+                    Ok(designs)
+                })
+                .await?;
                 // A workspace design built in a session: that session's project.
                 for d in &mut designs {
                     if let Some(built) = &mut d.built_in {
@@ -2656,8 +2664,9 @@ impl Daemon {
                     .into_iter()
                     .map(|d| {
                         let d = self.design_info(d, &terminals);
+                        let place = if d.shared { LIBRARY } else { r.workspace.as_str() };
                         let owner = (d.kind == moonlet_proto::types::DesignKind::Workspace)
-                            .then(|| owners.get(&moonlet_core::design::replica::Item::design(&r.workspace, &d.slug)).cloned())
+                            .then(|| owners.get(&moonlet_core::design::replica::Item::design(place, &d.slug)).cloned())
                             .flatten();
                         let mut v = serde_json::to_value(&d).unwrap_or_default();
                         add_owner(&mut v, owner);
@@ -2745,6 +2754,28 @@ impl Daemon {
                 let agent_error = self.start_design_agent(&at, Some(intro)).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
                 ok(moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error })
+            }
+            m::DESIGN_SHARE => {
+                // The user's choice, never an agent's: an agent could move its
+                // own design into every workspace.
+                app_only(conn, "sharing a design")?;
+                let r: m::DesignShare = params(p)?;
+                if r.workspace == LIBRARY {
+                    return Err(RpcError::new("invalid_params", "the design is shared already"));
+                }
+                ok(self.move_design_to(&r.workspace, &r.slug, LIBRARY).await?)
+            }
+            m::DESIGN_UNSHARE => {
+                app_only(conn, "sharing a design")?;
+                let r: m::DesignUnshare = params(p)?;
+                if r.workspace != LIBRARY {
+                    return Err(RpcError::new("invalid_params", "only a shared design stops being shared"));
+                }
+                if r.into == LIBRARY {
+                    return Err(RpcError::new("invalid_params", "name the workspace it moves into"));
+                }
+                self.workspace_exists(&r.into)?;
+                ok(self.move_design_to(LIBRARY, &r.slug, &r.into).await?)
             }
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;
@@ -2968,9 +2999,9 @@ impl Daemon {
         };
         let slug = at.slug.clone();
         // The folders come from the store, never from what the agent edits:
-        // `design.toml` names the design system, which must be the workspace's.
+        // `design.toml` names the design system, the library's (X95).
         let (store, ws, design) = (self.design.clone(), workspace.clone(), at.clone());
-        let (launch, name) = blocking(move || {
+        let (launch, name, source) = blocking(move || {
             let dir = design.folder().canonicalize()?;
             let mut config = store.design_config(&design)?;
             if let Some(intro) = intro {
@@ -2978,13 +3009,15 @@ impl Daemon {
             }
             let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
             let readme = store.readme(&ws, &config.system)?;
+            let source = store.record(&ws, &config.system)?.sources.first().map(|s| s.project.clone());
             let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
-            Ok((launch, config.name))
+            Ok((launch, config.name, source))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.clone(), slug: slug.clone(), name };
-        let profile = Some(workspace.clone());
+        // A shared design has no workspace (X95): its system's first source's.
+        let profile = if workspace == LIBRARY { source.and_then(|p| self.workspace_holding(&p)) } else { Some(workspace.clone()) };
         self.agent_chat(&launch, tag, profile, |id| self.design.set_design_agent(at, id))
     }
 
@@ -3099,6 +3132,38 @@ impl Daemon {
             return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
         }
         Ok(())
+    }
+
+    /// Moves design `slug` of `from` into `into` (X95): into the library to
+    /// share it, out of it to stop sharing it. Refused while its agent
+    /// works; otherwise its agent stops, and its next message starts it in
+    /// the new place. This member's copy entry and its record follow it
+    /// (X71). Gives its slug there.
+    async fn move_design_to(&self, from: &str, slug: &str, into: &str) -> Result<String, RpcError> {
+        use moonlet_core::design::replica::Item;
+        use moonlet_proto::types::AgentState;
+        let at = self
+            .locate(&m::DesignRef::Workspace { workspace: from.to_string(), slug: slug.to_string() })
+            .await?;
+        let lock = self.lock_of(&at, DesignLock::Agent);
+        let _held = lock.lock().await;
+        let pages = self.lock_of(&at, DesignLock::Pages);
+        let _pages = pages.lock().await;
+        let history = self.lock_of(&at, DesignLock::History);
+        let _history = history.lock().await;
+        if let Some(agent) = self.design_agent(&at).await? {
+            if matches!(agent.agent_state, AgentState::Working | AgentState::Blocked) {
+                return Err(RpcError::new("busy", "its agent is working: try again when it is done"));
+            }
+            let _ = self.terminals.kill(agent.id, true);
+        }
+        self.take_hand_edits(&at);
+        let (store, f, s, i) = (self.design.clone(), from.to_string(), slug.to_string(), into.to_string());
+        let to = blocking(move || if i == LIBRARY { store.share_design(&f, &s) } else { store.unshare_design(&s, &i) }).await?;
+        if let Err(e) = self.copies.moved(&Item::design(from, slug), &Item::design(into, &to)).await {
+            tracing::warn!("cannot note where design {slug} moved: {e:#}");
+        }
+        Ok(to)
     }
 
     /// The workspace a design is in: a workspace design's own, a session
@@ -5872,14 +5937,19 @@ impl Daemon {
                 // Build it (X65): the workspace design, its pages and the
                 // session's workspace checked before any worktree is made…
                 let from = self.locate(&m::DesignRef::Workspace { workspace: pick.workspace.clone(), slug: pick.slug.clone() }).await?;
-                match req.workspace_id.as_deref() {
-                    None => req.workspace_id = Some(pick.workspace.clone()),
-                    Some(ws) if ws == pick.workspace => {}
-                    Some(_) => return Err(RpcError::new("invalid_params", "a session builds a design of its own workspace")),
-                }
-                if !self.workspace_projects(&pick.workspace).iter().any(|p| p.id == req.project_id) {
+                // A shared design (X95) is built in the workspace the user is
+                // in, which the request names.
+                let workspace = match (req.workspace_id.clone(), pick.workspace == LIBRARY) {
+                    (None, true) => return Err(RpcError::new("invalid_params", "a session building a shared design names its workspace")),
+                    (None, false) => pick.workspace.clone(),
+                    (Some(ws), true) => ws,
+                    (Some(ws), false) if ws == pick.workspace => ws,
+                    (Some(_), false) => return Err(RpcError::new("invalid_params", "a session builds a design of its own workspace")),
+                };
+                if !self.workspace_projects(&workspace).iter().any(|p| p.id == req.project_id) {
                     return Err(RpcError::new("invalid_params", "the project is not in the design's workspace"));
                 }
+                req.workspace_id = Some(workspace);
                 let (store, checked, pages) = (self.design.clone(), from.clone(), pick.pages.clone());
                 blocking(move || store.has_pages(&checked, &pages)).await?;
                 // …then copied into the worktree before its agent starts…

@@ -317,6 +317,10 @@ pub struct DesignInfo {
     /// copy: **Update** brings the new one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub system_updated: bool,
+    /// A design shared with every workspace (X95): the library's, addressed
+    /// as `{workspace: "library", slug}`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 impl DesignInfo {
@@ -343,6 +347,7 @@ impl DesignInfo {
             project: None,
             built_in: None,
             system_updated: false,
+            shared: false,
         }
     }
 

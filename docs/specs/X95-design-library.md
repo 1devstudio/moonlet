@@ -48,19 +48,19 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 ### The agents
 
 - [ ] A system's sync agent runs in the Claude profile (X33) of the first workspace, in the account's order, whose sections hold the system's first source project. When no workspace holds it, the agent runs in the default profile. (`moonletd/tests/daemon.rs` a_systems_sync_agent_runs_in_the_profile_of_its_first_sources_workspace)
-- [ ] A shared design's agent runs in the profile of the workspace that holds its system's first source project, by the same rule.
+- [ ] A shared design's agent runs in the profile of the workspace that holds its system's first source project, by the same rule. (`moonletd/tests/daemon.rs` a_shared_designs_agent_runs_in_the_profile_of_its_systems_first_sources_workspace)
 - [ ] The sync agent's `progress`, `synced` and `snap` commands work from a library system's folder, and still act only on the system of their folder. (`moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder, the_sync_agents_commands_act_only_on_the_system_of_their_folder)
 - [ ] A design's agent gets its library system's folder with `--add-dir` and its deny rule (X65), wherever the design is. (`moonletd/tests/daemon.rs` a_new_design_starts_its_agent_in_its_folder_on_its_design_system)
 - [ ] `moonlet design system ls` lists the library. `moonlet design new --here` picks the library system built from the session's project, as before within the workspace. (`moonlet-cli/src/design.rs` a_session_design_takes_the_design_system_built_from_its_project_or_asks_which)
 
 ### Sharing a design
 
-- [ ] `design.share {workspace, slug}` moves a workspace design into the library, with its pages, comments, history and record. Its agent is stopped first; the next message starts it again in the library folder. A slug in use in the library gets the next free suffix. The answer is the new slug.
-- [ ] `design.unshare {slug, into}` moves a shared design into the workspace `into`, under the next free slug there. The answer is the new slug.
-- [ ] Share and unshare refuse while the design's agent is working (`busy`), and on a copy (`not_owner`, X71).
-- [ ] `design.list {workspace}` gives the workspace's own designs, then every shared design with `shared: true` and `workspace: "library"`.
-- [ ] A shared design is addressed as `{workspace: "library", slug}` in every design RPC.
-- [ ] **Build it** on a shared design starts the session in the workspace the user is in, on one of that workspace's projects. A session design made from it records the library as its design's place.
+- [ ] `design.share {workspace, slug}` moves a workspace design into the library, with its pages, comments, history and record. Its agent is stopped first; the next message starts it again in the library folder. A slug in use in the library gets the next free suffix. The answer is the new slug. (`design/library.rs` a_shared_design_moves_into_the_library_with_its_pages_and_history_and_back_into_a_workspace)
+- [ ] `design.unshare {workspace: "library", slug, into}` moves a shared design into the workspace `into`, under the next free slug there. The answer is the new slug. (`design/library.rs` a_shared_design_moves_into_the_library_with_its_pages_and_history_and_back_into_a_workspace; `moonletd/tests/daemon.rs` a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one)
+- [ ] Share and unshare refuse while the design's agent is working (`busy`), and on a copy (`not_owner`, X71). (`moonletd/tests/daemon.rs` a_design_whose_agent_works_is_not_shared)
+- [ ] `design.list {workspace}` gives the workspace's own designs, then every shared design with `shared: true`. (`moonletd/tests/daemon.rs` a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one)
+- [ ] A shared design is addressed as `{workspace: "library", slug}` in every design RPC, and framed on the `library` host. (`moonletd/tests/daemon.rs` a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one; `src-tauri/src/design_scheme.rs` a_shared_designs_page_is_on_the_librarys_host)
+- [ ] **Build it** on a shared design starts the session in the workspace the user is in, on one of that workspace's projects. A session design made from it records the library as its design's place. (`moonletd/tests/daemon.rs` a_shared_design_is_built_in_a_session_of_the_workspace_the_user_is_in)
 - [ ] Removing a shared design removes it for every workspace, after the same confirmation as today.
 
 ### The app
@@ -98,7 +98,7 @@ The New design system dialog groups its project picker by workspace, the shown w
 - The workspace `library` is accepted wherever a design RPC takes a workspace: `design.file`, `design.check`, `design.snap`, `design.cards`, `design.settle`, `design.system.*` and every design RPC that takes `{workspace, slug}` for a shared design.
 - `design.systems {workspace}` gives the library's systems. `workspace` must still name an existing workspace or `library`, so an app talking to an older daemon gets that workspace's systems as before.
 - `design.system.create {workspace, name, sources, cover?}` makes a library system. Its sources may be any project of this member.
-- `design.share {workspace, slug}` → the new slug. `design.unshare {slug, into}` → the new slug. Both are app-only, like `design.move`.
+- `design.share {workspace, slug}` → the new slug. `design.unshare {workspace: "library", slug, into}` → the new slug. Both are app-only, like `design.move`; `busy` while the design's agent works, `not_owner` on a copy (X71).
 - `design.list` entries gain `shared: bool`.
 - `design.changed` for a library system or shared design carries `workspace: "library"`.
 - The account record kind `design` (X71) carries `workspace: "library"` for systems and shared designs.

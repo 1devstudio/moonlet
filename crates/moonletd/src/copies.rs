@@ -1117,6 +1117,27 @@ impl DesignCopies {
         Ok(moved)
     }
 
+    /// Notes that this member's item `from` moved to `to` (X95: a design
+    /// shared or no longer shared), between rounds: what it keeps of it
+    /// follows, and the record of its own names the new place. An item it
+    /// keeps nothing of is left to the next round.
+    pub async fn moved(&self, from: &Item, to: &Item) -> Result<()> {
+        let _one = self.round.lock().await;
+        let mut kept = self.load()?;
+        let Some((id, l)) = kept.iter_mut().find(|(_, l)| &l.item() == from) else {
+            return Ok(());
+        };
+        l.workspace = to.workspace.clone();
+        l.slug = to.slug.clone();
+        if l.owned {
+            self.sessions
+                .set_design(id, &[("workspace", json!(to.workspace)), ("slug", json!(to.slug))]);
+        }
+        self.save(&kept)?;
+        self.kick();
+        Ok(())
+    }
+
     /// Moves the design systems this member keeps under its workspaces, as
     /// members older than X95 kept them, into the library (X95), between
     /// rounds: its own, in the account's `order`, with their records

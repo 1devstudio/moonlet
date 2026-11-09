@@ -817,8 +817,9 @@ async fn design_systems_follow_a_workspace_merged_on_another_member_and_on_start
     .await;
 }
 
-/// What `d` holds of a design system's file `path` (X71).
-fn design_file(d: &Daemon, ws: &str, slug: &str, path: &str) -> Option<String> {
+/// What `d` holds of a design system's file `path` (X71), in the library
+/// (X95).
+fn design_file(d: &Daemon, slug: &str, path: &str) -> Option<String> {
     std::fs::read_to_string(d.home.path().join("design").join("library").join("systems").join(slug).join(path)).ok()
 }
 
@@ -840,7 +841,7 @@ async fn a_design_system_made_on_one_member_is_copied_to_every_member_and_follow
     std::fs::write(folder.join("styles.css"), "@import \"tokens/colors.css\";\n").unwrap();
     for d in [&mini, &air] {
         within(Duration::from_secs(10), "Acme web copied", || async {
-            design_file(d, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/colors.css\";\n")
+            design_file(d, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/colors.css\";\n")
         })
         .await;
         assert_eq!(systems(d, &books).await, ["acme-web"]);
@@ -849,7 +850,7 @@ async fn a_design_system_made_on_one_member_is_copied_to_every_member_and_follow
     // An edit on the MacBook reaches the Air.
     std::fs::write(folder.join("styles.css"), "@import \"tokens/brand.css\";\n").unwrap();
     within(Duration::from_secs(5), "the edit on the Air", || async {
-        design_file(&air, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
+        design_file(&air, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
     })
     .await;
 
@@ -964,7 +965,7 @@ async fn a_copy_is_read_only_until_moved_here_and_the_old_owner_keeps_a_copy() {
     let folder = mini.home.path().join("design").join("library").join("systems/acme-web");
     std::fs::write(folder.join("styles.css"), "@import \"tokens/brand.css\";\n").unwrap();
     within(Duration::from_secs(5), "the edit on the MacBook", || async {
-        design_file(&book, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
+        design_file(&book, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
     })
     .await;
 }
@@ -997,7 +998,7 @@ async fn a_change_the_old_owner_made_offline_is_never_lost_when_its_item_moved()
     // The edit either reached studio-mini, which had not changed the
     // system since, or waits in the MacBook's leftovers.
     within(Duration::from_secs(10), "the edit kept", || async {
-        let on_mini = design_file(&mini, &books, "acme-web", "NOTES.md").as_deref() == Some("Made on the plane.\n");
+        let on_mini = design_file(&mini, "acme-web", "NOTES.md").as_deref() == Some("Made on the plane.\n");
         let left = std::fs::read_dir(book.home.path().join("sync-leftovers"))
             .map(|d| {
                 d.flatten().any(|e| {
