@@ -5,9 +5,10 @@ import type { DesignChanged } from "./protocol";
 export const LIBRARY = "library";
 
 /** The workspaces a `design.changed` is for: a library design system's is
- *  every workspace's on its host, as each lists the library's systems. */
+ *  every workspace's on its host, as each lists the library's systems, and
+ *  the library's own, whose shared designs use it. */
 export function changedWorkspaces(change: DesignChanged, workspaces: string[]): string[] {
-  return change.workspace === LIBRARY && change.system ? workspaces : [change.workspace];
+  return change.workspace === LIBRARY && change.system ? [...workspaces, LIBRARY] : [change.workspace];
 }
 
 /** The projects a new design system may be built from (X95): every

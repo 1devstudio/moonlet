@@ -1,6 +1,7 @@
 // Design mode's labels and names (X64, X65). Pure: the store is designStore.ts.
 
 import { ago } from "./mobile";
+import { LIBRARY } from "./designLibrary";
 import type { AgentState, Design, DesignChanged, DesignOpen, DesignSystem } from "./protocol";
 
 export interface RowLabel {
@@ -75,7 +76,7 @@ export function systemFolder(name: string, taken: string[] | undefined): string 
   let n = 1;
   let slug = designSlug(name);
   while (taken.includes(slug)) slug = designSlug(`${name} ${++n}`);
-  return `~/.moonlet/design/library/systems/${slug}`;
+  return `~/.moonlet/design/${LIBRARY}/systems/${slug}`;
 }
 
 /** The picked projects still in the workspace, in the order they were picked. */

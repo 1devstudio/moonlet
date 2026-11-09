@@ -11,7 +11,7 @@ import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
 import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownDesignPlace, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { LIBRARY, sourcesByWorkspace } from "../../lib/designLibrary";
-import { workspaceProjects } from "../../lib/tasksStore";
+import { projectsOfWorkspace } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
@@ -95,6 +95,7 @@ export function DesignSidebar() {
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
   const states = useStore(useShallow((s) => (ws ? (entries ?? []).map(({ host, design: d }) => designAgentState(d, d.agent === null ? undefined : s.terminals[host]?.[d.agent]?.agent_state)) : [])));
+  const sharedStates = useStore(useShallow((s) => (ws ? (shared ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
   const now = useNow(true);
   const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
@@ -185,9 +186,9 @@ export function DesignSidebar() {
           <>
             <Heading label="Shared designs" />
             <nav aria-label="Shared designs" className="px-2">
-              {shared.map((d) => {
+              {shared.map((d, i) => {
                 const current = place === LIBRARY && d.slug === design?.slug;
-                const label = designRow(d, now, null);
+                const label = designRow(d, now, sharedStates[i] ?? null);
                 return (
                   <button
                     key={d.slug}
@@ -197,9 +198,7 @@ export function DesignSidebar() {
                     className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
                   >
                     {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
-                    <span className="flex w-[14px] shrink-0 justify-center">
-                      <Share2 size={12} className="text-muted" />
-                    </span>
+                    <span className="flex w-[14px] shrink-0 justify-center">{label.state ? <StateGlyph state={label.state} size={14} /> : <Share2 size={12} className="text-muted" />}</span>
                     <span className="min-w-0 flex-1 truncate">{d.name}</span>
                     <span title={d.error ?? d.needs_you?.text} className={cx("shrink-0 ui-text-11.5 tabular-nums", TONES[label.tone])}>
                       {label.text}
@@ -299,10 +298,10 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
   const workspaces = useStore((s) => s.workspaces[host]);
   const sections = useStore((s) => s.sections[host]);
   const allProjects = useStore((s) => s.projects[host]);
-  const groups = useMemo(() => {
-    const s = { workspaces: { [host]: workspaces ?? [] }, sections: { [host]: sections ?? [] }, projects: { [host]: allProjects ?? [] } } as unknown as Parameters<typeof workspaceProjects>[0];
-    return sourcesByWorkspace(workspaces ?? [], workspace, (ws) => workspaceProjects(s, host, ws));
-  }, [workspaces, sections, allProjects, host, workspace]);
+  const groups = useMemo(
+    () => sourcesByWorkspace(workspaces ?? [], workspace, (ws) => projectsOfWorkspace(workspaces ?? [], sections ?? [], allProjects ?? [], ws)),
+    [workspaces, sections, allProjects, workspace],
+  );
   const projects = useMemo(() => groups.flatMap((g) => g.projects), [groups]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const taken = useDesign((d) => systemsOf(d, host, workspace))?.map((s) => s.slug);

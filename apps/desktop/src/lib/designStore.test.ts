@@ -5,7 +5,7 @@ import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
 import { cardUrl } from "./designView";
 import { pageRevReader, startFromProjectDesign } from "./designStore";
-import { shareDesign, unshareDesign, shownDesignPlace } from "./designStore";
+import { openDesign, shareDesign, unshareDesign, shownDesignPlace } from "./designStore";
 import { cardRevOf, cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -973,6 +973,22 @@ describe("shared designs (X95)", () => {
     expect(calls.find((c) => c.method === "design.unshare")?.params).toEqual({ workspace: "library", slug: "pricing", into: "w-site" });
     expect(shownDesign(useDesign.getState(), "local", "w-site")?.name).toBe("Pricing 2");
     expect(shownDesignPlace(useDesign.getState(), "local", "w-site")).toBe("w-site");
+  });
+
+  it("opens a shared design in the workspace shown, never in a workspace named library", async () => {
+    const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
+    useStore.setState({
+      hosts: { local: host },
+      workspaces: { local: [{ id: "w-1devstudio", name: "1devstudio", color: "clay" as const, section_ids: [], created_at: 0 }] },
+      workspace: { host: "local", id: "w-1devstudio" },
+      mode: {},
+    });
+    answers["design.list"] = (p) => ((p as { workspace: string }).workspace === "library" ? [design({ slug: "pricing", name: "Pricing" })] : []);
+    await openDesign("local", "library", "pricing");
+    expect(useStore.getState().workspace?.id).toBe("w-1devstudio");
+    expect(modeOf(useStore.getState())).toBe("design");
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.name).toBe("Pricing");
+    expect(shownDesignPlace(useDesign.getState(), "local", "w-1devstudio")).toBe("library");
   });
 
   it("a workspace's own designs leave out the shared ones, which the library lists", async () => {

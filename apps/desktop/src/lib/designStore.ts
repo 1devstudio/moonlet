@@ -540,10 +540,19 @@ export function showDesign(host: string, workspace: string, slug: string, shared
   void checkDesign(host, place, slug);
 }
 
-/** Switches the app to a design: its workspace, Design mode and its screen. */
+/** Switches the app to a design: its workspace, Design mode and its screen.
+ *  A shared design (X95), the library's, opens in the workspace shown. */
 export async function openDesign(host: string, workspace: string, slug: string) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
+  if (workspace === LIBRARY) {
+    if (!ws) return;
+    setMode("design");
+    const at = designHostOf(useStore.getState()) ?? host;
+    await loadDesigns(at, LIBRARY, true).catch(() => {});
+    showDesign(at, ws.id, slug, true);
+    return;
+  }
   if (!isShown(ws, host, workspace, s.accounts[host]?.account)) switchWorkspace({ host, id: workspace, account: s.accounts[host]?.account });
   setMode("design");
   // Shown where Design mode reads the workspace's designs: this Mac's copy
