@@ -1,7 +1,8 @@
 // A session's tab row when its tabs don't fit (X94): which sides fade, how
 // many tabs are out of view, where to scroll, and the All tabs list.
 
-import type { AgentState, JobState } from "./protocol";
+import { leaves, type Tab } from "./layout";
+import type { AgentState, ExitInfo, JobState, TerminalKind } from "./protocol";
 
 /** WebKit leaves a fraction of a pixel at either end of a scrolled row. */
 const SLACK = 1;
@@ -92,4 +93,52 @@ export function tabStatus(tab: TabState): { tone: TabTone; label: string } {
 export function filterTabs<T extends { name: string }>(tabs: T[], query: string): T[] {
   const q = query.trim().toLowerCase();
   return q ? tabs.filter((t) => t.name.toLowerCase().includes(q)) : tabs;
+}
+
+/** A file or diff tab's name: the file's. */
+export const fileTabName = (path: string): string => path.split("/").pop() ?? path;
+
+/** What a terminal tab knows of its terminal. */
+export interface TerminalLook {
+  kind: TerminalKind;
+  agent?: string;
+  title: string;
+  agent_state: AgentState;
+  exit?: ExitInfo;
+}
+
+/** A terminal tab's name: its agent, else its title; "…" before it is known. */
+export const terminalTabName = (info?: TerminalLook): string => (info ? (info.agent ?? info.title) : "…");
+
+/** What the All tabs list shows of a session's tabs. */
+export interface TabRow {
+  id: string;
+  name: string;
+  /** The terminal to focus when the tab is picked: a terminal tab's first. */
+  focused: number | null;
+  status: { tone: TabTone; label: string };
+}
+
+/** The All tabs list (X94): each tab's name and status, from what the app knows of its terminals, files and jobs. */
+export function tabRows(
+  tabs: Tab[],
+  look: { terminal: (id: number) => TerminalLook | undefined; dirty: (path: string) => boolean; job: (id: string) => { command: string; state: JobState } | undefined },
+): TabRow[] {
+  return tabs.map((t) => {
+    const r = t.root;
+    if (r.type === "file") return { id: t.id, name: fileTabName(r.path), focused: null, status: tabStatus({ kind: "file", dirty: look.dirty(r.path) }) };
+    if (r.type === "diff") return { id: t.id, name: fileTabName(r.path), focused: null, status: tabStatus({ kind: "diff" }) };
+    if (r.type === "job") {
+      const j = look.job(r.job);
+      return { id: t.id, name: j?.command ?? "Job", focused: null, status: tabStatus({ kind: "job", state: j?.state }) };
+    }
+    const focused = leaves(r)[0];
+    const info = look.terminal(focused);
+    return {
+      id: t.id,
+      name: terminalTabName(info),
+      focused,
+      status: tabStatus({ kind: "terminal", agentState: info?.kind === "agent" ? info.agent_state : null, exited: !!info?.exit }),
+    };
+  });
 }

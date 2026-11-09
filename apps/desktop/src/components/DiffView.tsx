@@ -8,7 +8,7 @@ import type { DiffMode } from "../lib/layout";
 import { isMarkdownPath } from "../lib/markdown";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
 import { M, type FileVersions } from "../lib/protocol";
-import { errorToast, refreshGit, toast, useStore } from "../lib/store";
+import { errorToast, refreshGit, toast, useStore, hostPath } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
 import { askConfirm } from "../lib/confirm";
 import { editorFont } from "../lib/uiScale";
@@ -72,7 +72,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
 export default function DiffView({ host, wsId, path, mode, visible }: { host: string; wsId: string; path: string; mode: DiffMode; visible: boolean }) {
   const ws = useStore((s) => s.sessions[host]?.find((w) => w.id === wsId));
   const fontSize = useStore((s) => s.settings.term.fontSize);
-  const fsVersion = useStore((s) => (ws ? (s.fsVersion[`${host}|${ws.path}`] ?? 0) : 0));
+  const fsVersion = useStore((s) => (ws ? (s.fsVersion[hostPath(host, ws.path)] ?? 0) : 0));
   const language = useEditorLanguage(path);
   const [versions, setVersions] = useState<FileVersions | null>(null);
   const [diff, setDiff] = useState<ParsedDiff | null>(null);

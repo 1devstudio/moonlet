@@ -92,7 +92,7 @@ import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashC
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
 import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
-import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
+import { errorToast, getLayout, setLayout, termKey, toast, useStore, hostPath } from "../lib/store";
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planCardBelow, planLabels, planView } from "../lib/plan";
@@ -895,7 +895,7 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 const fileCache = new Map<string, Promise<string[]>>();
 
 function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
-  const key = `${host}|${root}`;
+  const key = hostPath(host, root);
   let p = fresh ? undefined : fileCache.get(key);
   if (!p) {
     p = rpc<string[]>(host, M.fsFiles, { root }).catch(() => [] as string[]);
@@ -1226,7 +1226,8 @@ function ChatEditor({
 }
 
 /** Tailwind classes for the X51 layout's px values. */
-const PAD_X: Record<number, string> = { 24: "px-6", 16: "px-4", 12: "px-3" };
+// The composer's sides in px, as the design gives them (X94); the app's rem is 13.5 px, not 16.
+const PAD_X: Record<number, string> = { 24: "px-[24px]", 16: "px-[16px]", 12: "px-[12px]" };
 const INSET_X: Record<number, string> = { 16: "pl-4", 12: "pl-3" };
 /** The input card's padding by its inset: 14 px above and below, 11 px when compact. */
 const CARD_PAD: Record<number, string> = { 16: "py-3.5 pl-4", 12: "py-[11px] pl-3" };

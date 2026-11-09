@@ -3,7 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { M, type FileContent } from "../lib/protocol";
-import { errorToast, toast, useStore } from "../lib/store";
+import { errorToast, toast, useStore, hostPath } from "../lib/store";
 import { editorFont } from "../lib/uiScale";
 import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
@@ -22,9 +22,9 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
   const saved = useRef("");
   const fontSize = useStore((s) => s.settings.term.fontSize);
   const root = useStore((s) => s.sessions[host]?.find((w) => w.id === wsId)?.path ?? null);
-  const fsVersion = useStore((s) => (root ? (s.fsVersion[`${host}|${root}`] ?? 0) : 0));
+  const fsVersion = useStore((s) => (root ? (s.fsVersion[hostPath(host, root)] ?? 0) : 0));
   const language = useEditorLanguage(path);
-  const key = `${host}|${path}`;
+  const key = hostPath(host, path);
   const readOnly = !file || file.truncated;
   const markdown = isMarkdownPath(path);
   /** The editor's text while a markdown file shows rendered; null shows the source. */

@@ -277,6 +277,9 @@ function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   return { rows, now };
 }
 
+/** The px between two views, and before More. */
+const VIEW_GAP = 2;
+
 /**
  * The right panel's views, 36 px, as tabs like the session's: 32 px, the one shown filled with the pane's tone (X94). Those that do not fit go into More,
  * the last first; the view shown always stays in the row, in its place.
@@ -294,7 +297,7 @@ function ViewTabs({ tabs, shown, pick, extra }: { tabs: { id: RightTab; label: s
     if (!r || !m) return;
     const widths = [...m.querySelectorAll<HTMLElement>("[data-view]")].map((e) => e.offsetWidth);
     const more = m.querySelector<HTMLElement>("[data-more]")?.offsetWidth ?? 0;
-    const next = fitViews(widths, active, r.clientWidth, more);
+    const next = fitViews(widths, active, r.clientWidth, more, VIEW_GAP);
     setFit((p) => (p && p.shown.join() === next.shown.join() && p.more.join() === next.more.join() ? p : next));
   }, [active]);
   useLayoutEffect(() => {
@@ -306,15 +309,15 @@ function ViewTabs({ tabs, shown, pick, extra }: { tabs: { id: RightTab; label: s
   }, [measure, key]);
   const visible = fit ? fit.shown.filter((i) => i < tabs.length) : tabs.map((_, i) => i);
   const hidden = fit ? fit.more.filter((i) => i < tabs.length) : [];
-  const view = (t: { id: RightTab; label: string }, props: Record<string, unknown> = {}) => (
-    <span className="flex items-center gap-1.5" {...props}>
+  const view = (t: { id: RightTab; label: string }) => (
+    <span className="flex items-center gap-1.5">
       {t.label}
       {extra(t.id)}
     </span>
   );
   return (
     <div className="relative flex h-ui-36 shrink-0 items-end px-2">
-      <div ref={row} role="tablist" className="flex h-ui-32 min-w-0 flex-1 items-stretch gap-[2px] overflow-hidden">
+      <div ref={row} role="tablist" className="flex h-ui-32 min-w-0 flex-1 items-stretch overflow-hidden" style={{ gap: VIEW_GAP }}>
         {visible.map((i) => {
           const t = tabs[i];
           return (

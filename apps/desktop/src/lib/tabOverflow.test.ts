@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterTabs, hiddenTabs, revealScroll, scrollStep, tabEdges, tabStatus, wheelScroll } from "./tabOverflow";
+import { filterTabs, hiddenTabs, revealScroll, scrollStep, tabEdges, tabRows, tabStatus, wheelScroll } from "./tabOverflow";
+import type { Tab } from "./layout";
 
 describe("tabEdges (X94)", () => {
   it("shows no fade when every tab fits", () => {
@@ -129,5 +130,40 @@ describe("filterTabs (X94)", () => {
 
   it("lists none when nothing matches", () => {
     expect(filterTabs(tabs, "vim")).toEqual([]);
+  });
+});
+
+describe("tabRows (X94)", () => {
+  // A session's tabs: an agent, a split of two shells, a file, a diff and a job.
+  const tabs: Tab[] = [
+    { id: "t1", root: { type: "leaf", session: 7 } },
+    { id: "t2", root: { type: "split", dir: "row", children: [{ type: "leaf", session: 8 }, { type: "leaf", session: 9 }], sizes: [50, 50] } },
+    { id: "t3", root: { type: "file", path: "src/app/main.ts" } },
+    { id: "t4", root: { type: "diff", path: "docs/README.md", mode: "head" } },
+    { id: "t5", root: { type: "job", job: "j1" } },
+  ];
+  const terminals: Record<number, { kind: "agent" | "shell"; agent?: string; title: string; agent_state: "working" | "idle"; exit?: { code: number; signal: null } }> = {
+    7: { kind: "agent", agent: "claude", title: "claude", agent_state: "working" },
+    8: { kind: "shell", title: "zsh", agent_state: "idle", exit: { code: 0, signal: null } },
+  };
+  const look = {
+    terminal: (id: number) => terminals[id],
+    dirty: (path: string) => path === "src/app/main.ts",
+    job: (id: string) => (id === "j1" ? { command: "pnpm test", state: { kind: "done" as const, exit: 1 } } : undefined),
+  };
+
+  it("names each tab and says how it is going, focusing a terminal tab on its first terminal", () => {
+    expect(tabRows(tabs, look)).toEqual([
+      { id: "t1", name: "claude", focused: 7, status: { tone: "working", label: "Running" } },
+      { id: "t2", name: "zsh", focused: 8, status: { tone: "idle", label: "Exited" } },
+      { id: "t3", name: "main.ts", focused: null, status: { tone: "unsaved", label: "Unsaved" } },
+      { id: "t4", name: "README.md", focused: null, status: { tone: "idle", label: "" } },
+      { id: "t5", name: "pnpm test", focused: null, status: { tone: "error", label: "Failed" } },
+    ]);
+  });
+
+  it("names a terminal or a job not known yet", () => {
+    const none = { terminal: () => undefined, dirty: () => false, job: () => undefined };
+    expect(tabRows([tabs[0], tabs[4]], none).map((r) => r.name)).toEqual(["…", "Job"]);
   });
 });

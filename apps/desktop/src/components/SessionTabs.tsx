@@ -8,10 +8,10 @@ import { rpc } from "../lib/daemon";
 import { diffModeLabel } from "../lib/changes";
 import { leaves, type DiffMode, type Tab as LayoutTab } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
-import { getLayout, projectOf, setLayout, sesKey, termKey, useStore } from "../lib/store";
+import { getLayout, projectOf, setLayout, sesKey, termKey, useStore, hostPath } from "../lib/store";
 import { closeDiffTab, closeFileTab, closeJobTab, closeTab, newAgentTab, newSessionAgentTab, newTab, split } from "../lib/actions";
-import { filterTabs, hiddenTabs, revealScroll, scrollStep, tabEdges, tabStatus, type TabState, type TabTone, wheelScroll } from "../lib/tabOverflow";
-import { chipFromJob, going } from "../lib/jobs";
+import { fileTabName, filterTabs, hiddenTabs, revealScroll, scrollStep, tabEdges, tabRows, tabStatus, terminalTabName, type TabTone, wheelScroll } from "../lib/tabOverflow";
+import { chipFromJob } from "../lib/jobs";
 import { useSessionJob, useSessionJobs } from "../lib/jobsStore";
 import { agentLabel } from "../lib/agents";
 import { copyOffers } from "../lib/centralCopies";
@@ -76,7 +76,7 @@ function TerminalTab({ host, ws, id, ids, active }: { host: string; ws: Session;
   const info = useStore((s) => s.terminals[host]?.[ids[0]]);
   const unread = useStore((s) => ids.some((x) => s.unread[termKey(host, x)]));
   const state = info?.kind === "agent" && !info.exit ? info.agent_state : null;
-  const name = info ? (info.agent ?? info.title) : "…";
+  const name = terminalTabName(info);
   return (
     <TabFrame
       id={id}
@@ -102,8 +102,8 @@ function TerminalTab({ host, ws, id, ids, active }: { host: string; ws: Session;
 
 /** A file's editor tab (X26): a dot while it has unsaved edits. */
 function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id: string; path: string; active: boolean }) {
-  const dirty = useStore((s) => !!s.dirtyFiles[`${host}|${path}`]);
-  const name = path.split("/").pop() ?? path;
+  const dirty = useStore((s) => !!s.dirtyFiles[hostPath(host, path)]);
+  const name = fileTabName(path);
   return (
     <TabFrame id={id} active={active} title={path} icon={<FileIcon name={name} />} onShow={() => show(host, ws.id, id, null)} onClose={() => void closeFileTab(host, ws.id, path)}>
       <span className="truncate">{name}</span>
@@ -114,7 +114,7 @@ function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id
 
 /** A changed file's diff tab (X77): the name, and which changes it compares. */
 function DiffTab({ host, ws, id, path, mode, active }: { host: string; ws: Session; id: string; path: string; mode: DiffMode; active: boolean }) {
-  const name = path.split("/").pop() ?? path;
+  const name = fileTabName(path);
   return (
     <TabFrame
       id={id}
@@ -133,7 +133,7 @@ function DiffTab({ host, ws, id, path, mode, active }: { host: string; ws: Sessi
 /** A job's tab (X62): where it runs, its command and how it is going. */
 function JobTab({ host, ws, id, job, active }: { host: string; ws: Session; id: string; job: string; active: boolean }) {
   const j = useSessionJob(host, ws.id, job);
-  const s = j?.state;
+  const tone = tabStatus({ kind: "job", state: j?.state }).tone;
   return (
     <TabFrame
       id={id}
@@ -144,11 +144,11 @@ function JobTab({ host, ws, id, job, active }: { host: string; ws: Session; id: 
       onClose={() => closeJobTab(host, ws.id, job)}
     >
       <span className="truncate font-mono ui-text-12.5">{j?.command ?? "Job"}</span>
-      {j && going(j) ? (
+      {tone === "working" ? (
         <LoaderCircle aria-label="running" size={12} className="shrink-0 animate-spin text-accent" />
-      ) : s?.kind === "done" && s.exit === 0 ? (
+      ) : tone === "done" ? (
         <Check aria-label="done" size={13} className="shrink-0 text-done" />
-      ) : s ? (
+      ) : tone === "error" ? (
         <X aria-label="failed" size={13} className="shrink-0 text-error" />
       ) : null}
     </TabFrame>
@@ -189,28 +189,10 @@ function AllTabs({ host, ws, onClose }: { host: string; ws: Session; onClose: ()
       .catch(() => {});
   }, [newTabs, host, repo]);
 
-  const rows = (layout?.tabs ?? []).map((t) => {
-    const r = t.root;
-    let name: string;
-    let state: TabState;
-    let focused: number | null = null;
-    if (r.type === "file") {
-      name = r.path.split("/").pop() ?? r.path;
-      state = { kind: "file", dirty: !!dirty[`${host}|${r.path}`] };
-    } else if (r.type === "diff") {
-      name = r.path.split("/").pop() ?? r.path;
-      state = { kind: "diff" };
-    } else if (r.type === "job") {
-      const j = jobs.find((x) => x.id === r.job);
-      name = j?.command ?? "Job";
-      state = { kind: "job", state: j?.state };
-    } else {
-      focused = leaves(r)[0];
-      const info = terminals?.[focused];
-      name = info ? (info.agent ?? info.title) : "…";
-      state = { kind: "terminal", agentState: info?.kind === "agent" ? info.agent_state : null, exited: !!info?.exit };
-    }
-    return { id: t.id, name, focused, status: tabStatus(state) };
+  const rows = tabRows(layout?.tabs ?? [], {
+    terminal: (id) => terminals?.[id],
+    dirty: (path) => !!dirty[hostPath(host, path)],
+    job: (id) => jobs.find((x) => x.id === id),
   });
   const shown = filterTabs(rows, q);
   const item = (key: string, content: ReactNode, run: () => void, kbd?: string) => (
@@ -319,7 +301,7 @@ export function TabStrip({ host, ws }: { host: string; ws: Session }) {
     };
   }, [measure, ids]);
 
-  /** Scrolls the row smoothly, measuring again while it settles: WebKit has no scrollend, and a window in the background scrolls slowly. */
+  /** Scrolls the row, measuring again while it settles: scrollend may not come, and a window in the background scrolls slowly. */
   const scroll = (el: HTMLElement, to: ScrollToOptions, by = false) => {
     if (by) el.scrollBy(to);
     else el.scrollTo(to);
@@ -347,7 +329,8 @@ export function TabStrip({ host, ws }: { host: string; ws: Session }) {
           ref={row}
           role="tablist"
           aria-label="Session tabs"
-          className="no-scrollbar flex min-w-0 flex-1 items-stretch gap-[2px] overflow-x-auto overflow-y-hidden"
+          // Positioned, so a tab's offsetLeft is from the row's own start.
+          className="no-scrollbar relative flex min-w-0 flex-1 items-stretch gap-[2px] overflow-x-auto overflow-y-hidden"
           onScroll={measure}
           onWheel={(e) => {
             const d = wheelScroll(e.deltaX, e.deltaY);

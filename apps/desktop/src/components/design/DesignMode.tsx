@@ -14,7 +14,7 @@ import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, Pane, StateGlyph, inputCls } from "../ui";
+import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, Pane, StateGlyph, inputCls, TRAFFIC_LIGHTS } from "../ui";
 import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
@@ -189,27 +189,27 @@ export function DesignMain() {
   if (design && ws) {
     return (
       <div className="flex h-full flex-col">
-        <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+        <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   if (indexed && ws) {
     return (
       <div className="flex h-full flex-col">
-        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} inset={sidebarOpen ? 0 : 84} />
+        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   if (shown && ws) {
     return (
       <div className="flex h-full flex-col">
-        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : 84} />
+        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   return (
     <div className="flex h-full flex-col">
-      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
       {systems?.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-[10px] bg-bg p-6 text-center">
           <SwatchBook size={18} className="text-muted" />

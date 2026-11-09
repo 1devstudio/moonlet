@@ -8,6 +8,9 @@ import { type TrackerKind, trackerOf } from "../lib/tasks";
 
 export { cx };
 
+/** The px the traffic lights take at the left of a header row while the sidebar is closed (X32, X94). */
+export const TRAFFIC_LIGHTS = 84;
+
 /** What a column shows (X94): a block of the pane's tone with rounded corners, on the window's tone. */
 export function Pane({ className, children, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (

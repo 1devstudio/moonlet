@@ -5,7 +5,7 @@ import { changeCount, changeList, changeTree, type ChangeNode } from "../lib/cha
 import { NOT_COMMITTED, changesGroups } from "../lib/changesGroups";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { M, type FileChange, type GitStatus, type Session } from "../lib/protocol";
-import { errorToast, refreshGit, useStore, sesKey } from "../lib/store";
+import { errorToast, refreshGit, useStore, sesKey, hostPath } from "../lib/store";
 import { openDiffTab } from "../lib/actions";
 import type { DiffMode } from "../lib/layout";
 import { askConfirm } from "../lib/confirm";
@@ -173,7 +173,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const [mode, setMode] = useState<DiffMode>("base");
   const [headStatus, setHeadStatus] = useState<typeof status>(undefined);
   const files = (mode === "base" ? status : headStatus)?.files ?? [];
-  const fsVersion = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
+  const fsVersion = useStore((s) => s.fsVersion[hostPath(host, ws.path)] ?? 0);
 
   useEffect(() => {
     if (mode !== "head") return;

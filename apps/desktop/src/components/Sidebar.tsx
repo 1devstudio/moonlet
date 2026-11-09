@@ -430,7 +430,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
           />
         ) : (
           <>
-            <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#d4d3cf]", unread && "font-semibold")}>{s.name}</span>
+            <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
             {mark && (
               <span title={mark} aria-label={mark} className="flex shrink-0 text-muted">
                 <PenTool size={12} />
@@ -503,11 +503,11 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
     <div
       title={a.done ? "Archived" : "Archiving…"}
       className="overflow-hidden"
-      style={{ height: a.folding ? 0 : 38, opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
+      style={{ height: a.folding ? 0 : "max(38px, calc(38px * var(--ui-scale, 1)))", opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
     >
       <div className="relative h-ui-38 overflow-hidden bg-window">
         <ArchiveLoader loader={a.loader} />
-        <div className="relative flex h-[38px] w-1/2 items-center gap-2 pl-4">
+        <div className="relative flex h-ui-38 w-1/2 items-center gap-2 pl-4">
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
             {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
           </span>
@@ -544,7 +544,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
     heading === "project" ? (
       <>
         {g.projectId ? <ProjectMark host={host} projectId={g.projectId} /> : <span aria-hidden className="h-[18px] w-[18px] shrink-0 rounded-[5px] border border-dashed border-border-strong" />}
-        <span className={cx("truncate ui-text-14 font-semibold", g.projectId ? "text-fg" : "text-faint")}>{g.label}</span>
+        <span className={cx("truncate ui-text-14 font-semibold", g.projectId ? "text-[#d6d6d6]" : "text-faint")}>{g.label}</span>
         {g.on && <span className="shrink-0 font-mono ui-text-11 text-faint">{"missing" in g.on ? `not on ${labelOf(primary)}` : `on ${labelOf(g.on.host)}`}</span>}
         {column?.prefix && <span className="shrink-0 font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
       </>

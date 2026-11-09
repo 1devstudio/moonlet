@@ -7,7 +7,7 @@ import { M, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Se
 import { killParams, runningLine, stillRunningLine, withRunning } from "./sessionProcesses";
 import { copyRefused } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
-import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
+import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession, hostPath } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
@@ -151,7 +151,7 @@ export function closeDiffTab(host: string, wsId: string, path: string, mode: Dif
 
 /** Closes a file's editor tab, asking first when it has unsaved edits. */
 export async function closeFileTab(host: string, wsId: string, path: string) {
-  const key = `${host}|${path}`;
+  const key = hostPath(host, path);
   if (useStore.getState().dirtyFiles[key]) {
     const name = path.split("/").pop();
     const ok = await askConfirm({ title: "Unsaved changes", message: `Discard unsaved changes to ${name}?`, action: "Discard", variant: "danger" });

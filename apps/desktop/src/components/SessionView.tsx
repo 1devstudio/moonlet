@@ -5,7 +5,7 @@ import { focusTerminal, getLayout, useStore, sesKey } from "../lib/store";
 import { newSessionAgentTab, newTab, sendToAgent } from "../lib/actions";
 import { quietWhen } from "../lib/motion";
 import { PaneTree } from "./PaneTree";
-import { AgentIcon, Kbd, Pane, cx } from "./ui";
+import { AgentIcon, Kbd, Pane, cx, TRAFFIC_LIGHTS } from "./ui";
 import { agentLabel } from "../lib/agents";
 import { TaskBar, useSessionTask } from "./tasks/SessionTask";
 import { TabStrip } from "./SessionTabs";
@@ -20,7 +20,7 @@ function SessionHeader({ ws }: { ws: Session }) {
       aria-label="Session"
       className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
       // Clear of the traffic lights when the sidebar is closed.
-      style={{ paddingLeft: sidebarOpen ? 12 : 84 }}
+      style={{ paddingLeft: sidebarOpen ? 12 : TRAFFIC_LIGHTS }}
     >
       <GitBranch size={14} strokeWidth={1.75} className="shrink-0 text-muted" />
       <h1 className="min-w-0 truncate ui-text-13.5 font-medium text-fg">{ws.name}</h1>

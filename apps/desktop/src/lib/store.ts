@@ -111,6 +111,8 @@ export interface Settings {
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
 export const termKey = (host: string, id: number) => `${host}:${id}`;
+/** A path on a host: the key of `dirtyFiles` and `fsVersion`. */
+export const hostPath = (host: string, path: string) => `${host}|${path}`;
 export const projKey = (host: string, id: string) => `${host}/${id}`;
 
 /** A project's base branch against origin, for the sidebar's pull chip (X13). */
@@ -1378,7 +1380,7 @@ function handleEvent(e: DaemonEvent) {
     }
     case EV.fsChanged: {
       const ch = data as FsChanged;
-      set((s) => ({ fsVersion: { ...s.fsVersion, [`${host}|${ch.root}`]: (s.fsVersion[`${host}|${ch.root}`] ?? 0) + 1 } }));
+      set((s) => ({ fsVersion: { ...s.fsVersion, [hostPath(host, ch.root)]: (s.fsVersion[hostPath(host, ch.root)] ?? 0) + 1 } }));
       for (const w of get().sessions[host] ?? []) {
         if (ch.root === w.path || ch.root.startsWith(w.path + "/") || w.path.startsWith(ch.root.replace(/\/$/, "") + "/")) scheduleGit(host, w.id);
       }

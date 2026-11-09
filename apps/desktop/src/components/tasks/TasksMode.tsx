@@ -1077,12 +1077,20 @@ const STATE_DOT: Record<Column, string> = {
  * chevron, 26 px high; under 560 px of header, only the dot. The select over
  * it opens the state menu.
  */
-function StatePill({ column, label, children }: { column: Column; label: string; children: React.ReactNode }) {
+function StatePill({ column, label, children, title, locked = false }: { column: Column; label: string; children?: React.ReactNode; title?: string; locked?: boolean }) {
+  // With no menu (a Project's item before its board's columns are known) or a locked one, the pill neither lights up nor shows a chevron.
+  const opens = !!children && !locked;
   return (
-    <span className="relative flex h-ui-26 shrink-0 items-center gap-[7px] rounded-full bg-raised pl-2.5 pr-2 ui-text-12 text-fg hover:bg-hover focus-within:ring-1 focus-within:ring-accent @max-[560px]:w-[28px] @max-[560px]:justify-center @max-[560px]:bg-transparent @max-[560px]:p-0">
+    <span
+      title={title}
+      className={cx(
+        "relative flex h-ui-26 shrink-0 items-center gap-[7px] rounded-full bg-raised pl-2.5 pr-2 ui-text-12 text-fg focus-within:ring-1 focus-within:ring-accent @max-[560px]:w-[28px] @max-[560px]:justify-center @max-[560px]:bg-transparent @max-[560px]:p-0",
+        opens && "hover:bg-hover",
+      )}
+    >
       <span aria-hidden="true" className={cx("h-[7px] w-[7px] shrink-0 rounded-full", STATE_DOT[column])} />
       <span className="whitespace-nowrap @max-[560px]:hidden">{label}</span>
-      <ChevronDown size={12} className="shrink-0 text-muted @max-[560px]:hidden" />
+      {opens && <ChevronDown size={12} className="shrink-0 text-muted @max-[560px]:hidden" />}
       {children}
     </span>
   );
@@ -1136,7 +1144,13 @@ export function StateMenu({ host, workspaceId, task, chip }: { host: string; wor
         ))}
       </select>
     );
-    if (chip) return <StatePill column={chip} label={current < 0 ? "Not shown" : choices[current].label}>{select}</StatePill>;
+    // A state the header can't move says why in its tooltip: the header has no room for a second line.
+    if (chip)
+      return (
+        <StatePill column={chip} label={current < 0 ? "Not shown" : choices[current].label} title={lock ?? undefined} locked={locked}>
+          {select}
+        </StatePill>
+      );
     if (!locked) return select;
     return (
       <span className="flex flex-col gap-1">
@@ -1146,7 +1160,7 @@ export function StateMenu({ host, workspaceId, task, chip }: { host: string; wor
     );
   }
   // A Project's item before its board's columns are known: no Open/Closed to fall back on.
-  if (task.github?.project) return <span className={cx("ui-text-12.5 text-muted", chip && "shrink-0 whitespace-nowrap")}>{task.github.project.status ?? NO_STATUS}</span>;
+  if (task.github?.project) return chip ? <StatePill column={chip} label={task.github.project.status ?? NO_STATUS} /> : <span className="ui-text-12.5 text-muted">{task.github.project.status ?? NO_STATUS}</span>;
   const options = stateOptions(task);
   const current = options.findIndex((o) => o.current);
   const select = (

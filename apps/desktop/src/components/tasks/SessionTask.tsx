@@ -15,7 +15,7 @@ import { ArchivedSessions } from "./ArchivedSessions";
 import { ensureTasks, linkTask, lookUpPasted, originRepoOf, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
-import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
+import { Button, cx, Dialog, IconButton, inputCls, StateGlyph, TRAFFIC_LIGHTS } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 import { TaskComments } from "./TaskComments";
 
@@ -62,7 +62,7 @@ export function TaskBar({ host, ws, linked }: { host: string; ws: Session; linke
       data-tauri-drag-region
       className="drag @container flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
       // Clear of the traffic lights when the sidebar is closed.
-      style={{ paddingLeft: sidebarOpen ? 12 : 84 }}
+      style={{ paddingLeft: sidebarOpen ? 12 : TRAFFIC_LIGHTS }}
     >
       <TaskGlyph column={card.column} size={14} />
       {/* The key is the link to the issue in its tracker. */}

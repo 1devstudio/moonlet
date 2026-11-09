@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type DirEntry, type Session } from "../lib/protocol";
-import { errorToast, sesKey, useStore } from "../lib/store";
+import { errorToast, sesKey, useStore, hostPath } from "../lib/store";
 import { draftToAgent, openFileTab } from "../lib/actions";
 import { fileMention } from "../lib/chat";
 import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
@@ -100,7 +100,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
 
 export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [showIgnored, setShowIgnored] = useState(false);
-  const version = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
+  const version = useStore((s) => s.fsVersion[hostPath(host, ws.path)] ?? 0);
   // The file of the active editor tab (X26).
   const selected = useStore((s) => {
     const l = s.layouts[sesKey(host, ws.id)];
