@@ -30,3 +30,10 @@ export const THEME = {
   brightCyan: "#94e2ec",
   brightWhite: "#f2f4f8",
 };
+
+/** The tone of the desktop's panes (X94), which a terminal fills:
+ *  moonlet.css's --color-bg. */
+export const PANE = "#121212";
+
+/** The desktop's terminal colours: THEME on the pane's tone. */
+export const DESKTOP_THEME = { ...THEME, background: PANE, cursorAccent: PANE, overviewRulerBorder: PANE };

@@ -4,6 +4,7 @@
 import { type KeyboardEvent, type ReactNode, useId } from "react";
 import { radioKey, type StatusLine, type Tone } from "../../lib/settingsPage";
 import { cx } from "../ui";
+import { ScrollArea } from "../ScrollArea";
 
 export const fieldCls =
   "h-[30px] rounded-md border border-border-strong bg-panel-2 px-2.5 ui-text-13 text-fg outline-none placeholder:text-faint focus:border-accent aria-[invalid=true]:border-error disabled:cursor-not-allowed disabled:opacity-40";
@@ -191,9 +192,9 @@ export function Initial({ letter, className }: { letter: string; className?: str
 export function PageBody({ children, bar }: { children: ReactNode; bar?: ReactNode }) {
   return (
     <>
-      <div data-settings-scroll className="min-h-0 flex-1 overflow-auto px-12 pb-16 pt-3">
+      <ScrollArea x data-settings-scroll className="px-12 pb-16 pt-3">
         <div className="mx-auto flex max-w-[680px] flex-col gap-8">{children}</div>
-      </div>
+      </ScrollArea>
       {bar}
     </>
   );

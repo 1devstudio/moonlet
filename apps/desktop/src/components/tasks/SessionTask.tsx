@@ -1,7 +1,7 @@
-// A session's task (X46): the task bar above the conversation, the right
+// A session's task (X46): the task header above the session's tabs (X94), the right
 // panel's Task tab and the link dialog.
 
-import { ChevronLeft, ChevronRight, ExternalLink, GitBranch, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, GitBranch, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { taskWorkspace } from "../../lib/boards";
@@ -15,7 +15,7 @@ import { ArchivedSessions } from "./ArchivedSessions";
 import { ensureTasks, linkTask, lookUpPasted, originRepoOf, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
-import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
+import { Button, cx, Dialog, IconButton, inputCls, StateGlyph, TRAFFIC_LIGHTS } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 import { TaskComments } from "./TaskComments";
 
@@ -47,22 +47,40 @@ export function useSessionTask(host: string, ws: Session): SessionTask | null {
   }, [board, ref, host, ws.id]);
 }
 
-/** Above the conversation: the task, its state and its other sessions. */
-export function TaskBar({ host, ws }: { host: string; ws: Session }) {
-  const linked = useSessionTask(host, ws);
-  if (!linked) return null;
+/** The session's header when it works on a task (X46, X94), above its
+ * tabs: the task, its state and its other sessions. */
+export function TaskBar({ host, ws, linked }: { host: string; ws: Session; linked: SessionTask }) {
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
   const { card, board } = linked;
   const at = card.rows.findIndex((r) => r.session.id === ws.id);
   const go = (d: number) => selectSession(card.rows[(at + d + card.rows.length) % card.rows.length].session.host ?? host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
+  const tracker = trackerName(card.task.connection);
   return (
-    <div role="region" aria-label="Task" className="flex min-h-[40px] shrink-0 items-center gap-2.5 border-b border-border bg-panel py-1.5 pr-3 pl-4 ui-text-12.5">
+    <div
+      role="region"
+      aria-label="Task"
+      data-tauri-drag-region
+      className="drag @container flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
+      // Clear of the traffic lights when the sidebar is closed.
+      style={{ paddingLeft: sidebarOpen ? 12 : TRAFFIC_LIGHTS }}
+    >
       <TaskGlyph column={card.column} size={14} />
-      <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{card.task.key}</span>
-      <span className="min-w-0 truncate font-medium text-fg">{card.task.title}</span>
-      <StateMenu host={board.host} workspaceId={board.id} task={card.task} chip />
-      <span className="flex-1" />
+      {/* The key is the link to the issue in its tracker. */}
+      <a
+        href={card.task.url}
+        target="_blank"
+        rel="noreferrer"
+        title={`Open ${card.task.key} in ${tracker}`}
+        className="no-drag -mx-1 shrink-0 whitespace-nowrap rounded px-1 py-0.5 font-mono ui-text-12 text-muted underline-offset-[3px] hover:bg-hover hover:text-accent hover:underline"
+      >
+        {card.task.key}
+      </a>
+      <h1 className="min-w-0 flex-1 truncate ui-text-13.5 font-medium text-fg">{card.task.title}</h1>
+      <span className="no-drag flex shrink-0">
+        <StateMenu host={board.host} workspaceId={board.id} task={card.task} chip={card.column} />
+      </span>
       {card.rows.length > 1 && (
-        <div role="group" aria-label="Sessions on this task" className="flex shrink-0 items-center gap-0.5 whitespace-nowrap ui-text-12 text-muted">
+        <div role="group" aria-label="Sessions on this task" className="no-drag flex shrink-0 items-center gap-0.5 whitespace-nowrap ui-text-12 text-muted">
           <IconButton title="Previous session on this task" onClick={() => go(-1)}>
             <ChevronLeft size={14} />
           </IconButton>
@@ -74,9 +92,6 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
           </IconButton>
         </div>
       )}
-      <a href={card.task.url} target="_blank" rel="noreferrer" className="flex shrink-0 items-center gap-1 ui-text-12 text-accent-2 hover:text-accent">
-        {trackerName(card.task.connection)} <ExternalLink size={12} />
-      </a>
     </div>
   );
 }

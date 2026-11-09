@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, Eye, EyeOff, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type DirEntry, type Session } from "../lib/protocol";
-import { errorToast, sesKey, useStore } from "../lib/store";
+import { errorToast, sesKey, useStore, hostPath } from "../lib/store";
 import { draftToAgent, openFileTab } from "../lib/actions";
 import { fileMention } from "../lib/chat";
 import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
@@ -10,6 +10,7 @@ import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
 import { Menu } from "./Menu";
 import { IconButton, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 /** What a row needs from the panel: where it lives and what its actions do. */
 interface Tree {
@@ -99,7 +100,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
 
 export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [showIgnored, setShowIgnored] = useState(false);
-  const version = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
+  const version = useStore((s) => s.fsVersion[hostPath(host, ws.path)] ?? 0);
   // The file of the active editor tab (X26).
   const selected = useStore((s) => {
     const l = s.layouts[sesKey(host, ws.id)];
@@ -121,11 +122,11 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
           {showIgnored ? <EyeOff size={12} /> : <Eye size={12} />}
         </IconButton>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+      <ScrollArea className="py-1.5">
         <div role="tree" aria-label="Files">
           <Dir path={ws.path} depth={0} tree={{ host, root: ws.path, showIgnored, version, selected, targets, onOpen }} />
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 }

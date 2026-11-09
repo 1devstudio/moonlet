@@ -8,7 +8,8 @@ import { M, type ArchivedChat, type Session, type SessionHistory } from "../lib/
 import { sesKey, useStore } from "../lib/store";
 import { ChatItemView, ToolGroup } from "./AgentView";
 import { useSessionTask } from "./tasks/SessionTask";
-import { Button } from "./ui";
+import { Button, Pane } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 /** The blocks of a kept transcript shown at first; "Show earlier" adds more. */
 const SHOWN = 200;
@@ -38,8 +39,8 @@ export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
   const lines = archivedSummary(ws, { project, task, pr, now: Date.now() });
   const note = history && historyNote(history);
   return (
-    <div role="region" aria-label={`Archived session ${ws.name}`} className="flex h-full w-full flex-col overflow-hidden bg-bg">
-      <header className="flex h-[44px] shrink-0 items-center gap-2.5 border-b border-border bg-panel pr-3 pl-4">
+    <div role="region" aria-label={`Archived session ${ws.name}`} className="flex h-full w-full flex-col overflow-hidden">
+      <header className="flex h-ui-44 shrink-0 items-center gap-2.5 pr-3 pl-4">
         <Archive size={14} className="shrink-0 text-faint" />
         <span className="min-w-0 truncate ui-text-13.5 font-medium text-fg">{ws.name}</span>
         <span className="shrink-0 rounded-full border border-border-strong px-2 py-px ui-text-11 text-muted">Archived</span>
@@ -57,7 +58,8 @@ export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
           <RotateCcw size={12} /> {restoring ? "Restoring…" : "Restore"}
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <Pane className="flex flex-col">
+        <ScrollArea>
         <div className="mx-auto flex max-w-[860px] flex-col gap-1 px-6 pt-5 pb-8">
           <dl aria-label="About this session" className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 ui-text-12.5">
             {lines.task && (
@@ -91,7 +93,8 @@ export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
           {note && <p className="mt-6 ui-text-13 text-faint">{note}</p>}
           {history && !(history instanceof Error) && history.chats.map((c) => <Transcript key={c.id} chat={c} cwd={ws.path} />)}
         </div>
-      </div>
+      </ScrollArea>
+      </Pane>
     </div>
   );
 }

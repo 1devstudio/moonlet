@@ -135,12 +135,12 @@ describe("new agent tab", () => {
     await browser.waitUntil(() => terms().filter((t) => t.kind === "shell").length === shells + 1, { timeoutMsg: "⇧⌘T opened no shell" });
   });
 
-  it("opens an agent with the + button, and a shell from its menu's Terminal ⇧⌘T", async () => {
+  it("opens an agent with the + button, and a shell from All tabs' Terminal ⇧⌘T", async () => {
     const chats = terms().filter((t) => t.chat).length;
     await $('button[title="New agent (⌘T)"]').click();
     await browser.waitUntil(() => terms().filter((t) => t.chat).length === chats + 1, { timeoutMsg: "+ opened no agent" });
     const shells = terms().filter((t) => t.kind === "shell").length;
-    await $('button[title="New agent or split"]').click();
+    await $('button[aria-label="All tabs"]').click();
     await $('//button[starts-with(normalize-space(), "Terminal")][contains(., "⇧⌘T")]').click();
     await browser.waitUntil(() => terms().filter((t) => t.kind === "shell").length === shells + 1, { timeoutMsg: "Terminal opened no shell" });
   });

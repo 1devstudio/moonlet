@@ -13,6 +13,7 @@ import { displayOf, fieldEntries, fieldInput, fieldOff, fieldSet, fieldShows, fi
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
+import { ScrollArea } from "../ScrollArea";
 
 /** The orange dot of an off-system element or value. */
 export function OffSystemDot({ className }: { className?: string }) {
@@ -49,7 +50,7 @@ export function InspectorTab({
   if (!mid || !tag) return <p className="px-4 py-6 text-center ui-text-12.5 text-faint">{locked ? "Edit opens when Claude stops." : "Select an element in Edit mode (V) to inspect it."}</p>;
   const display = displayOf(inline, computed);
   return (
-    <div aria-label="Inspector" className="min-h-0 flex-1 overflow-y-auto">
+    <ScrollArea aria-label="Inspector">
       <div className="flex h-11 items-center gap-2 border-b border-border px-3.5">
         <span className="rounded bg-[rgba(91,156,255,0.16)] px-1.5 py-px font-mono ui-text-12 text-[#cfe0ff]">{tag}</span>
         <span className="font-mono ui-text-12 text-faint">{mid}</span>
@@ -80,7 +81,7 @@ export function InspectorTab({
           ))}
         </section>
       ))}
-    </div>
+    </ScrollArea>
   );
 }
 
@@ -262,7 +263,7 @@ export function PaletteTab({
         <input aria-label="Search snippets" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search snippets" className="min-w-0 flex-1 bg-transparent ui-text-12.5 text-fg outline-none placeholder:text-faint" />
       </div>
       <p className="shrink-0 px-3.5 pt-2.5 ui-text-11.5 text-faint">{locked ? "Edit opens when Claude stops." : selected ? `Click inserts after ${selected}; or drag one onto the page.` : "Click inserts at the end of the page; or drag one onto it."}</p>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
+      <ScrollArea className="px-1.5 pb-3">
         {snippets.length === 0 && <p className="px-2 py-6 text-center ui-text-12.5 text-faint">The design system has no snippets yet.</p>}
         {snippets.length > 0 && groups.length === 0 && <p className="px-2 py-6 text-center ui-text-12.5 text-faint">No snippet matches.</p>}
         {groups.map((g) => (
@@ -292,7 +293,7 @@ export function PaletteTab({
             ))}
           </section>
         ))}
-      </div>
+      </ScrollArea>
     </div>
   );
 }

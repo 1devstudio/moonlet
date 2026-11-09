@@ -5,11 +5,12 @@ import { changeCount, changeList, changeTree, type ChangeNode } from "../lib/cha
 import { NOT_COMMITTED, changesGroups } from "../lib/changesGroups";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { M, type FileChange, type GitStatus, type Session } from "../lib/protocol";
-import { errorToast, refreshGit, useStore, sesKey } from "../lib/store";
+import { errorToast, refreshGit, useStore, sesKey, hostPath } from "../lib/store";
 import { openDiffTab } from "../lib/actions";
 import type { DiffMode } from "../lib/layout";
 import { askConfirm } from "../lib/confirm";
 import { Button, Empty, IconButton, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 type FileAction = "stage" | "unstage" | "revert";
 
@@ -172,7 +173,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const [mode, setMode] = useState<DiffMode>("base");
   const [headStatus, setHeadStatus] = useState<typeof status>(undefined);
   const files = (mode === "base" ? status : headStatus)?.files ?? [];
-  const fsVersion = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
+  const fsVersion = useStore((s) => s.fsVersion[hostPath(host, ws.path)] ?? 0);
 
   useEffect(() => {
     if (mode !== "head") return;
@@ -237,7 +238,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           {mode === "base" ? `Nothing differs from ${ws.base}.` : "The working tree is clean."}
         </Empty>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <ScrollArea>
           {total && <SummaryLine status={total} />}
           {groups ? (
             <GroupedChanges groups={groups} view={view} onSelect={open} onAction={(f, a) => void fileAction(f, a)} />
@@ -246,7 +247,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
           ) : (
             <ChangeListView files={files} onSelect={open} onAction={(f, a) => void fileAction(f, a)} />
           )}
-        </div>
+        </ScrollArea>
       )}
     </div>
   );

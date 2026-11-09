@@ -92,7 +92,7 @@ import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashC
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
 import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
-import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
+import { errorToast, getLayout, setLayout, termKey, toast, useStore, hostPath } from "../lib/store";
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planCardBelow, planLabels, planView } from "../lib/plan";
@@ -109,6 +109,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 import { useCopyReadOnly } from "./CopyLine";
 import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
@@ -894,7 +895,7 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 const fileCache = new Map<string, Promise<string[]>>();
 
 function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
-  const key = `${host}|${root}`;
+  const key = hostPath(host, root);
   let p = fresh ? undefined : fileCache.get(key);
   if (!p) {
     p = rpc<string[]>(host, M.fsFiles, { root }).catch(() => [] as string[]);
@@ -1225,7 +1226,8 @@ function ChatEditor({
 }
 
 /** Tailwind classes for the X51 layout's px values. */
-const PAD_X: Record<number, string> = { 24: "px-6", 16: "px-4", 12: "px-3" };
+// The composer's sides in px, as the design gives them (X94); the app's rem is 13.5 px, not 16.
+const PAD_X: Record<number, string> = { 24: "px-[24px]", 16: "px-[16px]", 12: "px-[12px]" };
 const INSET_X: Record<number, string> = { 16: "pl-4", 12: "pl-3" };
 /** The input card's padding by its inset: 14 px above and below, 11 px when compact. */
 const CARD_PAD: Record<number, string> = { 16: "py-3.5 pl-4", 12: "py-[11px] pl-3" };
@@ -1710,16 +1712,19 @@ export function AgentView({
           <PlanPanel view={plan} />
         </Dialog>
       )}
-      <div
+      {/* The transcript (X94): 24 px above and below, 28 at the sides, at most 880 wide; fades and Latest. */}
+      <ScrollArea
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto"
+        latest
+        // Wide tables scroll sideways, as before.
+        x
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
         <FileLinks.Provider value={fileLinks}>
-          <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
+          <div className="flex max-w-[880px] flex-col gap-0.5 px-[28px] py-[24px]">
             {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
@@ -1805,8 +1810,9 @@ export function AgentView({
             })}
           </div>
         </FileLinks.Provider>
-      </div>
-      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", PAD_X[layout.padX])}>
+      </ScrollArea>
+      {/* 4 px above the composer, 14 below (X94). */}
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-[14px] pt-[4px]", PAD_X[layout.padX])}>
         {replies && !working && (
           <div role="group" aria-label="Suggested replies" className="mb-2 flex flex-wrap items-center gap-1.5">
             {replies.map((r, i) => (

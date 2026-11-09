@@ -7,6 +7,7 @@ import { tokens } from "../lib/chat";
 import { AGENT_STATE, type AgentRow, agentKey, agentsHeader, isActive, modelLabel, retryMessage, stoppable } from "../lib/subagents";
 import { Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
 import { Button, Empty, StateGlyph, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 const LINE = { fg: "text-fg", muted: "text-muted", error: "text-error" };
 
@@ -97,7 +98,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
   const meta = [a.model && modelLabel(a.model), row.elapsed, a.tokens ? `${tokens(a.tokens)} tokens` : null].filter(Boolean);
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <ScrollArea className="px-4 pb-4">
         <button className="-ml-1 mt-3 flex items-center gap-0.5 ui-text-12.5 text-muted hover:text-fg" onClick={() => useStore.setState({ agentDetail: null })}>
           <ChevronLeft size={14} />
           Agents
@@ -153,7 +154,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
             <Markdown text={a.report} />
           </div>
         )}
-      </div>
+      </ScrollArea>
       {isActive(row.state) && (
         <div className="flex h-11 shrink-0 items-center justify-end border-t border-border px-4">
           <button className="ui-text-12.5 text-muted hover:text-fg" onClick={() => act.stop(row)}>

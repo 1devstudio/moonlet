@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
+import { ChevronDown, ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
@@ -21,6 +21,7 @@ import { JobsPanel } from "./JobsPanel";
 import { ProcessesPanel } from "./ProcessesPanel";
 import { useSessionJobs } from "../lib/jobsStore";
 import { jobsTabCount } from "../lib/jobs";
+import { fitViews } from "../lib/viewOverflow";
 import { FileLinks, useProjectFiles } from "./AgentView";
 import { useNow } from "../lib/useNow";
 import { FilesPanel } from "./FilesPanel";
@@ -30,6 +31,7 @@ import { SessionDesignTab } from "./design/SessionDesign";
 import { designTab } from "../lib/sessionDesign";
 import { pickDesignTab, sessionDesignsOf, useDesign } from "../lib/designStore";
 import { copyOffers } from "../lib/centralCopies";
+import { ScrollArea } from "./ScrollArea";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -187,30 +189,35 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     };
   }, [host, ws.id, ws.path]);
   return (
-    <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 px-4">
+    <div data-tauri-drag-region className="drag @container flex h-ui-44 shrink-0 items-center gap-1 px-4">
       <button
-        className={cx("no-drag flex h-8 items-center gap-2 rounded-md px-2.5 ui-text-14 hover:bg-raised", hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg")}
+        className={cx(
+          "no-drag flex h-8 items-center gap-2 rounded-md bg-raised px-2.5 ui-text-14 hover:bg-hover @max-[340px]:px-2",
+          hasRunCommand(config) ? "text-fg" : "text-faint hover:text-fg",
+        )}
         title={hasRunCommand(config) ? `Run: ${config?.run} (⌘R)` : "Set a run command…"}
         onClick={() => (hasRunCommand(config) ? void runScript("run") : openProjectSettings({ host, project: ws.project_id }, "run"))}
       >
-        <Play size={13} fill="currentColor" strokeWidth={0} /> Run
+        <Play size={13} fill="currentColor" strokeWidth={0} />
+        <span className="@max-[340px]:hidden">Run</span>
       </button>
       {pr && view && <StackMenu view={view} current={pr.number} />}
       <button
-        className="no-drag group flex h-8 items-center gap-2 rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
+        className="no-drag group ml-auto flex h-8 min-w-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
         <PrIcon className={pr ? prTone(pr.state) : "text-accent"} />
-        PR {pr && <span className="text-muted">#{pr.number}</span>}
-        {pr && pr.state !== "open" && <span className={prTone(pr.state)}>· {pr.state}</span>}
+        {/* Narrow, the PR drops its word, then its state (X94). */}
+        <span className={cx(pr && "@max-[400px]:hidden")}>PR</span>
+        {pr && <span className="text-muted">#{pr.number}</span>}
+        {pr && pr.state !== "open" && <span className={cx(prTone(pr.state), "@max-[340px]:hidden")}>· {pr.state}</span>}
         {pr ? (
           <ExternalLink size={11} className="text-faint opacity-0 group-hover:opacity-100" />
         ) : (
           <Plus size={12} className="text-faint opacity-0 group-hover:opacity-100" />
         )}
       </button>
-      <span className="ml-auto" />
       <MoreMenu host={host} ws={ws} />
     </div>
   );
@@ -270,6 +277,116 @@ function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   return { rows, now };
 }
 
+/** The px between two views, and before More. */
+const VIEW_GAP = 2;
+
+/**
+ * The right panel's views, 36 px, as tabs like the session's: 32 px, the one shown filled with the pane's tone (X94). Those that do not fit go into More,
+ * the last first; the view shown always stays in the row, in its place.
+ */
+function ViewTabs({ tabs, shown, pick, extra }: { tabs: { id: RightTab; label: string }[]; shown: RightTab; pick: (id: RightTab) => void; extra: (id: RightTab) => ReactNode }) {
+  const row = useRef<HTMLDivElement>(null);
+  const sizer = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState<{ shown: number[]; more: number[] } | null>(null);
+  const [open, setOpen] = useState(false);
+  const active = tabs.findIndex((t) => t.id === shown);
+  const key = tabs.map((t) => t.id).join(",");
+  const measure = useCallback(() => {
+    const r = row.current;
+    const m = sizer.current;
+    if (!r || !m) return;
+    const widths = [...m.querySelectorAll<HTMLElement>("[data-view]")].map((e) => e.offsetWidth);
+    const more = m.querySelector<HTMLElement>("[data-more]")?.offsetWidth ?? 0;
+    const next = fitViews(widths, active, r.clientWidth, more, VIEW_GAP);
+    setFit((p) => (p && p.shown.join() === next.shown.join() && p.more.join() === next.more.join() ? p : next));
+  }, [active]);
+  useLayoutEffect(() => {
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (row.current) ro.observe(row.current);
+    if (sizer.current) ro.observe(sizer.current);
+    return () => ro.disconnect();
+  }, [measure, key]);
+  const visible = fit ? fit.shown.filter((i) => i < tabs.length) : tabs.map((_, i) => i);
+  const hidden = fit ? fit.more.filter((i) => i < tabs.length) : [];
+  const view = (t: { id: RightTab; label: string }) => (
+    <span className="flex items-center gap-1.5">
+      {t.label}
+      {extra(t.id)}
+    </span>
+  );
+  return (
+    <div className="relative flex h-ui-36 shrink-0 items-end px-2">
+      <div ref={row} role="tablist" className="flex h-ui-32 min-w-0 flex-1 items-stretch overflow-hidden" style={{ gap: VIEW_GAP }}>
+        {visible.map((i) => {
+          const t = tabs[i];
+          return (
+            <button
+              key={t.id}
+              id={`right-tab-${t.id}`}
+              role="tab"
+              aria-selected={shown === t.id}
+              aria-controls="right-tabpanel"
+              onClick={() => pick(t.id)}
+              className={cx(
+                "relative flex shrink-0 items-center rounded-t-[8px] px-3 ui-text-13 transition-colors",
+                shown === t.id ? "bg-bg font-medium text-fg" : "text-muted hover:bg-tab-hover hover:text-fg",
+              )}
+            >
+              {view(t)}
+            </button>
+          );
+        })}
+        {hidden.length > 0 && (
+          <div className="relative ml-auto flex shrink-0 items-center pr-0.5">
+            <button
+              aria-label={`More views, ${hidden.length}`}
+              aria-expanded={open}
+              className={cx("flex h-7 items-center gap-1 rounded-md pl-2 pr-1.5 ui-text-13 text-muted hover:bg-hover hover:text-fg", open && "bg-hover text-fg")}
+              onClick={() => setOpen(!open)}
+            >
+              More
+              <span className="rounded bg-border-strong px-[5px] font-mono ui-text-11 leading-4 text-fg">{hidden.length}</span>
+              <ChevronDown size={12} />
+            </button>
+          </div>
+        )}
+      </div>
+      {/* Every view and More at their own width, out of sight, to measure the row by; after the row, so its copies of the views' dots come second. */}
+      <div ref={sizer} aria-hidden="true" className="invisible absolute flex h-0 overflow-hidden whitespace-nowrap">
+        {tabs.map((t) => (
+          <span key={t.id} data-view className="flex shrink-0 items-center gap-1.5 px-3 ui-text-13 font-medium">
+            {view(t)}
+          </span>
+        ))}
+        <span data-more className="flex shrink-0 items-center gap-1 pl-2 pr-1.5 ui-text-13">
+          More <span className="px-[5px] font-mono ui-text-11">{tabs.length}</span> <ChevronDown size={12} />
+        </span>
+      </div>
+      {open && hidden.length > 0 && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div role="menu" aria-label="More views" className="absolute right-1.5 top-full z-40 mt-1 flex w-[200px] flex-col gap-px rounded-[10px] border border-border-strong bg-panel-2 p-1.5 shadow-2xl">
+            {hidden.map((i) => (
+              <button
+                key={tabs[i].id}
+                role="menuitem"
+                className="flex h-[30px] items-center rounded-md px-2 text-left ui-text-13 text-fg hover:bg-hover"
+                onClick={() => {
+                  setOpen(false);
+                  pick(tabs[i].id);
+                }}
+              >
+                {view(tabs[i])}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   // The Task tab is there for a session linked to a task (X46); otherwise Files stands in.
   const linked = !!useSessionTask(host, ws);
@@ -302,41 +419,39 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   }, [host, ws.path]);
 
   return (
-    <div className="flex h-full flex-col bg-panel">
+    <div className="flex h-full flex-col">
       <TopActions host={host} ws={ws} />
-      <div role="tablist" className="flex h-[38px] shrink-0 items-stretch border-b border-border px-2">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            id={`right-tab-${t.id}`}
-            role="tab"
-            aria-selected={tab === t.id}
-            aria-controls="right-tabpanel"
-            // The Agents tab always opens on its list (X42); the Design tab
-            // is entered, its canvas's keys working at once (X65).
-            onClick={() =>
-              t.id === "design"
-                ? pickDesignTab(host, ws.id)
-                : useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : t.id === "jobs" ? { rightTab: t.id, jobDetail: null } : { rightTab: t.id })
-            }
-            className={cx(
-              "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
-              tab === t.id ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
-            )}
-          >
-            {t.label}
-            {t.id === "jobs" && <span className="ui-text-12 tabular-nums text-faint">{jobsTabCount(jobs)}</span>}
-            {t.id === "design" && !!design?.count && <span aria-label={`${design.count} open comments`} className="ui-text-12 tabular-nums text-faint">{design.count}</span>}
-            {t.id === "plan" && planTabDot(tab, planWaiting) && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
-            {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
-          </button>
-        ))}
-      </div>
-      <div
+      <ViewTabs
+        tabs={tabs}
+        shown={tab}
+        // The Agents tab always opens on its list (X42); the Design tab
+        // is entered, its canvas's keys working at once (X65).
+        pick={(id) =>
+          id === "design"
+            ? pickDesignTab(host, ws.id)
+            : useStore.setState(id === "agents" ? { rightTab: id, agentDetail: null } : id === "jobs" ? { rightTab: id, jobDetail: null } : { rightTab: id })
+        }
+        extra={(id) =>
+          id === "jobs" ? (
+            <span className="ui-text-12 font-normal tabular-nums text-faint">{jobsTabCount(jobs)}</span>
+          ) : id === "design" && !!design?.count ? (
+            <span aria-label={`${design.count} open comments`} className="ui-text-12 font-normal tabular-nums text-faint">
+              {design.count}
+            </span>
+          ) : id === "plan" && planTabDot(tab, planWaiting) ? (
+            <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />
+          ) : id === "agents" && agentsTabDot(tab, agents.rows) ? (
+            <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />
+          ) : null
+        }
+      />
+      <ScrollArea
         id="right-tabpanel"
         role="tabpanel"
         aria-labelledby={`right-tab-${tab}`}
-        className={cx("min-h-0 flex-1 bg-bg", tab === "design" ? "flex flex-col" : "overflow-y-auto")}
+        frame="overflow-hidden rounded-[10px]"
+        // The Design tab fills the pane with its own canvas and rail, unscrolled.
+        className={cx("rounded-[10px] bg-bg", tab === "design" && "flex flex-col !overflow-hidden")}
       >
         <Suspense fallback={null}>
           {tab === "design" ? (
@@ -363,7 +478,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             <ChecksPanel host={host} ws={ws} />
           )}
         </Suspense>
-      </div>
+      </ScrollArea>
     </div>
   );
 }

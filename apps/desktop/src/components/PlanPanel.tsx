@@ -2,6 +2,7 @@ import { ClipboardList } from "lucide-react";
 import { type PlanView, planLabels } from "../lib/plan";
 import { Markdown, PLAN_TONE_BG, PLAN_TONE_TEXT } from "./AgentView";
 import { Empty, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 /** The Plan tab (X24): the latest plan of the session's chat, with its status. */
 export function PlanPanel({ view }: { view: PlanView | null }) {
@@ -31,9 +32,9 @@ export function PlanPanel({ view }: { view: PlanView | null }) {
           </div>
         )}
       </div>
-      <div className="selectable min-h-0 flex-1 overflow-auto px-5 pb-6 pt-4 leading-[1.6]">
+      <ScrollArea x className="selectable px-5 pb-6 pt-4 leading-[1.6]">
         <Markdown text={view.plan} />
-      </div>
+      </ScrollArea>
     </div>
   );
 }

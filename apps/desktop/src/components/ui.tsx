@@ -1,4 +1,4 @@
-import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
+import { type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
 import { GitBranch, Loader2, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
 import { confirmFocus, fromOtherDialog, tabWrap } from "../lib/modal";
@@ -7,6 +7,18 @@ import { cx } from "../lib/cx";
 import { type TrackerKind, trackerOf } from "../lib/tasks";
 
 export { cx };
+
+/** The px the traffic lights take at the left of a header row while the sidebar is closed (X32, X94). */
+export const TRAFFIC_LIGHTS = 84;
+
+/** What a column shows (X94): a block of the pane's tone with rounded corners, on the window's tone. */
+export function Pane({ className, children, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div className={cx("min-h-0 flex-1 overflow-hidden rounded-[10px] bg-bg", className)} {...rest}>
+      {children}
+    </div>
+  );
+}
 
 type Variant = "primary" | "ghost" | "subtle" | "danger";
 
