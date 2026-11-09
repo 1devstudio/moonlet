@@ -5,10 +5,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
+use super::designs::DESIGN_FILE;
 use super::fsx;
 use super::merge::{folders, follow_system, number};
+use super::place::DesignAt;
 use super::store::{CONFIG, Record, Store, is_name, read_config, read_record, record_file};
 
 /// The folder of the library under `~/.moonlet/design`. A workspace id is
@@ -153,6 +155,26 @@ impl Store {
             .collect();
         out.extend(found.into_iter().filter(|f| !order.contains(f)));
         Ok(out)
+    }
+}
+
+impl Store {
+    /// Points a session design at the library slug `to` of its design
+    /// system, when its `design.toml` names `from`: the move into the library
+    /// renamed that system (X95). The rest of the file is left as the agent
+    /// wrote it, and its pinned styles are its own. Gives whether it changed.
+    pub fn follow_renamed_system(&self, at: &DesignAt, from: &str, to: &str) -> Result<bool> {
+        if self.design_config(at)?.system != from {
+            return Ok(false);
+        }
+        fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
+            let mut doc: toml_edit::DocumentMut = text
+                .parse()
+                .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+            doc["system"] = toml_edit::value(to);
+            Ok(doc.to_string())
+        })?;
+        Ok(true)
     }
 }
 

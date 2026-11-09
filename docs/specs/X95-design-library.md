@@ -37,7 +37,7 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 ### Moving existing systems into the library (core and daemon)
 
 - [ ] On start, the daemon moves each workspace's `systems/<slug>/` and its record into the library, for the systems this member owns (X71), or every system when there is no account. It moves the workspaces in the account's order, so on a clash the first workspace's system keeps its slug.
-- [ ] A slug already in the library keeps both: the moved system gets the next free slug (`acme-web-2`) and name ("Acme web 2"). The designs of its workspace that use it are repointed to the new slug. So are the session designs of that workspace's open sessions, so their **Update** keeps comparing with the system they were made from. (`design/library.rs` every_workspaces_systems_move_into_the_library_and_a_taken_slug_gets_a_number; `moonletd/tests/daemon.rs` systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts)
+- [ ] A slug already in the library keeps both: the moved system gets the next free slug (`acme-web-2`) and name ("Acme web 2"). The designs of its workspace that use it are repointed to the new slug. So are the session designs of that workspace's open sessions, so their **Update** keeps comparing with the system they were made from. (`design/library.rs` every_workspaces_systems_move_into_the_library_and_a_taken_slug_gets_a_number; `moonletd/tests/daemon.rs` systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts, an_open_sessions_design_follows_its_system_renamed_by_the_move_into_the_library)
 - [ ] The move keeps a journal in `library/.records/move.toml`. A daemon stopped midway finishes the move at its next start, and never moves a system twice or loses one. A second start with nothing to move changes nothing. (`design/library.rs` a_move_stopped_after_naming_a_system_finishes_with_its_number_once, a_move_stopped_before_the_designs_followed_finishes_them, a_record_that_cannot_be_read_stops_the_move_with_that_system_left_in_place)
 - [ ] A system's sync agent is stopped when its folder moves, and the moved record names no chat, as after a workspace merge (X71): the next **Sync** starts a new one, in the library folder.
 - [ ] A copy of another member's system (X71) under a workspace is deleted, not moved. It comes back in the library once its owner has moved it. (`design/library.rs` another_members_copy_is_deleted_and_a_moved_systems_agent_is_forgotten)
@@ -47,11 +47,11 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 
 ### The agents
 
-- [ ] A system's sync agent runs in the Claude profile (X33) of the first workspace, in the account's order, whose sections hold the system's first source project. When no workspace holds it, the agent runs in the default profile.
+- [ ] A system's sync agent runs in the Claude profile (X33) of the first workspace, in the account's order, whose sections hold the system's first source project. When no workspace holds it, the agent runs in the default profile. (`moonletd/tests/daemon.rs` a_systems_sync_agent_runs_in_the_profile_of_its_first_sources_workspace)
 - [ ] A shared design's agent runs in the profile of the workspace that holds its system's first source project, by the same rule.
-- [ ] The sync agent's `progress`, `synced` and `snap` commands work from a library system's folder, and still act only on the system of their folder.
-- [ ] A design's agent gets its library system's folder with `--add-dir` and its deny rule (X65), wherever the design is.
-- [ ] `moonlet design system ls` lists the library. `moonlet design new --here` picks the library system built from the session's project, as before within the workspace.
+- [ ] The sync agent's `progress`, `synced` and `snap` commands work from a library system's folder, and still act only on the system of their folder. (`moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder, the_sync_agents_commands_act_only_on_the_system_of_their_folder)
+- [ ] A design's agent gets its library system's folder with `--add-dir` and its deny rule (X65), wherever the design is. (`moonletd/tests/daemon.rs` a_new_design_starts_its_agent_in_its_folder_on_its_design_system)
+- [ ] `moonlet design system ls` lists the library. `moonlet design new --here` picks the library system built from the session's project, as before within the workspace. (`moonlet-cli/src/design.rs` a_session_design_takes_the_design_system_built_from_its_project_or_asks_which)
 
 ### Sharing a design
 
