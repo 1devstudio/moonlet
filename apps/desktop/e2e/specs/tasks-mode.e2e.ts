@@ -636,10 +636,26 @@ describe("Tasks mode", () => {
     await $(sel.sessionRow(SESSION)).click();
     const bar = $('//div[@role="region"][@aria-label="Task"]');
     await expect(bar.$(`.${sel.text("acme/storefront#12")}`)).toBeDisplayed({ wait: 10_000 });
+    // The task bar is the title bar, above the session's tabs, with the tabs under it.
+    expect(await bar.getLocation("y")).toBe(0);
+    const tab = $('//div[@aria-current="true"][.//button[@title="Close tab"]]');
+    expect(await tab.getLocation("y")).toBeGreaterThanOrEqual((await bar.getLocation("y")) + (await bar.getSize("height")));
     // The key comes first: no `Tasks /` before it.
     await expect(bar.$('.//button[normalize-space()="Tasks"]')).not.toBeExisting();
     await expect(bar.$('.//div[@aria-label="Sessions on this task"]')).toHaveText(/Session \d of 2/);
-    await expect(bar.$('.//a[normalize-space()="GitHub"]')).toHaveAttribute("href", "https://github.com/acme/storefront/issues/12");
+    // The key is the link to the issue; there is no separate tracker link (X94).
+    await expect(bar.$('.//a[normalize-space()="acme/storefront#12"]')).toHaveAttribute("href", "https://github.com/acme/storefront/issues/12");
+    await expect(bar.$('.//a[normalize-space()="GitHub"]')).not.toBeExisting();
+    // The state pill names the state, and under 560 px shows only its dot.
+    const pill = bar.$('.//select[@aria-label="State of acme/storefront#12"]/parent::span');
+    await expect(pill.$('./span[2]')).toBeDisplayed();
+    await browser.execute(() => {
+      (document.querySelector('[role="region"][aria-label="Task"]') as HTMLElement).style.width = "520px";
+    });
+    await expect(pill.$('./span[2]')).not.toBeDisplayed();
+    await browser.execute(() => {
+      (document.querySelector('[role="region"][aria-label="Task"]') as HTMLElement).style.width = "";
+    });
     rpc(w, "session.archive", { id: second });
     await tasksButton().click();
   });
