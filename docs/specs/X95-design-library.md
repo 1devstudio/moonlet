@@ -27,23 +27,23 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 
 ### The library on disk (core)
 
-- [ ] Design systems live in `~/.moonlet/design/library/systems/<slug>/`, with their records in `~/.moonlet/design/library/.records/<slug>.toml`. `library` is reserved: a workspace id is 12 hex digits and never `library`.
+- [ ] Design systems live in `~/.moonlet/design/library/systems/<slug>/`, with their records in `~/.moonlet/design/library/.records/<slug>.toml`. `library` is reserved: a workspace id is 12 hex digits and never `library`. (`design/library.rs` a_system_made_in_one_workspace_is_listed_from_every_workspace)
 - [ ] A system's slug is unique in the library. A new system whose name is in use gets the next free suffix (` 2`, `-2`), as within a workspace today.
-- [ ] Creating, listing, syncing, checking, settling and removing a system act on the library whatever workspace the call names.
-- [ ] A workspace design's `system` names a library system. Its pages keep linking `../../../systems/<slug>/styles.css`: a workspace's `systems/<path>` resolves to `library/systems/<path>`, for the store's resolver and the `moonlet-design://` scheme. Pages written before X95 need no rewrite.
+- [ ] Creating, listing, syncing, checking, settling and removing a system act on the library whatever workspace the call names. (`design/store.rs` a_workspace_lists_its_design_systems_with_their_cards_and_what_needs_the_user; `moonletd/tests/daemon.rs` design_systems_over_rpc)
+- [ ] A workspace design's `system` names a library system. Its pages keep linking `../../../systems/<slug>/styles.css`: a workspace's `systems/<path>` resolves to `library/systems/<path>`, for the store's resolver and the `moonlet-design://` scheme. Pages written before X95 need no rewrite. (`design/store.rs` removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace; `src-tauri/src/design_scheme.rs` a_workspaces_systems_file_is_read_from_the_librarys_systems_and_no_other_library_file)
 - [ ] A session design keeps its pinned copy of the system (ADR 0013). `design.system.update` and "Design system updated" compare with the library system.
 - [ ] Shared designs live in `~/.moonlet/design/library/designs/<slug>/`, with their records in `library/.records/designs/<slug>.toml`. Their pages link `../../../systems/<slug>/styles.css`, which resolves inside `library/`.
 
 ### Moving existing systems into the library (core and daemon)
 
 - [ ] On start, the daemon moves each workspace's `systems/<slug>/` and its record into the library, for the systems this member owns (X71), or every system when there is no account. It moves the workspaces in the account's order, so on a clash the first workspace's system keeps its slug.
-- [ ] A slug already in the library keeps both: the moved system gets the next free slug (`acme-web-2`) and name ("Acme web 2"). The designs of its workspace that use it are repointed to the new slug. So are the session designs of that workspace's open sessions, so their **Update** keeps comparing with the system they were made from.
-- [ ] The move keeps a journal in `library/.records/move.toml`. A daemon stopped midway finishes the move at its next start, and never moves a system twice or loses one. A second start with nothing to move changes nothing.
-- [ ] A system's sync agent is stopped before its folder moves, and the moved record names no chat, as after a workspace merge (X71): the next **Sync** starts a new one, in the library folder.
-- [ ] A copy of another member's system (X71) under a workspace is deleted, not moved. It comes back in the library once its owner has moved it.
+- [ ] A slug already in the library keeps both: the moved system gets the next free slug (`acme-web-2`) and name ("Acme web 2"). The designs of its workspace that use it are repointed to the new slug. So are the session designs of that workspace's open sessions, so their **Update** keeps comparing with the system they were made from. (`design/library.rs` every_workspaces_systems_move_into_the_library_and_a_taken_slug_gets_a_number; `moonletd/tests/daemon.rs` systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts)
+- [ ] The move keeps a journal in `library/.records/move.toml`. A daemon stopped midway finishes the move at its next start, and never moves a system twice or loses one. A second start with nothing to move changes nothing. (`design/library.rs` a_move_stopped_after_naming_a_system_finishes_with_its_number_once, a_move_stopped_before_the_designs_followed_finishes_them, a_record_that_cannot_be_read_stops_the_move_with_that_system_left_in_place)
+- [ ] A system's sync agent is stopped when its folder moves, and the moved record names no chat, as after a workspace merge (X71): the next **Sync** starts a new one, in the library folder.
+- [ ] A copy of another member's system (X71) under a workspace is deleted, not moved. It comes back in the library once its owner has moved it. (`design/library.rs` another_members_copy_is_deleted_and_a_moved_systems_agent_is_forgotten)
 - [ ] The owner gives each moved system's account record `workspace = "library"` and its new slug. Other members drop their copies at the old place and fetch them at the new one (X71).
-- [ ] A system record from a member older than X95, at a workspace's `systems/`, is ignored: its system shows once that member upgrades.
-- [ ] `workspace.merge` no longer moves systems, only the merged workspace's designs (X71).
+- [ ] A system record from a member older than X95, at a workspace's `systems/`, is ignored: its system shows once that member upgrades. (`copies.rs` a_system_kept_under_a_workspace_is_neither_copied_nor_claimed)
+- [ ] `workspace.merge` no longer moves systems, only the merged workspace's designs (X71). (`design/merge.rs` a_merged_workspaces_designs_move_and_a_taken_slug_gets_a_number, a_renamed_system_takes_the_next_number_and_only_the_designs_asked_follow_it)
 
 ### The agents
 
@@ -70,7 +70,7 @@ Designs stay per workspace. A workspace design can be **shared**: it moves into 
 - [ ] The New design dialog offers every library system.
 - [ ] A design's `⋯` menu has **Share with every workspace** for a workspace design, and **Stop sharing** for a shared one. Stop sharing says "Move <name> into <workspace>?".
 - [ ] The sidebar shows **Shared designs** after **Designs**, when there is at least one. The Designs index has a **Shared designs** group after **Workspace designs**.
-- [ ] A change to a library system reloads the pages that use it, in every workspace's open design.
+- [ ] A change to a library system reloads the pages that use it, in every workspace's open design. (`lib/designLibrary.test.ts` is every workspace's when it is in a library design system; `moonletd/tests/daemon.rs` a_file_written_in_a_design_system_is_announced)
 - [ ] Cards and shared design pages are framed on `moonlet-design://<key>.library/<path>`, and a workspace design's pages on their workspace's host, as today.
 
 ## UI
@@ -150,11 +150,10 @@ One `gh stack` on `main`. Each entry carries its criteria's tests and leaves `pn
 | # | Entry | Scope |
 |---|---|---|
 | 1 | `x94/spec` | This spec, ADR 0013's change, `CONTEXT.md` |
-| 2 | `x94/core-library` | The library folder, systems resolved there, the move from workspaces with its journal and renames |
-| 3 | `x94/daemon` | RPC gate for `library`, the move on start with X71's re-keying, the agents' profile, the CLI |
-| 4 | `x94/scheme` | The scheme's `systems/` mapping and the `library` host |
-| 5 | `x94/shared-designs` | `design.share`, `design.unshare`, `design.list`'s shared designs, Build it from a shared design |
-| 6 | `x94/desktop` | Design mode lists, dialogs, the `⋯` actions, Shared designs; e2e |
+| 2 | `x94/core-library` | The library folder and systems resolved there; the move from workspaces on start, with its journal and renames; X71's records re-keyed and per-workspace system records left alone; a workspace merge moving designs only; the scheme's `systems/` bound; the app taking a library system's `design.changed` for every workspace |
+| 3 | `x94/daemon` | The agents' profile, open sessions' designs following a rename at the move, the CLI's listing |
+| 4 | `x94/shared-designs` | `design.share`, `design.unshare`, the `library` host, `design.list`'s shared designs, Build it from a shared design |
+| 5 | `x94/desktop` | Design mode lists, dialogs, the `⋯` actions, Shared designs; e2e |
 
 ## Open questions
 

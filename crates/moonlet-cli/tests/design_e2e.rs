@@ -201,7 +201,7 @@ async fn the_sync_agent_reports_checks_and_records_from_its_folder() {
         .home
         .path()
         .join("design")
-        .join(&ws.id)
+        .join("library")
         .join("systems/moonlet-desktop");
     for (path, body) in [
         ("styles.css", "@import \"components.css\";\n"),
@@ -291,7 +291,7 @@ async fn the_sync_agents_commands_act_only_on_the_system_of_their_folder() {
         .home
         .path()
         .join("design")
-        .join(&ws.id)
+        .join("library")
         .join("systems/alpha");
     for args in [
         vec!["design", "system", "progress", "cards", "--system", "beta"],
@@ -351,7 +351,7 @@ async fn render_system(d: &Daemon) -> PathBuf {
         .home
         .path()
         .join("design")
-        .join(&ws.id)
+        .join("library")
         .join("systems/storefront");
     for (path, body) in [
         ("styles.css", "@import \"components.css\";\n"),
@@ -542,7 +542,9 @@ fn json(o: &Output) -> serde_json::Value {
 async fn designs_are_made_listed_opened_and_removed_from_the_cli() {
     let d = Daemon::with_fake_claude().await;
     let ws = workspace_with_system(&d).await;
+    // The workspace's own design folder: its system is the library's (X95).
     let here = d.home.path().join("design").join(&ws);
+    std::fs::create_dir_all(&here).unwrap();
 
     let made = json(&d.moonlet(
         &here,

@@ -906,7 +906,7 @@ async fn phones_do_not_hear_design_changes() {
     hello(&mut phone, "moonlet-mobile").await;
     let mut app = Client::connect(&mac.socket, "test").await.unwrap();
 
-    let card = mac.home.path().join("design/w1/systems/storefront/components/buttons/button/button.html");
+    let card = mac.home.path().join("design/library/systems/storefront/components/buttons/button/button.html");
     std::fs::create_dir_all(card.parent().unwrap()).unwrap();
     std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
 

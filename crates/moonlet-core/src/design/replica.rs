@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use moonlet_proto::types::ProjectIdentity;
 
+use super::library::LIBRARY;
 use super::store::Store;
 
 /// What kind of item a key names.
@@ -45,7 +46,8 @@ impl Kind {
     }
 }
 
-/// One design system or workspace design of a workspace.
+/// One design system (in the library, X95) or one design of a workspace
+/// or of the library.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Item {
     pub workspace: String,
@@ -54,12 +56,20 @@ pub struct Item {
 }
 
 impl Item {
-    pub fn system(workspace: &str, slug: &str) -> Item {
+    /// A design system, which is the library's whatever workspace names it
+    /// (X95): its key is the same from every workspace.
+    pub fn system(_workspace: &str, slug: &str) -> Item {
         Item {
-            workspace: workspace.into(),
+            workspace: LIBRARY.into(),
             kind: Kind::System,
             slug: slug.into(),
         }
+    }
+
+    /// A design system kept under a workspace, as members older than X95
+    /// keep them: the library holds every system now (X95).
+    pub fn kept_per_workspace(&self) -> bool {
+        self.kind == Kind::System && self.workspace != LIBRARY
     }
 
     pub fn design(workspace: &str, slug: &str) -> Item {
@@ -671,7 +681,7 @@ mod tests {
     /// "Acme web" with a token file, as the sync agent leaves it, and the
     /// hidden folders moonlet and Claude Code keep in it.
     fn acme(home: &Path) -> PathBuf {
-        let dir = home.join("design/w-acme/systems/acme-web");
+        let dir = home.join("design/library/systems/acme-web");
         write(&dir, "config.toml", "name = \"Acme web\"\ncreated_at = 1\n");
         write(&dir, "styles.css", "@import \"tokens/colors.css\";\n");
         write(&dir, "tokens/colors.css", ":root { --brand: #0a66ff; }\n");
@@ -742,9 +752,9 @@ mod tests {
     async fn a_copy_on_another_member_is_the_owners_folder_with_its_own_clones_as_sources() {
         let (mini, book) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         acme(mini.path());
-        std::fs::create_dir_all(mini.path().join("design/w-acme/.records")).unwrap();
+        std::fs::create_dir_all(mini.path().join("design/library/.records")).unwrap();
         std::fs::write(
-            mini.path().join("design/w-acme/.records/acme-web.toml"),
+            mini.path().join("design/library/.records/acme-web.toml"),
             toml::to_string(&crate::design::store::Record {
                 sources: vec![source()],
                 synced_at: Some(7),
@@ -758,7 +768,7 @@ mod tests {
         let tree = owner.snapshot(&item).await.unwrap();
 
         // The MacBook had an older copy, with a card since removed.
-        let old = book.path().join("design/w-acme/systems/acme-web");
+        let old = book.path().join("design/library/systems/acme-web");
         write(&old, "config.toml", "name = \"Acme web\"\ncreated_at = 1\n");
         write(&old, "components/old/Old.html", "<div>old</div>\n");
         let copy = Replicas::new(book.path());
@@ -952,7 +962,7 @@ mod tests {
         let item = Item::system("w-acme", "acme-web");
         let owner = Replicas::new(mini.path());
         let tree = owner.snapshot(&item).await.unwrap();
-        let old = book.path().join("design/w-acme/systems/acme-web");
+        let old = book.path().join("design/library/systems/acme-web");
         write(&old, "config.toml", "name = \"Acme web\"\ncreated_at = 1\n");
         write(&old, ".claude/settings.json", "{}\n");
         write(&old, ".cache/screenshots/button.png", "png");
@@ -985,10 +995,10 @@ mod tests {
             "config.toml",
             "name = \"Acme web\"\ncreated_at = 1\n",
         );
-        std::fs::create_dir_all(home.path().join("design/w-acme/systems")).unwrap();
+        std::fs::create_dir_all(home.path().join("design/library/systems")).unwrap();
         std::fs::write(
             home.path().join("design/.store/incoming/3f1c.target"),
-            "w-acme/systems/acme-web",
+            "library/systems/acme-web",
         )
         .unwrap();
         replicas.recover().unwrap();
@@ -1114,13 +1124,13 @@ mod tests {
     async fn a_copy_refuses_a_bad_slug_and_a_source_folder_outside_its_project() {
         let (mini, book) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         acme(mini.path());
-        std::fs::create_dir_all(mini.path().join("design/w-acme/.records")).unwrap();
+        std::fs::create_dir_all(mini.path().join("design/library/.records")).unwrap();
         let escaping = crate::design::store::Source {
             subdir: Some("../../.ssh".into()),
             ..source()
         };
         std::fs::write(
-            mini.path().join("design/w-acme/.records/acme-web.toml"),
+            mini.path().join("design/library/.records/acme-web.toml"),
             toml::to_string(&crate::design::store::Record {
                 sources: vec![escaping],
                 ..Default::default()
@@ -1154,7 +1164,7 @@ mod tests {
                 "{slug}"
             );
         }
-        assert!(!book.path().join("design/w-acme/systems/acme-web").exists());
+        assert!(!book.path().join("design/library/systems/acme-web").exists());
     }
 
     /// Every file under `root`, hidden ones too, by its path in it.

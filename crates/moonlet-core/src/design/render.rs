@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(
                 home.path()
-                    .join("design/w1/systems/storefront/.cache/render-check.json")
+                    .join("design/library/systems/storefront/.cache/render-check.json")
             )
             .unwrap(),
             r#"{
@@ -331,7 +331,7 @@ mod tests {
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems/storefront");
+        let dir = home.path().join("design/library/systems/storefront");
         put(&dir, &[("components/buttons/button/button.html", BUTTON)]);
         let card = "components/buttons/button/button.html";
         // The marker's viewport, the whole card.
@@ -375,7 +375,7 @@ mod tests {
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems/storefront");
+        let dir = home.path().join("design/library/systems/storefront");
         put(
             &dir,
             &[
@@ -426,7 +426,7 @@ mod tests {
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems/storefront");
+        let dir = home.path().join("design/library/systems/storefront");
         put(
             &dir,
             &[
@@ -467,7 +467,7 @@ mod tests {
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems/storefront");
+        let dir = home.path().join("design/library/systems/storefront");
         put(&dir, &[("components/buttons/button/button.html", BUTTON)]);
         std::os::unix::fs::symlink(outside.path(), dir.join(".cache")).unwrap();
         let target = store
@@ -521,7 +521,7 @@ mod tests {
         let slug = store
             .create_system("w1", "storefront", vec![], Cover::Core, 1)
             .unwrap();
-        let dir = home.path().join("design/w1/systems/storefront");
+        let dir = home.path().join("design/library/systems/storefront");
         let row = |group: &str| {
             format!(
                 "<!-- @dsCard group=\"{group}\" name=\"Row\" -->\n<section class=\"ds-cell\" data-snippet=\"{group}/row/default\"><div class=\"ds-mount\">Row</div></section>\n"

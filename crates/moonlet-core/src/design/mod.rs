@@ -11,6 +11,7 @@ pub mod foundations;
 pub(crate) mod fsx;
 pub mod history;
 pub mod kit;
+pub mod library;
 pub mod manifest;
 pub mod merge;
 pub mod mid;

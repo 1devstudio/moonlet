@@ -819,7 +819,7 @@ async fn design_systems_follow_a_workspace_merged_on_another_member_and_on_start
 
 /// What `d` holds of a design system's file `path` (X71).
 fn design_file(d: &Daemon, ws: &str, slug: &str, path: &str) -> Option<String> {
-    std::fs::read_to_string(d.home.path().join("design").join(ws).join("systems").join(slug).join(path)).ok()
+    std::fs::read_to_string(d.home.path().join("design").join("library").join("systems").join(slug).join(path)).ok()
 }
 
 #[tokio::test]
@@ -836,7 +836,7 @@ async fn a_design_system_made_on_one_member_is_copied_to_every_member_and_follow
             json!({ "workspace": books, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
         )
         .await;
-    let folder = book.home.path().join("design").join(&books).join("systems/acme-web");
+    let folder = book.home.path().join("design").join("library").join("systems/acme-web");
     std::fs::write(folder.join("styles.css"), "@import \"tokens/colors.css\";\n").unwrap();
     for d in [&mini, &air] {
         within(Duration::from_secs(10), "Acme web copied", || async {
@@ -961,7 +961,7 @@ async fn a_copy_is_read_only_until_moved_here_and_the_old_owner_keeps_a_copy() {
     let refused = try_call(&book, "design.check", check).await.unwrap_err();
     assert!(refused.contains("not_owner"), "{refused}");
     // An edit on the new owner reaches the old one's copy.
-    let folder = mini.home.path().join("design").join(&books).join("systems/acme-web");
+    let folder = mini.home.path().join("design").join("library").join("systems/acme-web");
     std::fs::write(folder.join("styles.css"), "@import \"tokens/brand.css\";\n").unwrap();
     within(Duration::from_secs(5), "the edit on the MacBook", || async {
         design_file(&book, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
@@ -988,7 +988,7 @@ async fn a_change_the_old_owner_made_offline_is_never_lost_when_its_item_moved()
     // The MacBook sleeps with an edit not yet sent; studio-mini takes the
     // system over meanwhile.
     book.stop();
-    let folder = book.home.path().join("design").join(&books).join("systems/acme-web");
+    let folder = book.home.path().join("design").join("library").join("systems/acme-web");
     std::fs::write(folder.join("NOTES.md"), "Made on the plane.\n").unwrap();
     let _: Value = mini
         .call("design.move", json!({ "workspace": books, "kind": "system", "slug": "acme-web", "force": true }))
@@ -1037,7 +1037,7 @@ async fn a_copies_file_that_cannot_be_read_turns_no_copy_into_a_new_item() {
     std::fs::write(book.home.path().join("design/.store/copies.json"), "{ not json").unwrap();
     // A change to the copy's folder asks for a round.
     std::fs::write(
-        book.home.path().join("design").join(&minis).join("systems/acme-web/NOTES.md"),
+        book.home.path().join("design").join("library").join("systems/acme-web/NOTES.md"),
         "by hand\n",
     )
     .unwrap();
