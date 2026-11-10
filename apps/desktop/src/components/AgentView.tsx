@@ -1712,7 +1712,7 @@ export function AgentView({
           <PlanPanel view={plan} />
         </Dialog>
       )}
-      {/* The transcript (X94): 24 px above and below, 28 at the sides, at most 880 wide; fades and Latest. */}
+      {/* The transcript (X94): 24 px above and below, 28 at the sides, the pane's full width; fades and Latest. */}
       <ScrollArea
         ref={scroller}
         latest
@@ -1724,7 +1724,7 @@ export function AgentView({
         }}
       >
         <FileLinks.Provider value={fileLinks}>
-          <div className="flex max-w-[880px] flex-col gap-0.5 px-[28px] py-[24px]">
+          <div data-transcript className="flex flex-col gap-0.5 px-[28px] py-[24px]">
             {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
