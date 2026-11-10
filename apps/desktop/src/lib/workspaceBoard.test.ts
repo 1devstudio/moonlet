@@ -5,6 +5,7 @@ import { useStore } from "./store";
 import { DEFAULT_CONFIG, type TasksData } from "./tasksStore";
 import type { Task } from "./tasks";
 import { cardOfSession } from "./tasksBoard";
+import { autoFixes, DEFAULT_RULES, prComments } from "./keepInStep";
 import { type BoardKnobs, workspaceBoard } from "./workspaceBoard";
 
 vi.mock("./daemon", () => ({ rpc: vi.fn(), sendInput: vi.fn() }));
@@ -128,6 +129,26 @@ describe("a session linked by hand to a task on no board (X46)", () => {
     expect(card && [card.task.key, card.task.title, card.column, card.rows.map((r) => r.session.name)]).toEqual(["AIO-259", "Coding Agent", "in_progress", ["Coding Agent"]]);
     // The board shows what its sprint reads, and nothing more.
     expect(b.shown?.views.flatMap((v) => v.cards.map((c) => c.task.key))).toEqual(["AIO-12"]);
+  });
+
+  it("is never moved or commented on by Keep in step by itself, as a task on the board is", () => {
+    const pr = { number: 131, url: "https://github.com/acme/web/pull/131", state: "open", title: "Coding agent", checks: [], review_decision: null };
+    useStore.setState({ prs: { "local/s9": pr } });
+    const b = workspaceBoard(useStore.getState(), ws, synced, withBoard);
+    const card = b.board && cardOfSession(b.board, "local", { host: "local", id: "s9" });
+    // The chip still offers the move by hand.
+    expect(card?.drift?.kind).toBe("pr_open");
+    expect(b.board && autoFixes(b.board, () => DEFAULT_RULES, {})).toEqual([]);
+    expect(b.board && prComments(b.board, () => DEFAULT_RULES, {})).toEqual([]);
+    useStore.setState({ prs: {} });
+  });
+
+  it("works on a task its tracker closed as not planned, in Done", () => {
+    useStore.setState({ sessions: { local: [{ ...session("s9", "Coding Agent"), task: { connection: "github:github.com", key: "acme/other#99", url: "https://github.com/acme/other/issues/99" } }] } });
+    const notPlanned: Task = { ...task("acme/other#99", "Shared design tokens"), connection: "github:github.com", column: "hidden" };
+    const b = workspaceBoard(useStore.getState(), ws, { ...synced, linked: [notPlanned] }, withBoard);
+    const card = b.board && cardOfSession(b.board, "local", { host: "local", id: "s9" });
+    expect(card && [card.task.key, card.column]).toEqual(["acme/other#99", "done"]);
   });
 
   it("works on a task the board reads into a hidden column, such as Backlog", () => {

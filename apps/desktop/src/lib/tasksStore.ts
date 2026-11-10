@@ -19,9 +19,9 @@ import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTarge
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { accountOf, parseWsKey, workspaceMembers, wsKey } from "./workspaces";
+import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
 
@@ -628,9 +628,14 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     for (const t of placed) readNow.add(taskId(t));
     boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
-  // Tasks sessions are linked to by hand that no board read: an Epic, someone else's issue (X46).
-  const linked = await lookUpLinked(host, linkedRefs(host, workspaceId, tasks), per[0]?.path ?? null, prev?.linked ?? []);
+  // Tasks sessions are linked to by hand that no board draws: an Epic, someone else's issue (X46).
+  const fallback = per[0]?.path ?? null;
+  const looked = await lookUpLinked(host, linkedRefs(host, workspaceId, tasks, fallback), prev?.linked ?? []);
   if (!isLatest()) return;
+  // Links the dialog made while the lookups ran stay, as long as their sessions keep them.
+  const still = new Set(linkedRefs(host, workspaceId, tasks, fallback).map((l) => taskId(l.ref)));
+  const lookedIds = new Set(looked.map(taskId));
+  const linked = [...looked, ...(useTasks.getState().data[key]?.linked ?? []).filter((t) => still.has(taskId(t)) && !lookedIds.has(taskId(t)))];
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
   if (Object.keys(fresh).length && !useTasks.getState().configError)
@@ -1393,45 +1398,63 @@ export function ensureTasks(host: string, workspaceId: string, now = Date.now())
 const ensuring = new Set<string>();
 const ensuredAt = new Map<string, number>();
 
-/** Keeps `task` among workspace `key`'s linked tasks, unless a board read it. */
-function keepLinked(key: string, task: Task) {
+/** Keeps `task` among workspace `ws`'s linked tasks unless a board draws
+ *  it. One a board holds in a hidden column is looked up for its tracker's. */
+async function keepLinked(ws: WorkspaceRef, task: Task) {
+  const key = wsKey(ws.host, ws.id);
+  const same = (t: Task) => taskId(t) === taskId(task);
+  const d = useTasks.getState().data[key];
+  if (!d || drawn(placedTasks(d).find(same))) return;
+  const found = drawn(task) ? task : ((await lookUpLinked(ws.host, [{ ref: task, path: null }], [])).at(0) ?? task);
   useTasks.setState((st) => {
-    const d = st.data[key];
-    const same = (t: Task) => taskId(t) === taskId(task);
-    if (!d || d.tasks.some(same)) return {};
-    return { data: { ...st.data, [key]: { ...d, linked: [...(d.linked ?? []).filter((t) => !same(t)), task] } } };
+    const now = st.data[key];
+    return now ? { data: { ...st.data, [key]: { ...now, linked: [...(now.linked ?? []).filter((t) => !same(t)), found] } } } : {};
   });
 }
 
-/** The stored links of the workspace's live sessions, on every member (X68), to tasks no board shows: not in `loaded`, or in a hidden column. */
-function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>): TaskRef[] {
+/** A stored link to look up, with the checkout on the syncing host that gh runs in for a GitHub issue. */
+interface LinkToLookUp {
+  ref: TaskRef;
+  path: string | null;
+}
+
+/** The stored links of the workspace's live sessions, on every member (X68),
+ *  to tasks no board draws: not in `loaded`, or in a hidden column. A GitHub
+ *  issue is asked of gh in its session's worktree on `host`, else in `fallback`. */
+function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>, fallback: string | null): LinkToLookUp[] {
   const st = useStore.getState();
   const hosts = hostWorkspaces(st);
   const members = workspaceMembers({ host, id: workspaceId, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) }, hosts);
-  const refs = new Map<string, TaskRef>();
+  const links = new Map<string, LinkToLookUp>();
   for (const h of members)
-    for (const s of st.sessions[h] ?? []) if (s.workspace_id === workspaceId && !s.archived && s.task && (loaded.get(taskId(s.task))?.column ?? "hidden") === "hidden") refs.set(taskId(s.task), s.task);
-  return [...refs.values()];
+    for (const s of st.sessions[h] ?? []) {
+      if (s.workspace_id !== workspaceId || s.archived || !s.task || drawn(loaded.get(taskId(s.task)))) continue;
+      const path = h === host ? s.path : (links.get(taskId(s.task))?.path ?? fallback);
+      links.set(taskId(s.task), { ref: s.task, path });
+    }
+  return [...links.values()];
 }
 
-/** The tasks `refs` name, looked up in their trackers by key, whatever their board, type or assignee (X46). One the tracker does not answer for keeps its last answer. */
-async function lookUpLinked(host: string, refs: TaskRef[], path: string | null, last: Task[]): Promise<Task[]> {
+/** The tasks `links` name, looked up in their trackers by key, whatever their
+ *  board, type or assignee (X46). One the tracker does not answer for keeps
+ *  its answer in `last`. */
+async function lookUpLinked(host: string, links: LinkToLookUp[], last: Task[]): Promise<Task[]> {
   const found = await Promise.all(
-    refs.map(async (r) => {
-      const t = r.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: r.key, site: null }, null)) : await hostsApi.trackerTask(r.connection, r.key).catch(() => null);
-      return t || last.find((x) => taskId(x) === taskId(r)) || null;
+    links.map(async ({ ref, path }) => {
+      const t = ref.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: ref.key, site: null }, null)) : await hostsApi.trackerTask(ref.connection, ref.key).catch(() => null);
+      return t || last.find((x) => taskId(x) === taskId(ref)) || null;
     }),
   );
   return found.filter((t): t is Task => t !== null);
 }
 
-/** Links a session to a task, or unlinks it with null (X46). A task that
- *  none of the boards of `board`, the workspace it is on, read shows on the
- *  session at once, rather than after the next sync. */
-export async function linkTask(host: string, sessionId: string, task: Task | null, board?: { host: string; id: string }) {
+/** Links a session to a task, or unlinks it with null (X46). A task that no
+ *  board of `ws`, the workspace whose boards the session reads, draws shows
+ *  on the session at once, rather than after the next sync. */
+export async function linkTask(host: string, sessionId: string, task: Task | null, ws?: WorkspaceRef) {
   try {
     await rpc(host, M.sessionUpdate, { id: sessionId, task: task ? { connection: task.connection, key: task.key, url: task.url } : null });
-    if (task && board) keepLinked(wsKey(board.host, board.id), task);
+    if (task && ws) await keepLinked(ws, task);
     toast(task ? `Linked to ${task.key}` : "Unlinked the task");
   } catch (e) {
     errorToast(e);

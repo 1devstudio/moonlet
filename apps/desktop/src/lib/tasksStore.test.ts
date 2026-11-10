@@ -1373,9 +1373,9 @@ describe("a task linked by hand that no board reads (X46)", () => {
     layout: null,
     task: key ? { connection: "linear:acme", key, url: `https://linear.app/acme/issue/${key}` } : null,
   });
-  const cardOf = () => {
+  const cardOf = (id = "s1") => {
     const { board } = workspaceBoard(useStore.getState(), { host: "local", id: "personal" }, useTasks.getState().data["local/personal"], { notNow: {}, config: trackersConfig(useTasks.getState()), paused: {}, moving: {}, shownId: null });
-    const card = board && cardOfSession(board, "local", { host: "local", id: "s1" });
+    const card = board && cardOfSession(board, "local", { host: "local", id });
     return card ? [card.task.key, card.task.title, card.column] : null;
   };
 
@@ -1406,6 +1406,50 @@ describe("a task linked by hand that no board reads (X46)", () => {
     useStore.setState({ sessions: { local: [linkedTo("MOON-9")] } });
     await refreshTasks("local", "personal", 1_000);
     expect(cardOf()).toEqual(["MOON-9", "Coding Agent", "todo"]);
+  });
+
+  it("shows on its session as soon as it is linked from a hidden column, in its tracker's column", async () => {
+    answers["board_columns linear:acme"] = () => [
+      { name: "Backlog", statuses: ["Backlog"], category: "todo", show: "hide" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+    ];
+    const parked = { tracker: { id: "MOON-9", state: "Backlog", source: "MOON" } };
+    answers["tracker_tasks linear:acme"] = () => [lt("MOON-1", "Hosts"), lt("MOON-9", "Coding Agent", parked)];
+    answers["tracker_task linear:acme MOON-9"] = () => lt("MOON-9", "Coding Agent", parked);
+    answers["session.update"] = () => ({});
+    useStore.setState({ sessions: { local: [linkedTo(null)] } });
+    await refreshTasks("local", "personal", 1_000);
+    // The link dialog lists the workspace's tasks as the board places them: MOON-9 in its hidden Backlog.
+    const listed = useTasks.getState().data["local/personal"].tasks.find((t) => t.key === "MOON-9")!;
+    await linkTask("local", "s1", listed, { host: "local", id: "personal" });
+    useStore.setState({ sessions: { local: [linkedTo("MOON-9")] } });
+    expect(cardOf()).toEqual(["MOON-9", "Coding Agent", "todo"]);
+  });
+
+  it("keeps a task the dialog links while a sync is looking up others", async () => {
+    answers["session.update"] = () => ({});
+    const other = { ...linkedTo(null), id: "s2", name: "Docs" };
+    useStore.setState({ sessions: { local: [linkedTo("MOON-9"), other] } });
+    await refreshTasks("local", "personal", 1_000);
+    // The next sync waits on MOON-9's lookup while the dialog links s2 to MOON-8.
+    let release: ((t: unknown) => void) | null = null;
+    answers["tracker_task linear:acme MOON-9"] = () => new Promise((r) => (release = r));
+    const sync = refreshTasks("local", "personal", 2_000);
+    await vi.waitFor(() => expect(release).not.toBe(null));
+    await linkTask("local", "s2", lt("MOON-8", "Write the docs"), { host: "local", id: "personal" });
+    useStore.setState({ sessions: { local: [linkedTo("MOON-9"), { ...other, task: { connection: "linear:acme", key: "MOON-8", url: "" } }] } });
+    release!(lt("MOON-9", "Coding Agent", { column: "in_progress" }));
+    await sync;
+    expect(cardOf("s2")).toEqual(["MOON-8", "Write the docs", "todo"]);
+  });
+
+  it("asks gh for a linked GitHub issue in its session's worktree", async () => {
+    answers["gh.task"] = (p) => ({ ...issue, repo: (p as { repo: string }).repo, number: (p as { number: number }).number, title: "Shared design tokens", url: "" });
+    // The workspace's first project gives no checkout to run gh in.
+    useStore.setState({ projects: { local: [] }, sessions: { local: [{ ...linkedTo(null), task: { connection: "github:github.com", key: "acme/other#99", url: "https://github.com/acme/other/issues/99" } }] } });
+    await refreshTasks("local", "personal", 1_000);
+    // An open issue with a session working on it is in progress.
+    expect(cardOf()).toEqual(["acme/other#99", "Shared design tokens", "in_progress"]);
   });
 
   it("keeps the task while its tracker cannot be reached", async () => {
