@@ -60,4 +60,4 @@ claude-yolo = "claude --dangerously-skip-permissions"
 ## Test plan
 
 - `workspace.rs`: `create_run_archive_workspace`, `agent_commands_resume_where_supported`, `config_parsing`.
-- `daemon.rs` e2e: `workspace_lifecycle_over_rpc`.
+- `daemon.rs` e2e: `workspace_lifecycle_over_rpc`, `a_new_sessions_branch_takes_the_hosts_prefix_unless_its_project_has_one`, `a_given_branch_gets_no_prefix_and_a_suffix_when_taken`.
