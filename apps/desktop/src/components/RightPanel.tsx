@@ -203,7 +203,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       </button>
       {pr && view && <StackMenu view={view} current={pr.number} />}
       <button
-        className="no-drag group ml-auto flex h-8 min-w-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
+        className="no-drag group flex h-8 min-w-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 ui-text-14 text-fg hover:bg-raised"
         title={pr ? `#${pr.number} ${pr.title} · Open in browser` : "Create pull request (⇧⌘P)"}
         onClick={() => (pr ? void openUrl(pr.url) : useStore.setState({ dialog: { kind: "create-pr" } }))}
       >
@@ -218,6 +218,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
           <Plus size={12} className="text-faint opacity-0 group-hover:opacity-100" />
         )}
       </button>
+      <span className="ml-auto" />
       <MoreMenu host={host} ws={ws} />
     </div>
   );
