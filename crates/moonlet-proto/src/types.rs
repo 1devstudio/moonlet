@@ -1395,6 +1395,10 @@ pub struct Subagent {
     /// Its latest tool calls, without their output.
     #[serde(default)]
     pub tools: Vec<SubagentTool>,
+    /// The report it handed back with `SubagentHandback` during this run,
+    /// which becomes `report` once it is done. The daemon's own; never sent.
+    #[serde(skip)]
+    pub handback: Option<String>,
 }
 
 /// One tool call of a subagent (X42).

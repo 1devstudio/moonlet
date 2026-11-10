@@ -143,13 +143,13 @@ fn task_event(v: &Value, st: &mut ChatState) -> bool {
             a.duration_ms = usage["duration_ms"].as_u64().or(a.duration_ms);
             let summary = v["summary"].as_str().map(String::from);
             match a.status.as_str() {
-                // An agent that ended by handing its report back already has
-                // it; the summary then only points at the hand-back.
-                "done" if a.tools.last().is_some_and(|t| t.name == HANDBACK_TOOL) => {}
-                "done" => a.report = summary,
+                // An agent that handed its report back gets that report; the
+                // summary then only points at the hand-back.
+                "done" => a.report = a.handback.take().or(summary),
                 "failed" => a.error = a.error.take().or(summary),
                 _ => {}
             }
+            a.handback = None;
         }
         _ => return false,
     }
@@ -209,7 +209,7 @@ fn subagent_line(parent: &str, v: &Value, st: &mut ChatState) -> bool {
                 if name == HANDBACK_TOOL
                     && let Some(m) = b["input"]["message"].as_str()
                 {
-                    a.report = Some(m.into());
+                    a.handback = Some(m.into());
                 }
                 let stat = super::diff_for(name, &b["input"]).map(|d| diff_stat(&d));
                 a.tools.push(SubagentTool {
@@ -231,6 +231,9 @@ fn subagent_line(parent: &str, v: &Value, st: &mut ChatState) -> bool {
                     && t.status != "denied"
                 {
                     t.status = if part["is_error"].as_bool().unwrap_or(false) { "error".into() } else { "ok".into() };
+                    if t.status == "error" && t.name == HANDBACK_TOOL {
+                        a.handback = None;
+                    }
                     changed = true;
                 }
             }
@@ -1753,6 +1756,36 @@ mod tests {
         let s = &st.subagents[0];
         assert_eq!(s.status, "done");
         assert_eq!(s.report.as_deref(), Some("**1. hello.txt — DONE**\n- Wrote `hello.txt` with the single word hi."));
+    }
+
+    #[test]
+    fn a_handed_back_report_shows_only_once_the_agent_ends() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#), &mut a, &mut st);
+        a.on_line(HANDBACK, &mut st);
+        let s = &st.subagents[0];
+        assert_eq!((s.status.as_str(), s.report.as_deref()), ("running", None));
+    }
+
+    #[test]
+    fn a_hand_back_that_failed_leaves_the_summary_as_the_report() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#), &mut a, &mut st);
+        a.on_line(HANDBACK, &mut st);
+        a.on_line(r#"{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01NTrn8DpvafgEKH3z4u1uGT", "is_error": true, "content": "No caller to deliver the report to."}]}, "parent_tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "session_id": "26b767d8-a541-4e6b-8218-d72d25035a9d"}"#, &mut st);
+        a.on_line(r#"{"type": "system", "subtype": "task_notification", "task_id": "a98344134013d8227", "tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "status": "completed", "summary": "Wrote hello.txt.", "usage": {"total_tokens": 10682, "tool_uses": 2, "duration_ms": 3175}}"#, &mut st);
+        assert_eq!(st.subagents[0].report.as_deref(), Some("Wrote hello.txt."));
+    }
+
+    #[test]
+    fn a_resumed_agent_that_ends_without_a_hand_back_reports_its_new_summary() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#), &mut a, &mut st);
+        a.on_line(HANDBACK, &mut st);
+        a.on_line(HANDED_BACK_END, &mut st);
+        // Sent another message, it notifies again with a plain summary.
+        a.on_line(r#"{"type": "system", "subtype": "task_notification", "task_id": "a98344134013d8227", "tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "status": "completed", "summary": "hello.txt still says hi.", "usage": {"total_tokens": 11020, "tool_uses": 3, "duration_ms": 4210}}"#, &mut st);
+        assert_eq!(st.subagents[0].report.as_deref(), Some("hello.txt still says hi."));
     }
 
     const BASH_TASKS: &str = include_str!("fixtures/claude-bash-tasks.jsonl");
