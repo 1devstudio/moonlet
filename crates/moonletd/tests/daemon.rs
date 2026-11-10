@@ -720,6 +720,22 @@ async fn a_new_sessions_branch_takes_the_hosts_prefix_unless_its_project_has_one
 }
 
 #[tokio::test]
+async fn a_given_branch_gets_no_prefix_and_a_suffix_when_taken() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_repo, p) = project_with_repo(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": "feature/"}))
+        .await
+        .unwrap();
+    let given = |name: &str| serde_json::json!({"project_id": p.id, "name": name, "branch": "fix/cart", "agent": "none"});
+    let first: moonlet_proto::types::Session = c.request(methods::SESSION_CREATE, given("Fix cart")).await.unwrap();
+    assert_eq!(first.branch, "fix/cart");
+    let second: moonlet_proto::types::Session = c.request(methods::SESSION_CREATE, given("Fix cart again")).await.unwrap();
+    assert_eq!(second.branch, "fix/cart-2");
+}
+
+#[tokio::test]
 async fn starting_from_origin_fetches_and_does_not_track_the_base() {
     use moonlet_proto::types::Project;
     let d = TestDaemon::start().await;

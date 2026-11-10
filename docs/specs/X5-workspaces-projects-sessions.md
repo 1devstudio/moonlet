@@ -37,7 +37,7 @@ The composer's layout and source picks are now X54's: a header with the project,
   - **Footer:** the agent/model picker on the left (`Sonnet 5.5 High ⌄`: agent, model alias, effort), and on the right `+` (attach files: adds paths to the prompt) and **Create ↵** (⌘↵, or ↵ in a single-line prompt).
 - **On Create:**
   - The session name is the prompt's first line, trimmed to 48 characters, or "Untitled".
-  - The branch is `moonlet/<slug>`, made unique.
+  - Unless a branch is given, the branch is `<prefix><slug>`, made unique: the project's `branch_prefix`, else the host's (X55).
   - The worktree is created and the setup script runs.
   - The agent starts with the chosen model and effort: Claude `--model <alias> --effort <level> -n <name>`; Codex `-m <model> -c model_reasoning_effort=<level>`, checked against the Codex source (`utils/cli` shared options and config overrides).
   - The prompt becomes the agent's first message.
