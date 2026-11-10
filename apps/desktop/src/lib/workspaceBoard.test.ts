@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardConfig } from "./boards";
 import type { Session } from "./protocol";
 import { useStore } from "./store";
 import { DEFAULT_CONFIG, type TasksData } from "./tasksStore";
 import type { Task } from "./tasks";
+import { cardOfSession } from "./tasksBoard";
 import { type BoardKnobs, workspaceBoard } from "./workspaceBoard";
 
 vi.mock("./daemon", () => ({ rpc: vi.fn(), sendInput: vi.fn() }));
@@ -100,5 +102,42 @@ describe("a workspace's board (X78)", () => {
       ["Fix login", "Looks like MOON-7 Fix login"],
       ["Add dark mode", "No matching issue"],
     ]);
+  });
+});
+
+describe("a session linked by hand to a task on no board (X46)", () => {
+  const sprintBoard: BoardConfig = { id: "jira:acme/224@local/personal", name: "AIO Tasks", connection: "jira:acme", workspace: "local/personal", origin: { kind: "jira_board", board: 224 },
+    columns: [
+      { name: "To Do", statuses: ["10000"], category: "todo" },
+      { name: "In Progress", statuses: ["3"], category: "in_progress" },
+    ],
+  };
+  const onBoard: Task = { ...task("AIO-12", "Rotate keys"), connection: "jira:acme", tracker: { id: "12", state: "To Do", source: "AIO", statusId: "10000" } };
+  // An Epic, which the board's sprint never reads, In Progress (a status the board has a column for).
+  const epic: Task = { ...task("AIO-259", "Coding Agent"), connection: "jira:acme", column: "in_progress", issueType: "Epic", tracker: { id: "259", state: "In Progress", source: "AIO", statusId: "3" } };
+  const synced: TasksData = { ...data, tasks: [onBoard], boards: { [sprintBoard.id]: { keys: ["jira:acme AIO-12"] } }, linked: [epic] };
+  const withBoard: BoardKnobs = { ...knobs, config: { ...DEFAULT_CONFIG, boards: [sprintBoard] } };
+
+  beforeEach(() => {
+    useStore.setState({ sessions: { local: [{ ...session("s9", "Coding Agent"), task: { connection: "jira:acme", key: "AIO-259", url: "https://acme.atlassian.net/browse/AIO-259" } }] }, git: {} });
+  });
+
+  it("works on that task, in its tracker's column, though no board shows it", () => {
+    const b = workspaceBoard(useStore.getState(), ws, synced, withBoard);
+    const card = b.board && cardOfSession(b.board, "local", { host: "local", id: "s9" });
+    expect(card && [card.task.key, card.task.title, card.column, card.rows.map((r) => r.session.name)]).toEqual(["AIO-259", "Coding Agent", "in_progress", ["Coding Agent"]]);
+    // The board shows what its sprint reads, and nothing more.
+    expect(b.shown?.views.flatMap((v) => v.cards.map((c) => c.task.key))).toEqual(["AIO-12"]);
+  });
+
+  it("works on a task the board reads into a hidden column, such as Backlog", () => {
+    const backlog: BoardConfig = { ...sprintBoard, columns: [{ name: "Backlog", statuses: ["10001"], category: "todo", show: "hide" }, ...(sprintBoard.columns ?? [])] };
+    const parked: Task = { ...task("AIO-259", "Coding Agent"), connection: "jira:acme", column: "hidden", tracker: { id: "259", state: "Backlog", source: "AIO", statusId: "10001" } };
+    // The sync looked it up by key as well: its tracker puts it in To Do.
+    const read: TasksData = { ...synced, tasks: [onBoard, parked], boards: { [sprintBoard.id]: { keys: ["jira:acme AIO-12", "jira:acme AIO-259"] } }, linked: [{ ...parked, column: "todo" }] };
+    const b = workspaceBoard(useStore.getState(), ws, read, { ...knobs, config: { ...DEFAULT_CONFIG, boards: [backlog] } });
+    const card = b.board && cardOfSession(b.board, "local", { host: "local", id: "s9" });
+    expect(card && [card.task.key, card.column]).toEqual(["AIO-259", "todo"]);
+    expect(b.shown?.views.flatMap((v) => v.cards.map((c) => c.task.key))).toEqual(["AIO-12"]);
   });
 });

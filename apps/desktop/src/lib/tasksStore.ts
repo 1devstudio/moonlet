@@ -6,8 +6,8 @@ import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns
 import { create } from "zustand";
 import { DaemonError, hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type Worktree } from "./protocol";
-import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type TaskRef, type Worktree } from "./protocol";
+import { errorMessage, errorToast, hostWorkspaces, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
 import { modeOf, setMode, toggleMode } from "./mode";
@@ -21,7 +21,7 @@ import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewI
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { parseWsKey, wsKey } from "./workspaces";
+import { accountOf, parseWsKey, workspaceMembers, wsKey } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
 
@@ -43,6 +43,8 @@ export interface TasksData {
   error: string | null;
   /** Each synced board's tasks (`connection key`) and active sprint or cycle (X50). */
   boards?: Record<string, BoardData>;
+  /** Tasks the workspace's sessions are linked to by hand that no board reads, looked up by key (X46). */
+  linked?: Task[];
 }
 
 /** What a sync read for one board (X50). */
@@ -626,6 +628,9 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     for (const t of placed) readNow.add(taskId(t));
     boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
+  // Tasks sessions are linked to by hand that no board read: an Epic, someone else's issue (X46).
+  const linked = await lookUpLinked(host, linkedRefs(host, workspaceId, tasks), per[0]?.path ?? null, prev?.linked ?? []);
+  if (!isLatest()) return;
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
   if (Object.keys(fresh).length && !useTasks.getState().configError)
@@ -652,6 +657,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     syncedAt: error ? (prev?.syncedAt ?? null) : now,
     error,
     boards: merged.boards ?? boardData,
+    ...(linked.length && { linked }),
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next }, moving: withoutMoves(st.moving, settled.filter(([id]) => readNow.has(id))) }));
   // Compared as the board shows them: with its columns as saved now.
@@ -1387,10 +1393,45 @@ export function ensureTasks(host: string, workspaceId: string, now = Date.now())
 const ensuring = new Set<string>();
 const ensuredAt = new Map<string, number>();
 
-/** Links a session to a task, or unlinks it with null (X46). */
-export async function linkTask(host: string, sessionId: string, task: Task | null) {
+/** Keeps `task` among workspace `key`'s linked tasks, unless a board read it. */
+function keepLinked(key: string, task: Task) {
+  useTasks.setState((st) => {
+    const d = st.data[key];
+    const same = (t: Task) => taskId(t) === taskId(task);
+    if (!d || d.tasks.some(same)) return {};
+    return { data: { ...st.data, [key]: { ...d, linked: [...(d.linked ?? []).filter((t) => !same(t)), task] } } };
+  });
+}
+
+/** The stored links of the workspace's live sessions, on every member (X68), to tasks no board shows: not in `loaded`, or in a hidden column. */
+function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>): TaskRef[] {
+  const st = useStore.getState();
+  const hosts = hostWorkspaces(st);
+  const members = workspaceMembers({ host, id: workspaceId, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) }, hosts);
+  const refs = new Map<string, TaskRef>();
+  for (const h of members)
+    for (const s of st.sessions[h] ?? []) if (s.workspace_id === workspaceId && !s.archived && s.task && (loaded.get(taskId(s.task))?.column ?? "hidden") === "hidden") refs.set(taskId(s.task), s.task);
+  return [...refs.values()];
+}
+
+/** The tasks `refs` name, looked up in their trackers by key, whatever their board, type or assignee (X46). One the tracker does not answer for keeps its last answer. */
+async function lookUpLinked(host: string, refs: TaskRef[], path: string | null, last: Task[]): Promise<Task[]> {
+  const found = await Promise.all(
+    refs.map(async (r) => {
+      const t = r.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: r.key, site: null }, null)) : await hostsApi.trackerTask(r.connection, r.key).catch(() => null);
+      return t || last.find((x) => taskId(x) === taskId(r)) || null;
+    }),
+  );
+  return found.filter((t): t is Task => t !== null);
+}
+
+/** Links a session to a task, or unlinks it with null (X46). A task that
+ *  none of the boards of `board`, the workspace it is on, read shows on the
+ *  session at once, rather than after the next sync. */
+export async function linkTask(host: string, sessionId: string, task: Task | null, board?: { host: string; id: string }) {
   try {
     await rpc(host, M.sessionUpdate, { id: sessionId, task: task ? { connection: task.connection, key: task.key, url: task.url } : null });
+    if (task && board) keepLinked(wsKey(board.host, board.id), task);
     toast(task ? `Linked to ${task.key}` : "Unlinked the task");
   } catch (e) {
     errorToast(e);

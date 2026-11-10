@@ -234,7 +234,7 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   latestChoices.current = choices;
   const pick = (t: Task) => {
     close();
-    void linkTask(host, ws.id, t);
+    void linkTask(host, ws.id, t, boardRef ?? undefined);
   };
   const row = (t: Task, reason?: string) => (
     <button key={t.key} onClick={() => pick(t)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-panel-2">
