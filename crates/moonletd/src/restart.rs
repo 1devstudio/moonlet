@@ -75,16 +75,37 @@ async fn answers(socket: &Path) -> Answer {
     }
 }
 
-/// The pid in the daemon's pid file, when that process is a live `moonletd`.
-/// A file left by a daemon that died can name a pid that now belongs to
-/// something else, which must never be signalled.
+/// The pid in the daemon's pid file, when that process is a live `moonletd`
+/// that was already running when the file was written. A file left by a
+/// daemon that died can name a pid that now belongs to something else, even
+/// another home's `moonletd`, which must never be signalled.
 fn daemon_pid(socket: &Path) -> Option<i32> {
-    let pid: i32 = std::fs::read_to_string(upgrade::pid_file(socket))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
+    let file = upgrade::pid_file(socket);
+    let pid: i32 = std::fs::read_to_string(&file).ok()?.trim().parse().ok()?;
+    let written = std::fs::metadata(&file).ok()?.modified().ok()?;
+    let ran = Duration::from_secs(etime_secs(&ps(pid, "etime")?)?);
+    let started = std::time::SystemTime::now().checked_sub(ran)?;
+    // `etime` is in whole seconds.
+    (started <= written + Duration::from_secs(2)).then_some(())?;
     moonletd_pid(pid)
+}
+
+/// Seconds from `ps -o etime=`: `[[dd-]hh:]mm:ss`.
+fn etime_secs(etime: &str) -> Option<u64> {
+    let etime = etime.trim();
+    let (days, clock) = match etime.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, etime),
+    };
+    let mut secs = 0;
+    let parts: Vec<&str> = clock.split(':').collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
+    }
+    for part in parts {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86400 + secs)
 }
 
 /// The pid the daemon on `socket` gives when it greets, for a daemon whose
@@ -151,4 +172,22 @@ async fn kill_daemon(socket: &Path) -> Result<()> {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_how_long_a_process_has_run_from_ps_etime() {
+        // Captured from `ps -o etime=` on macOS.
+        assert_eq!(etime_secs("      00:00"), Some(0));
+        assert_eq!(etime_secs("12:50:45"), Some(12 * 3600 + 50 * 60 + 45));
+        assert_eq!(
+            etime_secs("04-20:28:05"),
+            Some(4 * 86400 + 20 * 3600 + 28 * 60 + 5)
+        );
+        assert_eq!(etime_secs(""), None);
+        assert_eq!(etime_secs("soon"), None);
+    }
 }

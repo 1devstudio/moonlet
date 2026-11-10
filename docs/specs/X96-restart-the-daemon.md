@@ -20,11 +20,12 @@ Until now, the app had no way to restart this Mac's `moonletd`. A daemon that st
 ## Behaviour and acceptance criteria
 
 - [x] `moonletd restart` on a daemon that answers hands its terminals to a new daemon process: the same terminal, with the same shell pid, keeps running under a new daemon pid. (`tests/restart.rs` restart_keeps_terminals_on_a_daemon_that_answers)
-- [x] `moonletd restart` on a daemon that doesn't answer within 3 s exits with code 3, says "the daemon isn't answering" on stderr, and leaves the daemon alone. (`tests/restart.rs` restart_leaves_a_daemon_that_does_not_answer_and_exits_3)
+- [x] `moonletd restart` on a daemon that doesn't answer within 3 s exits with code 3 after those 3 s, says "the daemon isn't answering" on stderr, and leaves the daemon alone. (`tests/restart.rs` restart_leaves_a_daemon_that_does_not_answer_and_exits_3)
 - [x] `moonletd restart --force` on a daemon that doesn't answer kills it and starts a new daemon on the same socket, which answers. (`tests/restart.rs` force_restart_replaces_a_daemon_that_does_not_answer)
 - [x] `moonletd restart --force` never kills a process that isn't a moonletd: when the pid file names a live process that isn't one (a stale file whose pid was reused), that process keeps running and a new daemon starts. (`tests/restart.rs` force_restart_never_kills_a_process_that_is_not_moonletd)
+- [x] `moonletd restart --force` never kills a moonletd that started after the pid file was written, such as another home's daemon that got a stale file's pid. (`tests/restart.rs` force_restart_never_kills_another_homes_moonletd_that_got_a_stale_pid)
 - [x] `moonletd restart` with no daemon running starts one. (`tests/restart.rs` restart_starts_a_daemon_when_none_runs)
-- [x] `moonletd restart --force` finds a daemon whose pid file is gone by the pid it greets with, and replaces it. (`tests/restart.rs` force_restart_finds_a_daemon_whose_pid_file_is_gone)
+- [x] `moonletd restart --force` finds a daemon whose pid file is gone by the pid it greets with, and replaces it. A daemon too stuck to greet, with no pid file, can't be found: the command fails and says so, and the user has to find and kill its process by hand. (`tests/restart.rs` force_restart_finds_a_daemon_whose_pid_file_is_gone, which covers a daemon that still greets)
 - [x] `moonletd restart --force` doesn't wait for the killed daemon to be reaped: a zombie whose parent never waits on it counts as gone. (`tests/restart.rs` force_restart_does_not_wait_for_a_killed_daemon_to_be_reaped)
 - [x] The app reads `moonletd restart`'s exit 3 as `not_responding` and any other failure as `failed`, with moonletd's message. (`src-tauri/src/lib.rs` moonletd_restart_exiting_3_asks_the_app_to_offer_a_force_restart)
 - [x] In the app, Restart asks for nothing when the handoff works, and tells the user that terminals kept running. (`settingsPage.test.ts` "restarts with a handoff and keeps terminals")
@@ -48,7 +49,7 @@ The button shows "Restarting…" and is disabled while the command runs: a few s
 
 - New CLI command `moonletd restart [--force]`.
   - Without `--force`: no daemon listening and no live moonletd in the pid file means it starts one. A daemon that answers `daemon.info` within 3 s gets the S3 handoff to the running `moonletd` binary (`moonletd upgrade`, which waits up to 30 s). Otherwise, or when the handoff fails, it exits **3** with the reason on stderr.
-  - With `--force`: the pid in `run/moonletd.pid`, or when that file is gone the pid the daemon greets with, gets SIGKILL, but only when `ps` names that process `moonletd`. moonletd then waits up to 5 s for it to exit (or become a zombie) and starts a new daemon (`moonletd start`).
+  - With `--force`: the pid in `run/moonletd.pid`, or when that file is gone the pid the daemon greets with, gets SIGKILL. A pid from the file is used only when `ps` names that process `moonletd` and its start time (`etime`) isn't later than the file's. moonletd then waits up to 5 s for it to exit (or become a zombie) and starts a new daemon (`moonletd start`).
 - New Tauri command `restart_daemon { force: bool }`. It runs the bundled `moonletd restart [--force]`. Exit 3 maps to the error code `not_responding`, any other failure to `failed`, each with moonletd's message. On success, the app reconnects to the local host straight away.
 
 ## Data and config
@@ -57,7 +58,7 @@ None. The pid file `run/moonletd.pid` already existed (S3).
 
 ## Security considerations
 
-- Only the user's own processes can be signalled, and only one whose executable is named `moonletd`. That rules out a stale pid file killing an unrelated process that got the same pid.
+- Only the user's own processes can be signalled, and only one whose executable is named `moonletd` and that was already running when the pid file was last written. A stale pid file can't get an unrelated process killed, nor another home's moonletd (a dev daemon, say) that got the same pid later. What's left is a moonletd that was already running under that pid before this home's daemon wrote the file, which can't happen, since pids are unique among live processes.
 - A force restart is destructive (terminals end), so the app always asks first. The CLI's `--force` is explicit.
 
 ## Out of scope

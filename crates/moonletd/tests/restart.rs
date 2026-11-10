@@ -112,9 +112,16 @@ async fn restart_leaves_a_daemon_that_does_not_answer_and_exits_3() {
     let stuck = home.info().await.pid as i32;
     signal(stuck, "STOP");
 
+    let asked = std::time::Instant::now();
     let out = home.moonletd(&["restart"]);
+    let took = asked.elapsed();
 
     assert_eq!(out.status.code(), Some(3));
+    // It gives up after 3 s; the rest of the bound is slack for a busy machine.
+    assert!(
+        took >= std::time::Duration::from_secs(3) && took < std::time::Duration::from_secs(10),
+        "took {took:?}"
+    );
     assert_eq!(
         String::from_utf8_lossy(&out.stderr).trim(),
         "the daemon isn't answering"
@@ -226,7 +233,36 @@ async fn force_restart_does_not_wait_for_a_killed_daemon_to_be_reaped() {
     let old = home.info().await.pid;
     signal(old as i32, "STOP");
 
-    let started = std::time::Instant::now();
+    let out = home.moonletd(&["restart", "--force"]);
+
+    // Waiting on the zombie would fail the restart after 5 s.
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(home.info().await.pid, old, "a new daemon answers");
+    let _ = parent.wait();
+}
+
+#[tokio::test]
+async fn force_restart_never_kills_another_homes_moonletd_that_got_a_stale_pid() {
+    let home = Home::new();
+    let other = Home::new();
+    assert!(other.moonletd(&["start"]).status.success());
+    let theirs = other.info().await.pid;
+    // This home's daemon died an hour ago without cleaning up, and its pid
+    // now belongs to the other home's daemon, started since.
+    let pid_file = home.socket.with_file_name("moonletd.pid");
+    std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+    std::fs::write(&pid_file, theirs.to_string()).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&pid_file)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+
     let out = home.moonletd(&["restart", "--force"]);
 
     assert!(
@@ -235,10 +271,13 @@ async fn force_restart_does_not_wait_for_a_killed_daemon_to_be_reaped() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(4),
-        "took {:?}",
-        started.elapsed()
+        alive(theirs as i32),
+        "the other home's daemon keeps running"
     );
-    assert_ne!(home.info().await.pid, old, "a new daemon answers");
-    let _ = parent.wait();
+    assert_eq!(other.info().await.pid, theirs);
+    assert_ne!(
+        home.info().await.pid,
+        theirs,
+        "this home gets a daemon of its own"
+    );
 }
