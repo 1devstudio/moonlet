@@ -1,4 +1,4 @@
-# X96 — Restart the daemon from the app, and force it when it's stuck
+# X97 — Restart the daemon from the app, and force it when it's stuck
 
 - **Status:** implemented
 - **Priority / phase:** P1 · phase 3
@@ -32,7 +32,7 @@ Until now, the app had no way to restart this Mac's `moonletd`. A daemon that st
 - [x] When the daemon can't hand over, the app shows the reason and offers Force restart. Only after the user agrees does it force the restart, and it says that terminals ended. (`settingsPage.test.ts` "forces the restart only after the user agrees")
 - [x] Cancelling that dialog leaves the daemon as it is, with no toast. (`settingsPage.test.ts` "leaves a stuck daemon alone when the user cancels")
 - [x] Any other failure (moonletd missing, the start failed) shows as an error, without offering a force restart. (`settingsPage.test.ts` "reports other failures without offering a force restart")
-- [x] Settings search finds the row by "restart", "stuck", "force restart" and "not answering". (`settingsSearch.test.ts` "finds Restart the daemon by what a stuck daemon looks like (X96)")
+- [x] Settings search finds the row by "restart", "stuck", "force restart" and "not answering". (`settingsSearch.test.ts` "finds Restart the daemon by what a stuck daemon looks like (X97)")
 
 ## UI
 
@@ -64,7 +64,7 @@ None. The pid file `run/moonletd.pid` already existed (S3).
 ## Out of scope
 
 - **Remote and tailnet hosts.** Restart is for this Mac's daemon. A remote host's daemon is restarted on that host.
-- **Restarting under launchd.** After a force restart, up to three starters see the killed daemon's stale socket at once: this command, the app's reconnect (`moonletd start`) and, with the login item on, launchd. Each new daemon checks that nothing listens before it binds, and one that finds a daemon listening exits with "already listening". So one daemon serves. In theory, two daemons that both check in the microseconds before either binds could both bind, and one would end up on a socket file that no longer exists. That race predates X96 (`server::bind`), and 8 daemons started together on a stale socket didn't hit it in 4 tries.
+- **Restarting under launchd.** After a force restart, up to three starters see the killed daemon's stale socket at once: this command, the app's reconnect (`moonletd start`) and, with the login item on, launchd. Each new daemon checks that nothing listens before it binds, and one that finds a daemon listening exits with "already listening". So one daemon serves. In theory, two daemons that both check in the microseconds before either binds could both bind, and one would end up on a socket file that no longer exists. That race predates X97 (`server::bind`), and 8 daemons started together on a stale socket didn't hit it in 4 tries.
 - **Detecting a stuck daemon by itself.** The user decides when to restart.
 
 ## Test plan

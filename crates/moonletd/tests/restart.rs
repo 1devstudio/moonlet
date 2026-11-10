@@ -1,4 +1,4 @@
-//! X96: `moonletd restart` hands terminals to a fresh daemon, and
+//! X97: `moonletd restart` hands terminals to a fresh daemon, and
 //! `--force` replaces one that is stuck.
 
 use std::path::{Path, PathBuf};

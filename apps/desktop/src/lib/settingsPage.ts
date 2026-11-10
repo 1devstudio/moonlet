@@ -220,14 +220,14 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
   return st.state === "loaded" ? { tone: "done", text: "Running under launchd", path } : { tone: "blocked", text: "Installed but not loaded", path };
 }
 
-/** What the force-restart dialog asks (X96). */
+/** What the force-restart dialog asks (X97). */
 export interface ForceAsk {
   title: string;
   message: string;
   action: string;
 }
 
-/** Restart this Mac's daemon (X96): a handoff that keeps terminals first,
+/** Restart this Mac's daemon (X97): a handoff that keeps terminals first,
  *  and when it is stuck, a force restart once the user agrees. The toast to
  *  show, or null when the user kept the daemon as it is. */
 export async function restartDaemon(restart: (force: boolean) => Promise<unknown>, askForce: (ask: ForceAsk) => Promise<boolean>): Promise<string | null> {

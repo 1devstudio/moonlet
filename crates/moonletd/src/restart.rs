@@ -1,4 +1,4 @@
-//! `moonletd restart [--force]` (X96): a fresh daemon process in place of the
+//! `moonletd restart [--force]` (X97): a fresh daemon process in place of the
 //! running one. Without `--force` its terminals are handed over (S3); with
 //! it, a stuck daemon is killed and a new one started.
 

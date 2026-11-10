@@ -113,7 +113,7 @@ export const hostsApi = {
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<DaemonService>("daemon_service", { action }),
   openLoginItems: () => invoke("open_login_items"),
-  /** Restarts this Mac's moonletd (X96); rejects with `not_responding` when only `force` can. */
+  /** Restarts this Mac's moonletd (X97); rejects with `not_responding` when only `force` can. */
   restartDaemon: (force: boolean) => invoke("restart_daemon", { force }),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),

@@ -305,7 +305,7 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
     serde_json::to_value(login_item::Service::from_moonletd(&status).map_err(err)?).map_err(err)
 }
 
-/// Restarts this Mac's daemon with the bundled `moonletd restart` (X96):
+/// Restarts this Mac's daemon with the bundled `moonletd restart` (X97):
 /// a handoff that keeps terminals, or with `force` a new daemon in place of
 /// a stuck one. `not_responding` when only a force restart can do it. The
 /// local host reconnects right away instead of waiting for its backoff.
@@ -322,7 +322,7 @@ async fn restart_daemon(hosts: Hosts<'_>, force: bool) -> Result<(), RpcError> {
     hosts.reconnect(hosts::LOCAL)
 }
 
-/// What `moonletd restart` exiting with `code` means to the webview (X96):
+/// What `moonletd restart` exiting with `code` means to the webview (X97):
 /// 3, moonletd's `STUCK`, is `not_responding`, so the app offers a force
 /// restart; any other failure is `failed`. `None` is a signal.
 fn restart_result(code: Option<i32>, stderr: &str) -> Result<(), RpcError> {

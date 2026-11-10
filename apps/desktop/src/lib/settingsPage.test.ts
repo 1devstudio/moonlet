@@ -541,7 +541,7 @@ describe("Task trackers in the nav (X44)", () => {
   });
 });
 
-describe("restart the daemon (X96)", () => {
+describe("restart the daemon (X97)", () => {
   /** The bundled `moonletd restart`, as the Tauri command answers: `stuck` is its message when it can't hand over. */
   const daemon = (stuck: string | null, other?: { code: string; message: string }) => {
     const ran: string[] = [];
