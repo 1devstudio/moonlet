@@ -1120,7 +1120,7 @@ impl ChatManager {
             let env = self.agent_env(id, &inner, launch.env);
             ("claude".to_string(), args, inner.cfg.cwd.clone(), env)
         };
-        folder_exists(&cwd)?;
+        require_folder(&cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let run = tokio::process::Command::new(&exe).args(&args).current_dir(&cwd).env_clear().envs(&env).stdin(Stdio::null()).kill_on_drop(true).output();
         let out = tokio::time::timeout(ASIDE_TIMEOUT, run).await.map_err(|_| anyhow::anyhow!("The aside took too long."))?.context("failed to start claude")?;
@@ -1149,7 +1149,7 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let env = self.agent_env(chat.id, inner, launch.env);
-        folder_exists(&cfg.cwd)?;
+        require_folder(&cfg.cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
@@ -1382,7 +1382,7 @@ pub fn chats_dir(home: &Path) -> PathBuf {
 
 /// An agent runs in its session's folder: a removed worktree is named as
 /// such, not as an agent that failed to start.
-fn folder_exists(cwd: &str) -> Result<()> {
+fn require_folder(cwd: &str) -> Result<()> {
     if !Path::new(cwd).is_dir() {
         bail!("This session's folder no longer exists: {cwd}");
     }
@@ -1577,6 +1577,9 @@ done
         assert_eq!(format!("{err:#}"), expected);
         let st = chats2.state(info.id).unwrap();
         assert_eq!(st.items.iter().rev().find(|i| i.kind == "error").unwrap().text, expected);
+        // Ask aside runs Claude in the same folder (X49).
+        let err = chats2.aside(info.id, "which port?").await.unwrap_err();
+        assert_eq!(format!("{err:#}"), expected);
     }
 
     /// X86: an archived session's chat leaves the live chats, its transcript

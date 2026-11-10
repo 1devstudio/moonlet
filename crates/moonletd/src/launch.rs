@@ -122,7 +122,7 @@ const SYSTEM_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 /// daemon captured), then the system folders and the usual install folders
 /// (`~/.local/bin` for Claude, Homebrew) it lacks, so `claude` and `git`
 /// are still found.
-pub fn fallback_path(inherited: Option<&str>, home: Option<&str>) -> String {
+fn fallback_path(inherited: Option<&str>, home: Option<&str>) -> String {
     let local = home.map(|h| format!("{}/.local/bin", h.trim_end_matches('/')));
     let mut dirs: Vec<&str> = Vec::new();
     let extra = SYSTEM_PATH.split(':').chain(local.as_deref()).chain(["/opt/homebrew/bin"]);
@@ -140,7 +140,7 @@ pub fn login_environment() -> BTreeMap<String, String> {
     let mut env = capture_login_environment();
     if !env.contains_key("PATH") {
         let path = fallback_path(std::env::var("PATH").ok().as_deref(), env.get("HOME").map(String::as_str));
-        tracing::warn!(%path, "the login shell gave no environment; terminals and agents use this PATH");
+        tracing::warn!(%path, "no PATH from the login shell; terminals and agents use this one");
         env.insert("PATH".into(), path);
     }
     env
@@ -150,19 +150,17 @@ pub fn login_environment() -> BTreeMap<String, String> {
 /// print one.
 fn capture_login_environment() -> BTreeMap<String, String> {
     let mut base = passthrough(std::env::vars());
-    base.insert("PATH".into(), SYSTEM_PATH.into());
     let shell = moonlet_core::pty::user_shell();
     base.entry("SHELL".into()).or_insert_with(|| shell.clone());
     let child = Command::new(&shell)
         .args(["-l", "-i", "-c", "/usr/bin/env -0"])
         .env_clear()
         .envs(&base)
+        .env("PATH", SYSTEM_PATH)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
-    // Only the shell's own output sets the PATH.
-    base.remove("PATH");
     let Ok(mut child) = child else {
         tracing::warn!("cannot run the login shell {shell}");
         return base;
