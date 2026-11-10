@@ -1405,7 +1405,7 @@ async function keepLinked(ws: WorkspaceRef, task: Task) {
   const same = (t: Task) => taskId(t) === taskId(task);
   const d = useTasks.getState().data[key];
   if (!d || drawn(placedTasks(d).find(same))) return;
-  const found = drawn(task) ? task : ((await lookUpLinked(ws.host, [{ ref: task, path: null }], [])).at(0) ?? task);
+  const found = drawn(task) ? task : ((await lookUpLinked(ws.host, [{ ref: task, path: null, once: false }], [])).at(0) ?? task);
   useTasks.setState((st) => {
     const now = st.data[key];
     return now ? { data: { ...st.data, [key]: { ...now, linked: [...(now.linked ?? []).filter((t) => !same(t)), found] } } } : {};
@@ -1416,11 +1416,14 @@ async function keepLinked(ws: WorkspaceRef, task: Task) {
 interface LinkToLookUp {
   ref: TaskRef;
   path: string | null;
+  /** Only archived sessions link it (X86): asked of its tracker once, then kept. */
+  once: boolean;
 }
 
-/** The stored links of the workspace's live sessions, on every member (X68),
- *  to tasks no board draws: not in `loaded`, or in a hidden column. A GitHub
- *  issue is asked of gh in its session's worktree on `host`, else in `fallback`. */
+/** The stored links of the workspace's sessions, live and archived, on every
+ *  member (X68), to tasks no board draws: not in `loaded`, or in a hidden
+ *  column. A GitHub issue is asked of gh in its session's worktree on `host`,
+ *  else in `fallback`. */
 function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>, fallback: string | null): LinkToLookUp[] {
   const st = useStore.getState();
   const hosts = hostWorkspaces(st);
@@ -1428,21 +1431,24 @@ function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>
   const links = new Map<string, LinkToLookUp>();
   for (const h of members)
     for (const s of st.sessions[h] ?? []) {
-      if (s.workspace_id !== workspaceId || s.archived || !s.task || drawn(loaded.get(taskId(s.task)))) continue;
-      const path = h === host ? s.path : (links.get(taskId(s.task))?.path ?? fallback);
-      links.set(taskId(s.task), { ref: s.task, path });
+      if (s.workspace_id !== workspaceId || !s.task || drawn(loaded.get(taskId(s.task)))) continue;
+      const seen = links.get(taskId(s.task));
+      const path = h === host && !s.archived ? s.path : (seen?.path ?? (h === host ? s.path : fallback));
+      links.set(taskId(s.task), { ref: s.task, path, once: s.archived && (seen?.once ?? true) });
     }
   return [...links.values()];
 }
 
 /** The tasks `links` name, looked up in their trackers by key, whatever their
  *  board, type or assignee (X46). One the tracker does not answer for keeps
- *  its answer in `last`. */
+ *  its answer in `last`, as does one only archived sessions link. */
 async function lookUpLinked(host: string, links: LinkToLookUp[], last: Task[]): Promise<Task[]> {
   const found = await Promise.all(
-    links.map(async ({ ref, path }) => {
+    links.map(async ({ ref, path, once }) => {
+      const kept = last.find((x) => taskId(x) === taskId(ref));
+      if (once && kept) return kept;
       const t = ref.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: ref.key, site: null }, null)) : await hostsApi.trackerTask(ref.connection, ref.key).catch(() => null);
-      return t || last.find((x) => taskId(x) === taskId(ref)) || null;
+      return t || kept || null;
     }),
   );
   return found.filter((t): t is Task => t !== null);

@@ -1452,6 +1452,16 @@ describe("a task linked by hand that no board reads (X46)", () => {
     expect(cardOf()).toEqual(["acme/other#99", "Shared design tokens", "in_progress"]);
   });
 
+  it("keeps an archived session's task, looked up once rather than on every sync (X86)", async () => {
+    useStore.setState({ sessions: { local: [{ ...linkedTo("MOON-9"), archived: true }] } });
+    await refreshTasks("local", "personal", 1_000);
+    expect(cardOf()).toEqual(["MOON-9", "Coding Agent", "in_progress"]);
+    // The tracker is not asked again: an archived session's work is done.
+    answers["tracker_task linear:acme MOON-9"] = () => lt("MOON-9", "Renamed since");
+    await refreshTasks("local", "personal", 2_000);
+    expect(cardOf()).toEqual(["MOON-9", "Coding Agent", "in_progress"]);
+  });
+
   it("keeps the task while its tracker cannot be reached", async () => {
     useStore.setState({ sessions: { local: [linkedTo("MOON-9")] } });
     await refreshTasks("local", "personal", 1_000);
