@@ -4,6 +4,7 @@
 //! * `moonletd start` starts it detached if it is not running.
 //! * `moonletd proxy` bridges stdio to the daemon socket, starting the daemon
 //!   first. Remote hosts are reached with `ssh host moonletd proxy`.
+//! * `moonletd restart [--force]` replaces the running daemon (X96).
 //! * `moonletd stop` / `moonletd status`.
 
 mod clones;
@@ -23,6 +24,7 @@ mod notify;
 mod peer;
 mod relay;
 mod render;
+mod restart;
 mod server;
 mod service;
 mod power;
@@ -79,6 +81,13 @@ enum Cmd {
     },
     /// Replace the running daemon with this binary, keeping every session.
     Upgrade,
+    /// Restart the daemon, handing its terminals to a fresh process; exits 3
+    /// when it is stuck and only `--force` can restart it (X96).
+    Restart {
+        /// Kill the running daemon and start a new one; its terminals end.
+        #[arg(long)]
+        force: bool,
+    },
     /// Start the daemon at login: a launchd LaunchAgent (macOS) or a systemd user unit (Linux).
     Service {
         #[command(subcommand)]
@@ -135,6 +144,13 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
         Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
+        Cmd::Restart { force } => match rt.block_on(restart::restart(&socket, std::env::current_exe()?, force))? {
+            restart::Outcome::Restarted => Ok(()),
+            restart::Outcome::Stuck(why) => {
+                eprintln!("{why}");
+                std::process::exit(restart::STUCK)
+            }
+        },
         Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
