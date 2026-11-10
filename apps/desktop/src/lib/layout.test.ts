@@ -79,6 +79,19 @@ describe("file tabs (X26)", () => {
     expect(l.tabs[0].root).toEqual({ type: "file", path: file, line: 42 });
   });
 
+  it("opens a file at a range of lines, and an open one at a new range (X96)", () => {
+    const l = openFile(emptyLayout(), file, 49, 53);
+    expect(l.tabs[0].root).toEqual({ type: "file", path: file, line: 49, endLine: 53 });
+    const again = openFile(l, file, 12);
+    expect(again.tabs).toHaveLength(1);
+    expect(again.tabs[0].root).toEqual({ type: "file", path: file, line: 12 });
+  });
+
+  it("reads a file tab's range back from a stored layout (X96)", () => {
+    const stored = { tabs: [{ id: "a", root: { type: "file", path: file, line: 49, endLine: 53 } }], active: "a", focused: null };
+    expect(parseLayout(stored).tabs).toEqual([{ id: "a", root: { type: "file", path: file, line: 49, endLine: 53 } }]);
+  });
+
   it("keeps file tabs when the terminals are synced", () => {
     const l = reconcile(openFile(reconcile(emptyLayout(), [1]), file), [1, 2]);
     expect(l.tabs.map((t) => t.root)).toEqual([

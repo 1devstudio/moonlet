@@ -10,6 +10,7 @@ import { ConfirmHost } from "./components/ConfirmHost";
 import { SyncPopoverHost } from "./components/SyncPopover";
 import { ReadHost } from "./components/ReadHost";
 import { CommandPalette } from "./components/CommandPalette";
+import { OpenFileDialog } from "./components/OpenFileDialog";
 import { Button, IconButton, Kbd, Pane, cx, TRAFFIC_LIGHTS } from "./components/ui";
 import { dismissToast, selectedSession, startStore, useStore } from "./lib/store";
 import { startSync } from "./lib/syncStore";
@@ -218,6 +219,7 @@ export default function App() {
       <SyncPopoverHost />
       <SignInRunning />
       {s.dialog?.kind === "palette" && <CommandPalette />}
+      {s.dialog?.kind === "open-file" && <OpenFileDialog host={s.dialog.host} session={s.dialog.session} root={s.dialog.root} />}
       <ConfirmHost />
       <ReadHost />
       <Toasts />

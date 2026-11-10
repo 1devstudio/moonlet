@@ -894,7 +894,7 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 
 const fileCache = new Map<string, Promise<string[]>>();
 
-function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
+export function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
   const key = hostPath(host, root);
   let p = fresh ? undefined : fileCache.get(key);
   if (!p) {
