@@ -6,8 +6,8 @@ import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns
 import { create } from "zustand";
 import { DaemonError, hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type Worktree } from "./protocol";
-import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type TaskRef, type Worktree } from "./protocol";
+import { errorMessage, errorToast, hostWorkspaces, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
 import { modeOf, setMode, toggleMode } from "./mode";
@@ -19,9 +19,9 @@ import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTarge
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { parseWsKey, wsKey } from "./workspaces";
+import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
 
@@ -43,6 +43,8 @@ export interface TasksData {
   error: string | null;
   /** Each synced board's tasks (`connection key`) and active sprint or cycle (X50). */
   boards?: Record<string, BoardData>;
+  /** Tasks the workspace's sessions are linked to by hand that no board reads, looked up by key (X46). */
+  linked?: Task[];
 }
 
 /** What a sync read for one board (X50). */
@@ -626,6 +628,14 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     for (const t of placed) readNow.add(taskId(t));
     boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
+  // Tasks sessions are linked to by hand that no board draws: an Epic, someone else's issue (X46).
+  const fallback = per[0]?.path ?? null;
+  const looked = await lookUpLinked(host, linkedRefs(host, workspaceId, tasks, fallback), prev?.linked ?? []);
+  if (!isLatest()) return;
+  // Links the dialog made while the lookups ran stay, as long as their sessions keep them.
+  const still = new Set(linkedRefs(host, workspaceId, tasks, fallback).map((l) => taskId(l.ref)));
+  const lookedIds = new Set(looked.map(taskId));
+  const linked = [...looked, ...(useTasks.getState().data[key]?.linked ?? []).filter((t) => still.has(taskId(t)) && !lookedIds.has(taskId(t)))];
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
   if (Object.keys(fresh).length && !useTasks.getState().configError)
@@ -652,6 +662,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     syncedAt: error ? (prev?.syncedAt ?? null) : now,
     error,
     boards: merged.boards ?? boardData,
+    ...(linked.length && { linked }),
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next }, moving: withoutMoves(st.moving, settled.filter(([id]) => readNow.has(id))) }));
   // Compared as the board shows them: with its columns as saved now.
@@ -1387,10 +1398,69 @@ export function ensureTasks(host: string, workspaceId: string, now = Date.now())
 const ensuring = new Set<string>();
 const ensuredAt = new Map<string, number>();
 
-/** Links a session to a task, or unlinks it with null (X46). */
-export async function linkTask(host: string, sessionId: string, task: Task | null) {
+/** Keeps `task` among workspace `ws`'s linked tasks unless a board draws
+ *  it. One a board holds in a hidden column is looked up for its tracker's. */
+async function keepLinked(ws: WorkspaceRef, task: Task) {
+  const key = wsKey(ws.host, ws.id);
+  const same = (t: Task) => taskId(t) === taskId(task);
+  const d = useTasks.getState().data[key];
+  if (!d || drawn(placedTasks(d).find(same))) return;
+  const found = drawn(task) ? task : ((await lookUpLinked(ws.host, [{ ref: task, path: null, once: false }], [])).at(0) ?? task);
+  useTasks.setState((st) => {
+    const now = st.data[key];
+    return now ? { data: { ...st.data, [key]: { ...now, linked: [...(now.linked ?? []).filter((t) => !same(t)), found] } } } : {};
+  });
+}
+
+/** A stored link to look up, with the checkout on the syncing host that gh runs in for a GitHub issue. */
+interface LinkToLookUp {
+  ref: TaskRef;
+  path: string | null;
+  /** Only archived sessions link it (X86): asked of its tracker once, then kept. */
+  once: boolean;
+}
+
+/** The stored links of the workspace's sessions, live and archived, on every
+ *  member (X68), to tasks no board draws: not in `loaded`, or in a hidden
+ *  column. A GitHub issue is asked of gh in its session's worktree on `host`,
+ *  else in `fallback`. */
+function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>, fallback: string | null): LinkToLookUp[] {
+  const st = useStore.getState();
+  const hosts = hostWorkspaces(st);
+  const members = workspaceMembers({ host, id: workspaceId, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) }, hosts);
+  const links = new Map<string, LinkToLookUp>();
+  for (const h of members)
+    for (const s of st.sessions[h] ?? []) {
+      if (s.workspace_id !== workspaceId || !s.task || drawn(loaded.get(taskId(s.task)))) continue;
+      const seen = links.get(taskId(s.task));
+      const path = h === host && !s.archived ? s.path : (seen?.path ?? (h === host ? s.path : fallback));
+      links.set(taskId(s.task), { ref: s.task, path, once: s.archived && (seen?.once ?? true) });
+    }
+  return [...links.values()];
+}
+
+/** The tasks `links` name, looked up in their trackers by key, whatever their
+ *  board, type or assignee (X46). One the tracker does not answer for keeps
+ *  its answer in `last`, as does one only archived sessions link. */
+async function lookUpLinked(host: string, links: LinkToLookUp[], last: Task[]): Promise<Task[]> {
+  const found = await Promise.all(
+    links.map(async ({ ref, path, once }) => {
+      const kept = last.find((x) => taskId(x) === taskId(ref));
+      if (once && kept) return kept;
+      const t = ref.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: ref.key, site: null }, null)) : await hostsApi.trackerTask(ref.connection, ref.key).catch(() => null);
+      return t || kept || null;
+    }),
+  );
+  return found.filter((t): t is Task => t !== null);
+}
+
+/** Links a session to a task, or unlinks it with null (X46). A task that no
+ *  board of `ws`, the workspace whose boards the session reads, draws shows
+ *  on the session at once, rather than after the next sync. */
+export async function linkTask(host: string, sessionId: string, task: Task | null, ws?: WorkspaceRef) {
   try {
     await rpc(host, M.sessionUpdate, { id: sessionId, task: task ? { connection: task.connection, key: task.key, url: task.url } : null });
+    if (task && ws) await keepLinked(ws, task);
     toast(task ? `Linked to ${task.key}` : "Unlinked the task");
   } catch (e) {
     errorToast(e);

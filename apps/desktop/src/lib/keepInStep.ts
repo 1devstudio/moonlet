@@ -154,7 +154,7 @@ export function autoFixes(board: Board, rulesOf: (c: Card) => Rules, done: Recor
   return Object.values(board)
     .flat()
     .filter((c) => {
-      if (!c.drift || done[driftKey(c)]) return false;
+      if (!c.drift || c.offBoard || done[driftKey(c)]) return false;
       if (c.drift.kind === "merged") return rulesOf(c).all_merged === "auto";
       if (c.drift.kind === "pr_open") return !c.task.github && rulesOf(c).pr_opens === "auto";
       return false;
@@ -197,7 +197,7 @@ export function prComments(board: Board, rulesOf: (c: Card) => Rules, done: Reco
   return Object.values(board)
     .flat()
     .flatMap((card) => {
-      if (card.task.github || !card.task.tracker || rulesOf(card).pr_comment !== "auto") return [];
+      if (card.task.github || !card.task.tracker || card.offBoard || rulesOf(card).pr_comment !== "auto") return [];
       return card.rows.flatMap(({ session }) => {
         const pr = session.pr;
         // Keyed by the PR's URL: two repositories can both have a #12.

@@ -592,6 +592,31 @@ describe("Tasks mode", () => {
     expect([s?.task ?? null, s?.task_unlinked]).toEqual([null, true]);
   });
 
+  it("shows a task no board reads on the session linked to it, at once and after a reload (X46)", async () => {
+    const row = sel.sessionRow(LINKED);
+    await $(row).click();
+    // The embedded driver has no right click: send the contextmenu event itself.
+    await browser.execute((xp: string) => {
+      const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
+    }, row);
+    await $(sel.button("Link to task…")).click();
+    // acme/other#99 is in a repository no board of the workspace reads, and assigned to no one.
+    await fill('//input[@placeholder="Search tasks, or paste a key or URL"]', "https://github.com/acme/other/issues/99");
+    await $('//section[@aria-label="Pasted"]//button[.//span[normalize-space()="acme/other#99"]]').click();
+    const bar = $('//*[@role="region"][@aria-label="Task"]');
+    await expect(bar.$(sel.text("acme/other#99"))).toBeDisplayed({ wait: 10_000 });
+    await expect(bar.$(sel.text("Shared design tokens"))).toBeDisplayed();
+    // After a reload, the sync looks it up in its tracker again.
+    await browser.refresh();
+    await $(row).click();
+    await expect($('//*[@role="region"][@aria-label="Task"]').$(sel.text("Shared design tokens"))).toBeDisplayed({ wait: 30_000 });
+    // The session is left unlinked, as the test before left it.
+    rpc(w, "session.update", { id: linkedId, task: null });
+    await expect($('//*[@role="region"][@aria-label="Task"]')).not.toBeExisting({ wait: 10_000 });
+  });
+
   it("offers Link to task… in a session's right-click menu", async () => {
     if (await sessionsButton().isExisting()) await sessionsButton().click();
     const row = sel.sessionRow(SESSION);

@@ -78,6 +78,9 @@ export interface Card {
   columnName?: string;
   /** On a board (X50): a line about the card, `Assigned to Kim Park`. */
   note?: string;
+  /** A task linked by hand that no board shows (X46): Keep in step leaves it
+   *  to the user, never moving it or commenting on it by itself. */
+  offBoard?: true;
 }
 
 /** How a task's tracker state disagrees with its work, and the fix (X45). */
@@ -150,6 +153,9 @@ function workColumn(sessions: BoardSession[]): Card["column"] {
   if (sessions.some((s) => isOpen(s.pr))) return "in_review";
   return sessions.length ? "in_progress" : "todo";
 }
+
+/** Whether a board draws the task: it read it, into a column that is not hidden. */
+export const drawn = (task: Pick<Task, "column"> | undefined) => !!task && task.column !== "hidden";
 
 export function tasksBoard(input: BoardInput): Board {
   const board: Board = { todo: [], in_progress: [], in_review: [], done: [] };
