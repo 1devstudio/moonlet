@@ -1120,6 +1120,7 @@ impl ChatManager {
             let env = self.agent_env(id, &inner, launch.env);
             ("claude".to_string(), args, inner.cfg.cwd.clone(), env)
         };
+        require_folder(&cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let run = tokio::process::Command::new(&exe).args(&args).current_dir(&cwd).env_clear().envs(&env).stdin(Stdio::null()).kill_on_drop(true).output();
         let out = tokio::time::timeout(ASIDE_TIMEOUT, run).await.map_err(|_| anyhow::anyhow!("The aside took too long."))?.context("failed to start claude")?;
@@ -1148,6 +1149,7 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let env = self.agent_env(chat.id, inner, launch.env);
+        require_folder(&cfg.cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
@@ -1378,6 +1380,15 @@ pub fn chats_dir(home: &Path) -> PathBuf {
     home.join("chats")
 }
 
+/// An agent runs in its session's folder: a removed worktree is named as
+/// such, not as an agent that failed to start.
+fn require_folder(cwd: &str) -> Result<()> {
+    if !Path::new(cwd).is_dir() {
+        bail!("This session's folder no longer exists: {cwd}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1544,6 +1555,31 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    /// A chat restored after its session's folder was removed (a deleted
+    /// worktree) says so, instead of a bare "failed to start claude".
+    #[tokio::test]
+    async fn a_chat_whose_folder_is_gone_says_so() {
+        let (dir, terms, chats) = setup().await;
+        let folder = dir.path().join("wt");
+        std::fs::create_dir(&folder).unwrap();
+        let info = chats.create(ChatCreate { cwd: folder.display().to_string(), agent: "claude".into(), name: "t".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.shutdown().await;
+        std::fs::remove_dir_all(&folder).unwrap();
+
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
+        assert_eq!(chats2.restore(), 1);
+        let err = chats2.send(info.id, "hi", &[]).unwrap_err();
+        let expected = format!("This session's folder no longer exists: {}", folder.display());
+        assert_eq!(format!("{err:#}"), expected);
+        let st = chats2.state(info.id).unwrap();
+        assert_eq!(st.items.iter().rev().find(|i| i.kind == "error").unwrap().text, expected);
+        // Ask aside runs Claude in the same folder (X49).
+        let err = chats2.aside(info.id, "which port?").await.unwrap_err();
+        assert_eq!(format!("{err:#}"), expected);
     }
 
     /// X86: an archived session's chat leaves the live chats, its transcript

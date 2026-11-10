@@ -1673,15 +1673,19 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     assert!(err.to_string().contains("is used by session"), "{err}");
 }
 
+/// Writes an executable script at `path`.
+fn write_script(path: &std::path::Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// A daemon whose `gh` is `script`. moonletd takes PATH from a login shell, so
 /// the fake goes first in every startup file of a scratch HOME (as the e2e
 /// world does). The temp dirs live as long as the daemon is used.
 async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
-    use std::os::unix::fs::PermissionsExt;
     let bin = tempfile::tempdir().unwrap();
-    let gh = bin.path().join("gh");
-    std::fs::write(&gh, script).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_script(&bin.path().join("gh"), script);
     let home = tempfile::tempdir().unwrap();
     let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.path().display());
     for rc in [".profile", ".zshenv", ".zprofile", ".zshrc"] {
@@ -1694,6 +1698,29 @@ async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
     ])
     .await;
     (d, vec![bin, home])
+}
+
+/// A login shell that does not print its environment in time (as during an
+/// upgrade on a busy Mac) leaves terminals and agents the PATH the daemon
+/// inherited, not a bare system one that lacks `~/.local/bin` and the like.
+#[tokio::test]
+async fn a_slow_login_shell_leaves_the_inherited_path() {
+    let bin = tempfile::tempdir().unwrap();
+    write_script(&bin.path().join("gh"), "#!/bin/sh\necho '{\"number\":7,\"title\":\"Gift cards\",\"body\":\"\",\"url\":\"https://github.com/acme/web/issues/7\",\"state\":\"OPEN\",\"stateReason\":\"\",\"assignees\":[],\"labels\":[],\"updatedAt\":\"2026-10-14T09:00:00Z\",\"closedByPullRequestsReferences\":[]}'\n");
+    let shell = bin.path().join("slow-shell");
+    write_script(&shell, "#!/bin/sh\nexec sleep 30\n");
+    let d = TestDaemon::start_with(&[
+        ("SHELL", shell.display().to_string()),
+        ("PATH", format!("{}:/usr/bin:/bin", bin.path().display())),
+    ])
+    .await;
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+    let task: serde_json::Value = c
+        .request(methods::GH_TASK, serde_json::json!({"path": repo, "repo": "acme/web", "number": 7}))
+        .await
+        .unwrap();
+    assert_eq!(task["title"].as_str(), Some("Gift cards"));
 }
 
 #[tokio::test]
