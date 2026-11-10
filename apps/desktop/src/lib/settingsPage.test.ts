@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey, restartDaemon } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -538,5 +538,58 @@ describe("Task trackers in the nav (X44)", () => {
     expect(trackers({})?.dot).toBe(undefined);
     expect(trackers({ trackersNeedAttention: 1 })?.dot).toBe("1 connection needs attention");
     expect(trackers({ trackersNeedAttention: 2 })?.dot).toBe("2 connections need attention");
+  });
+});
+
+describe("restart the daemon (X96)", () => {
+  /** The bundled `moonletd restart`, as the Tauri command answers: `stuck` is its message when it can't hand over. */
+  const daemon = (stuck: string | null, other?: { code: string; message: string }) => {
+    const ran: string[] = [];
+    const restart = async (force: boolean) => {
+      ran.push(force ? "restart --force" : "restart");
+      if (other) throw other;
+      if (!force && stuck) throw { code: "not_responding", message: stuck };
+    };
+    return { ran, restart };
+  };
+  const asked: { title: string; message: string; action: string }[] = [];
+  const answer = (ok: boolean) => async (o: { title: string; message: string; action: string }) => {
+    asked.push(o);
+    return ok;
+  };
+
+  it("restarts with a handoff and keeps terminals", async () => {
+    asked.length = 0;
+    const d = daemon(null);
+    expect(await restartDaemon(d.restart, answer(true))).toBe("Daemon restarted. Terminals kept running.");
+    expect(d.ran).toEqual(["restart"]);
+    expect(asked).toEqual([]);
+  });
+
+  it("forces the restart only after the user agrees", async () => {
+    asked.length = 0;
+    const d = daemon("the daemon isn't answering");
+    expect(await restartDaemon(d.restart, answer(true))).toBe("Daemon restarted. Its terminals ended; chats carry on.");
+    expect(d.ran).toEqual(["restart", "restart --force"]);
+    expect(asked).toEqual([
+      {
+        title: "Force restart the daemon",
+        message: "The daemon isn't answering. Force restart ends every terminal it holds. Agents' chats carry on from where they were.",
+        action: "Force restart",
+      },
+    ]);
+  });
+
+  it("leaves a stuck daemon alone when the user cancels", async () => {
+    const d = daemon("the daemon isn't answering");
+    expect(await restartDaemon(d.restart, answer(false))).toBeNull();
+    expect(d.ran).toEqual(["restart"]);
+  });
+
+  it("reports other failures without offering a force restart", async () => {
+    asked.length = 0;
+    const d = daemon(null, { code: "failed", message: "moonletd not found next to moonlet" });
+    await expect(restartDaemon(d.restart, answer(true))).rejects.toEqual({ code: "failed", message: "moonletd not found next to moonlet" });
+    expect(asked).toEqual([]);
   });
 });

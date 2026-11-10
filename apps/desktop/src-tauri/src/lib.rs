@@ -305,6 +305,28 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
     serde_json::to_value(login_item::Service::from_moonletd(&status).map_err(err)?).map_err(err)
 }
 
+/// Restarts this Mac's daemon with the bundled `moonletd restart` (X96):
+/// a handoff that keeps terminals, or with `force` a new daemon in place of
+/// a stuck one. `not_responding` when only a force restart can do it. The
+/// local host reconnects right away instead of waiting for its backoff.
+#[tauri::command]
+async fn restart_daemon(hosts: Hosts<'_>, force: bool) -> Result<(), RpcError> {
+    let moonletd = hosts::sibling_binary("moonletd").map_err(err)?;
+    let mut cmd = tokio::process::Command::new(&moonletd);
+    cmd.arg("restart");
+    if force {
+        cmd.arg("--force");
+    }
+    let out = cmd.output().await.map_err(err)?;
+    let message = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    match out.status.code() {
+        Some(0) => {}
+        Some(3) => return Err(RpcError::new("not_responding", message)),
+        _ => return Err(RpcError::new("failed", format!("moonletd restart failed ({}): {message}", out.status))),
+    }
+    hosts.reconnect(hosts::LOCAL)
+}
+
 /// Opens System Settings › Login Items, where the user allows the login
 /// item again after switching it off there (X56).
 #[tauri::command]
@@ -575,6 +597,7 @@ pub fn run() {
             open_targets,
             open_in,
             daemon_service,
+            restart_daemon,
             open_login_items,
             log_js,
             play_sound,

@@ -14,7 +14,7 @@ import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib
 import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
-import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems } from "../../lib/settingsPage";
+import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
 import type { DaemonService } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
@@ -127,6 +127,18 @@ function Daemon() {
       setBusy(false);
     }
   };
+  const [restarting, setRestarting] = useState(false);
+  const restart = async () => {
+    setRestarting(true);
+    try {
+      const done = await restartDaemon(hostsApi.restartDaemon, async (ask) => !!(await askConfirm(ask)));
+      if (done) toast(done);
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      setRestarting(false);
+    }
+  };
   return (
     <Section title="Background daemon">
       <Card>
@@ -148,6 +160,11 @@ function Daemon() {
             )}
           </div>
         )}
+        <Row setting="daemon-restart" label="Restart the daemon" hint="Hands terminals to a fresh moonletd. If it's stuck, you can force it.">
+          <Button size="sm" disabled={restarting} onClick={() => void restart()}>
+            {restarting ? "Restarting…" : "Restart"}
+          </Button>
+        </Row>
       </Card>
     </Section>
   );
