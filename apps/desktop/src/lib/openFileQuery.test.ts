@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findFiles, parseFileQuery } from "./openFileQuery";
+import { findFiles, openFileMessage, parseFileQuery, rangeLabel, rangeToShow } from "./openFileQuery";
 
 describe("what is typed in Open file (X96)", () => {
   it("reads a file name with a line range", () => {
@@ -22,6 +22,10 @@ describe("what is typed in Open file (X96)", () => {
   it("opens with no line for line 0 or a trailing colon", () => {
     expect(parseFileQuery("app.ts:0")).toEqual({ name: "app.ts" });
     expect(parseFileQuery("app.ts:")).toEqual({ name: "app.ts" });
+  });
+
+  it("reads a range ending at line 0 as its first line only", () => {
+    expect(parseFileQuery("app.ts:5-0")).toEqual({ name: "app.ts", line: 5 });
   });
 
   it("keeps a one-line range as one line", () => {
@@ -70,5 +74,42 @@ describe("which files match in Open file (X96)", () => {
   it("keeps at most 50 rows", () => {
     const many = Array.from({ length: 80 }, (_, i) => `src/file${i}.ts`);
     expect(findFiles(many, "file")).toHaveLength(50);
+  });
+});
+
+describe("what Open file says (X96)", () => {
+  it("names the line or range typed beside the field", () => {
+    expect(rangeLabel({ name: "a.yaml", line: 49, endLine: 53 })).toBe("lines 49–53");
+    expect(rangeLabel({ name: "a.yaml", line: 12 })).toBe("line 12");
+    expect(rangeLabel({ name: "a.yaml" })).toBe("");
+  });
+
+  it("asks for a name, waits for the files, then says when nothing matches", () => {
+    expect(openFileMessage("", null, 0)).toBe("Type a file name");
+    expect(openFileMessage("app", null, 0)).toBe("Loading files…");
+    expect(openFileMessage("zzz", ["src/app.ts"], 0)).toBe("No file matches “zzz”");
+    expect(openFileMessage("app", ["src/app.ts"], 1)).toBeNull();
+  });
+});
+
+describe("where the editor goes (X96)", () => {
+  /** A file of 60 lines, each 15 characters long (column 16 is a line's end). */
+  const file = { lineCount: 60, lineEnd: () => 16 };
+
+  it("puts the cursor at the start of a line", () => {
+    expect(rangeToShow(12, undefined, file)).toEqual({ startLineNumber: 12, startColumn: 1, endLineNumber: 12, endColumn: 1 });
+  });
+
+  it("selects a range from the start of its first line to the end of its last", () => {
+    expect(rangeToShow(49, 53, file)).toEqual({ startLineNumber: 49, startColumn: 1, endLineNumber: 53, endColumn: 16 });
+  });
+
+  it("goes to the last line for a line past the end of the file", () => {
+    expect(rangeToShow(90, undefined, file)).toEqual({ startLineNumber: 60, startColumn: 1, endLineNumber: 60, endColumn: 1 });
+    expect(rangeToShow(55, 90, file)).toEqual({ startLineNumber: 55, startColumn: 1, endLineNumber: 60, endColumn: 16 });
+  });
+
+  it("goes nowhere without a line", () => {
+    expect(rangeToShow(undefined, undefined, file)).toBeNull();
   });
 });

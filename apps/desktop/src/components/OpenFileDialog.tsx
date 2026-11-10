@@ -4,9 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { openFileTab } from "../lib/actions";
 import { setMode } from "../lib/mode";
-import { findFiles, parseFileQuery } from "../lib/openFileQuery";
+import { findFiles, openFileMessage, parseFileQuery, rangeLabel } from "../lib/openFileQuery";
+import { projectFiles } from "../lib/projectFiles";
 import { useStore } from "../lib/store";
-import { projectFiles } from "./AgentView";
 import { Kbd } from "./ui";
 
 export function OpenFileDialog({ host, session, root }: { host: string; session: string; root: string }) {
@@ -26,7 +26,7 @@ export function OpenFileDialog({ host, session, root }: { host: string; session:
 
   const query = parseFileQuery(q);
   const rows = useMemo(() => findFiles(files ?? [], query.name), [files, query.name]);
-  const lines = query.endLine ? `lines ${query.line}–${query.endLine}` : query.line ? `line ${query.line}` : "";
+  const lines = rangeLabel(query);
   useEffect(() => {
     list.current?.querySelector(`[data-row="${sel}"]`)?.scrollIntoView({ block: "nearest" });
   }, [sel]);
@@ -39,7 +39,7 @@ export function OpenFileDialog({ host, session, root }: { host: string; session:
     openFileTab(host, session, `${root.replace(/\/+$/, "")}/${rel}`, query.line, query.endLine);
   };
 
-  const empty = !query.name ? "Type a file name" : files === null ? "Loading files…" : rows.length === 0 ? `No file matches “${query.name}”` : null;
+  const empty = openFileMessage(query.name, files, rows.length);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[14vh]" onMouseDown={close}>
@@ -63,7 +63,7 @@ export function OpenFileDialog({ host, session, root }: { host: string; session:
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setSel((v) => Math.min(v + 1, rows.length - 1));
+                setSel((v) => Math.max(0, Math.min(v + 1, rows.length - 1)));
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setSel((v) => Math.max(v - 1, 0));

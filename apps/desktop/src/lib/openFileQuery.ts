@@ -12,13 +12,14 @@ export interface FileQuery {
 }
 
 /** `tenant-acme.yaml:49-53` as its name and lines. A column is ignored, a
- *  backwards range turned around, and line 0 means no line. */
+ *  backwards range turned around, and line 0 means no line (a range ending
+ *  at 0, its first line only). */
 export function parseFileQuery(text: string): FileQuery {
   const t = text.trim();
   const m = /^(.*?):(?:(\d+)(?:-(\d+)|:\d+)?)?$/.exec(t);
   const name = (m ? m[1] : t).replace(/^\.\//, "");
   const a = Number(m?.[2] ?? 0);
-  const b = Number(m?.[3] ?? a);
+  const b = Number(m?.[3] ?? 0) || a;
   if (!a) return { name };
   const [line, endLine] = a <= b ? [a, b] : [b, a];
   return line === endLine ? { name, line } : { name, line, endLine };
@@ -47,4 +48,35 @@ export function findFiles(files: readonly string[], name: string): string[] {
   }
   const byLength = (a: string, b: string) => a.length - b.length;
   return [...exact.sort(byLength), ...prefix.sort(byLength), ...fuzzy.sort((a, b) => a[1] - b[1]).map(([f]) => f)].slice(0, LIMIT);
+}
+
+/** The line or range typed, as shown beside the field: "lines 49–53". */
+export function rangeLabel(q: FileQuery): string {
+  return q.endLine ? `lines ${q.line}–${q.endLine}` : q.line ? `line ${q.line}` : "";
+}
+
+/** What the list says instead of rows, if anything: `files` is null while
+ *  the session's files load. */
+export function openFileMessage(name: string, files: readonly string[] | null, rows: number): string | null {
+  if (!name) return "Type a file name";
+  if (files === null) return "Loading files…";
+  return rows === 0 ? `No file matches “${name}”` : null;
+}
+
+export interface LineRange {
+  startLineNumber: number;
+  startColumn: number;
+  endLineNumber: number;
+  endColumn: number;
+}
+
+/** Where the editor goes for `line`: the cursor at the line's start, or
+ *  lines `line` to `endLine` selected whole. A line past the end of the file
+ *  is its last line. `lineEnd(n)` is the column after line n's last character. */
+export function rangeToShow(line: number | undefined, endLine: number | undefined, file: { lineCount: number; lineEnd: (line: number) => number }): LineRange | null {
+  if (!line) return null;
+  const from = Math.min(line, file.lineCount);
+  if (!endLine) return { startLineNumber: from, startColumn: 1, endLineNumber: from, endColumn: 1 };
+  const to = Math.min(endLine, file.lineCount);
+  return { startLineNumber: from, startColumn: 1, endLineNumber: to, endColumn: file.lineEnd(to) };
 }

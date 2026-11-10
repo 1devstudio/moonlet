@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { archiveSession, restoreSession } from "./actions";
+import { archiveSession, restoreSession, runAction } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
 import { answerConfirm, type ConfirmOptions } from "./confirm";
@@ -325,5 +325,20 @@ describe("restoreSession (X86)", () => {
     await restoreSession("local", old);
     const st = useStore.getState();
     expect([st.sessions.local[0].archived, st.toasts.map((t) => t.text)]).toEqual([true, ["cannot add the worktree"]]);
+  });
+});
+
+describe("Open file… (X96)", () => {
+  it("asks for a file of the selected session", () => {
+    useStore.setState({ sessions: { local: [ws] }, selected: { host: "local", session: "s1" }, dialog: null, toasts: [] });
+    runAction("open-file");
+    expect(useStore.getState().dialog).toEqual({ kind: "open-file", host: "local", session: "s1", root: "/w/s1" });
+  });
+
+  it("opens nothing with no session selected, and says why", () => {
+    useStore.setState({ sessions: { local: [ws] }, selected: null, dialog: null, toasts: [] });
+    runAction("open-file");
+    const st = useStore.getState();
+    expect([st.dialog, st.toasts.map((t) => t.text)]).toEqual([null, ["Select a session to open its files"]]);
   });
 });

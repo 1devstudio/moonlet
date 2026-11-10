@@ -9,6 +9,7 @@ import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { isMarkdownPath } from "../lib/markdown";
 import { afterRead, afterSave } from "../lib/fileSync";
+import { rangeToShow } from "../lib/openFileQuery";
 
 /**
  * A file in an editor tab of the main window (X26): writable at once, ⌘S
@@ -89,20 +90,11 @@ export default function FileEditor({ host, wsId, path, line, endLine, visible }:
   const at = useRef({ line, endLine });
   at.current = { line, endLine };
 
-  /** Scrolls to line `at`, with lines `at` to `end` selected (X96); a
-   *  line past the end of the file is its last line. */
+  /** Scrolls to line `at`, with lines `at` to `end` selected (X96). */
   const reveal = (ed: Parameters<OnMount>[0], at: number | undefined, end: number | undefined) => {
     const model = ed.getModel();
-    if (!at || !model) return;
-    const last = model.getLineCount();
-    const from = Math.min(at, last);
-    if (!end) {
-      ed.revealLineInCenter(from);
-      ed.setPosition({ lineNumber: from, column: 1 });
-      return;
-    }
-    const to = Math.min(end, last);
-    const range = { startLineNumber: from, startColumn: 1, endLineNumber: to, endColumn: model.getLineMaxColumn(to) };
+    const range = model && rangeToShow(at, end, { lineCount: model.getLineCount(), lineEnd: (n) => model.getLineMaxColumn(n) });
+    if (!range) return;
     ed.setSelection(range);
     ed.revealRangeInCenter(range);
   };

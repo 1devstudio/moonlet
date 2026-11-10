@@ -93,4 +93,25 @@ describe("Open file by name (X96)", () => {
     await press("Escape");
     await expect($(dialog)).not.toBeExisting();
   });
+
+  it("opens the row picked with ↓ from Tasks mode in Sessions mode, and a clicked row", async () => {
+    const mode = (name: string) => $(`//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "${name}")]`);
+    await mode("Tasks").click();
+    await expect(mode("Tasks")).toHaveAttribute("aria-pressed", "true");
+    await press("p", { metaKey: true });
+    await fill(field, "tenant-");
+    await expect($(`(${dialog}//div[@data-file-row])[2]`)).toHaveAttribute("data-file-row", "config/tenants/tenant-globex.yaml");
+    await press("ArrowDown");
+    await press("Enter");
+    await expect($(dialog)).not.toBeExisting();
+    await expect(mode("Sessions")).toHaveAttribute("aria-pressed", "true");
+    const globex = $(`//div[@title=${JSON.stringify(file.replace("tenant-acme", "tenant-globex"))}][.//button[@title="Close tab"]]`);
+    await expect(globex).toHaveAttribute("aria-current", "true");
+
+    await press("p", { metaKey: true });
+    await fill(field, "acme");
+    await $(`${dialog}//div[@data-file-row="config/tenants/tenant-acme.yaml"]`).click();
+    await expect($(dialog)).not.toBeExisting();
+    await expect(fileTab()).toHaveAttribute("aria-current", "true");
+  });
 });
