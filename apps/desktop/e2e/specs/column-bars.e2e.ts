@@ -46,8 +46,8 @@ const style = (xpath: string, props: string[]) =>
     props,
   ) as Promise<Record<string, string>>;
 
-// The tones: the window #161616, the sidebar's; a pane #121212, the content's; a control #1F1F1F.
-const WINDOW = "rgb(22, 22, 22)";
+// The tones: the window #191919, the sidebar's; a pane #121212, the content's; a control #1F1F1F.
+const WINDOW = "rgb(25, 25, 25)";
 const PANE = "rgb(18, 18, 18)";
 const CONTROL = "rgb(31, 31, 31)";
 const sessionPane = `${tabRow}/following-sibling::div[1]`;

@@ -4,7 +4,7 @@
 @import "./styles/motion.css";
 
 /* The panes (X94) use moonlet.css's tones: bars and the sidebar on the
-   window's (#161616), what a column shows in a pane of the content's
+   window's (#191919), what a column shows in a pane of the content's
    (#121212), which terminals and editors draw on too (PANE in
    lib/terminalTheme.ts). */
 

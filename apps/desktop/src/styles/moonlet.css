@@ -6,12 +6,12 @@
   --color-bg: #121212;
   --color-panel: #161616;
   /* The window behind the desktop's panes, the sidebar's tone (X94); the phone has none. */
-  --color-window: #161616;
+  --color-window: #191919;
   --color-panel-2: #1a1a1a;
   --color-raised: #1f1f1f;
   --color-hover: #222222;
   /* A tab or row on the window's background, hovered (X94). */
-  --color-tab-hover: #1a1a1a;
+  --color-tab-hover: #1e1e1e;
   --color-selected: #2a1f1a;
   --color-border: #242424;
   --color-border-strong: #2e2e2e;
