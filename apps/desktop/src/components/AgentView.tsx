@@ -79,7 +79,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown, renderUserMarkdown } from "../lib/markdown";
+import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdownAs, type ChatMarkdownKind } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
@@ -146,18 +146,10 @@ export function useProjectFiles(host: string, root: string, reloadWhen: unknown)
   return useMemo(() => (path: string) => !!files?.has(path), [files]);
 }
 
-/**
- * Chat Markdown; `task` renders a task's description (X46), at the panel's
- * smaller size; `user` a message the user sent (X92), its newlines kept.
- */
-/** `user`: a message the user sent (X92), every newline kept; `brief`: a
- *  subagent's brief (X42), rendered the same way at the panel's size. */
-export const Markdown = memo(function Markdown({ text, task = false, user = false, brief = false }: { text: string; task?: boolean; user?: boolean; brief?: boolean }) {
+/** Chat Markdown, rendered as its `kind` says (`renderChatMarkdownAs`); a task, user message or brief also gets its own size and colours (`.task-md`, `.user-md`, `.brief-md`). */
+export const Markdown = memo(function Markdown({ text, kind = "chat" }: { text: string; kind?: ChatMarkdownKind }) {
   const files = useContext(FileLinks);
-  const html = useMemo(
-    () => (task ? renderTaskMarkdown(text) : user || brief ? renderUserMarkdown(text) : renderChatMarkdown(text, files?.exists)),
-    [text, task, user, brief, files?.exists],
-  );
+  const html = useMemo(() => renderChatMarkdownAs(text, kind, files?.exists), [text, kind, files?.exists]);
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -192,7 +184,7 @@ export const Markdown = memo(function Markdown({ text, task = false, user = fals
   return (
     <>
       <div
-        className={cx("chat-md selectable", task && "task-md", user && "user-md", brief && "brief-md")}
+        className={cx("chat-md selectable", kind !== "chat" && `${kind}-md`)}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
         onKeyDown={(e) => copyCode(e, e.key)}
@@ -515,7 +507,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
       return (
         <div className="flex justify-end py-1">
           <div className="min-w-0 max-w-[85%] break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2">
-            <Markdown text={item.text} user />
+            <Markdown text={item.text} kind="user" />
           </div>
         </div>
       );
@@ -608,7 +600,7 @@ function LaunchedCard({ tools, rows }: { tools: ChatItem[]; rows: AgentRow[] }) 
 export function BriefCard({ text, className }: { text: string; className?: string }) {
   return (
     <div className={cx("rounded-lg border border-border bg-panel-2 px-3.5 py-3", className)}>
-      <Markdown text={text} brief />
+      <Markdown text={text} kind="brief" />
     </div>
   );
 }

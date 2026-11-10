@@ -210,7 +210,7 @@ function AttachmentRow({ a, onRemove, design }: { a: Attachment; onRemove: () =>
           </div>
         ) : (
           <div className="max-h-[220px] overflow-y-auto border-t border-border px-3 py-2">
-            {a.body ? <Markdown text={a.body} task /> : <span className="ui-text-12.5 text-faint">No description.</span>}
+            {a.body ? <Markdown text={a.body} kind="task" /> : <span className="ui-text-12.5 text-faint">No description.</span>}
           </div>
         ))}
     </div>

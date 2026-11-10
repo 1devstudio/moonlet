@@ -25,6 +25,7 @@ while IFS= read -r line; do
     *'"request_id":"q1"'*)
       out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"w1","type":"tool_result","content":"File created successfully at: /repo/hello.txt"}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
       out '{"type":"assistant","message":{"id":"s3","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"h1","name":"SubagentHandback","input":{"message":"Created hello.txt with hi."}}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
+      out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"h1","type":"tool_result","content":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
       out '{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":'"$(date +%s)000"'}}'
       out '{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_a1","status":"completed","summary":"This agent'"'"'s report was delivered to you as a message from \"a1\" (its SubagentHandback call). Read it there; it is not repeated here.\n","usage":{"total_tokens":10682,"tool_uses":2,"duration_ms":3175}}' ;;
     *'"type":"user"'*)

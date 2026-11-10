@@ -111,7 +111,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
           <span className={cx("inline-block first-letter:uppercase", look.text)}>{look.label}</span>
           {meta.map((m) => ` · ${m}`)}
         </div>
-        {a.prompt && (
+        {a.prompt.trim() && (
           <div className="mt-4">
             <button className="flex w-full min-w-0 items-center gap-1 text-left ui-text-12.5 text-muted hover:text-fg" onClick={() => setBrief(!brief)}>
               {brief ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}

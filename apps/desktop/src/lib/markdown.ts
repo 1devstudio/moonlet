@@ -398,5 +398,17 @@ export function renderUserMarkdown(source: string): string {
   return chatSanitize(chatMd.render(source, { user: true }));
 }
 
+/** What a piece of chat Markdown is: an agent's reply, a task's description
+ *  (X46), a message the user sent (X92) or a subagent's brief (X42). */
+export type ChatMarkdownKind = "chat" | "task" | "user" | "brief";
+
+/** Chat Markdown HTML for `kind`. A brief is written like a user message, so
+ *  it keeps every newline too; only agent replies get file links (X30). */
+export function renderChatMarkdownAs(source: string, kind: ChatMarkdownKind, exists?: FileCheck): string {
+  if (kind === "task") return renderTaskMarkdown(source);
+  if (kind === "user" || kind === "brief") return renderUserMarkdown(source);
+  return renderChatMarkdown(source, exists);
+}
+
 /** Whether a file shows as rendered Markdown in a Preview (X26, X77). */
 export const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);

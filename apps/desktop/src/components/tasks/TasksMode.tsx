@@ -360,7 +360,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
         </dl>
         {card.task.description && (
           <div className="mt-3">
-            <Markdown text={card.task.description} task />
+            <Markdown text={card.task.description} kind="task" />
           </div>
         )}
         {failure && (

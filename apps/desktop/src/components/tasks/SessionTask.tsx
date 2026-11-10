@@ -121,7 +121,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
         </div>
         {card.task.description && (
           <div className="mt-2">
-            <Markdown text={card.task.description} task />
+            <Markdown text={card.task.description} kind="task" />
           </div>
         )}
       </div>
