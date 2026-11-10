@@ -18,6 +18,9 @@ pub const STUCK: i32 = 3;
 /// How long the running daemon has to answer before it counts as stuck.
 const ANSWER_WITHIN: Duration = Duration::from_secs(3);
 
+/// How long a killed daemon has to exit.
+const GONE_WITHIN: Duration = Duration::from_secs(5);
+
 pub enum Outcome {
     Restarted,
     /// The daemon can't hand over; only a force restart replaces it.
@@ -31,16 +34,13 @@ pub async fn restart(socket: &Path, binary: PathBuf, force: bool) -> Result<Outc
         return Ok(Outcome::Restarted);
     }
     match answers(socket).await {
-        Answer::Nobody => {
-            if let Some(pid) = daemon_pid(socket) {
-                return Ok(Outcome::Stuck(format!(
-                    "the daemon (pid {pid}) runs but doesn't listen on its socket"
-                )));
-            }
+        // Nothing listens: start a daemon, unless one runs that has stopped
+        // listening (or whose queue of connections is full).
+        Answer::Nobody if daemon_pid(socket).is_none() => {
             launch::ensure_running(socket).await?;
             Ok(Outcome::Restarted)
         }
-        Answer::Silent => Ok(Outcome::Stuck("the daemon isn't answering".into())),
+        Answer::Nobody | Answer::Silent => Ok(Outcome::Stuck("the daemon isn't answering".into())),
         Answer::Yes => match upgrade::request_upgrade(socket, binary).await {
             Ok(()) => Ok(Outcome::Restarted),
             Err(e) => Ok(Outcome::Stuck(format!(
@@ -55,6 +55,7 @@ enum Answer {
     Nobody,
     /// Something listens but doesn't answer in time.
     Silent,
+    /// The daemon answered `daemon.info` in time.
     Yes,
 }
 
@@ -83,40 +84,69 @@ fn daemon_pid(socket: &Path) -> Option<i32> {
         .trim()
         .parse()
         .ok()?;
-    (pid > 0 && pid != std::process::id() as i32 && is_moonletd(pid)).then_some(pid)
+    moonletd_pid(pid)
 }
 
-fn is_moonletd(pid: i32) -> bool {
-    let Ok(out) = std::process::Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
+/// The pid the daemon on `socket` gives when it greets, for a daemon whose
+/// pid file is gone: it greets before it reads any request.
+async fn greeting_pid(socket: &Path) -> Option<i32> {
+    let c = tokio::time::timeout(ANSWER_WITHIN, Client::connect(socket, "moonletd-restart"))
+        .await
+        .ok()?
+        .ok()?;
+    match c.welcome {
+        moonlet_proto::Message::Welcome { pid, .. } => moonletd_pid(pid as i32),
+        _ => None,
+    }
+}
+
+/// `pid` when it is a live `moonletd` other than this process.
+fn moonletd_pid(pid: i32) -> Option<i32> {
+    (pid > 0
+        && pid != std::process::id() as i32
+        && ps(pid, "comm").is_some_and(|comm| {
+            Path::new(&comm)
+                .file_name()
+                .is_some_and(|n| n == "moonletd")
+        }))
+    .then_some(pid)
+}
+
+/// A field of `ps -o` for `pid`; none when there is no such process.
+fn ps(pid: i32, field: &str) -> Option<String> {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", &format!("{field}=")])
         .output()
-    else {
-        return false;
-    };
-    let comm = String::from_utf8_lossy(&out.stdout);
-    Path::new(comm.trim())
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().starts_with("moonletd"))
+        .ok()?;
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !value.is_empty()).then_some(value)
 }
 
-/// SIGKILLs the daemon in the pid file and waits until it's gone.
+/// Gone, or a zombie: dead, waiting only for a parent that may never reap it.
+fn gone(pid: i32) -> bool {
+    kill(Pid::from_raw(pid), None).is_err()
+        || ps(pid, "stat").is_none_or(|stat| stat.starts_with('Z'))
+}
+
+/// SIGKILLs the running daemon and waits until it's gone.
 async fn kill_daemon(socket: &Path) -> Result<()> {
-    let Some(pid) = daemon_pid(socket) else {
-        if tokio::net::UnixStream::connect(socket).await.is_ok() {
-            bail!(
-                "a daemon listens on {} but its pid file doesn't name it",
+    let pid = match daemon_pid(socket) {
+        Some(pid) => pid,
+        None if tokio::net::UnixStream::connect(socket).await.is_err() => return Ok(()),
+        None => greeting_pid(socket).await.with_context(|| {
+            format!(
+                "a daemon listens on {} but neither its pid file nor its greeting names it",
                 socket.display()
-            );
-        }
-        return Ok(());
+            )
+        })?,
     };
     tracing::info!(pid, "force restart: killing the daemon");
     kill(Pid::from_raw(pid), Signal::SIGKILL)
         .with_context(|| format!("cannot stop the daemon (pid {pid})"))?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while kill(Pid::from_raw(pid), None).is_ok() {
+    let deadline = tokio::time::Instant::now() + GONE_WITHIN;
+    while !gone(pid) {
         if tokio::time::Instant::now() > deadline {
-            bail!("the daemon (pid {pid}) is still running 5 s after SIGKILL");
+            bail!("the daemon (pid {pid}) is still running {GONE_WITHIN:?} after SIGKILL");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

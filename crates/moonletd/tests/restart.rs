@@ -186,3 +186,59 @@ async fn restart_starts_a_daemon_when_none_runs() {
     );
     assert!(home.info().await.pid > 0, "a daemon answers");
 }
+
+#[tokio::test]
+async fn force_restart_finds_a_daemon_whose_pid_file_is_gone() {
+    let home = Home::new();
+    assert!(home.moonletd(&["start"]).status.success());
+    let old = home.info().await.pid as i32;
+    std::fs::remove_file(home.socket.with_file_name("moonletd.pid")).unwrap();
+
+    let out = home.moonletd(&["restart", "--force"]);
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!alive(old), "the old daemon is gone");
+    assert_ne!(home.info().await.pid as i32, old, "a new daemon answers");
+}
+
+#[tokio::test]
+async fn force_restart_does_not_wait_for_a_killed_daemon_to_be_reaped() {
+    let home = Home::new();
+    // Started by a parent that never waits on it, as a long-lived
+    // `moonletd proxy` does: once killed it stays a zombie.
+    let mut parent = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("MOONLET_HOME", home.dir.path())
+        .env("MOONLET_SOCK", &home.socket)
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    moonlet_core::client::wait_for_socket(&home.socket, std::time::Duration::from_secs(15))
+        .await
+        .unwrap();
+    let old = home.info().await.pid;
+    signal(old as i32, "STOP");
+
+    let started = std::time::Instant::now();
+    let out = home.moonletd(&["restart", "--force"]);
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_ne!(home.info().await.pid, old, "a new daemon answers");
+    let _ = parent.wait();
+}
