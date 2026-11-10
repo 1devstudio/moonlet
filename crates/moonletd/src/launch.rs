@@ -114,25 +114,57 @@ pub fn passthrough(vars: impl Iterator<Item = (String, String)>) -> BTreeMap<Str
         .collect()
 }
 
+/// The PATH the login shell starts from: it builds the user's own on top.
+const SYSTEM_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// The PATH terminals and agents get when the login shell cannot tell: the
+/// daemon's inherited one first (after an upgrade, the login PATH the old
+/// daemon captured), then the system folders and the usual install folders
+/// (`~/.local/bin` for Claude, Homebrew) it lacks, so `claude` and `git`
+/// are still found.
+fn fallback_path(inherited: Option<&str>, home: Option<&str>) -> String {
+    let local = home.map(|h| format!("{}/.local/bin", h.trim_end_matches('/')));
+    let mut dirs: Vec<&str> = Vec::new();
+    let extra = SYSTEM_PATH.split(':').chain(local.as_deref()).chain(["/opt/homebrew/bin"]);
+    for dir in inherited.unwrap_or_default().split(':').chain(extra) {
+        if !dir.is_empty() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.join(":")
+}
+
 /// Runs the login shell once, from a clean environment, to read what the
 /// user's terminals should get (PATH from `.zprofile`, nvm, Homebrew…).
 pub fn login_environment() -> BTreeMap<String, String> {
+    let mut env = capture_login_environment();
+    if !env.contains_key("PATH") {
+        let path = fallback_path(std::env::var("PATH").ok().as_deref(), env.get("HOME").map(String::as_str));
+        tracing::warn!(%path, "no PATH from the login shell; terminals and agents use this one");
+        env.insert("PATH".into(), path);
+    }
+    env
+}
+
+/// The login shell's environment, without a PATH when the shell did not
+/// print one.
+fn capture_login_environment() -> BTreeMap<String, String> {
     let mut base = passthrough(std::env::vars());
-    base.insert(
-        "PATH".into(),
-        "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into(),
-    );
     let shell = moonlet_core::pty::user_shell();
     base.entry("SHELL".into()).or_insert_with(|| shell.clone());
     let child = Command::new(&shell)
         .args(["-l", "-i", "-c", "/usr/bin/env -0"])
         .env_clear()
         .envs(&base)
+        .env("PATH", SYSTEM_PATH)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
-    let Ok(mut child) = child else { return base };
+    let Ok(mut child) = child else {
+        tracing::warn!("cannot run the login shell {shell}");
+        return base;
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     let stdout = child.stdout.take();
     std::thread::spawn(move || {
@@ -169,6 +201,25 @@ pub fn login_environment() -> BTreeMap<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fallback_path_keeps_the_inherited_path_after_an_upgrade() {
+        // A daemon started by the old one during an upgrade inherits the
+        // login PATH that daemon captured.
+        let path = super::fallback_path(Some("/Users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"), Some("/Users/me"));
+        assert_eq!(path, "/Users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin");
+    }
+
+    #[test]
+    fn fallback_path_adds_the_usual_install_folders_to_launchds_path() {
+        let path = super::fallback_path(Some("/usr/bin:/bin:/usr/sbin:/sbin"), Some("/Users/me"));
+        assert_eq!(path, "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/Users/me/.local/bin:/opt/homebrew/bin");
+    }
+
+    #[test]
+    fn fallback_path_without_an_inherited_path_or_home() {
+        assert_eq!(super::fallback_path(None, None), "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin");
+    }
+
     #[test]
     fn passthrough_keeps_only_safe_basics() {
         let vars = [

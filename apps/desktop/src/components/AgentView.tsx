@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
+import { projectFiles } from "../lib/projectFiles";
 import { slashMenu, type SlashRow } from "../lib/sessionDesign";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
@@ -92,7 +93,7 @@ import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashC
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
 import { callbackForward, isWebPage, pagesToOpen, signInUnavailable } from "../lib/oauthRedirect";
 import { invoke } from "@tauri-apps/api/core";
-import { errorToast, getLayout, setLayout, termKey, toast, useStore, hostPath } from "../lib/store";
+import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planCardBelow, planLabels, planView } from "../lib/plan";
@@ -891,20 +892,6 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 }
 
 // ------------------------------------------------------------ editor
-
-const fileCache = new Map<string, Promise<string[]>>();
-
-function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
-  const key = hostPath(host, root);
-  let p = fresh ? undefined : fileCache.get(key);
-  if (!p) {
-    p = rpc<string[]>(host, M.fsFiles, { root }).catch(() => [] as string[]);
-    fileCache.set(key, p);
-    // Refresh on the next use after a while.
-    setTimeout(() => fileCache.delete(key), 30_000);
-  }
-  return p;
-}
 
 function ChatEditor({
   host,
@@ -1712,7 +1699,7 @@ export function AgentView({
           <PlanPanel view={plan} />
         </Dialog>
       )}
-      {/* The transcript (X94): 24 px above and below, 28 at the sides, at most 880 wide; fades and Latest. */}
+      {/* The transcript (X94): 24 px above and below, 28 at the sides, the pane's full width; fades and Latest. */}
       <ScrollArea
         ref={scroller}
         latest
@@ -1724,7 +1711,7 @@ export function AgentView({
         }}
       >
         <FileLinks.Provider value={fileLinks}>
-          <div className="flex max-w-[880px] flex-col gap-0.5 px-[28px] py-[24px]">
+          <div data-transcript className="flex flex-col gap-0.5 px-[28px] py-[24px]">
             {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>

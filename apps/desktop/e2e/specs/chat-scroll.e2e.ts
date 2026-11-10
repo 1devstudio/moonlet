@@ -26,7 +26,7 @@ while IFS= read -r line; do
 done
 `;
 
-const content = '//div[contains(@class, "max-w-[880px]")]';
+const content = "//div[@data-transcript]";
 const scroller = `${content}/..`;
 const fade = (edge: string) => $(`${scroller}/../span[@data-fade="${edge}"]`);
 const latest = () => $(`${scroller}/../button[normalize-space()="Latest"]`);
@@ -75,12 +75,29 @@ describe("a chat's transcript in its pane (X94)", () => {
     writeFileSync(FAKE, blocked);
   });
 
-  it("pads the transcript 24 px above and below and 28 at the sides, at most 880 wide, and the composer 4 above, 14 below and 16 at the sides", async () => {
-    const pad = await browser.execute((x: string) => {
-      const c = getComputedStyle(document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement);
-      return { top: c.paddingTop, bottom: c.paddingBottom, left: c.paddingLeft, right: c.paddingRight, max: c.maxWidth };
-    }, content);
-    expect(pad).toEqual({ top: "24px", bottom: "24px", left: "28px", right: "28px", max: "880px" });
+  it("pads the transcript 24 px above and below and 28 at the sides, as wide as its pane, and the composer 4 above, 14 below and 16 at the sides", async () => {
+    // A window wide enough that the chat's pane is wider than the old 880 px cap.
+    const before = await browser.getWindowSize();
+    await browser.setWindowSize(1900, before.height);
+    try {
+      const measure = () =>
+        browser.execute((x: string) => {
+          const el = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+          const c = getComputedStyle(el);
+          return {
+            pad: { top: c.paddingTop, bottom: c.paddingBottom, left: c.paddingLeft, right: c.paddingRight },
+            width: el.offsetWidth,
+            pane: (el.parentElement as HTMLElement).clientWidth,
+          };
+        }, content);
+      await browser.waitUntil(async () => (await measure()).pane > 1000, { timeoutMsg: "the chat's pane never widened past 1000 px" });
+      const t = await measure();
+      expect(t.pad).toEqual({ top: "24px", bottom: "24px", left: "28px", right: "28px" });
+      // No fixed width: the transcript fills its pane.
+      expect(t.width).toBe(t.pane);
+    } finally {
+      await browser.setWindowSize(before.width, before.height);
+    }
     // The composer: 4 px above, 14 below, 16 at the sides.
     const composer = await browser.execute(() => {
       const c = getComputedStyle(document.querySelector('section[aria-label="Chat input"]') as HTMLElement);
