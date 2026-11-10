@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups, shortcutModeNote } from "./runActions";
 
 describe("filtering", () => {
-  it("lists all 29 actions in catalogue order for an empty query", () => {
+  it("lists all 30 actions in catalogue order for an empty query", () => {
     const rows = filterActions("");
-    expect(rows).toHaveLength(29);
+    expect(rows).toHaveLength(30);
     expect(rows[0].action.label).toBe("New session…");
     expect(rows[1].action.label).toBe("New workspace…");
-    expect(rows[24].action.label).toBe("Switch between Sessions and Tasks");
-    expect(rows[25].action.label).toBe("Switch between Sessions and Design");
-    expect(rows[26].action.label).toBe("New design…");
-    expect(rows[27].action.label).toBe("Settings…");
-    expect(rows[28].action.label).toBe("Check for updates…");
+    expect(rows[14].action.label).toBe("Show review (PR, checks, commits)");
+    expect(rows[15].action.label).toBe("Open file…");
+    expect(rows[25].action.label).toBe("Switch between Sessions and Tasks");
+    expect(rows[26].action.label).toBe("Switch between Sessions and Design");
+    expect(rows[27].action.label).toBe("New design…");
+    expect(rows[28].action.label).toBe("Settings…");
+    expect(rows[29].action.label).toBe("Check for updates…");
   });
 
   it("finds the update check (X35)", () => {
@@ -120,6 +122,11 @@ describe("shortcuts", () => {
     expect(recordKey("shift+cmd+n", "new-design", { "new-design": "" })).toEqual({ kind: "ok", keys: "shift+cmd+n" });
   });
 
+  it("opens a file by name with ⌘P, leaving ⇧⌘P to Create pull request (X96)", () => {
+    expect(actionForKey("cmd+p", {})).toBe("open-file");
+    expect(actionForKey("shift+cmd+p", {})).toBe("pr");
+  });
+
   it("opens an agent tab with ⌘T and a terminal tab with ⇧⌘T (X38)", () => {
     expect(actionForKey("cmd+t", undefined)).toBe("new-tab");
     expect(ACTIONS.find((a) => a.id === "new-tab")?.label).toBe("New agent tab");
@@ -185,7 +192,8 @@ describe("shortcuts", () => {
 describe("the Keyboard shortcuts page (X43)", () => {
   it("groups every action in catalogue order, with its key or none", () => {
     const groups = shortcutGroups({}, "");
-    expect(groups.map((g) => g.name)).toEqual(["Session", "Workspace", "Section", "Agent", "Terminal", "Project", "Panels", "Git", "App"]);
+    expect(groups.map((g) => g.name)).toEqual(["Session", "Workspace", "Section", "Agent", "Terminal", "Project", "Panels", "Files", "Git", "App"]);
+    expect(groups.find((g) => g.name === "Files")?.rows).toEqual([{ id: "open-file", label: "Open file…", keys: "⌘P", custom: false }]);
     expect(groups.find((g) => g.name === "Git")?.rows).toEqual([
       { id: "commit", label: "Commit…", keys: "", custom: false },
       { id: "pr", label: "Create pull request…", keys: "⇧⌘P", custom: false },

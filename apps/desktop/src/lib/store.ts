@@ -275,6 +275,8 @@ interface State extends UiPersist {
     /** Add a board, or a board's settings when `board` is given (X50). */
     | { kind: "add-board"; host: string; workspace: string; board?: string; connection?: string; build?: "repo" }
     | { kind: "palette" }
+    /** Open file… (X96): a file of the session at `root`, by name. */
+    | { kind: "open-file"; host: string; session: string; root: string }
     | { kind: "commit" }
     /** A file that differs between the central host and this Mac, side by side (X60). */
     | { kind: "sync-compare"; host: string; session: string; path: string }

@@ -132,9 +132,17 @@ export async function closeTab(host: string, ids: number[]) {
   for (const id of ids) void rpc(host, M.terminalKill, { id, remove: true }).catch(errorToast);
 }
 
-/** Opens a file in an editor tab of a session's main window (X26), at `line` if given. */
-export function openFileTab(host: string, wsId: string, path: string, line?: number) {
-  setLayout(host, wsId, openFile(getLayout(host, wsId), path, line));
+/** Opens a file in an editor tab of a session's main window (X26), at
+ *  `line` if given, with lines `line` to `endLine` selected (X96). */
+export function openFileTab(host: string, wsId: string, path: string, line?: number, endLine?: number) {
+  setLayout(host, wsId, openFile(getLayout(host, wsId), path, line, endLine));
+}
+
+/** Open file… (X96): asks for a file of the selected session by name. */
+function openFileByName() {
+  const c = current();
+  if (!c) return toast("Select a session to open its files");
+  useStore.setState({ dialog: { kind: "open-file", host: c.host, session: c.ws.id, root: c.ws.path } });
 }
 
 /** Opens a changed file's diff in a tab of a session's main window (X77). */
@@ -496,6 +504,7 @@ const RUN: Record<string, () => void> = {
   changes: () => useStore.setState({ rightTab: "changes", rightOpen: true }),
   files: () => useStore.setState({ rightTab: "files", rightOpen: true }),
   checks: () => useStore.setState({ rightTab: "review", rightOpen: true }),
+  "open-file": openFileByName,
   commit: () => useStore.setState({ dialog: { kind: "commit" } }),
   pr: () => useStore.setState({ dialog: { kind: "create-pr" } }),
   archive: () => void archiveSession(),

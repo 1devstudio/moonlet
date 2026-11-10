@@ -3,8 +3,9 @@
 
 export type PaneNode =
   | { type: "leaf"; session: number }
-  /** A file open in the editor (X26); `line` is where it opened last. */
-  | { type: "file"; path: string; line?: number }
+  /** A file open in the editor (X26); `line` is where it opened last,
+   *  `endLine` the last line of the range selected there (X96). */
+  | { type: "file"; path: string; line?: number; endLine?: number }
   /** A routed command's output (X62), by job id. */
   | { type: "job"; job: string }
   /** A changed file's diff (X77), against the base or the uncommitted changes; `path` is relative to the worktree. */
@@ -117,9 +118,10 @@ function withTabs(layout: Layout, tabs: Tab[], removed: number | null): Layout {
 
 const isFile = (t: Tab, path: string) => t.root.type === "file" && t.root.path === path;
 
-/** Opens a file's tab (X26), or switches to it when it is open, at `line` if given. */
-export function openFile(layout: Layout, path: string, line?: number): Layout {
-  const root: PaneNode = line ? { type: "file", path, line } : { type: "file", path };
+/** Opens a file's tab (X26), or switches to it when it is open, at `line`
+ *  if given, with lines `line` to `endLine` selected (X96). */
+export function openFile(layout: Layout, path: string, line?: number, endLine?: number): Layout {
+  const root: PaneNode = line ? { type: "file", path, line, ...(endLine ? { endLine } : {}) } : { type: "file", path };
   const open = layout.tabs.find((t) => isFile(t, path));
   if (!open) {
     const tab = { id: newTabId(), root };
@@ -194,7 +196,7 @@ function isNode(v: unknown): v is PaneNode {
   if (!v || typeof v !== "object") return false;
   const n = v as Record<string, unknown>;
   if (n.type === "leaf") return typeof n.session === "number";
-  if (n.type === "file") return typeof n.path === "string" && (n.line === undefined || typeof n.line === "number");
+  if (n.type === "file") return typeof n.path === "string" && (n.line === undefined || typeof n.line === "number") && (n.endLine === undefined || typeof n.endLine === "number");
   if (n.type === "job") return typeof n.job === "string";
   if (n.type === "diff") return typeof n.path === "string" && (n.mode === "base" || n.mode === "head");
   return (

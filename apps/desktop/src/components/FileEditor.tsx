@@ -9,12 +9,13 @@ import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { isMarkdownPath } from "../lib/markdown";
 import { afterRead, afterSave } from "../lib/fileSync";
+import { rangeToShow } from "../lib/openFileQuery";
 
 /**
  * A file in an editor tab of the main window (X26): writable at once, ⌘S
  * saves. A change on disk shows when there are no unsaved edits.
  */
-export default function FileEditor({ host, wsId, path, line, visible }: { host: string; wsId: string; path: string; line?: number; visible: boolean }) {
+export default function FileEditor({ host, wsId, path, line, endLine, visible }: { host: string; wsId: string; path: string; line?: number; endLine?: number; visible: boolean }) {
   const [file, setFile] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const editor = useRef<Parameters<OnMount>[0] | null>(null);
@@ -85,24 +86,37 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
   // The ⌘S command is registered once; it calls the latest save.
   const saveRef = useRef(save);
   saveRef.current = save;
+  /** The line and range to show, for the reveal after the first layout. */
+  const at = useRef({ line, endLine });
+  at.current = { line, endLine };
 
-  const reveal = (ed: Parameters<OnMount>[0], at: number | undefined) => {
-    if (!at) return;
-    ed.revealLineInCenter(at);
-    ed.setPosition({ lineNumber: at, column: 1 });
+  /** Scrolls to line `at`, with lines `at` to `end` selected (X96). */
+  const reveal = (ed: Parameters<OnMount>[0], at: number | undefined, end: number | undefined) => {
+    const model = ed.getModel();
+    const range = model && rangeToShow(at, end, { lineCount: model.getLineCount(), lineEnd: (n) => model.getLineMaxColumn(n) });
+    if (!range) return;
+    ed.setSelection(range);
+    ed.revealRangeInCenter(range);
   };
 
   const onMount: OnMount = (ed) => {
     editor.current = ed;
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void saveRef.current());
-    reveal(ed, line);
+    reveal(ed, line, endLine);
+    // The editor lays itself out after mounting (automaticLayout), and a
+    // scroll before that is lost: reveal again once it has a height (X96).
+    const laidOut = ed.onDidLayoutChange((l) => {
+      if (l.height <= 0) return;
+      laidOut.dispose();
+      reveal(ed, at.current.line, at.current.endLine);
+    });
     if (visible) ed.focus();
   };
 
-  // Opened again at another line, from a terminal link (F3).
+  // Opened again at another line, from a terminal link (F3) or Open file (X96).
   useEffect(() => {
-    if (editor.current) reveal(editor.current, line);
-  }, [line]);
+    if (editor.current) reveal(editor.current, line, endLine);
+  }, [line, endLine]);
 
   useEffect(() => {
     if (visible) editor.current?.focus();

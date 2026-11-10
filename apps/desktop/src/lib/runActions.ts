@@ -31,6 +31,7 @@ export const ACTIONS: ActionDef[] = [
   ["changes", "Show changes", "Panels", "shift+cmd+d"],
   ["files", "Show files", "Panels", "shift+cmd+e"],
   ["checks", "Show review (PR, checks, commits)", "Panels", ""],
+  ["open-file", "Open file…", "Files", "cmd+p"],
   ["commit", "Commit…", "Git", ""],
   ["pr", "Create pull request…", "Git", "shift+cmd+p"],
   ["archive", "Archive session…", "Session", ""],
