@@ -552,26 +552,30 @@ describe("restart the daemon (X96)", () => {
     };
     return { ran, restart };
   };
-  const asked: { title: string; message: string; action: string }[] = [];
-  const answer = (ok: boolean) => async (o: { title: string; message: string; action: string }) => {
-    asked.push(o);
-    return ok;
+  /** The confirm dialog, answering `ok`; `asked` is what it showed. */
+  const dialog = (ok: boolean) => {
+    const asked: { title: string; message: string; action: string }[] = [];
+    const ask = async (o: { title: string; message: string; action: string }) => {
+      asked.push(o);
+      return ok;
+    };
+    return { asked, ask };
   };
 
   it("restarts with a handoff and keeps terminals", async () => {
-    asked.length = 0;
     const d = daemon(null);
-    expect(await restartDaemon(d.restart, answer(true))).toBe("Daemon restarted. Terminals kept running.");
+    const c = dialog(true);
+    expect(await restartDaemon(d.restart, c.ask)).toBe("Daemon restarted. Terminals kept running.");
     expect(d.ran).toEqual(["restart"]);
-    expect(asked).toEqual([]);
+    expect(c.asked).toEqual([]);
   });
 
   it("forces the restart only after the user agrees", async () => {
-    asked.length = 0;
     const d = daemon("the daemon isn't answering");
-    expect(await restartDaemon(d.restart, answer(true))).toBe("Daemon restarted. Its terminals ended; chats carry on.");
+    const c = dialog(true);
+    expect(await restartDaemon(d.restart, c.ask)).toBe("Daemon restarted. Its terminals ended; chats carry on.");
     expect(d.ran).toEqual(["restart", "restart --force"]);
-    expect(asked).toEqual([
+    expect(c.asked).toEqual([
       {
         title: "Force restart the daemon",
         message: "The daemon isn't answering. Force restart ends every terminal it holds. Agents' chats carry on from where they were.",
@@ -582,14 +586,14 @@ describe("restart the daemon (X96)", () => {
 
   it("leaves a stuck daemon alone when the user cancels", async () => {
     const d = daemon("the daemon isn't answering");
-    expect(await restartDaemon(d.restart, answer(false))).toBeNull();
+    expect(await restartDaemon(d.restart, dialog(false).ask)).toBeNull();
     expect(d.ran).toEqual(["restart"]);
   });
 
   it("reports other failures without offering a force restart", async () => {
-    asked.length = 0;
     const d = daemon(null, { code: "failed", message: "moonletd not found next to moonlet" });
-    await expect(restartDaemon(d.restart, answer(true))).rejects.toEqual({ code: "failed", message: "moonletd not found next to moonlet" });
-    expect(asked).toEqual([]);
+    const c = dialog(true);
+    await expect(restartDaemon(d.restart, c.ask)).rejects.toEqual({ code: "failed", message: "moonletd not found next to moonlet" });
+    expect(c.asked).toEqual([]);
   });
 });

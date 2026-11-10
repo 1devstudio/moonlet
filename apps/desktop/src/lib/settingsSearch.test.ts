@@ -35,6 +35,12 @@ describe("searching settings (X43)", () => {
     }
   });
 
+  it("finds Restart the daemon by what a stuck daemon looks like (X96)", () => {
+    for (const q of ["restart", "stuck", "force restart", "not answering"]) {
+      expect(shown(q)).toEqual([["Restart the daemon", "App › General › Background daemon", ""]]);
+    }
+  });
+
   it("finds the session row style with the style chosen (X48)", () => {
     expect(shown("session rows")).toEqual([["Session rows", "App › Appearance", "A · Issue number column"]]);
     expect(searchSettings("session rows", { ...ctx, settings: { ...ctx.settings, sessionRows: "task" } })[0].value).toBe("B · Task as a sub-header");

@@ -318,13 +318,21 @@ async fn restart_daemon(hosts: Hosts<'_>, force: bool) -> Result<(), RpcError> {
         cmd.arg("--force");
     }
     let out = cmd.output().await.map_err(err)?;
-    let message = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    match out.status.code() {
-        Some(0) => {}
-        Some(3) => return Err(RpcError::new("not_responding", message)),
-        _ => return Err(RpcError::new("failed", format!("moonletd restart failed ({}): {message}", out.status))),
-    }
+    restart_result(out.status.code(), &String::from_utf8_lossy(&out.stderr))?;
     hosts.reconnect(hosts::LOCAL)
+}
+
+/// What `moonletd restart` exiting with `code` means to the webview (X96):
+/// 3, moonletd's `STUCK`, is `not_responding`, so the app offers a force
+/// restart; any other failure is `failed`. `None` is a signal.
+fn restart_result(code: Option<i32>, stderr: &str) -> Result<(), RpcError> {
+    let message = stderr.trim();
+    match code {
+        Some(0) => Ok(()),
+        Some(3) => Err(RpcError::new("not_responding", message)),
+        Some(n) => Err(RpcError::new("failed", format!("moonletd restart failed (exit {n}): {message}"))),
+        None => Err(RpcError::new("failed", format!("moonletd restart failed (killed by a signal): {message}"))),
+    }
 }
 
 /// Opens System Settings › Login Items, where the user allows the login
@@ -634,6 +642,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moonletd_restart_exiting_3_asks_the_app_to_offer_a_force_restart() {
+        assert_eq!(restart_result(Some(0), ""), Ok(()));
+        assert_eq!(
+            restart_result(Some(3), "the daemon isn't answering\n"),
+            Err(RpcError::new("not_responding", "the daemon isn't answering"))
+        );
+        assert_eq!(
+            restart_result(Some(1), "Error: failed to spawn moonletd\n"),
+            Err(RpcError::new("failed", "moonletd restart failed (exit 1): Error: failed to spawn moonletd"))
+        );
+        assert_eq!(
+            restart_result(None, ""),
+            Err(RpcError::new("failed", "moonletd restart failed (killed by a signal): "))
+        );
+    }
 
     #[test]
     fn tracker_settings_are_read_and_saved_in_trackers_toml() {
