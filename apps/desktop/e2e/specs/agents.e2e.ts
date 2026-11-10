@@ -1,5 +1,6 @@
 // The Agents tab (X42), with a fake `claude` that launches two background
-// subagents the way claude 2.1.296 reports them: one asks to write a file,
+// subagents the way claude 2.1.296 reports them: one asks to write a file
+// and hands its report back with SubagentHandback (as claude 2.1.3xx does),
 // the other keeps running until it is stopped.
 
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
@@ -23,11 +24,13 @@ while IFS= read -r line; do
       out '{"type":"system","subtype":"task_notification","task_id":"a2","tool_use_id":"toolu_a2","status":"stopped","summary":"List files"}' ;;
     *'"request_id":"q1"'*)
       out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"w1","type":"tool_result","content":"File created successfully at: /repo/hello.txt"}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
+      out '{"type":"assistant","message":{"id":"s3","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"h1","name":"SubagentHandback","input":{"message":"Created hello.txt with hi."}}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
+      out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"h1","type":"tool_result","content":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
       out '{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":'"$(date +%s)000"'}}'
-      out '{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_a1","status":"completed","summary":"Created hello.txt with hi.","usage":{"total_tokens":10682,"tool_uses":1,"duration_ms":3175}}' ;;
+      out '{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_a1","status":"completed","summary":"This agent'"'"'s report was delivered to you as a message from \"a1\" (its SubagentHandback call). Read it there; it is not repeated here.\n","usage":{"total_tokens":10682,"tool_uses":2,"duration_ms":3175}}' ;;
     *'"type":"user"'*)
-      out '{"type":"assistant","message":{"id":"m1","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"toolu_a1","name":"Agent","input":{"description":"Write hello file","prompt":"Create hello.txt containing hi.","subagent_type":"general-purpose"}},{"type":"tool_use","id":"toolu_a2","name":"Agent","input":{"description":"List files","prompt":"List the files.","subagent_type":"general-purpose"}}]}}'
-      out '{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_a1","description":"Write hello file","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"Create hello.txt containing hi."}'
+      out '{"type":"assistant","message":{"id":"m1","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"toolu_a1","name":"Agent","input":{"description":"Write hello file","prompt":"Create hello.txt containing hi.\n\n1. Write it\n2. Check it","subagent_type":"general-purpose"}},{"type":"tool_use","id":"toolu_a2","name":"Agent","input":{"description":"List files","prompt":"List the files.","subagent_type":"general-purpose"}}]}}'
+      out '{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_a1","description":"Write hello file","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"Create hello.txt containing hi.\n\n1. Write it\n2. Check it"}'
       out '{"type":"system","subtype":"task_started","task_id":"a2","tool_use_id":"toolu_a2","description":"List files","subagent_type":"general-purpose","is_backgrounded":true,"prompt":"List the files."}'
       out '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_a1","type":"tool_result","content":"Async agent launched successfully."},{"tool_use_id":"toolu_a2","type":"tool_result","content":"Async agent launched successfully."}]}}'
       out '{"type":"assistant","message":{"id":"s1","model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"/repo/hello.txt","content":"hi\n"}}]},"parent_tool_use_id":"toolu_a1","agent_id":"a1"}'
@@ -141,8 +144,16 @@ describe("agents tab", () => {
       timeoutMsg: "the row kept its Allow button",
     });
     await expect($(`${tab("Agents")}//span[@aria-label="agent waiting"]`)).not.toBeExisting();
-    // Its report shows in the conversation.
+    // Its report shows in the conversation: the one it handed back, not
+    // Claude Code's pointer to it.
     await expect($(text("Created hello.txt with hi."))).toBeDisplayed();
+    await expect($('//*[contains(text(), "its SubagentHandback call")]')).not.toBeExisting();
+    // Its note opens the brief it was given, formatted.
+    const note = '//div[@data-agent-note="Write hello file"]';
+    await expect($(`${note}//li[normalize-space()="Write it"]`)).not.toBeExisting();
+    await jsClick(`${note}//button[normalize-space()="Brief"]`);
+    await expect($(`${note}//li[normalize-space()="Write it"]`)).toBeDisplayed();
+    await expect($(`${note}//li[normalize-space()="Check it"]`)).toBeDisplayed();
     // One agent still runs: the session row says so (X42).
     await expect($(chip("1 agent"))).toBeDisplayed();
   });
@@ -170,5 +181,8 @@ describe("agents tab", () => {
     await jsClick('//div[@role="button"][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="done"]]');
     await expect($('//*[@id="right-tabpanel"]//span[normalize-space()="Write hello file"]')).toBeDisplayed();
     await expect($('//*[@id="right-tabpanel"]//button[normalize-space()="Agents"]')).toBeDisplayed();
+    // Its brief unfolds as formatted text.
+    await jsClick('//*[@id="right-tabpanel"]//button[starts-with(normalize-space(), "Brief")]');
+    await expect($('//*[@id="right-tabpanel"]//li[normalize-space()="Check it"]')).toBeDisplayed();
   });
 });

@@ -79,7 +79,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown, renderUserMarkdown } from "../lib/markdown";
+import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdownAs, type ChatMarkdownKind } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
@@ -146,16 +146,10 @@ export function useProjectFiles(host: string, root: string, reloadWhen: unknown)
   return useMemo(() => (path: string) => !!files?.has(path), [files]);
 }
 
-/**
- * Chat Markdown; `task` renders a task's description (X46), at the panel's
- * smaller size; `user` a message the user sent (X92), its newlines kept.
- */
-export const Markdown = memo(function Markdown({ text, task = false, user = false }: { text: string; task?: boolean; user?: boolean }) {
+/** Chat Markdown, rendered as its `kind` says (`renderChatMarkdownAs`); a task, user message or brief also gets its own size and colours (`.task-md`, `.user-md`, `.brief-md`). */
+export const Markdown = memo(function Markdown({ text, kind = "chat" }: { text: string; kind?: ChatMarkdownKind }) {
   const files = useContext(FileLinks);
-  const html = useMemo(
-    () => (task ? renderTaskMarkdown(text) : user ? renderUserMarkdown(text) : renderChatMarkdown(text, files?.exists)),
-    [text, task, user, files?.exists],
-  );
+  const html = useMemo(() => renderChatMarkdownAs(text, kind, files?.exists), [text, kind, files?.exists]);
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -190,7 +184,7 @@ export const Markdown = memo(function Markdown({ text, task = false, user = fals
   return (
     <>
       <div
-        className={cx("chat-md selectable", task && "task-md", user && "user-md")}
+        className={cx("chat-md selectable", kind !== "chat" && `${kind}-md`)}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
         onKeyDown={(e) => copyCode(e, e.key)}
@@ -513,7 +507,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
       return (
         <div className="flex justify-end py-1">
           <div className="min-w-0 max-w-[85%] break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2">
-            <Markdown text={item.text} user />
+            <Markdown text={item.text} kind="user" />
           </div>
         </div>
       );
@@ -602,8 +596,18 @@ function LaunchedCard({ tools, rows }: { tools: ChatItem[]; rows: AgentRow[] }) 
   );
 }
 
+/** The brief the main agent gave a subagent (X42), as formatted text. */
+export function BriefCard({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cx("rounded-lg border border-border bg-panel-2 px-3.5 py-3", className)}>
+      <Markdown text={text} kind="brief" />
+    </div>
+  );
+}
+
 /** An agent that finished or failed, or a whole batch that ended (X42). */
 function AgentNoteView({ note }: { note: AgentNote }) {
+  const [brief, setBrief] = useState(false);
   if (note.kind === "all") {
     return (
       <div className="my-2 flex h-10 items-center gap-2.5 rounded-xl border border-border bg-panel px-3.5 ui-text-13">
@@ -621,13 +625,22 @@ function AgentNoteView({ note }: { note: AgentNote }) {
   const a = note.agent;
   const failed = a.status === "failed";
   return (
-    <div className="my-2">
+    <div className="my-2" data-agent-note={a.description}>
       <div className="flex items-center gap-2.5 ui-text-13">
         <StateGlyph state={failed ? "error" : "done"} size={12} />
         <span className="min-w-0 truncate text-fg">{a.description}</span>
         <span className={failed ? "text-error" : "text-faint"}>{failed ? "failed" : "finished"}</span>
-        <span className="ml-auto font-mono ui-text-12 tabular-nums text-faint">{clock(agentMs(a, Date.now()))}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-3">
+          {a.prompt.trim() && (
+            <button className="flex items-center gap-0.5 ui-text-12.5 text-muted hover:text-fg" aria-expanded={brief} onClick={() => setBrief(!brief)}>
+              {brief ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              Brief
+            </button>
+          )}
+          <span className="font-mono ui-text-12 tabular-nums text-faint">{clock(agentMs(a, Date.now()))}</span>
+        </span>
       </div>
+      {brief && <BriefCard text={a.prompt} className="ml-[22px] mt-2" />}
       {(failed ? a.error : a.report) && (
         <div className={cx("selectable ml-[5px] mt-1.5 border-l-2 border-border pl-4 ui-text-13 leading-[1.6]", failed && "text-error")}>
           {failed ? a.error : <Markdown text={a.report ?? ""} />}

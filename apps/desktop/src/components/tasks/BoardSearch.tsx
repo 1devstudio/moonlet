@@ -357,7 +357,7 @@ function TaskPreview({ host, workspaceId, row, shownLabel, sessions, onClose }: 
           </div>
           {task.description.trim() && (
             <div className="ui-text-13 leading-[1.55] text-muted">
-              <Markdown text={task.description} task />
+              <Markdown text={task.description} kind="task" />
             </div>
           )}
           <div className="flex items-start gap-2 rounded-lg bg-panel-2 px-3 py-2.5 ui-text-12 leading-[1.5] text-muted">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codeToCopy, fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown, renderUserMarkdown } from "./markdown";
+import { codeToCopy, fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderChatMarkdownAs, renderMarkdown, renderTaskMarkdown, renderUserMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -223,6 +223,19 @@ describe("the user's own messages (X92)", () => {
 
   it("links a URL as agent replies do (X9), and leaves a path the user typed as text (X30)", () => {
     expect(renderUserMarkdown("see https://example.com/a and src/lib/chat.ts")).toBe('<p>see <a href="https://example.com/a">https://example.com/a</a> and src/lib/chat.ts</p>\n');
+  });
+});
+
+describe("renderChatMarkdownAs: chat, task, user message and brief", () => {
+  it("keeps every newline of a user message and of a subagent's brief (X92, X42), not of an agent reply or a task", () => {
+    expect(renderChatMarkdownAs("Repo: /work/acme\nRead-only.", "brief")).toBe("<p>Repo: /work/acme<br>\nRead-only.</p>\n");
+    expect(renderChatMarkdownAs("first line\nsecond line", "user")).toBe("<p>first line<br>\nsecond line</p>\n");
+    expect(renderChatMarkdownAs("first line\nsecond line", "chat")).toBe("<p>first line\nsecond line</p>\n");
+    expect(renderChatMarkdownAs("first line\nsecond line", "task")).toBe("<p>first line\nsecond line</p>\n");
+  });
+
+  it("shows a brief's numbered list as a list", () => {
+    expect(renderChatMarkdownAs("Check:\n\n1. TLS\n2. Regions", "brief")).toBe("<p>Check:</p>\n<ol>\n<li>TLS</li>\n<li>Regions</li>\n</ol>\n");
   });
 });
 
