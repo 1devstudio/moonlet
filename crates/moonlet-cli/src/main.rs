@@ -333,7 +333,8 @@ enum SessionAction {
         /// Session name (defaults to the prompt's first line).
         #[arg(long)]
         name: Option<String>,
-        /// New branch name (defaults to `moonlet/<name>`).
+        /// New branch name, used as given. Leave it out for the branch prefix
+        /// from Settings › Git (or the project's `branch_prefix`) and the name.
         #[arg(long)]
         branch: Option<String>,
         /// Start point (defaults to the project's base branch).
