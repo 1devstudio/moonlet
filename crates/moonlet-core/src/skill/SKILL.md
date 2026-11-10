@@ -57,7 +57,7 @@ Keep your edits inside your own worktree. When the task needs a change in anothe
    "$MOONLET_BIN" session new <project> "<prompt>"
    ```
 
-   It prints the new session as JSON; keep its `id`. The session starts an agent with the prompt: the project's default agent, otherwise one like you, with your model and effort. It starts in your permission mode; `--mode` may only pick a stricter one. Other options: `--name`, `--branch`, `--from`, `--agent`, `--model`, `--effort`. Leave `--branch` out unless the user names a branch: moonlet then names it with the user's branch prefix. A `--branch` name is used as given, with no prefix added.
+   It prints the new session as JSON; keep its `id`. The session starts an agent with the prompt: the project's default agent, otherwise one like you, with your model and effort. It starts in your permission mode; `--mode` may only pick a stricter one. Other options: `--name`, `--branch`, `--from`, `--agent`, `--model`, `--effort`. Leave `--branch` out unless the user names a new branch: moonlet then names it with the project's or the user's branch prefix. A `--branch` name gets no prefix, and `-2`… if it is taken.
 
    Never start an agent in the session yourself, with `moonlet agent start` or otherwise: moonlet does not count it as the session's agent, so you cannot follow it. If the JSON shows no `agent`, tell the user.
 

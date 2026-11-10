@@ -33,7 +33,7 @@ moonlet session send <id> "Run the tests too"
 | Option | What it does |
 |---|---|
 | `--name` | The session's name, instead of the prompt's first line |
-| `--branch` | The new branch's name, instead of `moonlet/<name>` |
+| `--branch` | The new branch's name, with no prefix added, instead of your branch prefix plus the name (Settings › Git, or the project's `branch_prefix`) |
 | `--from` | The start point, instead of the project's base branch |
 | `--agent` | The agent to start, or `none` for a shell |
 | `--model`, `--effort`, `--mode` | The model, effort and permission mode |

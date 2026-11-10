@@ -333,8 +333,8 @@ enum SessionAction {
         /// Session name (defaults to the prompt's first line).
         #[arg(long)]
         name: Option<String>,
-        /// New branch name, used as given. Leave it out for the branch prefix
-        /// from Settings › Git (or the project's `branch_prefix`) and the name.
+        /// New branch name, with no prefix added (`-2`… if taken). Defaults to
+        /// the project's `branch_prefix`, else Settings › Git's, plus the session name.
         #[arg(long)]
         branch: Option<String>,
         /// Start point (defaults to the project's base branch).

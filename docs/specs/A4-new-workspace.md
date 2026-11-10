@@ -19,7 +19,8 @@ A workspace is one task: a git worktree on its own branch, the agent working in 
 
 - [x] `repo.add` accepts any directory inside a repo, stores the top level, and returns the existing record for a repo added twice. The base branch comes from `.moonlet/config.toml` `base_branch`, then `origin/HEAD`, then `main`/`master`/`develop`/`trunk`.
 - [x] `workspace.create`:
-  - The branch defaults to `<prefix><slug(name)>`, the prefix being the project's `branch_prefix`, else the host's from Settings › Git, `moonlet/` until changed (X55), and the directory to `~/.moonlet/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
+  - The branch defaults to `<prefix><slug(name)>` and the directory to `~/.moonlet/worktrees/<repo>/<slug>`; both get `-2`, `-3`… suffixes when taken.
+  - The prefix is the project's `branch_prefix`, else the host's from Settings › Git, which is `moonlet/` until changed (X55). A given branch gets no prefix.
   - The worktree starts from `from`, defaulting to the repo base branch. With `existing_branch` it checks out that branch instead of creating one (a leading `origin/` is stripped).
   - If `setup` is configured it runs in a `setup` tab, at the same time as the agent.
   - The agent runs in a login interactive shell (`$SHELL -lic "<agent cmd> '<prompt>'"`), so the user's PATH applies.
