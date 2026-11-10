@@ -1696,6 +1696,33 @@ async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
     (d, vec![bin, home])
 }
 
+/// A login shell that does not print its environment in time (as during an
+/// upgrade on a busy Mac) leaves terminals and agents the PATH the daemon
+/// inherited, not a bare system one that lacks `~/.local/bin` and the like.
+#[tokio::test]
+async fn a_slow_login_shell_leaves_the_inherited_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let gh = bin.path().join("gh");
+    std::fs::write(&gh, "#!/bin/sh\necho '{\"number\":7,\"title\":\"Gift cards\",\"body\":\"\",\"url\":\"https://github.com/acme/web/issues/7\",\"state\":\"OPEN\",\"stateReason\":\"\",\"assignees\":[],\"labels\":[],\"updatedAt\":\"2026-10-14T09:00:00Z\",\"closedByPullRequestsReferences\":[]}'\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let shell = bin.path().join("slow-shell");
+    std::fs::write(&shell, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let d = TestDaemon::start_with(&[
+        ("SHELL", shell.display().to_string()),
+        ("PATH", format!("{}:/usr/bin:/bin", bin.path().display())),
+    ])
+    .await;
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+    let task: serde_json::Value = c
+        .request(methods::GH_TASK, serde_json::json!({"path": repo, "repo": "acme/web", "number": 7}))
+        .await
+        .unwrap();
+    assert_eq!(task["title"].as_str(), Some("Gift cards"));
+}
+
 #[tokio::test]
 async fn one_github_issue_by_its_number_through_gh() {
     // A fake gh that prints one issue as `gh issue view --json` does.
