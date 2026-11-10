@@ -5,7 +5,7 @@ import { M } from "../lib/protocol";
 import { errorToast, useStore } from "../lib/store";
 import { tokens } from "../lib/chat";
 import { AGENT_STATE, type AgentRow, agentKey, agentsHeader, isActive, modelLabel, retryMessage, stoppable } from "../lib/subagents";
-import { Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
+import { BriefCard, Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
 import { Button, Empty, StateGlyph, cx } from "./ui";
 import { ScrollArea } from "./ScrollArea";
 
@@ -117,7 +117,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
               {brief ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
               <span className="truncate">Brief{brief ? "" : ` · ${a.prompt.split("\n")[0]}`}</span>
             </button>
-            {brief && <div className="selectable mt-1.5 whitespace-pre-wrap rounded-md bg-panel-2 px-3 py-2 ui-text-12.5 text-muted">{a.prompt}</div>}
+            {brief && <BriefCard text={a.prompt} className="mt-2" />}
           </div>
         )}
         {a.tools.length > 0 && (
