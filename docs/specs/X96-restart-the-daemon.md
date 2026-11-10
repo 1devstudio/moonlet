@@ -58,7 +58,7 @@ None. The pid file `run/moonletd.pid` already existed (S3).
 
 ## Security considerations
 
-- Only the user's own processes can be signalled, and only one whose executable is named `moonletd` and that was already running when the pid file was last written. A stale pid file can't get an unrelated process killed, nor another home's moonletd (a dev daemon, say) that got the same pid later. What's left is a moonletd that was already running under that pid before this home's daemon wrote the file, which can't happen, since pids are unique among live processes.
+- Only the user's own processes can be signalled, and only one whose executable is named `moonletd` and that was already running when the pid file was last written. A stale pid file can't get an unrelated process killed, nor another home's moonletd (a dev daemon, say) that got the same pid later. `etime` counts whole seconds, so the check allows 2 s of slack. What's left is a daemon that dies, and whose pid goes to another moonletd, within 2 s of writing its pid file. A 1-hour-old file is tested; that 2 s window isn't.
 - A force restart is destructive (terminals end), so the app always asks first. The CLI's `--force` is explicit.
 
 ## Out of scope
