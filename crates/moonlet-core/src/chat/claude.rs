@@ -143,6 +143,9 @@ fn task_event(v: &Value, st: &mut ChatState) -> bool {
             a.duration_ms = usage["duration_ms"].as_u64().or(a.duration_ms);
             let summary = v["summary"].as_str().map(String::from);
             match a.status.as_str() {
+                // An agent that ended by handing its report back already has
+                // it; the summary then only points at the hand-back.
+                "done" if a.tools.last().is_some_and(|t| t.name == HANDBACK_TOOL) => {}
                 "done" => a.report = summary,
                 "failed" => a.error = a.error.take().or(summary),
                 _ => {}
@@ -175,6 +178,10 @@ fn close_ask(st: &mut ChatState, id: &str) {
     .into();
 }
 
+/// The tool a subagent hands its final report back with; Claude Code's
+/// `task_notification` then carries only a pointer to it.
+const HANDBACK_TOOL: &str = "SubagentHandback";
+
 /// Tool calls kept per subagent (X42).
 const MAX_SUBAGENT_TOOLS: usize = 200;
 
@@ -199,6 +206,11 @@ fn subagent_line(parent: &str, v: &Value, st: &mut ChatState) -> bool {
                     continue;
                 }
                 let name = b["name"].as_str().unwrap_or("tool");
+                if name == HANDBACK_TOOL
+                    && let Some(m) = b["input"]["message"].as_str()
+                {
+                    a.report = Some(m.into());
+                }
                 let stat = super::diff_for(name, &b["input"]).map(|d| diff_stat(&d));
                 a.tools.push(SubagentTool {
                     id: id.into(),
@@ -1722,6 +1734,25 @@ mod tests {
         let s = &st.subagents[0];
         assert_eq!((s.status.as_str(), s.error.as_deref(), s.report.as_deref()), ("failed", Some("API Error: 529 overloaded"), None));
         assert_eq!(s.ended_at, Some(1791970434654));
+    }
+
+    /// A subagent's last call that hands its report back to the main agent
+    /// (shape from a real Claude Code 2.1.3xx transcript), for the fixture's
+    /// first agent.
+    const HANDBACK: &str = r#"{"type": "assistant", "message": {"model": "claude-haiku-5-5", "id": "msg_01HandbackXv8Yq2", "type": "message", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01NTrn8DpvafgEKH3z4u1uGT", "name": "SubagentHandback", "input": {"message": "**1. hello.txt — DONE**\n- Wrote `hello.txt` with the single word hi."}}]}, "parent_tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "session_id": "26b767d8-a541-4e6b-8218-d72d25035a9d"}"#;
+    /// Claude Code's end of a subagent that handed its report back: the
+    /// summary only points at the hand-back (wording from a real run).
+    const HANDED_BACK_END: &str = r#"{"type": "system", "subtype": "task_notification", "task_id": "a98344134013d8227", "tool_use_id": "toolu_01QNjAbPMDQiZwKyCqkmv2VD", "status": "completed", "summary": "This agent's report was delivered to you as a message from \"a98344134013d8227\" (its SubagentHandback call). Read it there; it is not repeated here.\n", "usage": {"total_tokens": 10682, "tool_uses": 2, "duration_ms": 3175}}"#;
+
+    #[test]
+    fn a_subagent_that_hands_its_report_back_keeps_that_report() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "task_progress", "task_id": "a69ffa893ad4d346c""#), &mut a, &mut st);
+        a.on_line(HANDBACK, &mut st);
+        a.on_line(HANDED_BACK_END, &mut st);
+        let s = &st.subagents[0];
+        assert_eq!(s.status, "done");
+        assert_eq!(s.report.as_deref(), Some("**1. hello.txt — DONE**\n- Wrote `hello.txt` with the single word hi."));
     }
 
     const BASH_TASKS: &str = include_str!("fixtures/claude-bash-tasks.jsonl");
