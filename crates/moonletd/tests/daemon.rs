@@ -6039,3 +6039,24 @@ async fn a_designs_page_comes_as_one_file_with_its_styles_and_assets_inlined() {
         .await;
     assert!(gone.is_err());
 }
+
+/// X99: `design.standalone` gives a snapshot's page as the snapshot has it,
+/// on the path the canvas frames it at (`designs/<slug>@<n>/…`).
+#[tokio::test]
+async fn a_snapshots_page_comes_as_one_file_as_the_snapshot_has_it() {
+    let d = fake_claude_daemon(WRITING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "Again"})).await.unwrap();
+    history_of(&mut c, &ws, 2).await;
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page@1/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page, serde_json::json!({"html": "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n", "missing": []}));
+}

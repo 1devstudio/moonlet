@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { downloadNote, playCounter, playFile, playFrame, playKey, playStep } from "./designPlay";
+import { downloadNote, playCounter, playFile, playFrame, playKey, playShown, playStep } from "./designPlay";
 
 describe("playing a design full screen (X99)", () => {
   it("fills the area at 100% with Fill, and fits the viewport into it, never above 100%, with Fit", () => {
@@ -44,5 +44,11 @@ describe("playing a design full screen (X99)", () => {
       tone: "error",
     });
     expect(downloadNote({ path: null, missing: [] })).toBeNull();
+  });
+
+  it("shows the page played while it is there, else the design's first page, and none when no page is left", () => {
+    expect(playShown(["index", "settings"], "settings")).toBe("settings");
+    expect(playShown(["index", "billing"], "settings")).toBe("index");
+    expect(playShown([], "settings")).toBeNull();
   });
 });

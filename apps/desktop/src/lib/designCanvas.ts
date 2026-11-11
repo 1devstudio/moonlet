@@ -334,7 +334,8 @@ export function inTabAfter(e: TabKeysEvent): boolean {
 /** Whether a canvas takes its keys (C, V, Esc, the editor's, ⌘0, ⌘= and
  *  ⌘-): the design screen's whenever it is shown, a session's Design tab's
  *  while the user is in it (`inTab`), so the session's terminals and chat
- *  beside it keep theirs. */
-export function canvasTakesKeys(session: boolean, inTab: boolean): boolean {
-  return !session || inTab;
+ *  beside it keep theirs; none while its page is played full screen
+ *  (X99), which takes its own. */
+export function canvasTakesKeys(session: boolean, inTab: boolean, playing = false): boolean {
+  return !playing && (!session || inTab);
 }

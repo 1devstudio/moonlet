@@ -2,8 +2,8 @@
 // window's size (Fill) or at the canvas's viewport fitted (Fit), ←/→ through
 // the pages, and the page's file for Download.
 
-import { designFolder, isSession, taggedSlug, type DesignPlace } from "./designPlace";
-import { pagePath } from "./designPage";
+import { isSession, type DesignPlace } from "./designPlace";
+import { designPagePath } from "./designView";
 
 export type Size = [number, number];
 export type PlayFit = "fill" | "fit";
@@ -23,6 +23,12 @@ export function playStep(pages: string[], page: string, dir: -1 | 1): string {
   return pages[Math.min(pages.length - 1, Math.max(0, at + dir))];
 }
 
+/** The page to show while `page` is played: itself while it is among
+ *  `pages`, else the design's first page; none when no page is left. */
+export function playShown(pages: string[], page: string): string | null {
+  return pages.includes(page) ? page : (pages[0] ?? null);
+}
+
 /** "2 / 3": the page's place among the design's pages. */
 export function playCounter(pages: string[], page: string): string {
   return `${pages.indexOf(page) + 1} / ${pages.length}`;
@@ -31,16 +37,18 @@ export function playCounter(pages: string[], page: string): string {
 /** The page as `design.file` and `design.standalone` name it: in the
  *  design's folder, or in its snapshot `snapshot`'s. */
 export function playFile(place: DesignPlace, slug: string, page: string, snapshot: number | null): { workspace: string; path: string } | { session: string; path: string } {
-  const path = `${designFolder(place, snapshot === null ? slug : taggedSlug(slug, snapshot))}/${pagePath(page)}`;
+  const path = designPagePath(place, slug, page, snapshot);
   return isSession(place) ? { session: place.session, path } : { workspace: place, path };
 }
 
 /** What a key (as `keyId` names it) does in the play view: Esc goes back,
  *  ← and → go through the pages; nothing while typing. */
-export function playKey(id: string, typing: boolean): "back" | "prev" | "next" | null {
-  if (typing) return null;
-  return id === "escape" ? "back" : id === "arrowleft" ? "prev" : id === "arrowright" ? "next" : null;
+export function playKey(id: string, typing: boolean): PlayAct | null {
+  return typing ? null : (PLAY_KEYS[id] ?? null);
 }
+
+export type PlayAct = "back" | "prev" | "next";
+const PLAY_KEYS: Record<string, PlayAct> = { escape: "back", arrowleft: "prev", arrowright: "next" };
 
 /** What `design_download` answers: where it saved, none when cancelled,
  *  and the addresses the page loads that it could not read. */

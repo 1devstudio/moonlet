@@ -303,11 +303,13 @@ export function DesignCanvas({
     inTab.current = inTabAfter({ kind: "opened" });
     tookOpened(host, place.session);
   }, [opened, host, place]);
-  const keysHere = () => canvasTakesKeys(session, inTab.current);
+  const keysHere = () => canvasTakesKeys(session, inTab.current, playingRef.current);
   // The page shown, or null for Overview.
   const [picked, setPicked] = useState<string | null>("index");
-  // The page played full screen (X99), or null.
+  // The page played full screen (X99), or null; the canvas takes no keys meanwhile.
   const [playing, setPlaying] = useState<string | null>(null);
+  const playingRef = useRef(false);
+  playingRef.current = playing !== null;
   const stopPlaying = useCallback((last: string) => {
     setPicked(last);
     setPlaying(null);

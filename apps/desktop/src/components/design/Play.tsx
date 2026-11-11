@@ -10,7 +10,7 @@ import { cx } from "../../lib/cx";
 import { isTyping } from "../../lib/designCanvas";
 import { pageFile } from "../../lib/designPage";
 import type { DesignPlace } from "../../lib/designPlace";
-import { downloadNote, playCounter, playFile, playFrame, playKey, playStep, type Downloaded, type PlayFit, type Size } from "../../lib/designPlay";
+import { downloadNote, playCounter, playFile, playFrame, playKey, playShown, playStep, type Downloaded, type PlayFit, type Size } from "../../lib/designPlay";
 import { pageRevOf, useDesign } from "../../lib/designStore";
 import { pageUrl, snapshotPageUrl } from "../../lib/designView";
 import { keyId } from "../../lib/runActions";
@@ -48,9 +48,9 @@ export function Play({
   const [areaRef, area] = useSize<HTMLDivElement>();
   const rev = useDesign((d) => pageRevOf(d, host, place, slug, page));
   // A page that went away shows the first there is; none left, the canvas.
-  const shown = pages.includes(page) ? page : pages[0];
+  const shown = playShown(pages, page);
   useEffect(() => {
-    if (shown === undefined) onClose(page);
+    if (shown === null) onClose(page);
     else if (shown !== page) setPage(shown);
   }, [shown, page, onClose]);
 
@@ -77,7 +77,7 @@ export function Play({
   const frame = playFrame(area, viewport, fit);
   const url = snapshot === null ? pageUrl(place, slug, page, rev) : snapshotPageUrl(place, slug, snapshot, page);
   return createPortal(
-    <div role="dialog" aria-label={`Playing ${name} · ${page}`} className="fixed inset-0 z-[55] flex flex-col bg-bg">
+    <div role="dialog" aria-label={`Playing ${name} · ${page}`} className="fixed inset-0 z-[45] flex flex-col bg-bg">
       <div data-tauri-drag-region className="drag flex h-9 shrink-0 items-center gap-2 border-b border-border pr-3 ui-text-13" style={{ paddingLeft: TRAFFIC_LIGHTS }}>
         <IconButton title="Back (Esc)" className="no-drag" onClick={() => onClose(page)}>
           <ArrowLeft size={14} />

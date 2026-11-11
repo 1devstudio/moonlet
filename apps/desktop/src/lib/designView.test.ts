@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl, frameKey } from "./designView";
+import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl, frameKey, designPagePath } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -328,5 +328,13 @@ describe("which address gets a frame of its own (X64, ADR 0013)", () => {
     expect(frameKey(a, false)).toBe("0f3c2a1b4d5e6f70.w1");
     expect(frameKey("moonlet-design://0f3c2a1b4d5e6f70.w1/designs/d/pages/index.html?v=3", false)).toBe("0f3c2a1b4d5e6f70.w1");
     expect(frameKey("not an address", false)).toBe("not an address");
+  });
+});
+
+describe("a design's page's path (X65, X99)", () => {
+  it("is in the design's folder, or in its snapshot's", () => {
+    expect(designPagePath("ws1", "settings-page", "billing")).toBe("designs/settings-page/pages/billing.html");
+    expect(designPagePath("ws1", "settings-page", "billing", 3)).toBe("designs/settings-page@3/pages/billing.html");
+    expect(designPagePath({ session: "s7" }, "checkout", "index")).toBe("checkout/pages/index.html");
   });
 });

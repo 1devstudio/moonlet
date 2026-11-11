@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use base64::Engine;
 use regex::Regex;
@@ -96,27 +97,114 @@ impl<R: FnMut(&str) -> Option<Vec<u8>>> Inliner<R> {
     /// The stylesheet `text`, at `base`, with its `@import`s replaced by the
     /// sheets they import and its `url()`s by `data:` URLs.
     fn css(&mut self, base: &str, text: &str, seen: &mut HashSet<String>) -> String {
-        let import = Regex::new(r#"@import\s+(?:url\(\s*)?["']?([^"')\s;]+)["']?\s*\)?\s*([^;]*);"#).expect("import pattern");
-        let url = Regex::new(r#"url\(\s*["']?([^"')]+?)["']?\s*\)"#).expect("url pattern");
+        let (kept, rules) = self.sheet(base, text, seen);
+        if kept.is_empty() { rules } else { format!("{}\n{rules}", kept.join("\n")) }
+    }
+
+    /// [`Self::css`]'s rules, and apart from them the `@import`s left as they
+    /// are (an address outside the design's files, one not read), which a
+    /// browser takes only before every rule.
+    fn sheet(&mut self, base: &str, text: &str, seen: &mut HashSet<String>) -> (Vec<String>, String) {
         // Imports stand aside while this sheet's own url()s are inlined.
         let mut imports = Vec::new();
-        let text = import.replace_all(text, |c: &regex::Captures| {
-            imports.push((c[0].to_string(), c[1].to_string(), c[2].trim().to_string()));
+        let text = IMPORT.replace_all(text, |c: &regex::Captures| {
+            let addr = c.get(1).or(c.get(2)).or(c.get(3)).map_or("", |m| m.as_str()).to_string();
+            imports.push((c[0].to_string(), addr, c[4].trim().to_string()));
             format!("\u{0}{}\u{0}", imports.len() - 1)
         });
-        let mut text = url.replace_all(&text, |c: &regex::Captures| format!("url(\"{}\")", self.data_url(base, &c[1]))).into_owned();
-        for (i, (statement, addr, media)) in imports.into_iter().enumerate() {
+        let mut text = URL.replace_all(&text, |c: &regex::Captures| format!("url(\"{}\")", self.data_url(base, &c[1]))).into_owned();
+        let mut kept = Vec::new();
+        for (i, (statement, addr, conditions)) in imports.into_iter().enumerate() {
             let inlined = match self.file(base, &addr) {
-                Ok(Some((path, bytes))) if seen.insert(path.clone()) => {
-                    let sheet = self.css(&path, &String::from_utf8_lossy(&bytes), seen);
-                    if media.is_empty() { sheet } else { format!("@media {media} {{\n{sheet}\n}}") }
+                Ok(Some((path, bytes))) => {
+                    // An import cycle ends where a sheet comes again.
+                    if seen.insert(path.clone()) {
+                        let (more, rules) = self.sheet(&path, &String::from_utf8_lossy(&bytes), seen);
+                        kept.extend(more);
+                        Some(wrap(&conditions, rules))
+                    } else {
+                        None
+                    }
                 }
-                _ => statement,
+                _ => {
+                    kept.push(statement);
+                    None
+                }
             };
-            text = text.replacen(&format!("\u{0}{i}\u{0}"), &inlined, 1);
+            let mark = format!("\u{0}{i}\u{0}");
+            text = match inlined {
+                Some(rules) => text.replacen(&mark, &rules, 1),
+                None => text.replacen(&format!("{mark}\n"), "", 1).replacen(&mark, "", 1),
+            };
         }
-        text
+        (kept, text)
     }
+}
+
+/// An `@import`: its address (double-quoted, single-quoted or bare, with or
+/// without `url()`), then its layer, supports and media conditions. CSS
+/// keywords are case-insensitive, and the space after `@import` optional.
+static IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)@import\s*(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^"'()\s;]+))\s*\)?\s*([^;]*);"#).expect("import pattern")
+});
+
+/// A `url()`, its address unquoted.
+static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)url\(\s*["']?([^"')]+?)["']?\s*\)"#).expect("url pattern"));
+
+/// `rules` under an import's `conditions`: `layer` or `layer(name)`, then
+/// `supports(…)`, then a media query list, each kept as the rule it stands
+/// for.
+fn wrap(conditions: &str, rules: String) -> String {
+    let mut rest = conditions.trim();
+    let mut open = Vec::new();
+    if let Some(after) = strip_keyword(rest, "layer") {
+        match call_args(after) {
+            Some((name, tail)) => {
+                open.push(format!("@layer {}", name.trim()));
+                rest = tail;
+            }
+            None => {
+                open.push("@layer".to_string());
+                rest = after;
+            }
+        }
+        rest = rest.trim_start();
+    }
+    if let Some((test, tail)) = strip_keyword(rest, "supports").and_then(call_args) {
+        let test = test.trim();
+        open.push(if test.starts_with('(') { format!("@supports {test}") } else { format!("@supports ({test})") });
+        rest = tail.trim_start();
+    }
+    if !rest.is_empty() {
+        open.push(format!("@media {rest}"));
+    }
+    open.into_iter().rev().fold(rules, |inner, rule| format!("{rule} {{\n{inner}\n}}"))
+}
+
+/// What follows `keyword` at the start of `s`, ignoring case.
+fn strip_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
+    let head = s.get(..keyword.len())?;
+    head.eq_ignore_ascii_case(keyword).then(|| &s[keyword.len()..])
+}
+
+/// `(…)` at the start of `s`: what is inside, with nested parentheses, and
+/// what follows.
+fn call_args(s: &str) -> Option<(&str, &str)> {
+    let s = s.strip_prefix('(')?;
+    let mut depth = 1;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[..i], &s[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `html`, the page at `page` (a path from the root `read` reads from), with
@@ -253,6 +341,27 @@ mod tests {
             ("s/b.css", b"@import \"a.css\";\n.b {}"),
         ]);
         let out = inline("p.html", "<link rel=\"stylesheet\" href=\"s/a.css\">", |p| files.get(p).cloned());
-        assert_eq!(out.html, "<style>@media print {\n@import \"a.css\";\n.b {}\n}\n.a {}</style>");
+        assert_eq!(out.html, "<style>@media print {\n.b {}\n}\n.a {}</style>");
+    }
+
+    #[test]
+    fn an_import_written_in_capitals_or_with_no_space_is_inlined_too() {
+        let files = files(&[("s/a.css", b"@IMPORT\"b.css\";\n.a {}"), ("s/b.css", b".b {}")]);
+        let out = inline("p.html", "<link rel=\"stylesheet\" href=\"s/a.css\">", |p| files.get(p).cloned());
+        assert_eq!(out.html, "<style>.b {}\n.a {}</style>");
+    }
+
+    #[test]
+    fn an_import_left_as_it_is_goes_first_where_a_browser_still_takes_it() {
+        let files = files(&[("s/a.css", b"@import \"local.css\";\n@import url(https://fonts.example.com/x.css);\n.a {}"), ("s/local.css", b".l {}")]);
+        let out = inline("p.html", "<link rel=\"stylesheet\" href=\"s/a.css\">", |p| files.get(p).cloned());
+        assert_eq!(out.html, "<style>@import url(https://fonts.example.com/x.css);\n.l {}\n.a {}</style>");
+    }
+
+    #[test]
+    fn an_import_into_a_layer_under_a_supports_and_a_media_keeps_all_three() {
+        let files = files(&[("s/a.css", b"@import \"b.css\" layer(base) supports(display: grid) screen;"), ("s/b.css", b".b {}")]);
+        let out = inline("p.html", "<link rel=\"stylesheet\" href=\"s/a.css\">", |p| files.get(p).cloned());
+        assert_eq!(out.html, "<style>@layer base {\n@supports (display: grid) {\n@media screen {\n.b {}\n}\n}\n}</style>");
     }
 }
