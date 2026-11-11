@@ -76,6 +76,8 @@ function makeWorld(root: string): World {
       MOONLET_TRACKER_BASE: `http://127.0.0.1:${trackerPort(root)}`,
       // Cloud machines (X63) are scratch daemons made by the fake provider, steered by files there.
       MOONLET_CLOUD_FAKE: join(root, "cloud-fake"),
+      // Delete in the Files tab (X98) moves here, not to the user's own Trash.
+      MOONLET_TRASH_DIR: join(root, "trash"),
     },
   };
 }
@@ -97,6 +99,7 @@ export function setUp(): World {
 function seed(w: World) {
   mkdirSync(w.home, { recursive: true });
   mkdirSync(w.env.HOME, { recursive: true });
+  mkdirSync(w.env.MOONLET_TRASH_DIR, { recursive: true });
   // If anything ever resolves a real agent, it gets this instead.
   const fakeBin = join(w.root, "bin");
   mkdirSync(fakeBin);

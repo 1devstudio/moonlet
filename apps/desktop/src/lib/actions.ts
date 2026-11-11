@@ -2,8 +2,8 @@
 // keyboard shortcuts.
 
 import { rpc, sendInput } from "./daemon";
-import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
-import { M, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
+import { addTab, closeDiff, closeFile, closeFilesUnder, closeJob, cycleFocus, movedPath, moveFiles, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
+import { M, type FsDeleted, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
 import { killParams, runningLine, stillRunningLine, withRunning } from "./sessionProcesses";
 import { copyRefused } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
@@ -50,11 +50,20 @@ async function spawnShell(host: string, ws: Session, cwd?: string): Promise<Term
 }
 
 export async function newTab() {
+  await shellTab();
+}
+
+/** Opens a terminal tab in `cwd`, a folder of the selected session: Open terminal here (X98). */
+export async function newTabIn(cwd: string) {
+  await shellTab(cwd);
+}
+
+async function shellTab(cwd?: string) {
   const c = forNewTab();
   if (!c) return;
   try {
     // The session.created event would add a background tab; make it active instead.
-    const info = await spawnShell(c.host, c.ws);
+    const info = await spawnShell(c.host, c.ws, cwd);
     const layout = getLayout(c.host, c.ws.id);
     const existing = tabOf(layout, info.id);
     setLayout(c.host, c.ws.id, existing ? { ...layout, active: existing.id, focused: info.id } : addTab(layout, info.id));
@@ -136,6 +145,51 @@ export async function closeTab(host: string, ids: number[]) {
  *  `line` if given, with lines `line` to `endLine` selected (X96). */
 export function openFileTab(host: string, wsId: string, path: string, line?: number, endLine?: number) {
   setLayout(host, wsId, openFile(getLayout(host, wsId), path, line, endLine));
+}
+
+/** Renames or moves an entry of a session's Files tab (X98): its editor
+ *  tabs, and their unsaved marks, follow it. False when it failed. */
+export async function moveEntry(host: string, ws: Session, from: string, to: string): Promise<boolean> {
+  try {
+    await rpc(host, M.fsRename, { root: ws.path, from, to });
+  } catch (e) {
+    errorToast(e);
+    return false;
+  }
+  setLayout(host, ws.id, moveFiles(getLayout(host, ws.id), from, to));
+  useStore.setState((s) => {
+    const dirtyFiles: Record<string, true> = {};
+    for (const [key, dirty] of Object.entries(s.dirtyFiles)) {
+      const moved = key.startsWith(`${host}|`) ? movedPath(key.slice(host.length + 1), from, to) : null;
+      dirtyFiles[moved === null ? key : hostPath(host, moved)] = dirty;
+    }
+    return { dirtyFiles };
+  });
+  return true;
+}
+
+/** Deletes an entry of a session's Files tab after asking (X98): to the
+ *  Trash on a Mac, for good on another host. Its editor tabs close. */
+export async function deleteEntry(host: string, ws: Session, entry: { path: string; name: string; is_dir: boolean }) {
+  const local = (useStore.getState().hosts[host]?.kind ?? (host === "local" ? "local" : "ssh")) === "local";
+  const ok = await askConfirm(
+    local
+      ? { title: entry.is_dir ? "Delete folder" : "Delete file", message: `Move ${entry.name} to the Trash?`, action: "Move to Trash", variant: "danger" }
+      : { title: entry.is_dir ? "Delete folder" : "Delete file", message: `Delete ${entry.name}? This can't be undone.`, action: "Delete", variant: "danger" },
+  );
+  if (!ok) return;
+  try {
+    const r = await rpc<FsDeleted>(host, M.fsDelete, { root: ws.path, path: entry.path });
+    toast(r.trashed ? `Moved ${entry.name} to the Trash` : `Deleted ${entry.name}`);
+  } catch (e) {
+    return errorToast(e);
+  }
+  setLayout(host, ws.id, closeFilesUnder(getLayout(host, ws.id), entry.path));
+  useStore.setState((s) => {
+    const dirtyFiles = { ...s.dirtyFiles };
+    for (const key of Object.keys(dirtyFiles)) if (key.startsWith(`${host}|`) && movedPath(key.slice(host.length + 1), entry.path, entry.path) !== null) delete dirtyFiles[key];
+    return { dirtyFiles };
+  });
 }
 
 /** Open file… (X96): asks for a file of the selected session by name. */
