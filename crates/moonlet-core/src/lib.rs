@@ -12,6 +12,7 @@ pub mod commands;
 pub mod browser;
 pub mod copied_files;
 pub mod design;
+pub mod file_actions;
 pub mod fs;
 pub mod gh_issues;
 pub mod gh_projects;

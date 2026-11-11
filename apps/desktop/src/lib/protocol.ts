@@ -936,6 +936,16 @@ export interface DirEntry {
   ignored: boolean;
 }
 
+/** `fs.duplicate`'s result (X98): the copy's path. */
+export interface FsDuplicated {
+  path: string;
+}
+
+/** `fs.delete`'s result (X98): moved to the Trash, or deleted for good. */
+export interface FsDeleted {
+  trashed: boolean;
+}
+
 export interface FileContent {
   path: string;
   content: string;
@@ -1538,6 +1548,13 @@ export const M = {
   fsRead: "fs.read",
   fsWrite: "fs.write",
   fsWriteInside: "fs.write_inside",
+  /** File actions of the Files tab (X98), each inside `root`. */
+  fsCreate: "fs.create",
+  fsRename: "fs.rename",
+  fsDuplicate: "fs.duplicate",
+  fsDelete: "fs.delete",
+  /** Whether `fs.delete` moves to a Trash on the host (X98). */
+  fsHasTrash: "fs.has_trash",
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",

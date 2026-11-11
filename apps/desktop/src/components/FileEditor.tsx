@@ -24,7 +24,12 @@ export default function FileEditor({ host, wsId, path, line, endLine, visible }:
   const fontSize = useStore((s) => s.settings.term.fontSize);
   const root = useStore((s) => s.sessions[host]?.find((w) => w.id === wsId)?.path ?? null);
   const fsVersion = useStore((s) => (root ? (s.fsVersion[hostPath(host, root)] ?? 0) : 0));
-  const language = useEditorLanguage(path);
+  const loaded = useEditorLanguage(path);
+  // A rename to another extension (X98) loads a new grammar: the editor
+  // keeps the last one meanwhile, so it stays mounted with its unsaved edits.
+  const lastLanguage = useRef<string | null>(null);
+  if (loaded) lastLanguage.current = loaded;
+  const language = loaded ?? lastLanguage.current;
   const key = hostPath(host, path);
   const readOnly = !file || file.truncated;
   const markdown = isMarkdownPath(path);

@@ -136,6 +136,29 @@ export function closeFile(layout: Layout, path: string): Layout {
   return withTabs(layout, layout.tabs.filter((t) => !isFile(t, path)), null);
 }
 
+/** Whether `path` is `folder` or inside it (X98). */
+export const isUnder = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`);
+
+/** Where `path` is after `from` moved to `to`: itself or inside it; null when neither (X98). */
+export function movedPath(path: string, from: string, to: string): string | null {
+  return isUnder(path, from) ? to + path.slice(from.length) : null;
+}
+
+/** File tabs follow a renamed or moved file or folder (X98). */
+export function moveFiles(layout: Layout, from: string, to: string): Layout {
+  const tabs = layout.tabs.map((t) => {
+    const path = t.root.type === "file" ? movedPath(t.root.path, from, to) : null;
+    return path !== null && t.root.type === "file" ? { ...t, root: { ...t.root, path } } : t;
+  });
+  return { ...layout, tabs };
+}
+
+/** Closes the tabs of a deleted file, or of the files in a deleted folder (X98). */
+export function closeFilesUnder(layout: Layout, path: string): Layout {
+  const gone = (t: Tab) => t.root.type === "file" && isUnder(t.root.path, path);
+  return withTabs(layout, layout.tabs.filter((t) => !gone(t)), null);
+}
+
 const isDiff = (t: Tab, path: string, mode: DiffMode) => t.root.type === "diff" && t.root.path === path && t.root.mode === mode;
 
 /** Opens a changed file's diff tab (X77), or switches to it when that file and mode are open. */

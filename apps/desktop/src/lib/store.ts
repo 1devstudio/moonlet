@@ -111,8 +111,8 @@ export interface Settings {
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
 export const termKey = (host: string, id: number) => `${host}:${id}`;
-/** A path on a host: the key of `dirtyFiles` and `fsVersion`. */
-export const hostPath = (host: string, path: string) => `${host}|${path}`;
+import { hostPath } from "./hostPath";
+export { hostPath };
 export const projKey = (host: string, id: string) => `${host}/${id}`;
 
 /** A project's base branch against origin, for the sidebar's pull chip (X13). */
