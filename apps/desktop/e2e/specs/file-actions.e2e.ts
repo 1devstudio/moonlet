@@ -101,6 +101,28 @@ describe("File actions in the Files tab (X98)", () => {
     await expect($(fileTab(join(dir, "src", "notes.md")))).not.toBeExisting();
   });
 
+  it("keeps unsaved edits through a rename to another language", async () => {
+    await browser.execute(() => (document.querySelector(".monaco-editor textarea") as HTMLElement).focus());
+    await browser.keys("const draft = 1;");
+    await expect($('span[aria-label="unsaved"]')).toBeExisting();
+    await act("guide.md", "Rename");
+    await fill('//input[@aria-label="Rename guide.md"]', "guide.ts");
+    await browser.keys("Enter");
+    await expect($(row("guide.ts"))).toBeDisplayed({ wait: 15_000 });
+    await expect($(fileTab(join(dir, "src", "guide.ts")))).toBeDisplayed();
+    // Saved from the renamed tab, the edit typed before the rename reaches the disk.
+    await browser.waitUntil(() => browser.execute(() => !!document.querySelector(".monaco-editor textarea")), { timeout: 10_000, timeoutMsg: "no editor after the rename" });
+    await browser.execute(() => (document.querySelector(".monaco-editor textarea") as HTMLElement).focus());
+    await browser.execute(() => {
+      const e = new KeyboardEvent("keydown", { key: "s", code: "KeyS", metaKey: true, bubbles: true, cancelable: true });
+      Object.defineProperty(e, "keyCode", { get: () => 83 });
+      Object.defineProperty(e, "which", { get: () => 83 });
+      document.activeElement?.dispatchEvent(e);
+    });
+    await browser.waitUntil(() => readFileSync(join(dir, "src", "guide.ts"), "utf8").includes("const draft = 1;"), { timeout: 10_000, timeoutMsg: `guide.ts holds ${JSON.stringify(readFileSync(join(dir, "src", "guide.ts"), "utf8"))}` });
+    await expect($('span[aria-label="unsaved"]')).not.toBeExisting();
+  });
+
   it("duplicates a file next to it as a copy, and starts renaming the copy", async () => {
     await act("util.ts", "Duplicate");
     await expect($('//input[@aria-label="Rename util copy.ts"]')).toBeDisplayed({ wait: 15_000 });
@@ -128,14 +150,14 @@ describe("File actions in the Files tab (X98)", () => {
   });
 
   it("moves a deleted file to the Trash after asking, and closes its tab", async () => {
-    await act("guide.md", "Delete");
+    await act("guide.ts", "Delete");
     await expect($(sel.confirm("Delete file"))).toBeDisplayed();
-    await expect($(sel.text("Move guide.md to the Trash?"))).toBeDisplayed();
+    await expect($(sel.text("Move guide.ts to the Trash?"))).toBeDisplayed();
     await $(sel.confirmButton("Move to Trash")).click();
-    await expect($(row("guide.md"))).not.toBeExisting({ wait: 15_000 });
-    expect(existsSync(join(dir, "src", "guide.md"))).toBe(false);
-    expect(readdirSync(w.env.MOONLET_TRASH_DIR)).toContain("guide.md");
-    await expect($(fileTab(join(dir, "src", "guide.md")))).not.toBeExisting();
+    await expect($(row("guide.ts"))).not.toBeExisting({ wait: 15_000 });
+    expect(existsSync(join(dir, "src", "guide.ts"))).toBe(false);
+    expect(readdirSync(w.env.MOONLET_TRASH_DIR)).toContain("guide.ts");
+    await expect($(fileTab(join(dir, "src", "guide.ts")))).not.toBeExisting();
   });
 
   it("opens a terminal tab in a folder", async () => {

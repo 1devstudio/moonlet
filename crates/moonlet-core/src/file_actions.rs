@@ -12,6 +12,22 @@ use cap_std::fs::{Dir, OpenOptions};
 
 use crate::terminal::expand_home;
 
+#[cfg(test)]
+thread_local! {
+    /// A test's other process, run once just before an action puts an
+    /// entry at a new name, so a name taken in between can be tested.
+    static BEFORE_PLACING: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's other process, if one is set; nothing outside tests.
+fn before_placing() {
+    #[cfg(test)]
+    if let Some(other) = BEFORE_PLACING.with(|h| h.borrow_mut().take()) {
+        other();
+    }
+}
+
 /// An entry inside the root: the handle of the folder it is in, its name
 /// there, and its full path.
 struct Entry {
@@ -105,9 +121,85 @@ pub fn rename(root: &str, from: &str, to: &str) -> Result<()> {
     if b.exists() && !a.same_as(&b) {
         bail!("{} already exists", b.label());
     }
-    a.dir
-        .rename(&a.name, &b.dir, &b.name)
-        .with_context(|| format!("cannot move {} to {}", a.path.display(), b.path.display()))
+    before_placing();
+    let moved = if a.same_as(&b) {
+        // Only the case changes: both names are the entry itself.
+        a.dir.rename(&a.name, &b.dir, &b.name)
+    } else {
+        rename_no_replace(&a.dir, &a.name, &b.dir, &b.name)
+    };
+    moved.map_err(|err| match err.kind() {
+        std::io::ErrorKind::AlreadyExists => anyhow::anyhow!("{} already exists", b.label()),
+        _ => anyhow::Error::new(err).context(format!(
+            "cannot move {} to {}",
+            a.path.display(),
+            b.path.display()
+        )),
+    })
+}
+
+/// Renames `from` in `src` to `to` in `dst`, failing with `AlreadyExists`
+/// rather than replace an entry there, even one made a moment ago: macOS's
+/// `renameatx_np` with `RENAME_EXCL`, Linux's `renameat2` with
+/// `RENAME_NOREPLACE`. A filesystem that can't do that gets a check first.
+fn rename_no_replace(
+    src: &Dir,
+    from: &std::ffi::OsStr,
+    dst: &Dir,
+    to: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let c = |n: &std::ffi::OsStr| {
+        std::ffi::CString::new(n.as_encoded_bytes()).map_err(std::io::Error::other)
+    };
+    let (from_c, to_c) = (c(from)?, c(to)?);
+    let (from_fd, to_fd) = (src.as_raw_fd(), dst.as_raw_fd());
+    // SAFETY: both descriptors are open folders for the call's length, and
+    // both names are NUL-terminated strings that outlive it.
+    #[cfg(target_os = "macos")]
+    let done = unsafe {
+        libc::renameatx_np(
+            from_fd,
+            from_c.as_ptr(),
+            to_fd,
+            to_c.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    // Through the system call itself, not libc's wrapper: the static musl
+    // builds of the remote helpers have no `renameat2` to link against.
+    #[cfg(target_os = "linux")]
+    let done = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            from_fd,
+            from_c.as_ptr(),
+            to_fd,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        ) as i32
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let done: i32 = {
+        let _ = (from_fd, to_fd, &from_c, &to_c);
+        -1
+    };
+    if done == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    let unsupported = cfg!(not(any(target_os = "macos", target_os = "linux")))
+        || matches!(
+            err.raw_os_error(),
+            Some(libc::EINVAL | libc::ENOTSUP | libc::ENOSYS)
+        );
+    if !unsupported {
+        return Err(err);
+    }
+    if dst.symlink_metadata(to).is_ok() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    src.rename(from, dst, to)
 }
 
 /// Copies the entry at `path` next to it as `name copy.ext` (then `name
@@ -119,10 +211,23 @@ pub fn duplicate(root: &str, path: &str) -> Result<String> {
         .symlink_metadata(&e.name)
         .with_context(|| format!("no such file: {}", e.path.display()))?;
     let is_dir = meta.is_dir();
-    let name = free_name(&e.dir, |n| copy_name(&e.name, n, is_dir)).context("too many copies")?;
-    copy_entry(&e.dir, &e.name, &e.dir, &name)
-        .with_context(|| format!("cannot copy {}", e.path.display()))?;
-    Ok(e.path.with_file_name(&name).display().to_string())
+    for n in 1..1000 {
+        let name = copy_name(&e.name, n, is_dir);
+        if e.dir.symlink_metadata(&name).is_ok() {
+            continue;
+        }
+        before_placing();
+        // The copy's name is claimed by creating it exclusively: a name
+        // taken in between moves on to the next one, never replaces it.
+        match copy_entry(&e.dir, &e.name, &e.dir, &name) {
+            Ok(()) => return Ok(e.path.with_file_name(&name).display().to_string()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| format!("cannot copy {}", e.path.display()));
+            }
+        }
+    }
+    bail!("too many copies of {}", e.label())
 }
 
 /// The `n`th copy's name: `util copy.ts`, `util copy 2.ts`; a folder's and
@@ -154,7 +259,12 @@ fn with_suffix(name: &std::ffi::OsStr, suffix: &str, is_dir: bool) -> OsString {
 
 /// Copies `from` in `src` to `to` in `dst`: a folder with its contents, a
 /// symlink as a link to the same place, a file with its permissions.
-fn copy_entry(src: &Dir, from: &std::ffi::OsStr, dst: &Dir, to: &std::ffi::OsStr) -> Result<()> {
+fn copy_entry(
+    src: &Dir,
+    from: &std::ffi::OsStr,
+    dst: &Dir,
+    to: &std::ffi::OsStr,
+) -> std::io::Result<()> {
     let kind = src.symlink_metadata(from)?.file_type();
     if kind.is_symlink() {
         dst.symlink_contents(src.read_link_contents(from)?, to)?;
@@ -166,9 +276,19 @@ fn copy_entry(src: &Dir, from: &std::ffi::OsStr, dst: &Dir, to: &std::ffi::OsStr
             copy_entry(&inner_src, &name, &inner_dst, &name)?;
         }
     } else if kind.is_file() {
-        src.copy(from, dst, to)?;
+        let mut source = src.open(from)?;
+        let mut copy = dst.open_with(to, OpenOptions::new().write(true).create_new(true))?;
+        let written = std::io::copy(&mut source, &mut copy)
+            .and_then(|_| copy.set_permissions(source.metadata()?.permissions()));
+        if written.is_err() {
+            let _ = dst.remove_file(to);
+        }
+        written?;
     } else {
-        bail!("{} is not a file or a folder", from.to_string_lossy());
+        return Err(std::io::Error::other(format!(
+            "{} is not a file or a folder",
+            from.to_string_lossy()
+        )));
     }
     Ok(())
 }
@@ -544,5 +664,47 @@ mod tests {
         std::os::unix::fs::symlink(dir.path(), root.join("src")).unwrap();
         let here = real_path(&e.dir).unwrap();
         assert_eq!(here, root.join("moved").canonicalize().unwrap());
+    }
+
+    #[test]
+    fn a_name_taken_while_renaming_or_duplicating_is_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let r = s(&root);
+        std::fs::write(root.join("a.md"), "mine").unwrap();
+        std::fs::write(root.join("util.ts"), "util").unwrap();
+
+        let other = root.clone();
+        BEFORE_PLACING.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::write(other.join("b.md"), "theirs").unwrap()
+            }))
+        });
+        let err = rename(&r, &s(&root.join("a.md")), &s(&root.join("b.md"))).unwrap_err();
+        assert!(err.to_string().contains("b.md already exists"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.md")).unwrap(),
+            "theirs"
+        );
+        assert_eq!(std::fs::read_to_string(root.join("a.md")).unwrap(), "mine");
+
+        let other = root.clone();
+        BEFORE_PLACING.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::write(other.join("util copy.ts"), "theirs").unwrap()
+            }))
+        });
+        assert_eq!(
+            duplicate(&r, &s(&root.join("util.ts"))).unwrap(),
+            s(&root.join("util copy 2.ts"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("util copy.ts")).unwrap(),
+            "theirs"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("util copy 2.ts")).unwrap(),
+            "util"
+        );
     }
 }

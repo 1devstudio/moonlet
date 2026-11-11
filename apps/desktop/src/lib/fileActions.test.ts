@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deletePrompt, dirtyUnder, dropTarget, movedDirty, nameProblem, offersFileActions, renameSelection, terminalFolder } from "./fileActions";
+import { deletePrompt, dirtyUnder, dropTarget, folderOf, movedDirty, nameFieldOutcome, nameProblem, offersFileActions, renameSelection } from "./fileActions";
 
 describe("nameProblem (X98)", () => {
   it("accepts a plain name, a dotfile and a name with spaces", () => {
@@ -47,10 +47,32 @@ describe("dropTarget (X98)", () => {
   });
 });
 
-describe("terminalFolder (X98)", () => {
+describe("folderOf (X98)", () => {
   it("opens a terminal in a folder, or in a file's folder", () => {
-    expect(terminalFolder({ path: "/w/shop/src", is_dir: true })).toBe("/w/shop/src");
-    expect(terminalFolder({ path: "/w/shop/src/util.ts", is_dir: false })).toBe("/w/shop/src");
+    expect(folderOf({ path: "/w/shop/src", is_dir: true })).toBe("/w/shop/src");
+    expect(folderOf({ path: "/w/shop/src/util.ts", is_dir: false })).toBe("/w/shop/src");
+  });
+
+  it("moves an entry dropped on a file's row into that file's folder", () => {
+    expect(dropTarget("/w/shop/lib/keep.txt", folderOf({ path: "/w/shop/src/util.ts", is_dir: false }))).toBe("/w/shop/src/keep.txt");
+    // Dropped on a row in its own folder: nothing moves.
+    expect(dropTarget("/w/shop/src/a.ts", folderOf({ path: "/w/shop/src/util.ts", is_dir: false }))).toBeNull();
+  });
+});
+
+describe("nameFieldOutcome (X98)", () => {
+  it("saves a new name, trimmed", () => {
+    expect(nameFieldOutcome(" guide.md ", "notes.md", false)).toEqual({ save: "guide.md" });
+  });
+
+  it("gives up on an empty or unchanged name", () => {
+    expect(nameFieldOutcome("  ", "notes.md", false)).toBe("cancel");
+    expect(nameFieldOutcome("notes.md", "notes.md", true)).toBe("cancel");
+  });
+
+  it("keeps the field open on a bad name after Enter, and gives up when the field is left", () => {
+    expect(nameFieldOutcome("a/b", "notes.md", false)).toEqual({ problem: "A name can't have a “/”" });
+    expect(nameFieldOutcome("a/b", "notes.md", true)).toBe("cancel");
   });
 });
 

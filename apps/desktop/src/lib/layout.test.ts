@@ -229,10 +229,13 @@ describe("file tabs after a rename, a move or a delete (X98)", () => {
 
   it("closes the tabs of a deleted file, and of the files in a deleted folder", () => {
     const opened = openFile(openFile(openFile(reconcile(emptyLayout(), [1]), `${src}/util.ts`), `${src}/lib/index.ts`), "/w/shop/src2/a.ts");
-    expect(closeFilesUnder(opened, src).tabs.map((t) => t.root)).toEqual([
+    const closed = closeFilesUnder(opened, src);
+    expect(closed.tabs.map((t) => t.root)).toEqual([
       { type: "leaf", session: 1 },
       { type: "file", path: "/w/shop/src2/a.ts" },
     ]);
+    // The active tab, src2/a.ts, stays active.
+    expect(closed.tabs.find((t) => t.id === closed.active)?.root).toEqual({ type: "file", path: "/w/shop/src2/a.ts" });
     expect(closeFilesUnder(opened, `${src}/util.ts`).tabs).toHaveLength(3);
   });
 });

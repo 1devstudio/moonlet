@@ -31,9 +31,21 @@ export function dropTarget(from: string, folder: string): string | null {
   return `${folder}/${baseName(from)}`;
 }
 
-/** The folder Open terminal here starts in. */
-export function terminalFolder(e: { path: string; is_dir: boolean }): string {
+/** An entry's folder: itself, or a file's folder. Open terminal here
+ *  starts there, and a row dropped on the entry moves there. */
+export function folderOf(e: { path: string; is_dir: boolean }): string {
   return e.is_dir ? e.path : parentOf(e.path);
+}
+
+/** What the name field does with `value` (X98): save it, keep the field
+ *  open with a reason, or give up. Leaving the field (`leaving`) gives up
+ *  on a bad name instead of asking again. */
+export function nameFieldOutcome(value: string, initial: string, leaving: boolean): "cancel" | { save: string } | { problem: string } {
+  const name = value.trim();
+  if (!name || name === initial) return "cancel";
+  const problem = nameProblem(name);
+  if (problem) return leaving ? "cancel" : { problem };
+  return { save: name };
 }
 
 /** The folder a path is in. */

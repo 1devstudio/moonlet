@@ -6,7 +6,7 @@ import { M, type DirEntry, type FsDuplicated, type Session } from "../lib/protoc
 import { errorToast, sesKey, toast, useStore, hostPath } from "../lib/store";
 import { deleteEntry, draftToAgent, moveEntry, newTabIn, openFileTab } from "../lib/actions";
 import { fileMention } from "../lib/chat";
-import { dropTarget, nameProblem, offersFileActions, parentOf, renameSelection, terminalFolder } from "../lib/fileActions";
+import { dropTarget, folderOf, nameFieldOutcome, offersFileActions, parentOf, renameSelection } from "../lib/fileActions";
 import { isUnder, movedPath } from "../lib/layout";
 import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
@@ -52,12 +52,12 @@ interface Tree {
 /** New file, Rename, Duplicate, Delete and the rest, for an entry or (null) the session's root (X98). */
 function entryItems(e: DirEntry | null, tree: Tree): MenuItem[] {
   const { host, ws } = tree;
-  const folder = e ? (e.is_dir ? e.path : parentOf(e.path)) : tree.root;
+  const folder = e ? folderOf(e) : tree.root;
   const create = (dir: boolean) => {
     if (folder !== tree.root) tree.setOpen(folder, true);
     tree.setEditing({ kind: "new", folder, dir });
   };
-  const terminal: MenuItem = { label: "Open terminal here", icon: <SquareTerminal size={14} className="text-muted" />, onSelect: () => void newTabIn(e ? terminalFolder(e) : tree.root) };
+  const terminal: MenuItem = { label: "Open terminal here", icon: <SquareTerminal size={14} className="text-muted" />, onSelect: () => void newTabIn(e ? folderOf(e) : tree.root) };
   const news: MenuItem[] = [
     { label: "New file", icon: <FilePlus size={14} className="text-muted" />, onSelect: () => create(false) },
     { label: "New folder", icon: <FolderPlus size={14} className="text-muted" />, onSelect: () => create(true) },
@@ -91,7 +91,7 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
   const choices = synced?.choices ?? openInChoices(tree.targets, { dir: e.is_dir, kind });
   const open = (t: OpenTarget) => (synced ? hostsApi.openIn(t.id, synced.path) : hostsApi.openIn(t.id, e.path, tree.host));
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
+    <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
       {!e.is_dir && (
         <IconButton title="Add to chat" onClick={() => void draftToAgent(fileMention(tree.root, e.path))}>
           <Plus size={14} />
@@ -132,22 +132,17 @@ function NameField({ initial, dir, onSave, onCancel }: { initial: string; dir: b
   }, []);
   /** Enter keeps the field open on a bad name; leaving it gives up. */
   const save = async (leaving = false) => {
-    const name = value.trim();
-    if (!name || name === initial) {
+    const outcome = nameFieldOutcome(value, initial, leaving);
+    if (outcome === "cancel") {
       done.current = true;
       return onCancel();
     }
-    const problem = nameProblem(name);
-    if (problem && leaving) {
-      done.current = true;
-      return onCancel();
-    }
-    if (problem) {
+    if ("problem" in outcome) {
       setBad(true);
-      return toast(problem);
+      return toast(outcome.problem);
     }
     done.current = true;
-    if (!(await onSave(name))) {
+    if (!(await onSave(outcome.save))) {
       done.current = false;
       setBad(true);
       input.current?.focus();
@@ -219,7 +214,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
   /** Where a row dragged over `e` would move: into it, or into a file's folder. */
   const over = (ev: React.DragEvent, e: DirEntry) => {
     const from = tree.dragging.current;
-    const folder = e.is_dir ? e.path : parentOf(e.path);
+    const folder = folderOf(e);
     // Handled here, so the panel's own drop (to the root) doesn't also take it.
     ev.stopPropagation();
     if (!from || !dropTarget(from, folder)) return tree.setDropOn(null);
@@ -230,7 +225,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
   const drop = (ev: React.DragEvent, e: DirEntry) => {
     ev.preventDefault();
     ev.stopPropagation();
-    tree.dropInto(e.is_dir ? e.path : parentOf(e.path));
+    tree.dropInto(folderOf(e));
   };
   return (
     <>
