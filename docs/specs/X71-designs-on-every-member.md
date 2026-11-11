@@ -106,7 +106,7 @@ The sidebar row of a copy carries the owner's host label in the muted style of t
 - An offered pack is unpacked into a quarantine repository and checked there; only the objects a tree that passes reaches go to the store, so a refused pack, or anything else a pack carries, leaves nothing behind. A pack over 256 MiB is refused before it is read. It must hold only regular files and folders: no links, no submodules, no `..`, no absolute paths, and no file an agent takes as instructions (a `.md` file whose name starts with `claude` or `agents`, in any case), which the sync agent would read after **Move here**. It must not exceed 256 MiB unpacked, and it must not hold `.cache/` or `.claude/`. A copy is written through the item's `cap-std` handle (`fsx`), which never follows a link.
 - `record.toml` from a snapshot gives only the portable fields, and a source's `subdir` that is empty, absolute or has a `..` refuses the snapshot. A copy's source folders come from this member's own projects. A copied record never names a folder that the next sync agent would get as `--add-dir`.
 - Settings that grant an agent permissions are never copied, because `.claude/` is left out. After **Move here**, the new owner installs its own, as at creation.
-- ADR 0014's trust note applies: any member can publish items that every other member renders. Cards render in the sandboxed, no-network `moonlet-design://` frames, with site isolation (ADR 0013).
+- ADR 0014's trust note applies: any member can publish items that every other member renders. Cards render in the sandboxed, no-network `moonlet-design://` frames, with site isolation (ADR 0013), which is off since 2026-11-11.
 
 ## Out of scope
 

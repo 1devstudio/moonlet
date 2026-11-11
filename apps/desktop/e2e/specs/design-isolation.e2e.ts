@@ -32,7 +32,11 @@ type Heard = { heard?: string[] };
 /** `p`'s value, or "timed out" when it takes longer than `ms`. */
 const within = <T>(ms: number, p: Promise<T>) => Promise.race([p, new Promise<"timed out">((r) => setTimeout(() => r("timed out"), ms))]);
 
-describe("A design card that never stops running", () => {
+// Skipped while site isolation is off (2026-11-11): it crashed the whole app
+// when a card's frame was let go, on macOS 27.0.1 (X64 spec, ADR 0013). Without
+// it, a looping card freezes the window. Run with MOONLET_SITE_ISOLATION=1
+// passed to the app to check it again.
+describe.skip("A design card that never stops running", () => {
   before(async () => {
     // The app keeps its mode and system across runs: start where no card shows.
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();

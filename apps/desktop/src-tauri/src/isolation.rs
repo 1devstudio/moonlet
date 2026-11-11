@@ -10,6 +10,9 @@
 //! the webview is made with: turned on after a load, frames never load. A
 //! WebKit without it (a later macOS may rename or drop it) gets no
 //! configuration, and the window is made as before.
+//!
+//! Off unless `MOONLET_SITE_ISOLATION=1` since 2026-11-11: on macOS 27.0.1 it
+//! crashed the whole app when a card's frame was let go (see `main_window`).
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;

@@ -507,6 +507,11 @@ fn app_info() -> Value {
 /// (`"create": false` there) because on macOS its webview needs site
 /// isolation from its first load, so each design card runs in its own web
 /// process (X64). A WebKit without the feature gets the window as before.
+///
+/// Site isolation is off unless `MOONLET_SITE_ISOLATION=1`: on macOS 27.0.1
+/// WebKit crashed the whole app when a card's frame was let go
+/// (`RemoteScrollingCoordinatorProxy` "Invalid message dispatched"), and the
+/// variable turns it back on to look into that.
 fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
     let config = app
         .config()
@@ -518,12 +523,16 @@ fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
         .unwrap_or_default();
     let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
     #[cfg(target_os = "macos")]
-    let builder = match isolation::configuration() {
-        Ok(webview) => builder.with_webview_configuration(webview),
-        Err(why) => {
-            tracing::warn!("design cards share the window's web process: {why}");
-            builder
+    let builder = if std::env::var_os("MOONLET_SITE_ISOLATION").is_some_and(|v| v == "1") {
+        match isolation::configuration() {
+            Ok(webview) => builder.with_webview_configuration(webview),
+            Err(why) => {
+                tracing::warn!("design cards share the window's web process: {why}");
+                builder
+            }
         }
+    } else {
+        builder
     };
     builder.build()
 }
