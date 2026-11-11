@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, claudeBanner, claudeOffer, claudeStatus, closeClaudeBanner } from "./claudeUpdate";
+import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, claudeBanner, claudeOffer, claudeStatus, closeClaudeBanner, recheckClaudeOnReconnect } from "./claudeUpdate";
 import type { ClaudeUpdateStep } from "./claudeUpdate";
 
 const IDLE = { phase: "idle" } as const;
@@ -195,6 +195,10 @@ describe("claudeStatus", () => {
   it("says Claude Code was not found once a check could not run it", () => {
     expect(claudeStatus(IDLE, { installed: null, latest: "2.1.296" }, false)).toBe("Not found on the PATH");
   });
+
+  it("does not call Claude Code missing when the daemon could not be asked", () => {
+    expect(claudeStatus(IDLE, { installed: null, latest: "2.1.296", unasked: true }, false)).toBe("Could not ask moonlet's daemon");
+  });
 });
 
 describe("closeClaudeBanner", () => {
@@ -222,5 +226,17 @@ describe("claudeOffer", () => {
     expect(claudeOffer({ phase: "updating", ...v, step: "install" }, v)).toBeNull();
     expect(claudeOffer(IDLE, { installed: "2.1.296", latest: "2.1.296" })).toBeNull();
     expect(claudeOffer(IDLE, { installed: null, latest: "2.1.296" })).toBeNull();
+  });
+});
+
+describe("recheckClaudeOnReconnect", () => {
+  it("checks again when this Mac's daemon is back after a restart", () => {
+    expect(recheckClaudeOnReconnect("local", "reconnecting", "connected")).toBe(true);
+  });
+
+  it("leaves a connection that stayed up, and other hosts, alone", () => {
+    expect(recheckClaudeOnReconnect("local", "connected", "connected")).toBe(false);
+    expect(recheckClaudeOnReconnect("local", "connected", "reconnecting")).toBe(false);
+    expect(recheckClaudeOnReconnect("mac-mini", "reconnecting", "connected")).toBe(false);
   });
 });

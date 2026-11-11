@@ -489,6 +489,10 @@ describe("General's update lines (X43)", () => {
     expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: "2.1.301" }, false)).toEqual({ tone: "blocked", text: "Not found on the PATH" });
     expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: null }, true)).toEqual({ tone: "muted", text: "Checking…" });
   });
+
+  it("does not warn about Claude Code when the daemon could not be asked", () => {
+    expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: "2.1.301", unasked: true }, false)).toEqual({ tone: "muted", text: "Could not ask moonlet's daemon" });
+  });
 });
 
 describe("the Phones page's access line (X43)", () => {

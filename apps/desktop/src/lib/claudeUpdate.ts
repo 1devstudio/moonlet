@@ -19,6 +19,8 @@ export type ClaudeUpdateRun = { ok: boolean; output: string } | { error: string 
 export interface ClaudeVersions {
   installed: string | null;
   latest: string | null;
+  /** The daemon did not answer, so `installed` is unknown rather than missing. */
+  unasked?: boolean;
 }
 
 /** Whether version `a` is newer than `b`, compared number by number. */
@@ -142,8 +144,16 @@ export function claudeStatus(s: ClaudeUpdateState, v: ClaudeVersions, checking: 
   if (checking) return "Checking…";
   if (s.phase === "updating") return "Updating…";
   if (!v.latest) return null;
+  if (v.unasked) return "Could not ask moonlet's daemon";
   if (!v.installed) return "Not found on the PATH";
   return isNewer(v.latest, v.installed) ? `${v.latest} is available` : "Up to date";
+}
+
+/** Whether a host's status change calls for asking Claude Code's version
+ *  again: this Mac's daemon came back, maybe restarted with another PATH,
+ *  and an answer from before (or a failed ask) may be stale. */
+export function recheckClaudeOnReconnect(host: string, prev: string | undefined, next: string): boolean {
+  return host === "local" && prev !== undefined && prev !== "connected" && next === "connected";
 }
 
 /** The release Settings › Updates offers to update to; null for none. */

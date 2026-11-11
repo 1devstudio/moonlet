@@ -10,7 +10,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
 import { afterCloneDone, rememberCloneParent, runsAfterProgress, type CloneRuns } from "./addProject";
-import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
+import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, recheckClaudeOnReconnect, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -508,7 +508,7 @@ export async function checkClaudeVersion() {
   };
   const [local, latest] = await Promise.all([claudeVersion().catch(unknown("claude --version")), hostsApi.claudeLatest().catch(unknown("Claude Code release check"))]);
   if (runs !== claudeRuns) return set({ claudeChecking: false });
-  const versions = { installed: local?.version ?? null, latest };
+  const versions = { installed: local?.version ?? null, latest, unasked: local === null };
   const check = { ...versions, updating: local?.updating ?? false };
   set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
 }
@@ -539,7 +539,7 @@ async function finishClaudeUpdate(run: ClaudeUpdateRun) {
   set({ claudeUpdate: state });
   if (dismiss) updateSettings({ claudeUpdateDismissed: dismiss });
   const now = await claudeVersion().catch(() => null);
-  if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version } }));
+  if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version, unasked: false } }));
 }
 
 /** Later hides the announced release until a newer one is out; the close
@@ -1411,6 +1411,7 @@ export async function startStore() {
     const prev = get().hosts[h.id];
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));
     if (h.status === "connected" && prev?.status !== "connected") void loadHost(h.id);
+    if (recheckClaudeOnReconnect(h.id, prev?.status, h.status)) void checkClaudeVersion();
   });
   const hosts = await hostsApi.list();
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });
