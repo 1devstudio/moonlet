@@ -267,7 +267,8 @@ pub fn refusal(url: &str, status: u16, why: &str) -> (u16, Vec<(&'static str, St
         ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string()),
         ("Cache-Control", "no-store".to_string()),
     ];
-    (status, headers, REFUSED.as_bytes().to_vec())
+    // It clears itself when let go, as every page does (ADR 0013).
+    (status, headers, with_script(REFUSED.as_bytes(), format!("<script>{RELEASE}</script>").as_bytes()))
 }
 
 /// Answers a request for `url`: the file this Mac's daemon resolves it to,
@@ -982,6 +983,8 @@ mod tests {
             ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string())
         );
         assert!(body.contains("bridge.failed"), "{body}");
+        // It clears itself when let go, as every page does (ADR 0013).
+        assert!(body.contains("`moonlet:released`"), "{body}");
         // Why stays out of the page: the app asks the daemon.
         assert!(!body.contains("no such design file"), "{body}");
         // Anything else, a file the page links or a card, is refused in plain text.

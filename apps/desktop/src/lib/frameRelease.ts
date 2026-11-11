@@ -50,7 +50,8 @@ function framesIn(node: Node): HTMLIFrameElement[] {
 
 /** Holds `el`, unseen and out of the way of the pointer, the keyboard,
  *  assistive tech and the layout, until `frames`' pages all said they
- *  cleared, then calls `done`. A page that loads meanwhile is asked again:
+ *  cleared, then calls `done`, with no name left on it or inside it. A page
+ *  that loads meanwhile is asked again:
  *  it may have missed the first ask. */
 function hold(el: HTMLElement, frames: HTMLIFrameElement[], done: () => void) {
   el.style.opacity = "0";
@@ -58,6 +59,10 @@ function hold(el: HTMLElement, frames: HTMLIFrameElement[], done: () => void) {
   el.style.position = "absolute";
   el.setAttribute("inert", "");
   el.setAttribute("aria-hidden", "true");
+  // Nameless, so nothing finds it by a name the screen it was part of had.
+  for (const named of [el, ...el.querySelectorAll("[aria-label], [title], [role]")]) {
+    for (const attr of ["aria-label", "title", "role"]) named.removeAttribute(attr);
+  }
   const doc = el.ownerDocument;
   const win = doc.defaultView;
   const waiting = new Set(frames.map((f) => f.contentWindow));

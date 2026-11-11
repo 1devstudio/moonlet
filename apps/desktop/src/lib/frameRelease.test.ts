@@ -53,6 +53,15 @@ describe("removing a design frame (ADR 0013)", () => {
     expect(box.isConnected).toBe(false);
   });
 
+  it("leaves no name on a held box or inside it, so nothing finds it by one", () => {
+    const { parent, box, frame } = framed();
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Playing Settings page");
+    frame.setAttribute("title", "index.html");
+    parent.removeChild(box);
+    expect(document.querySelector('[role="dialog"], [aria-label="Playing Settings page"], [title="index.html"]')).toBeNull();
+  });
+
   it("removes a box only once every frame in it said its page cleared", () => {
     const { parent, box, page } = framed();
     const other = framed();
