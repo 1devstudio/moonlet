@@ -6001,3 +6001,41 @@ async fn only_the_app_makes_a_design_in_the_library() {
         .await;
     assert_eq!(refused.unwrap_err().to_string(), "forbidden: only the moonlet app manages a shared design");
 }
+
+/// X99: `design.standalone` gives a design's page as one file, its design
+/// system's styles and its own assets inlined, and lists what it could not
+/// read; nothing outside the design's files is ever read into it.
+#[tokio::test]
+async fn a_designs_page_comes_as_one_file_with_its_styles_and_assets_inlined() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::create_dir_all(design.join("assets")).unwrap();
+    std::fs::write(design.join("assets/logo.png"), [1u8, 2, 3]).unwrap();
+    std::fs::write(d.home.path().join(".moonlet/design/library/systems/moonlet-desktop/styles.css"), ".btn { color: red; }").unwrap();
+    std::fs::write(
+        design.join("pages/index.html"),
+        "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\"><img src=\"../assets/logo.png\"><img src=\"../../../../git.toml\">",
+    )
+    .unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        page,
+        serde_json::json!({
+            "html": "<style>.btn { color: red; }</style><img src=\"data:image/png;base64,AQID\"><img src=\"../../../../git.toml\">",
+            "missing": ["../../../../git.toml"],
+        })
+    );
+    let gone = c
+        .request::<_, serde_json::Value>(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page/pages/gone.html"}))
+        .await;
+    assert!(gone.is_err());
+}
