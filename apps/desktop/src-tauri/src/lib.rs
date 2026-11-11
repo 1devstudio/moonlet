@@ -222,17 +222,17 @@ fn url_path(path: &str) -> Result<String, RpcError> {
     url_escape(path, true)
 }
 
-/// Opens a workspace in another app. Remote paths open through the editor's
-/// SSH remote support where it has one.
-#[tauri::command]
-fn open_in(target: String, path: String, host: Option<String>) -> Result<(), RpcError> {
-    let remote = host.filter(|h| h != hosts::LOCAL);
-    let mut cmd = std::process::Command::new("open");
-    match (target.as_str(), remote) {
-        ("finder", None) => cmd.arg(&path),
-        ("reveal", None) => cmd.args(["-R", &path]),
+/// What `open` is given to open `path` in `target`. Remote paths open
+/// through the editor's SSH remote support where it has one. A local app
+/// gets `root` before `path`: Zed then opens `path` in that worktree's
+/// window, not in whichever window is in front.
+fn open_args(target: &str, path: &str, host: Option<&str>, root: Option<&str>) -> Result<Vec<String>, RpcError> {
+    let remote = host.filter(|h| *h != hosts::LOCAL);
+    Ok(match (target, remote) {
+        ("finder", None) => vec![path.to_string()],
+        ("reveal", None) => vec!["-R".to_string(), path.to_string()],
         (app @ ("vscode" | "cursor"), Some(h)) => {
-            cmd.arg(format!("{app}://vscode-remote/ssh-remote+{}{}", url_escape(&h, false)?, url_path(&path)?))
+            vec![format!("{app}://vscode-remote/ssh-remote+{}{}", url_escape(h, false)?, url_path(path)?)]
         }
         (_, Some(_)) => {
             return Err(RpcError::new(
@@ -246,10 +246,16 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
                 .find(|(id, _, _)| *id == t)
                 .map(|(_, _, b)| *b)
                 .ok_or_else(|| RpcError::new("invalid_params", "unknown app"))?;
-            cmd.args(["-a", bundle, &path])
+            ["-a", bundle].into_iter().chain(root).chain([path]).map(String::from).collect()
         }
-    };
-    let status = cmd.status().map_err(err)?;
+    })
+}
+
+/// Opens a session's folder or file in another app (`open_args`).
+#[tauri::command]
+fn open_in(target: String, path: String, host: Option<String>, root: Option<String>) -> Result<(), RpcError> {
+    let args = open_args(&target, &path, host.as_deref(), root.as_deref())?;
+    let status = std::process::Command::new("open").args(&args).status().map_err(err)?;
     if !status.success() {
         return Err(RpcError::new(
             "failed",
@@ -647,6 +653,25 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zed_gets_the_worktree_before_the_file_and_other_apps_get_the_entry_alone() {
+        let args = |target, path, host, root| open_args(target, path, host, root);
+        assert_eq!(
+            args("zed", "/w/fix-cart/src/cart.ts", Some("local"), Some("/w/fix-cart")),
+            Ok(vec!["-a".to_string(), "Zed".into(), "/w/fix-cart".into(), "/w/fix-cart/src/cart.ts".into()])
+        );
+        assert_eq!(args("zed", "/w/fix-cart", None, None), Ok(vec!["-a".to_string(), "Zed".into(), "/w/fix-cart".into()]));
+        assert_eq!(args("reveal", "/w/fix-cart/src", None, Some("/w/fix-cart")), Ok(vec!["-R".to_string(), "/w/fix-cart/src".into()]));
+        assert_eq!(
+            args("cursor", "/w/fix-cart", Some("devbox"), None),
+            Ok(vec!["cursor://vscode-remote/ssh-remote+devbox/w/fix-cart".to_string()])
+        );
+        assert_eq!(
+            args("zed", "/w/fix-cart/a.ts", Some("devbox"), Some("/w/fix-cart")),
+            Err(RpcError::new("unsupported", "this app cannot open remote folders"))
+        );
+    }
 
     #[test]
     fn moonletd_restart_exiting_3_asks_the_app_to_offer_a_force_restart() {

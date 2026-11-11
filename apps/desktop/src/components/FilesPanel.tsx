@@ -8,7 +8,7 @@ import { deleteEntry, draftToAgent, moveEntry, newTabIn, openFileTab } from "../
 import { fileMention } from "../lib/chat";
 import { dropTarget, folderOf, nameFieldOutcome, offersFileActions, parentOf, renameSelection } from "../lib/fileActions";
 import { isUnder, movedPath } from "../lib/layout";
-import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
+import { entryOpenIn, openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
@@ -89,7 +89,10 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
   const copyPath = useSync((s) => (sessionId ? s.copies[sesKey(tree.host, sessionId)]?.path || null : null));
   const synced = syncedOpenIn(tree.targets, e.is_dir, { copy: copyPath, session: tree.root }, e.path);
   const choices = synced?.choices ?? openInChoices(tree.targets, { dir: e.is_dir, kind });
-  const open = (t: OpenTarget) => (synced ? hostsApi.openIn(t.id, synced.path) : hostsApi.openIn(t.id, e.path, tree.host));
+  const open = (t: OpenTarget) => {
+    const to = entryOpenIn(t.id, { path: e.path, dir: e.is_dir }, { host: tree.host, session: tree.root, copy: copyPath });
+    return hostsApi.openIn(t.id, to.path, to.host, to.root);
+  };
   return (
     <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>
       {!e.is_dir && (
