@@ -5,7 +5,7 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { fill, rpc, sel, SESSION, world } from "../fixtures";
+import { fill, rpc, sel, SESSION, siteIsolation, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -200,9 +200,9 @@ describe("A design's screen", () => {
     await expect(bar()).toHaveText(expect.stringContaining(`Design system removed. Pages show without Screen kit's styles.`));
   });
 
-  // Skipped while site isolation is off (2026-11-11), as in
-  // design-isolation.e2e.ts: without it, a looping page freezes the window.
-  it.skip("leaves the window answering while a page never stops running", async () => {
+  // Runs only with site isolation on (`E2E_SITE_ISOLATION=1 pnpm e2e`): without
+  // it, a looping page freezes the window (ADR 0013).
+  (siteIsolation ? it : it.skip)("leaves the window answering while a page never stops running", async () => {
     writeFileSync(join(dir(), "pages", "loop.html"), page("Loop", "<script>for (;;) {}</script>"));
     await $('//nav[@aria-label="Pages"]//button[normalize-space()="loop"]').click();
     await expect(frame("loop.html")).toBeExisting();
