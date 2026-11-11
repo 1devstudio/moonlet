@@ -179,19 +179,22 @@ pub fn bridging(url: &str) -> bool {
     asks(url, "moonlet-bridge")
 }
 
-/// The script served first in an HTML page asked for at `url` on `place`:
-/// the render page's measuring script, or the canvas's bridge; none for a
-/// project design, which is only ever shown, read only (X65).
-pub fn script_for(place: &Place, url: &str) -> Option<&'static str> {
-    if matches!(place, Place::Project(_)) {
-        None
-    } else if measuring(url) {
-        Some(MEASURE)
-    } else if bridging(url) {
-        Some(BRIDGE)
-    } else {
-        None
-    }
+/// The script that clears a page when the app lets its frame go (ADR
+/// 0013), served first in every page.
+const RELEASE: &str = include_str!("design_release.js");
+
+/// The scripts served first, in this order, in an HTML page asked for at
+/// `url` on `place`: the release script, then the render page's measuring
+/// script or the canvas's bridge; never the bridge for a project design,
+/// which is only ever shown, read only (X65).
+pub fn scripts_for(place: &Place, url: &str) -> Vec<&'static str> {
+    let other = match place {
+        Place::Project(_) => None,
+        _ if measuring(url) => Some(MEASURE),
+        _ if bridging(url) => Some(BRIDGE),
+        _ => None,
+    };
+    std::iter::once(RELEASE).chain(other).collect()
 }
 
 /// Whether `url`'s query has the parameter `name`.
@@ -293,7 +296,7 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
     };
-    let script = script_for(&place, url);
+    let scripts = scripts_for(&place, url);
     let params = match &place {
         Place::Workspace(workspace) => serde_json::json!({ "workspace": workspace, "path": path }),
         Place::Session(session) => serde_json::json!({ "session": session, "path": path }),
@@ -334,11 +337,14 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             None => return reply(404, "no such design file"),
         },
     };
-    // The render page's card measures itself, and the canvas's page outlines
-    // and reports its elements (X65), each in its own sandboxed frame.
-    let body = match script {
-        Some(js) if content_type.starts_with("text/html") => with_script(&body, format!("<script>{js}</script>").as_bytes()),
-        _ => body,
+    // Every page clears itself before its frame is let go (ADR 0013); the
+    // render page's card measures itself, and the canvas's page outlines and
+    // reports its elements (X65), each in its own sandboxed frame.
+    let body = if content_type.starts_with("text/html") {
+        let tags: String = scripts.iter().map(|js| format!("<script>{js}</script>")).collect();
+        with_script(&body, tags.as_bytes())
+    } else {
+        body
     };
     let mut res = tauri::http::Response::builder().status(200);
     for (name, value) in headers(content_type, &host) {
@@ -735,7 +741,7 @@ mod tests {
         // A key that names no folder serves nothing.
         assert!(!serves_at("19a1c555a197e847.p-p1a2b3c4d5e6", "settings-page/pages/index.html"));
         let url = "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1";
-        assert_eq!(script_for(&target(url).unwrap().place, url), None);
+        assert_eq!(scripts_for(&target(url).unwrap().place, url), vec![RELEASE]);
     }
 
     #[test]
@@ -887,6 +893,36 @@ mod tests {
         ] {
             assert!(!bridging(plain), "{plain}");
         }
+    }
+
+    #[test]
+    fn every_page_a_frame_is_served_starts_with_the_release_script() {
+        let scripts = |url: &str| scripts_for(&target(url).unwrap().place, url);
+        // A card in the app's window, the render page's card, the canvas's
+        // page and a project design's page, which gets no bridge.
+        assert_eq!(
+            scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/systems/s/components/buttons/button/button.html?v=2"),
+            vec![RELEASE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://w1/systems/s/components/buttons/button/button.html?moonlet-render=3"),
+            vec![RELEASE, MEASURE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1"),
+            vec![RELEASE, BRIDGE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1"),
+            vec![RELEASE]
+        );
+        // The page clears itself when its window asks, and says so.
+        assert!(RELEASE.contains("`moonlet:release`"));
+        assert!(RELEASE.contains("`moonlet:released`"));
+        // It has no quote at all, so a page whose attribute quote is never
+        // closed still swallows the scripts after it, as it would without it
+        // (X65 entry 13).
+        assert!(!RELEASE.contains(['"', '\'']));
     }
 
     #[test]

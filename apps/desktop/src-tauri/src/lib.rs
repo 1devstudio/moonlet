@@ -512,8 +512,8 @@ fn app_info() -> Value {
 /// The main window, as `tauri.conf.json` describes it. It is made here
 /// (`"create": false` there) because on macOS its webview needs site
 /// isolation from its first load to run each design card in its own web
-/// process (X64). Site isolation is off unless `isolation::SWITCH` turns it
-/// on (ADR 0013); a WebKit without the feature gets the window as before.
+/// process (X64). Site isolation is on unless `isolation::SWITCH` turns it
+/// off (ADR 0013); a WebKit without the feature gets the window as before.
 fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
     let config = app
         .config()

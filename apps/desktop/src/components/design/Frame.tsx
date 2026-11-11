@@ -50,8 +50,14 @@ export function CardFrame({
           // With the loader, each address gets a frame of its own: WebKit
           // suspends a hidden window's card processes, and a frame sent
           // to a new address in one may not load until the window shows.
-          key={loader ? turn.src : undefined}
+          // Without it, each host does: a frame sent to another host would
+          // drop its page's web process with no chance to clear it, where a
+          // frame removed is held until its page cleared (ADR 0013,
+          // lib/frameRelease.ts).
+          key={loader ? turn.src : hostOf(turn.src)}
           ref={frameRef}
+          // A design frame, held until its page cleared when removed.
+          data-moonlet-frame=""
           title={title}
           src={turn.src}
           sandbox="allow-scripts"
@@ -70,6 +76,15 @@ export function CardFrame({
       )}
     </div>
   );
+}
+
+/** `url`'s host, or `url` itself when it has none. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
 }
 
 /** − and + by steps from 25% to `max` (400% for a card, 200% for a page),

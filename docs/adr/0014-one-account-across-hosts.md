@@ -93,7 +93,7 @@ ADR 0009 put every session on the central host, with other machines as windows o
 - **Rendering without the app needs a spike first:**
   - WPE WebKit's snapshots and its sandboxing on the static Linux builds (X58);
   - the macOS helper in a login session with no app window;
-  - each card's own process, which keeps a looping card from freezing others: macOS gets it from site isolation when that is on (ADR 0013; off by default since 2026-11-11), WPE would get it from a process per render killed on a timeout.
+  - each card's own process, which keeps a looping card from freezing others: macOS gets it from site isolation (ADR 0013), WPE would get it from a process per render killed on a timeout.
 - **Glossary.** *Central host* keeps its name with its new meaning. *Member* (a host in the account), *owner* (the member running a session's agent), *admin* and *account state* are added to `CONTEXT.md` when this ADR is accepted.
 - **Delivery,** each slice with its own spec:
   1. account state, synced through the central host, and the workspace migration;
