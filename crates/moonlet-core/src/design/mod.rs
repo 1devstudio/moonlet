@@ -24,6 +24,7 @@ pub mod readme;
 pub mod render;
 pub mod session;
 pub mod stack;
+pub mod standalone;
 pub mod store;
 pub mod tokens;
 pub mod watch;

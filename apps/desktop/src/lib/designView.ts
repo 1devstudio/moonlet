@@ -115,7 +115,13 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
  *  with the comment bridge, which the canvas talks to (`design_scheme.rs`
  *  `bridging`). */
 export function pageUrl(place: DesignPlace, design: string, page: string, rev = 0, bridge = false): string {
-  return designUrl(place, `${designFolder(place, design)}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
+  return designUrl(place, designPagePath(place, design, page), rev, bridge ? { "moonlet-bridge": "1" } : {});
+}
+
+/** A design's page as `design.file` and the scheme name it: in the design's
+ *  folder, or in its snapshot `snapshot`'s (`designs/<design>@<n>/`). */
+export function designPagePath(place: DesignPlace, design: string, page: string, snapshot: number | null = null): string {
+  return `${designFolder(place, snapshot === null ? design : taggedSlug(design, snapshot))}/${pagePath(page)}`;
 }
 
 /** Page `page` of design `design`'s snapshot `n`, read only: never with the
@@ -130,7 +136,7 @@ export function pageUrl(place: DesignPlace, design: string, page: string, rev = 
  *  link in the page never shows the current page in the preview. */
 export function snapshotPageUrl(place: DesignPlace, design: string, n: number, page: string): string {
   const folder = designFolder(place, taggedSlug(design, n));
-  const path = `${folder}/${pagePath(page)}`;
+  const path = designPagePath(place, design, page, n);
   return designUrl(place, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
 }
 

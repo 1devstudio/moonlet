@@ -334,6 +334,11 @@ pub const DESIGN_RENDER_DONE: &str = "design.render.done";
 pub const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
+/// [`DesignFile`] of a workspace's or a session's design's page, a
+/// snapshot's included → `{html, missing}`: the page as one file,
+/// everything it loads from the design's folder inlined, and the addresses
+/// it could not read (X99 Download).
+pub const DESIGN_STANDALONE: &str = "design.standalone";
 /// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.
 pub const DESIGN_DETECT: &str = "design.detect";
 /// [`DesignSettle`]: the user's choice for a card after a sync.

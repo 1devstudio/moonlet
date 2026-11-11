@@ -38,6 +38,9 @@ cap-std = "4"
 # Reads a sign-in URL's redirect_uri (X75); already in the lockfile.
 url = "2.5"
 sha1 = "0.10"
+# A design's page downloaded as one HTML file (X99): its images and fonts
+# as data: URLs; already in the lockfile.
+base64 = "0.22"
 sha2 = "0.10"
 
 # Delete in the Files tab moves to the Trash (X98); already built for the app.

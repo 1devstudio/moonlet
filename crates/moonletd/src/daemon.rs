@@ -285,8 +285,9 @@ const DESIGN_ADDRESSED: &[&str] = &[
 
 /// The design calls that gate what their own parsed params name (X65):
 /// `design.check`, a design system's workspace or a design, and
-/// `design.file`, a workspace's file or a session design's.
-const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
+/// `design.file` and `design.standalone`, a workspace's file or a session
+/// design's.
+const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE, m::DESIGN_STANDALONE];
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
@@ -2632,6 +2633,33 @@ impl Daemon {
                     (Some(_), Some(_)) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session, not both")),
                     (None, None) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session")),
                 }
+            }
+            m::DESIGN_STANDALONE => {
+                let r: m::DesignFile = params(p)?;
+                let page = r.path.clone();
+                // Every file read as design.file reads it: nothing outside
+                // the workspace's design folder (and the library's systems)
+                // or the session's design folder.
+                let read: Box<dyn FnMut(&str) -> Option<Vec<u8>> + Send> = match (r.workspace, r.session, r.project) {
+                    (Some(workspace), None, None) => {
+                        self.workspace_exists(&workspace)?;
+                        let store = store.clone();
+                        Box::new(move |path: &str| store.resolve(&workspace, path).ok().and_then(|real| std::fs::read(real).ok()))
+                    }
+                    (None, Some(session), None) => {
+                        let (s, folder) = self.design_session(&session)?;
+                        self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
+                        Box::new(move |path: &str| moonlet_core::design::session::session_file(Path::new(&s.path), &folder, path).ok())
+                    }
+                    _ => return Err(RpcError::new("invalid_params", "name a design's page by its workspace or by its session")),
+                };
+                ok(blocking(move || {
+                    let mut read = read;
+                    let html = read(&page).ok_or_else(|| anyhow::anyhow!(RpcError::new("invalid_params", format!("{page} is no page of a design"))))?;
+                    let out = moonlet_core::design::standalone::inline(&page, &String::from_utf8_lossy(&html), read);
+                    Ok(serde_json::json!({"html": out.html, "missing": out.missing}))
+                })
+                .await?)
             }
             m::DESIGN_DETECT => {
                 let r: m::DesignDetect = params(p)?;

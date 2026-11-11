@@ -361,4 +361,9 @@ describe("a canvas's keys (X65)", () => {
   it("are a session's Design tab's at once when the app opened it, on design.open or a toast's Open", () => {
     expect(canvasTakesKeys(true, inTabAfter({ kind: "opened" }))).toBe(true);
   });
+
+  it("are none while the page is played full screen over it (X99)", () => {
+    expect(canvasTakesKeys(false, false, true)).toBe(false);
+    expect(canvasTakesKeys(true, true, true)).toBe(false);
+  });
 });

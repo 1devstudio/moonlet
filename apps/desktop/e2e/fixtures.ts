@@ -78,6 +78,8 @@ function makeWorld(root: string): World {
       MOONLET_CLOUD_FAKE: join(root, "cloud-fake"),
       // Delete in the Files tab (X98) moves here, not to the user's own Trash.
       MOONLET_TRASH_DIR: join(root, "trash"),
+      // Download as HTML (X99) saves here, with no save dialog.
+      MOONLET_DOWNLOAD_DIR: join(root, "downloads"),
     },
   };
 }
@@ -100,6 +102,7 @@ function seed(w: World) {
   mkdirSync(w.home, { recursive: true });
   mkdirSync(w.env.HOME, { recursive: true });
   mkdirSync(w.env.MOONLET_TRASH_DIR, { recursive: true });
+  mkdirSync(w.env.MOONLET_DOWNLOAD_DIR, { recursive: true });
   // If anything ever resolves a real agent, it gets this instead.
   const fakeBin = join(w.root, "bin");
   mkdirSync(fakeBin);

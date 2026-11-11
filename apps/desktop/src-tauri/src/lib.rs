@@ -3,6 +3,7 @@
 //! PTY output to the webview over a binary channel.
 
 mod attach;
+mod design_download;
 mod design_render;
 mod design_scheme;
 mod hosts;
@@ -598,6 +599,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            design_download::design_download,
             host_pair,
             host_list,
             host_add,
