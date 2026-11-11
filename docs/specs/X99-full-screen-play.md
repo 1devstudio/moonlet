@@ -1,6 +1,6 @@
 # X99 — Play a design full screen
 
-- **Status:** draft
+- **Status:** implemented (2026-11-11)
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X65 (Design mode: the canvas, View mode), X64 (design systems)
 - **Related ADRs:** [0013](../adr/0013-design-systems-and-designs.md)
@@ -22,16 +22,16 @@ The canvas ([X65](X65-design-mode.md)) shows a design's page at a chosen viewpor
 
 ## Behaviour and acceptance criteria
 
-- [ ] The canvas toolbar has **Play** (title "Play full screen (P)") wherever a page shows: a workspace design, a session design's Design tab, a project design and a snapshot previewed. P outside a text field does the same. In Overview it plays the first page.
-- [ ] Play covers the whole app window, above the sidebar and the columns (dialogs and toasts still show over it), until Esc or the back arrow; nothing behind it takes the pointer. The window's traffic lights stay usable, and the bar drags the window.
-- [ ] The bar shows the design's name and the page, the page's place among the design's pages (`2 / 3`), Download, and Fill | Fit.
-- [ ] **Fill** (the default) lays the page out at the area under the bar, at 100%, and again whenever the window's size changes. **Fit** shows it at the canvas's viewport, scaled to fit that area, never above 100%, centred.
-- [ ] The page is live as in View mode: its scripts, links and menus run, and it scrolls, with no outlines, pins or editing. It is framed like the canvas's page (sandboxed, on the page's own host, under the no-network CSP), so a page that never stops running freezes neither the window nor the bar (X64, site isolation).
-- [ ] ←/→ (with the page not focused) show the previous and next page of the design, stopping at the first and the last. A snapshot previewed goes through the snapshot's pages.
-- [ ] The page loads again when its file or its design system changes, as on the canvas; a page that is gone shows the next page there is, or returns to the canvas when none is left.
-- [ ] Esc (with the page not focused), or the back arrow, returns to the canvas showing the page last played, at the canvas's viewport and zoom as they were.
-- [ ] **Download** saves the page shown as one `.html` file through a save dialog, named after the page (`settings.html`). The file holds everything the page loads from its design's folder and its design system: stylesheets (with their `@import`s) inlined as `<style>`, scripts as inline `<script>`, and images, fonts and other `url()`s as `data:` URLs. An address outside the design's files (`https:`, `data:`, `#…`) is left as it is. A snapshot previewed downloads the snapshot's page.
-- [ ] Download says where it saved (`Saved settings.html`), and says why when it could not (a file it could not read is left as its address, and listed).
+- [x] The canvas toolbar has **Play** (title "Play full screen (P)") wherever the design screen shows a page: a workspace design, a session design's Design tab and a snapshot previewed. P outside a text field does the same. In Overview it plays the first page. (`e2e/specs/design-play.e2e.ts` plays the page over the whole window with Play, at the window's size; plays with P)
+- [x] Play covers the whole app window, above the sidebar and the columns (dialogs and toasts still show over it), until Esc or the back arrow; nothing behind it takes the pointer. The window's traffic lights stay usable, and the bar drags the window. (`design-play.e2e.ts` plays the page over the whole window with Play, at the window's size; the traffic lights and dragging the window by the bar are a check by hand)
+- [x] The bar shows the design's name and the page, the page's place among the design's pages (`2 / 3`), Download, and Fill | Fit. (`lib/designPlay.test.ts` counts the page shown among the design's pages; `design-play.e2e.ts` plays the page over the whole window with Play, at the window's size)
+- [x] **Fill** (the default) lays the page out at the area under the bar, at 100%, and again whenever the window's size changes. **Fit** shows it at the canvas's viewport, scaled to fit that area, never above 100%, centred. (`lib/designPlay.test.ts` fills the area at 100% with Fill, and fits the viewport into it, never above 100%, with Fit; `design-play.e2e.ts` plays the page over the whole window with Play, at the window's size; fits the canvas's viewport into the window with Fit)
+- [x] The page is live as in View mode: its scripts, links and menus run, and it scrolls, with no outlines, pins or editing. It is framed like the canvas's page (sandboxed, on the page's own host, under the no-network CSP), so a page that never stops running freezes neither the window nor the bar (X64, site isolation). It is `CardFrame`, as the canvas's page is; scrolling with the wheel is a check by hand.
+- [x] ←/→ (with the page not focused) show the previous and next page of the design, stopping at the first and the last. A snapshot previewed goes through the snapshot's pages. (`lib/designPlay.test.ts` steps through the pages, stopping at the first and the last; goes back on Esc and through the pages on ← and →, never while typing; `design-play.e2e.ts` goes through the pages with → and ←)
+- [x] The page loads again when its file changes, as on the canvas; a page that is gone shows the design's first page, or returns to the canvas when none is left. (`design-play.e2e.ts` loads a page written again)
+- [x] Esc (with the page not focused), or the back arrow, returns to the canvas showing the page last played, at the canvas's viewport and zoom as they were. (`design-play.e2e.ts` goes back to the canvas on Esc, showing the page last played; plays with P)
+- [x] **Download** saves the page shown as one `.html` file through a save dialog, named after the page (`settings.html`). The file holds everything the page loads from its design's folder and its design system: stylesheets (with their `@import`s) inlined as `<style>`, scripts as inline `<script>`, and images, fonts and other `url()`s as `data:` URLs. An address outside the design's files (`https:`, `data:`, `#…`) is left as it is. A snapshot previewed downloads the snapshot's page. (`moonlet-core` `design/standalone.rs` a_page_comes_with_its_stylesheets_imports_fonts_images_and_scripts_inlined, addresses_outside_the_designs_files_are_left_as_they_are, an_import_with_media_is_kept_to_its_media_and_an_import_cycle_ends; `moonletd/tests/daemon.rs` a_designs_page_comes_as_one_file_with_its_styles_and_assets_inlined; `lib/designPlay.test.ts` names the page shown as design.file names it, a snapshot's page in the snapshot's folder; `design-play.e2e.ts` downloads the page as one HTML file with its styles and images inlined, through `MOONLET_DOWNLOAD_DIR` in place of the save dialog)
+- [x] Download says where it saved (`Saved settings.html`), and says why when it could not (a file it could not read is left as its address, and listed). (`standalone.rs` an_address_that_cannot_be_read_or_leaves_the_root_is_left_and_listed; `lib/designPlay.test.ts` says where Download saved the page, and what it could not read; nothing when cancelled)
 
 ## UI
 
@@ -67,7 +67,7 @@ None: Fill or Fit is not kept; every Play starts with Fill.
 
 ## Out of scope
 
-- Playing a design system's card full screen.
+- Playing a design system's card, or a project design's page from the Designs index, full screen (`design.standalone` already takes a project design's page).
 - Recording, presenting to another screen, or a device frame around the page.
 - Downloading a whole design (every page) or a zip; Download saves the page shown.
 
