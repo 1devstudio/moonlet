@@ -10,6 +10,20 @@ const TERMINALS = ["iterm", "ghostty", "terminal"];
 /** Apps that open folders on an SSH host (see `open_in`). */
 const REMOTE = ["vscode", "cursor"];
 
+/** Apps that open a lone file in whichever of their windows is in front. */
+const PROJECT_EDITORS = ["zed"];
+
+/**
+ * What a Files tab entry opens in `target`. Zed, already running, puts a
+ * lone file in the window in front, often another project's, so a file
+ * opens with its session's worktree (`root`) and a folder opens the
+ * worktree itself.
+ */
+export function entryOpenIn(target: string, root: string, entry: { path: string; dir: boolean }): { path: string; root?: string } {
+  if (!PROJECT_EDITORS.includes(target)) return { path: entry.path };
+  return entry.dir ? { path: root } : { path: entry.path, root };
+}
+
 /**
  * The "Open in" choices of a Files tab entry (X25), from the app's
  * `open_targets`. Finder reveals the entry rather than opening it: `open`

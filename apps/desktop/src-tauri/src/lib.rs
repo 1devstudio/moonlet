@@ -223,9 +223,10 @@ fn url_path(path: &str) -> Result<String, RpcError> {
 }
 
 /// Opens a workspace in another app. Remote paths open through the editor's
-/// SSH remote support where it has one.
+/// SSH remote support where it has one. A local app gets `root` too, before
+/// `path`, so it opens `path` in that folder's window.
 #[tauri::command]
-fn open_in(target: String, path: String, host: Option<String>) -> Result<(), RpcError> {
+fn open_in(target: String, path: String, host: Option<String>, root: Option<String>) -> Result<(), RpcError> {
     let remote = host.filter(|h| h != hosts::LOCAL);
     let mut cmd = std::process::Command::new("open");
     match (target.as_str(), remote) {
@@ -246,7 +247,8 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
                 .find(|(id, _, _)| *id == t)
                 .map(|(_, _, b)| *b)
                 .ok_or_else(|| RpcError::new("invalid_params", "unknown app"))?;
-            cmd.args(["-a", bundle, &path])
+            cmd.args(["-a", bundle]);
+            cmd.args(root.as_deref()).arg(&path)
         }
     };
     let status = cmd.status().map_err(err)?;

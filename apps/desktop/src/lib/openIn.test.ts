@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openInChoices, syncedOpenIn, workspaceOpenIn, workspaceOpenTargets } from "./openIn";
+import { entryOpenIn, openInChoices, syncedOpenIn, workspaceOpenIn, workspaceOpenTargets } from "./openIn";
 
 // What `open_targets` returns on a Mac with Cursor, Zed, Ghostty and Terminal installed.
 const targets = [
@@ -86,5 +86,23 @@ describe("workspaceOpenIn: the session header's Open in (X25, X60)", () => {
   it("opens any other session where it is, with its host's apps", () => {
     expect(workspaceOpenIn(withVscode, { kind: "tailnet", host: "studio-mini", path: "/w" }, null)).toEqual({ choices: [], path: "/w", host: "studio-mini" });
     expect(workspaceOpenIn(withVscode, { kind: "ssh", host: "devbox", path: "/w" }, null)).toEqual({ choices: [{ id: "cursor", label: "Cursor" }, { id: "vscode", label: "VS Code" }], path: "/w", host: "devbox" });
+  });
+});
+
+describe("entryOpenIn: what a Files tab entry opens", () => {
+  const root = "/Users/sam/.moonlet/worktrees/shop/fix-cart";
+
+  it("opens a file in Zed inside its session's worktree, not in whichever Zed window is in front", () => {
+    expect(entryOpenIn("zed", root, { path: `${root}/src/cart.ts`, dir: false })).toEqual({ path: `${root}/src/cart.ts`, root });
+  });
+
+  it("opens the worktree in Zed for a folder of it", () => {
+    expect(entryOpenIn("zed", root, { path: `${root}/src`, dir: true })).toEqual({ path: root });
+    expect(entryOpenIn("zed", root, { path: root, dir: true })).toEqual({ path: root });
+  });
+
+  it("opens the entry alone in the other apps", () => {
+    expect(entryOpenIn("cursor", root, { path: `${root}/src/cart.ts`, dir: false })).toEqual({ path: `${root}/src/cart.ts` });
+    expect(entryOpenIn("reveal", root, { path: `${root}/src`, dir: true })).toEqual({ path: `${root}/src` });
   });
 });
