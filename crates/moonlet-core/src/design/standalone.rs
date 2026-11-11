@@ -181,6 +181,30 @@ fn wrap(conditions: &str, rules: String) -> String {
     open.into_iter().rev().fold(rules, |inner, rule| format!("{rule} {{\n{inner}\n}}"))
 }
 
+/// A `srcset`'s candidates: each one's address, and its descriptor with the
+/// space before it (`" 2x"`), or none. An address runs to the first space,
+/// so a `data:` URL's commas stay in it.
+fn candidates(set: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut rest = set;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == ',');
+        if rest.is_empty() {
+            return out;
+        }
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (url, after) = rest.split_at(end);
+        if let Some(url) = url.strip_suffix(',') {
+            out.push((url, ""));
+            rest = after;
+            continue;
+        }
+        let stop = after.find(',').unwrap_or(after.len());
+        out.push((url, after[..stop].trim_end()));
+        rest = &after[stop..];
+    }
+}
+
 /// What follows `keyword` at the start of `s`, ignoring case.
 fn strip_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
     let head = s.get(..keyword.len())?;
@@ -229,7 +253,8 @@ pub fn inline(page: &str, html: &str, read: impl FnMut(&str) -> Option<Vec<u8>>)
                 let mut i = inliner.borrow_mut();
                 if let Ok(Some((path, bytes))) = i.file(page, &href) {
                     let sheet = i.css(&path, &String::from_utf8_lossy(&bytes), &mut HashSet::from([path.clone()]));
-                    el.replace(&format!("<style>{}</style>", sheet.replace("</style", "<\\/style")), ContentType::Html);
+                    let media = el.get_attribute("media").map(|m| format!(" media=\"{}\"", m.replace('&', "&amp;").replace('"', "&quot;"))).unwrap_or_default();
+                    el.replace(&format!("<style{media}>{}</style>", sheet.replace("</style", "<\\/style")), ContentType::Html);
                 }
             } else if rel_has(el, "icon") {
                 let url = inliner.borrow_mut().data_url(page, &href);
@@ -249,6 +274,13 @@ pub fn inline(page: &str, html: &str, read: impl FnMut(&str) -> Option<Vec<u8>>)
             let src = el.get_attribute("src").unwrap_or_default();
             let url = inliner.borrow_mut().data_url(page, &src);
             el.set_attribute("src", &url)?;
+            Ok(())
+        }))
+        .append_element_content_handler(element!("img[srcset], source[srcset]", |el| {
+            let set = el.get_attribute("srcset").unwrap_or_default();
+            let mut i = inliner.borrow_mut();
+            let set = candidates(&set).into_iter().map(|(url, descriptor)| format!("{}{descriptor}", i.data_url(page, url))).collect::<Vec<_>>().join(", ");
+            el.set_attribute("srcset", &set)?;
             Ok(())
         }))
         .append_element_content_handler(element!("video[poster]", |el| {
@@ -363,5 +395,16 @@ mod tests {
         let files = files(&[("s/a.css", b"@import \"b.css\" layer(base) supports(display: grid) screen;"), ("s/b.css", b".b {}")]);
         let out = inline("p.html", "<link rel=\"stylesheet\" href=\"s/a.css\">", |p| files.get(p).cloned());
         assert_eq!(out.html, "<style>@layer base {\n@supports (display: grid) {\n@media screen {\n.b {}\n}\n}\n}</style>");
+    }
+
+    #[test]
+    fn a_stylesheet_link_keeps_its_media_and_an_images_srcset_is_inlined_too() {
+        let files = files(&[("p/print.css", b".p {}"), ("p/a.png", &[1, 2, 3]), ("p/b.png", &[4, 5, 6])]);
+        let page = "<link rel=\"stylesheet\" href=\"print.css\" media=\"print\"><img src=\"a.png\" srcset=\"a.png 1x, b.png 2x, https://x.example/c.png 3x\">";
+        let out = inline("p/index.html", page, |p| files.get(p).cloned());
+        assert_eq!(
+            out.html,
+            "<style media=\"print\">.p {}</style><img src=\"data:image/png;base64,AQID\" srcset=\"data:image/png;base64,AQID 1x, data:image/png;base64,BAUG 2x, https://x.example/c.png 3x\">"
+        );
     }
 }

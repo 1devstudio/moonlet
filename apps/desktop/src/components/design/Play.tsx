@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, Download } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cx } from "../../lib/cx";
 import { isTyping } from "../../lib/designCanvas";
@@ -54,6 +54,20 @@ export function Play({
     else if (shown !== page) setPage(shown);
   }, [shown, page, onClose]);
 
+  // The keyboard's focus on the play bar, and the app behind out of reach,
+  // until the play view closes and gives the focus back.
+  const bar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const app = document.getElementById("root");
+    if (app) app.inert = true;
+    bar.current?.querySelector("button")?.focus();
+    return () => {
+      if (app) app.inert = false;
+      before?.focus();
+    };
+  }, []);
+
   // Esc and ←/→ before the canvas's own keys, which wait behind the play view.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -78,7 +92,7 @@ export function Play({
   const url = snapshot === null ? pageUrl(place, slug, page, rev) : snapshotPageUrl(place, slug, snapshot, page);
   return createPortal(
     <div role="dialog" aria-label={`Playing ${name} · ${page}`} className="fixed inset-0 z-[45] flex flex-col bg-bg">
-      <div data-tauri-drag-region className="drag flex h-9 shrink-0 items-center gap-2 border-b border-border pr-3 ui-text-13" style={{ paddingLeft: TRAFFIC_LIGHTS }}>
+      <div ref={bar} data-tauri-drag-region className="drag flex h-9 shrink-0 items-center gap-2 border-b border-border pr-3 ui-text-13" style={{ paddingLeft: TRAFFIC_LIGHTS }}>
         <IconButton title="Back (Esc)" className="no-drag" onClick={() => onClose(page)}>
           <ArrowLeft size={14} />
         </IconButton>

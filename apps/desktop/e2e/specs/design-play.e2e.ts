@@ -13,8 +13,9 @@ const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
 const mode = (label: string) => $(`//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "${label}")]`);
 const SYSTEM = "play-kit";
 const dir = () => join(w.home, "design", workspaceId(), "designs", "play-page");
+// Its script says it ran, and in which frame: the canvas's asks for the bridge.
 const page = (title: string) =>
-  `<!doctype html>\n<html><head><meta charset="utf-8"><link rel="stylesheet" href="../../../systems/${SYSTEM}/styles.css"></head>\n<body data-mid="m1"><h1 data-mid="m2">${title}</h1><img data-mid="m3" src="../assets/dot.png" alt=""></body></html>\n`;
+  `<!doctype html>\n<html><head><meta charset="utf-8"><link rel="stylesheet" href="../../../systems/${SYSTEM}/styles.css"></head>\n<body data-mid="m1"><h1 data-mid="m2">${title}</h1><img data-mid="m3" src="../assets/dot.png" alt=""><script>parent.postMessage("moonlet-e2e-ran:" + location.search, "*")</script></body></html>\n`;
 const play = () => $('//div[@role="dialog"][starts-with(@aria-label, "Playing Play page")]');
 const played = (name: string) => $(`//iframe[@title="${name}.html played"]`);
 /** The played frame's box: its size on screen. */
@@ -42,6 +43,14 @@ describe("Playing a design full screen", () => {
     await mode("Design").click();
     await $('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Play page"]]').click();
     await expect($('//nav[@aria-label="Pages"]//button[normalize-space()="settings"]')).toBeExisting();
+    // Fit's worked example: the Phone viewport, 390×844, fits the window's area whole, at 100%.
+    await $('//button[@aria-label="Viewport"]').click();
+    await $('//button[starts-with(normalize-space(), "Phone")]').click();
+    await browser.execute(() => {
+      const w = window as unknown as { ran: string[] };
+      w.ran = [];
+      addEventListener("message", (e) => typeof e.data === "string" && e.data.startsWith("moonlet-e2e-ran:") && w.ran.push(e.data));
+    });
   });
 
   after(async () => {
@@ -61,16 +70,14 @@ describe("Playing a design full screen", () => {
     const r = await browser.execute(() => document.querySelector('[role="dialog"][aria-label^="Playing"]')!.getBoundingClientRect().toJSON());
     expect([Math.round(r.width), Math.round(r.height)]).toEqual([ww, wh]);
     await browser.waitUntil(async () => JSON.stringify(await box("index")) === JSON.stringify(await area()), { timeout: 3000, timeoutMsg: "Fill did not size the page to the area" });
+    // The keyboard is on the play bar, and the page's own script ran in the played frame.
+    expect(await browser.execute(() => document.activeElement?.getAttribute("title"))).toBe("Back (Esc)");
+    await browser.waitUntil(() => browser.execute(() => (window as unknown as { ran: string[] }).ran.some((r) => !r.includes("moonlet-bridge"))), { timeout: 5000, timeoutMsg: "the played page's script did not run" });
   });
 
   it("fits the canvas's viewport into the window with Fit", async () => {
     await play().$('.//button[normalize-space()="Fit"]').click();
-    const [aw, ah] = await area();
-    const scale = Math.min(1, aw / 1440, ah / 900);
-    await browser.waitUntil(async () => {
-      const [bw, bh] = await box("index");
-      return Math.abs(bw - 1440 * scale) <= 1 && Math.abs(bh - 900 * scale) <= 1;
-    }, { timeout: 3000, timeoutMsg: "Fit did not scale the viewport into the area" });
+    await browser.waitUntil(async () => JSON.stringify(await box("index")) === JSON.stringify([390, 844]), { timeout: 3000, timeoutMsg: "Fit did not show the Phone viewport at 100%" });
     await play().$('.//button[normalize-space()="Fill"]').click();
   });
 
@@ -108,6 +115,8 @@ describe("Playing a design full screen", () => {
     await browser.keys("Escape");
     await expect(play()).not.toBeExisting();
     await expect($('//nav[@aria-label="Pages"]//button[normalize-space()="settings"]')).toHaveAttribute("aria-current", "page");
+    // The keyboard is back where it was: on Play.
+    expect(await browser.execute(() => document.activeElement?.getAttribute("title"))).toBe("Play full screen (P)");
   });
 
   it("plays with P", async () => {

@@ -285,8 +285,9 @@ const DESIGN_ADDRESSED: &[&str] = &[
 
 /// The design calls that gate what their own parsed params name (X65):
 /// `design.check`, a design system's workspace or a design, and
-/// `design.file`, a workspace's file or a session design's.
-const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
+/// `design.file` and `design.standalone`, a workspace's file or a session
+/// design's.
+const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE, m::DESIGN_STANDALONE];
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.

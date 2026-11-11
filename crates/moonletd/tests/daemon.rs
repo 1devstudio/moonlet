@@ -6060,3 +6060,32 @@ async fn a_snapshots_page_comes_as_one_file_as_the_snapshot_has_it() {
         .unwrap();
     assert_eq!(page, serde_json::json!({"html": "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n", "missing": []}));
 }
+
+/// X99: `design.standalone` reaches a session design's page by its session
+/// alone, as `design.file` does, its assets inlined from the worktree.
+#[tokio::test]
+async fn a_session_designs_page_comes_as_one_file_by_its_session_alone() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let dir = std::path::PathBuf::from(&session.path).join("docs/design/settings-page");
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("assets/logo.png"), [1u8, 2, 3]).unwrap();
+    std::fs::write(dir.join("pages/index.html"), "<img src=\"../assets/logo.png\">").unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page, serde_json::json!({"html": "<img src=\"data:image/png;base64,AQID\">", "missing": []}));
+}
