@@ -90,9 +90,8 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
   const synced = syncedOpenIn(tree.targets, e.is_dir, { copy: copyPath, session: tree.root }, e.path);
   const choices = synced?.choices ?? openInChoices(tree.targets, { dir: e.is_dir, kind });
   const open = (t: OpenTarget) => {
-    // A synced entry opens in the copy on this Mac (X60), with the copy as its worktree.
-    const to = synced && copyPath ? entryOpenIn(t.id, copyPath, { path: synced.path, dir: e.is_dir }) : entryOpenIn(t.id, tree.root, { path: e.path, dir: e.is_dir });
-    return hostsApi.openIn(t.id, to.path, synced ? undefined : tree.host, to.root);
+    const to = entryOpenIn(t.id, { path: e.path, dir: e.is_dir }, { host: tree.host, session: tree.root, copy: copyPath });
+    return hostsApi.openIn(t.id, to.path, to.host, to.root);
   };
   return (
     <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100" onClick={(ev) => ev.stopPropagation()}>

@@ -91,18 +91,29 @@ describe("workspaceOpenIn: the session header's Open in (X25, X60)", () => {
 
 describe("entryOpenIn: what a Files tab entry opens", () => {
   const root = "/Users/sam/.moonlet/worktrees/shop/fix-cart";
+  const here = { host: "local", session: root, copy: null };
 
   it("opens a file in Zed inside its session's worktree, not in whichever Zed window is in front", () => {
-    expect(entryOpenIn("zed", root, { path: `${root}/src/cart.ts`, dir: false })).toEqual({ path: `${root}/src/cart.ts`, root });
+    expect(entryOpenIn("zed", { path: `${root}/src/cart.ts`, dir: false }, here)).toEqual({ path: `${root}/src/cart.ts`, host: "local", root });
   });
 
   it("opens the worktree in Zed for a folder of it", () => {
-    expect(entryOpenIn("zed", root, { path: `${root}/src`, dir: true })).toEqual({ path: root });
-    expect(entryOpenIn("zed", root, { path: root, dir: true })).toEqual({ path: root });
+    expect(entryOpenIn("zed", { path: `${root}/src`, dir: true }, here)).toEqual({ path: root, host: "local" });
+    expect(entryOpenIn("zed", { path: root, dir: true }, { ...here, session: `${root}/` })).toEqual({ path: root, host: "local" });
   });
 
   it("opens the entry alone in the other apps", () => {
-    expect(entryOpenIn("cursor", root, { path: `${root}/src/cart.ts`, dir: false })).toEqual({ path: `${root}/src/cart.ts` });
-    expect(entryOpenIn("reveal", root, { path: `${root}/src`, dir: true })).toEqual({ path: `${root}/src` });
+    expect(entryOpenIn("cursor", { path: `${root}/src/cart.ts`, dir: false }, here)).toEqual({ path: `${root}/src/cart.ts`, host: "local" });
+    expect(entryOpenIn("reveal", { path: `${root}/src`, dir: true }, here)).toEqual({ path: `${root}/src`, host: "local" });
+  });
+
+  it("opens an entry of a session kept in sync in its copy on this Mac, the copy as Zed's worktree (X60)", () => {
+    const synced = { host: "studio-mini", session: root, copy: "/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart/" };
+    expect(entryOpenIn("zed", { path: `${root}/src/cart.ts`, dir: false }, synced)).toEqual({
+      path: "/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart/src/cart.ts",
+      root: "/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart",
+    });
+    expect(entryOpenIn("zed", { path: `${root}/src`, dir: true }, synced)).toEqual({ path: "/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart" });
+    expect(entryOpenIn("cursor", { path: `${root}/src`, dir: true }, synced)).toEqual({ path: "/Users/alex/.moonlet/copies/studio-mini/shop/fix-cart/src" });
   });
 });

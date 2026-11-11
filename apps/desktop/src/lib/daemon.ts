@@ -109,7 +109,7 @@ export const hostsApi = {
   sshHosts: () => invoke<string[]>("ssh_hosts"),
   install: (host: string) => invoke<{ triple: string; version: string }>("remote_install", { host }),
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),
-  /** `root`: a folder opened along with `path`, as the project it belongs to. */
+  /** `root`: the worktree Zed opens `path` in (`entryOpenIn`). */
   openIn: (target: string, path: string, host?: string, root?: string) => invoke("open_in", { target, path, host, root }),
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<DaemonService>("daemon_service", { action }),

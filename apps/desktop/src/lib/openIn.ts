@@ -14,14 +14,26 @@ const REMOTE = ["vscode", "cursor"];
 const PROJECT_EDITORS = ["zed"];
 
 /**
- * What a Files tab entry opens in `target`. Zed, already running, puts a
- * lone file in the window in front, often another project's, so a file
- * opens with its session's worktree (`root`) and a folder opens the
- * worktree itself.
+ * What a Files tab entry opens in `target`, and on which host. An entry of
+ * a session kept in sync opens in its copy on this Mac (X60). Zed, already
+ * running, puts a lone file in the window in front, often another
+ * project's, so a file opens with its worktree (`root`) and a folder opens
+ * the worktree itself.
  */
-export function entryOpenIn(target: string, root: string, entry: { path: string; dir: boolean }): { path: string; root?: string } {
-  if (!PROJECT_EDITORS.includes(target)) return { path: entry.path };
-  return entry.dir ? { path: root } : { path: entry.path, root };
+export function entryOpenIn(target: string, entry: { path: string; dir: boolean }, at: { host: string; session: string; copy: string | null }): { path: string; host?: string; root?: string } {
+  const copied = at.copy === null ? null : inCopy({ copy: at.copy, session: at.session }, entry.path);
+  const where = at.copy !== null && copied !== null ? { path: copied, host: undefined, root: trimSlash(at.copy) } : { path: entry.path, host: at.host, root: trimSlash(at.session) };
+  if (!PROJECT_EDITORS.includes(target)) return { path: where.path, host: where.host };
+  return entry.dir ? { path: where.root, host: where.host } : where;
+}
+
+const trimSlash = (p: string) => p.replace(/\/$/, "");
+
+/** `path` of the session at the same place under its copy, or null for a path outside the session. */
+function inCopy(roots: { copy: string; session: string }, path: string): string | null {
+  const root = trimSlash(roots.session);
+  const rel = path === root ? "" : path.startsWith(`${root}/`) ? path.slice(root.length) : null;
+  return rel === null ? null : `${trimSlash(roots.copy)}${rel}`;
 }
 
 /**
@@ -53,10 +65,8 @@ export function workspaceOpenTargets(targets: OpenTarget[], kind: HostKind): Ope
  */
 export function syncedOpenIn(targets: OpenTarget[], dir: boolean, roots: { copy: string | null; session: string }, path: string): { path: string; choices: OpenTarget[] } | null {
   if (!roots.copy) return null;
-  const root = roots.session.replace(/\/$/, "");
-  const rel = path === root ? "" : path.startsWith(`${root}/`) ? path.slice(root.length) : null;
-  if (rel === null) return null;
-  return { path: `${roots.copy.replace(/\/$/, "")}${rel}`, choices: openInChoices(targets, { dir, kind: "local" }) };
+  const copied = inCopy({ copy: roots.copy, session: roots.session }, path);
+  return copied === null ? null : { path: copied, choices: openInChoices(targets, { dir, kind: "local" }) };
 }
 
 /** The session header's Open in (X25): a session kept in sync opens from its
