@@ -204,7 +204,9 @@ pub fn write_inside(root: &str, path: &str, content: &str) -> Result<()> {
 
 struct Watch {
     _watcher: notify::RecommendedWatcher,
-    clients: HashSet<u64>,
+    /// How many watches each client has on this root: the app watches a
+    /// session's folder once for its Files tab and once per open file tab.
+    clients: HashMap<u64, usize>,
 }
 
 /// Shared filesystem watchers, one per root, reference-counted by client.
@@ -226,7 +228,7 @@ impl Watchers {
         let root = expand_home(path).canonicalize()?;
         let mut watches = self.watches.lock().unwrap();
         if let Some(w) = watches.get_mut(&root) {
-            w.clients.insert(client);
+            *w.clients.entry(client).or_default() += 1;
             return Ok(());
         }
         let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
@@ -246,7 +248,7 @@ impl Watchers {
             root,
             Watch {
                 _watcher: watcher,
-                clients: HashSet::from([client]),
+                clients: HashMap::from([(client, 1)]),
             },
         );
         Ok(())
@@ -258,7 +260,12 @@ impl Watchers {
         };
         let mut watches = self.watches.lock().unwrap();
         if let Some(w) = watches.get_mut(&root) {
-            w.clients.remove(&client);
+            if let Some(n) = w.clients.get_mut(&client) {
+                *n -= 1;
+                if *n == 0 {
+                    w.clients.remove(&client);
+                }
+            }
             if w.clients.is_empty() {
                 watches.remove(&root);
             }
@@ -501,6 +508,40 @@ mod tests {
         };
         assert!(found, "no fs.changed named x.txt within 5s; saw {seen:?}");
         w.release_client(1);
+    }
+
+    #[test]
+    fn a_folder_watched_twice_by_one_client_stays_watched_until_both_stop() {
+        // The app watches a session's folder for its Files tab and for each
+        // open file tab; closing a file tab must not stop the Files tab's.
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let w = Watchers::new(Arc::new(move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        }));
+        let root = dir.path().display().to_string();
+        w.watch(&root, 1).unwrap();
+        w.watch(&root, 1).unwrap();
+        w.unwatch(&root, 1);
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::write(dir.path().join("x.txt"), "1").unwrap();
+        let named = |rx: &std::sync::mpsc::Receiver<Message>, name: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let Ok(Message::Event { data, .. }) = rx.recv_timeout(left) else { break false };
+                let ch: FsChanged = serde_json::from_value(data).unwrap();
+                if ch.paths.iter().any(|p| p.ends_with(name)) {
+                    break true;
+                }
+            }
+        };
+        assert!(named(&rx, "x.txt"), "no fs.changed after one of two unwatches");
+        w.unwatch(&root, 1);
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::write(dir.path().join("y.txt"), "2").unwrap();
+        assert!(!named(&rx, "y.txt"), "still watched after both unwatches");
     }
 
     #[test]
