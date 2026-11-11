@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl } from "./designView";
+import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl, frameKey } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -318,5 +318,15 @@ describe("the cards a change in their design system loads again (X64)", () => {
     // Its folder itself: made again, removed, or reported whole.
     expect(cardsReloaded({ paths: [], whole: true })).toEqual({ all: true, cards: [] });
     expect(cardsReloaded({ paths: ["NOTES.md"], whole: true })).toEqual({ all: true, cards: [] });
+  });
+});
+
+describe("which address gets a frame of its own (X64, ADR 0013)", () => {
+  it("gives each address a frame of its own with the loader, and each host without it", () => {
+    const a = "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/d/pages/index.html?v=2";
+    expect(frameKey(a, true)).toBe(a);
+    expect(frameKey(a, false)).toBe("0f3c2a1b4d5e6f70.w1");
+    expect(frameKey("moonlet-design://0f3c2a1b4d5e6f70.w1/designs/d/pages/index.html?v=3", false)).toBe("0f3c2a1b4d5e6f70.w1");
+    expect(frameKey("not an address", false)).toBe("not an address");
   });
 });

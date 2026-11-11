@@ -42,10 +42,6 @@ export function trackerPort(root: string): number {
   return 40_000 + (h % 20_000);
 }
 
-/** Whether this run's app has WebKit's site isolation on (ADR 0013): only
- *  with `E2E_SITE_ISOLATION=1`, a name `scripts/clean-env.sh` lets through. */
-export const siteIsolation = process.env.E2E_SITE_ISOLATION === "1";
-
 /** The world created by the launcher, shared with workers through env. */
 export function world(): World {
   const root = process.env.MOONLET_E2E_ROOT;
@@ -82,8 +78,6 @@ function makeWorld(root: string): World {
       MOONLET_CLOUD_FAKE: join(root, "cloud-fake"),
       // Delete in the Files tab (X98) moves here, not to the user's own Trash.
       MOONLET_TRASH_DIR: join(root, "trash"),
-      // Site isolation is off by default (ADR 0013); E2E_SITE_ISOLATION=1 turns it on.
-      ...(siteIsolation ? { MOONLET_SITE_ISOLATION: "1" } : {}),
     },
   };
 }
