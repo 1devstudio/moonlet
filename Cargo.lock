@@ -2831,6 +2831,7 @@ dependencies = [
  "moonlet-proto",
  "nix",
  "notify",
+ "objc2-foundation",
  "regex",
  "serde",
  "serde_json",

@@ -288,6 +288,14 @@ pub const FS_READ: &str = "fs.read";
 pub const FS_WRITE: &str = "fs.write";
 /// Like `fs.write`, but the file stays inside a folder, never through a symlink (X38).
 pub const FS_WRITE_INSIDE: &str = "fs.write_inside";
+/// [`FsCreate`] → `true`: a new empty file or folder in the Files tab (X98).
+pub const FS_CREATE: &str = "fs.create";
+/// [`FsRename`] → `true`: renames or moves an entry, never over another (X98).
+pub const FS_RENAME: &str = "fs.rename";
+/// [`FsEntry`] → [`FsDuplicated`]: copies an entry next to it as `name copy.ext` (X98).
+pub const FS_DUPLICATE: &str = "fs.duplicate";
+/// [`FsEntry`] → [`FsDeleted`]: to the Trash on a Mac, for good elsewhere (X98).
+pub const FS_DELETE: &str = "fs.delete";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
@@ -2734,6 +2742,41 @@ pub struct FsWriteInside {
     pub root: String,
     pub path: String,
     pub content: String,
+}
+
+/// An entry inside `root`, a session's folder, that a file action (X98) must stay in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsEntry {
+    pub root: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsCreate {
+    pub root: String,
+    pub path: String,
+    /// A folder rather than a file.
+    #[serde(default)]
+    pub dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsRename {
+    pub root: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsDuplicated {
+    /// The copy's path.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsDeleted {
+    /// Moved to the Trash rather than deleted for good.
+    pub trashed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

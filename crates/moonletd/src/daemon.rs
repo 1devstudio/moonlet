@@ -17,7 +17,7 @@ use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
 use moonlet_core::terminal_read::{self, TerminalReads};
 use moonlet_core::tasks::{TaskRelay, TaskSnapshots};
-use moonlet_core::{fs, git, git_settings, tasks};
+use moonlet_core::{file_actions, fs, git, git_settings, tasks};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
 use moonlet_proto::{Message, PROTOCOL_VERSION, RpcError};
@@ -6249,6 +6249,28 @@ impl Daemon {
                 let r: m::FsWriteInside = params(p)?;
                 blocking(move || fs::write_inside(&r.root, &r.path, &r.content)).await?;
                 ok(true)
+            }
+            m::FS_CREATE => {
+                let r: m::FsCreate = params(p)?;
+                blocking(move || file_actions::create(&r.root, &r.path, r.dir)).await?;
+                ok(true)
+            }
+            m::FS_RENAME => {
+                let r: m::FsRename = params(p)?;
+                blocking(move || file_actions::rename(&r.root, &r.from, &r.to)).await?;
+                ok(true)
+            }
+            m::FS_DUPLICATE => {
+                let r: m::FsEntry = params(p)?;
+                let path = blocking(move || file_actions::duplicate(&r.root, &r.path)).await?;
+                ok(m::FsDuplicated { path })
+            }
+            m::FS_DELETE => {
+                let r: m::FsEntry = params(p)?;
+                let trash = file_actions::Trash::here();
+                let trashed =
+                    blocking(move || file_actions::delete(&r.root, &r.path, &trash)).await?;
+                ok(m::FsDeleted { trashed })
             }
             m::FS_WATCH => {
                 let r: m::FsPath = params(p)?;
