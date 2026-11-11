@@ -495,22 +495,34 @@ const claudeVersion = () => rpc<{ version: string | null; updating: boolean }>(L
 /** Counts updates started or finished, so a check that began before one
  *  does not put back the version from before it. */
 let claudeRuns = 0;
+/** Another check was asked for while one ran. */
+let claudeCheckAgain = false;
 
 /** Compares the installed Claude Code with npm's newest. A side that cannot
  *  be read is unknown, which shows no banner: being offline is not an error. */
-export async function checkClaudeVersion() {
-  if (get().claudeChecking) return;
+export async function checkClaudeVersion(): Promise<void> {
+  // A check asked for during another one (the daemon came back while npm
+  // answered) runs once that one is done, so its answer is the last word.
+  if (get().claudeChecking) {
+    claudeCheckAgain = true;
+    return;
+  }
   set({ claudeChecking: true });
+  claudeCheckAgain = false;
   const runs = claudeRuns;
   const unknown = (what: string) => (e: unknown) => {
     console.warn(`${what} failed`, e);
     return null;
   };
   const [local, latest] = await Promise.all([claudeVersion().catch(unknown("claude --version")), hostsApi.claudeLatest().catch(unknown("Claude Code release check"))]);
-  if (runs !== claudeRuns) return set({ claudeChecking: false });
-  const versions = { installed: local?.version ?? null, latest, unasked: local === null };
-  const check = { ...versions, updating: local?.updating ?? false };
-  set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
+  if (runs !== claudeRuns) {
+    set({ claudeChecking: false });
+  } else {
+    const versions = { installed: local?.version ?? null, latest, unasked: local === null };
+    const check = { ...versions, updating: local?.updating ?? false };
+    set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
+  }
+  if (claudeCheckAgain) return checkClaudeVersion();
 }
 
 /** Runs `claude update`; its lines move the banner's steps as they come. */

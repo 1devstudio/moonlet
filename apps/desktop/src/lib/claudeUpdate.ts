@@ -1,6 +1,8 @@
 // The sidebar banner about a newer Claude Code and its `claude update` run
 // (X36). Pure: the RPCs and the npm request live in the store.
 
+import type { HostStatus } from "./protocol";
+
 /** Where a `claude update` run is: checking, or downloading and installing. */
 export type ClaudeUpdateStep = "check" | "install";
 
@@ -143,8 +145,8 @@ export function closeClaudeBanner(s: ClaudeUpdateState, how: "later" | "close"):
 export function claudeStatus(s: ClaudeUpdateState, v: ClaudeVersions, checking: boolean): string | null {
   if (checking) return "Checking…";
   if (s.phase === "updating") return "Updating…";
-  if (!v.latest) return null;
   if (v.unasked) return "Could not ask moonlet's daemon";
+  if (!v.latest) return null;
   if (!v.installed) return "Not found on the PATH";
   return isNewer(v.latest, v.installed) ? `${v.latest} is available` : "Up to date";
 }
@@ -152,7 +154,7 @@ export function claudeStatus(s: ClaudeUpdateState, v: ClaudeVersions, checking: 
 /** Whether a host's status change calls for asking Claude Code's version
  *  again: this Mac's daemon came back, maybe restarted with another PATH,
  *  and an answer from before (or a failed ask) may be stale. */
-export function recheckClaudeOnReconnect(host: string, prev: string | undefined, next: string): boolean {
+export function recheckClaudeOnReconnect(host: string, prev: HostStatus | undefined, next: HostStatus): boolean {
   return host === "local" && prev !== undefined && prev !== "connected" && next === "connected";
 }
 

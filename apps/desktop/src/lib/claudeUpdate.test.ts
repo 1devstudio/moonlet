@@ -198,6 +198,7 @@ describe("claudeStatus", () => {
 
   it("does not call Claude Code missing when the daemon could not be asked", () => {
     expect(claudeStatus(IDLE, { installed: null, latest: "2.1.296", unasked: true }, false)).toBe("Could not ask moonlet's daemon");
+    expect(claudeStatus(IDLE, { installed: null, latest: null, unasked: true }, false)).toBe("Could not ask moonlet's daemon");
   });
 });
 
