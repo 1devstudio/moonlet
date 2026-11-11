@@ -6,7 +6,7 @@
 // previewed on the canvas, read only.
 
 import { LIBRARY } from "../../lib/designLibrary";
-import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Share2, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, ChevronDown, Play as PlayIcon, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Share2, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatHasItem, chatKey, revealInChat, useChat } from "../../lib/chat";
@@ -71,6 +71,7 @@ import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
+import { Play } from "./Play";
 import { CommentBox, CommentsTab, PinLayer, designMessage, type BoxTarget } from "./Comments";
 import { Breadcrumb, EditsChip, LayersTab } from "./Editor";
 import { InspectorTab, PaletteTab } from "./Inspector";
@@ -305,6 +306,12 @@ export function DesignCanvas({
   const keysHere = () => canvasTakesKeys(session, inTab.current);
   // The page shown, or null for Overview.
   const [picked, setPicked] = useState<string | null>("index");
+  // The page played full screen (X99), or null.
+  const [playing, setPlaying] = useState<string | null>(null);
+  const stopPlaying = useCallback((last: string) => {
+    setPicked(last);
+    setPlaying(null);
+  }, []);
   const [zoom, setZoom] = useState<number | null>(null);
   const [details, setDetails] = useState(false);
   const [custom, setCustom] = useState(false);
@@ -539,6 +546,22 @@ export function DesignCanvas({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  // P plays the page shown full screen (X99); in Overview, the first.
+  const playRef = useRef(() => {});
+  playRef.current = () => {
+    const first = page ?? names[0];
+    if (first !== undefined) setPlaying(first);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const { dialog, confirm, settingsPage } = useStore.getState();
+      if (dialog || confirm || settingsPage || !keysRef.current() || keyId(e) !== "p" || isTyping(e.target instanceof Element ? e.target : null)) return;
+      e.preventDefault();
+      playRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
   const asked = useRef(design.needs_you);
@@ -728,6 +751,14 @@ export function DesignCanvas({
           <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes, readOnly })} onClick={() => travel(true)}>
             <Undo2 size={14} />
           </IconButton>
+          <button
+            title="Play full screen (P)"
+            disabled={!names.length}
+            onClick={() => playRef.current()}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border-strong px-2 text-muted hover:text-fg disabled:text-faint"
+          >
+            <PlayIcon size={12} /> Play
+          </button>
           {/* A snapshot previewed is View only, as the History board shows it: no switch. */}
           {!readOnly && (
           <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
@@ -913,6 +944,19 @@ export function DesignCanvas({
             updateSettings({ designViewports: withCustomViewport(useStore.getState().settings.designViewports, size) });
             setViewport(size);
           }}
+        />
+      )}
+      {playing !== null && (
+        <Play
+          host={host}
+          place={place}
+          slug={design.slug}
+          name={design.name}
+          pages={names}
+          start={playing}
+          snapshot={previewed?.n ?? null}
+          viewport={viewport}
+          onClose={stopPlaying}
         />
       )}
     </div>

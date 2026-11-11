@@ -23,13 +23,13 @@ The canvas ([X65](X65-design-mode.md)) shows a design's page at a chosen viewpor
 ## Behaviour and acceptance criteria
 
 - [ ] The canvas toolbar has **Play** (title "Play full screen (P)") wherever a page shows: a workspace design, a session design's Design tab, a project design and a snapshot previewed. P outside a text field does the same. In Overview it plays the first page.
-- [ ] Play covers the whole app window, above the sidebar, columns and dialogs, until Esc or the back arrow; nothing behind it takes the pointer or keys. The window's traffic lights stay usable, and the bar drags the window.
+- [ ] Play covers the whole app window, above the sidebar and the columns (dialogs and toasts still show over it), until Esc or the back arrow; nothing behind it takes the pointer. The window's traffic lights stay usable, and the bar drags the window.
 - [ ] The bar shows the design's name and the page, the page's place among the design's pages (`2 / 3`), Download, and Fill | Fit.
 - [ ] **Fill** (the default) lays the page out at the area under the bar, at 100%, and again whenever the window's size changes. **Fit** shows it at the canvas's viewport, scaled to fit that area, never above 100%, centred.
 - [ ] The page is live as in View mode: its scripts, links and menus run, and it scrolls, with no outlines, pins or editing. It is framed like the canvas's page (sandboxed, on the page's own host, under the no-network CSP), so a page that never stops running freezes neither the window nor the bar (X64, site isolation).
-- [ ] ←/→ (outside the page) show the previous and next page of the design, stopping at the first and the last. A snapshot previewed goes through the snapshot's pages.
+- [ ] ←/→ (with the page not focused) show the previous and next page of the design, stopping at the first and the last. A snapshot previewed goes through the snapshot's pages.
 - [ ] The page loads again when its file or its design system changes, as on the canvas; a page that is gone shows the next page there is, or returns to the canvas when none is left.
-- [ ] Esc, or the back arrow, returns to the canvas showing the page last played, at the canvas's viewport and zoom as they were.
+- [ ] Esc (with the page not focused), or the back arrow, returns to the canvas showing the page last played, at the canvas's viewport and zoom as they were.
 - [ ] **Download** saves the page shown as one `.html` file through a save dialog, named after the page (`settings.html`). The file holds everything the page loads from its design's folder and its design system: stylesheets (with their `@import`s) inlined as `<style>`, scripts as inline `<script>`, and images, fonts and other `url()`s as `data:` URLs. An address outside the design's files (`https:`, `data:`, `#…`) is left as it is. A snapshot previewed downloads the snapshot's page.
 - [ ] Download says where it saved (`Saved settings.html`), and says why when it could not (a file it could not read is left as its address, and listed).
 
