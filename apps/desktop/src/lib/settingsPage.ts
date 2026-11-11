@@ -440,7 +440,7 @@ export function appUpdateLine(u: UpdateState, checking: boolean, error: string |
 export function claudeUpdateLine(s: ClaudeUpdateState, v: ClaudeVersions, checking: boolean): StatusLine | null {
   const text = claudeStatus(s, v, checking);
   if (!text) return null;
-  if (checking || s.phase === "updating") return { tone: "muted", text };
+  if (checking || s.phase === "updating" || v.unasked) return { tone: "muted", text };
   if (!v.installed) return { tone: "blocked", text };
   return { tone: claudeOffer(s, v) ? "accent" : "done", text };
 }
