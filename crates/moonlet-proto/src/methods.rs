@@ -296,6 +296,9 @@ pub const FS_RENAME: &str = "fs.rename";
 pub const FS_DUPLICATE: &str = "fs.duplicate";
 /// [`FsEntry`] → [`FsDeleted`]: to the Trash on a Mac, for good elsewhere (X98).
 pub const FS_DELETE: &str = "fs.delete";
+/// `{}` → `true` when `fs.delete` moves to a Trash on this host (X98), so
+/// the app asks the right question before deleting.
+pub const FS_HAS_TRASH: &str = "fs.has_trash";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 

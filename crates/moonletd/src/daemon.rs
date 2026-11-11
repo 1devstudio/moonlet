@@ -6272,6 +6272,7 @@ impl Daemon {
                     blocking(move || file_actions::delete(&r.root, &r.path, &trash)).await?;
                 ok(m::FsDeleted { trashed })
             }
+            m::FS_HAS_TRASH => ok(file_actions::Trash::here().keeps()),
             m::FS_WATCH => {
                 let r: m::FsPath = params(p)?;
                 self.watchers.watch(&r.path, conn.id).map_err(internal)?;

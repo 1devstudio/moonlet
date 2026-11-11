@@ -92,6 +92,9 @@ pub fn create(root: &str, path: &str, dir: bool) -> Result<()> {
 /// Renames or moves the entry at `from` to `to`, both inside `root`. An
 /// existing entry at `to` is never replaced.
 pub fn rename(root: &str, from: &str, to: &str) -> Result<()> {
+    if expand_home(to) == expand_home(from) {
+        return Ok(());
+    }
     if expand_home(to).starts_with(expand_home(from)) {
         bail!("cannot move {from} into itself");
     }
@@ -116,10 +119,7 @@ pub fn duplicate(root: &str, path: &str) -> Result<String> {
         .symlink_metadata(&e.name)
         .with_context(|| format!("no such file: {}", e.path.display()))?;
     let is_dir = meta.is_dir();
-    let name = (1..1000)
-        .map(|n| copy_name(&e.name, n, is_dir))
-        .find(|n| e.dir.symlink_metadata(n).is_err())
-        .context("too many copies")?;
+    let name = free_name(&e.dir, |n| copy_name(&e.name, n, is_dir)).context("too many copies")?;
     copy_entry(&e.dir, &e.name, &e.dir, &name)
         .with_context(|| format!("cannot copy {}", e.path.display()))?;
     Ok(e.path.with_file_name(&name).display().to_string())
@@ -184,6 +184,11 @@ pub enum Trash {
 }
 
 impl Trash {
+    /// Whether a deleted entry can be taken back from here.
+    pub fn keeps(&self) -> bool {
+        !matches!(self, Trash::None)
+    }
+
     /// This host's: a test's folder, the Trash on a Mac, none elsewhere.
     pub fn here() -> Trash {
         match std::env::var_os("MOONLET_TRASH_DIR") {
@@ -206,21 +211,20 @@ pub fn delete(root: &str, path: &str, trash: &Trash) -> Result<bool> {
     let failed = || format!("cannot delete {}", e.path.display());
     match trash {
         Trash::System => {
-            move_to_trash(&e.path).with_context(failed)?;
+            // The folder the handle holds, as it is now, rather than the
+            // path checked a moment ago: a folder on the way swapped for a
+            // symlink since then can't redirect the move.
+            let here = real_path(&e.dir).with_context(failed)?.join(&e.name);
+            move_to_trash(&here).with_context(failed)?;
             Ok(true)
         }
         Trash::Folder(bin) => {
             let bin = Dir::open_ambient_dir(bin, ambient_authority()).with_context(failed)?;
-            let name = (1..1000)
-                .map(|n| {
-                    if n == 1 {
-                        e.name.clone()
-                    } else {
-                        with_suffix(&e.name, &format!(" {n}"), meta.is_dir())
-                    }
-                })
-                .find(|n| bin.symlink_metadata(n).is_err())
-                .context("the trash is full")?;
+            let name = free_name(&bin, |n| match n {
+                1 => e.name.clone(),
+                _ => with_suffix(&e.name, &format!(" {n}"), meta.is_dir()),
+            })
+            .context("the trash is full")?;
             e.dir.rename(&e.name, &bin, &name).with_context(failed)?;
             Ok(true)
         }
@@ -234,6 +238,32 @@ pub fn delete(root: &str, path: &str, trash: &Trash) -> Result<bool> {
             Ok(false)
         }
     }
+}
+
+/// The first of `name(1)`, `name(2)`, … that nothing in `dir` has.
+fn free_name(dir: &Dir, name: impl Fn(u32) -> OsString) -> Option<OsString> {
+    (1..1000)
+        .map(name)
+        .find(|n| dir.symlink_metadata(n).is_err())
+}
+
+/// Where the folder `dir` holds is now.
+#[cfg(target_os = "macos")]
+fn real_path(dir: &Dir) -> Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes into `buf`.
+    if unsafe { libc::fcntl(dir.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) } == -1 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn real_path(_dir: &Dir) -> Result<PathBuf> {
+    bail!("this host has no Trash")
 }
 
 /// Moves `path` to the user's Trash, where Finder can put it back.
@@ -304,6 +334,17 @@ mod tests {
             let err = create(&r, &path, false).unwrap_err().to_string();
             assert!(err.contains(why), "{path}: {err}");
         }
+        for (path, why) in [
+            (s(&home), "outside"),
+            (r.clone(), "outside"),
+            (format!("{r}/src/../../home"), "outside"),
+            (s(&root.join("linked/.zshrc")), "is not a folder"),
+        ] {
+            let err = duplicate(&r, &path).unwrap_err().to_string();
+            assert!(err.contains(why), "duplicate {path}: {err}");
+            let err = delete(&r, &path, &Trash::None).unwrap_err().to_string();
+            assert!(err.contains(why), "delete {path}: {err}");
+        }
         assert!(rename(&r, &s(&home.join(".zshrc")), &s(&root.join("zshrc"))).is_err());
         assert!(rename(&r, &s(&root.join("src")), &s(&root.join("linked/src"))).is_err());
         assert!(!home.join("new.txt").exists());
@@ -358,6 +399,10 @@ mod tests {
         let err = rename(&r, &s(&root.join("lib")), &s(&root.join("lib/inner/lib"))).unwrap_err();
         assert!(err.to_string().contains("into itself"), "{err}");
         assert!(rename(&r, &s(&root.join("missing.md")), &s(&root.join("c.md"))).is_err());
+
+        // A name left as it was changes nothing.
+        rename(&r, &s(&root.join("a.md")), &s(&root.join("a.md"))).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("a.md")).unwrap(), "a");
 
         // Only the case changes: on a Mac's volume both names are one file.
         rename(&r, &s(&root.join("a.md")), &s(&root.join("A.md"))).unwrap();
@@ -459,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_moves_to_the_trash_on_a_mac() {
+    fn delete_moves_to_a_trash_folder_beside_what_is_there() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("worktree");
         let trash = dir.path().join("Trash");
@@ -486,5 +531,18 @@ mod tests {
         assert_eq!(kept, ["first", "second"]);
         assert!(delete(&r, &s(&root.join("src")), &bin).unwrap());
         assert!(trash.join("src").is_dir() && !root.join("src").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_trash_gets_the_folder_where_it_is_now_not_where_it_was_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("worktree");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let e = entry(&s(&root), &s(&root.join("src/a.ts"))).unwrap();
+        std::fs::rename(root.join("src"), root.join("moved")).unwrap();
+        std::os::unix::fs::symlink(dir.path(), root.join("src")).unwrap();
+        let here = real_path(&e.dir).unwrap();
+        assert_eq!(here, root.join("moved").canonicalize().unwrap());
     }
 }

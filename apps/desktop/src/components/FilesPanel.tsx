@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Copy, Eye, EyeOff, FilePlus, FolderPlus, Pencil, Plus, SquareTerminal, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
-import { M, type DirEntry, type Session } from "../lib/protocol";
+import { M, type DirEntry, type FsDuplicated, type Session } from "../lib/protocol";
 import { errorToast, sesKey, toast, useStore, hostPath } from "../lib/store";
 import { deleteEntry, draftToAgent, moveEntry, newTabIn, openFileTab } from "../lib/actions";
 import { fileMention } from "../lib/chat";
 import { dropTarget, nameProblem, offersFileActions, parentOf, renameSelection, terminalFolder } from "../lib/fileActions";
-import { movedPath } from "../lib/layout";
+import { isUnder, movedPath } from "../lib/layout";
 import { openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
@@ -33,8 +33,8 @@ interface Tree {
   setOpen: (path: string, open: boolean) => void;
   editing: Editing | null;
   setEditing: (e: Editing | null) => void;
-  /** The file actions (X98) are offered: not in a copy of another host's session. */
-  changes: boolean;
+  /** The file actions (X98) are offered: not in another member's session. */
+  offersActions: boolean;
   /** The folder a dragged row would move into, highlighted. */
   dropOn: string | null;
   setDropOn: (path: string | null) => void;
@@ -43,6 +43,10 @@ interface Tree {
   onMenu: (ev: React.MouseEvent, e: DirEntry | null) => void;
   /** After a rename or move: expanded folders follow. */
   moved: (from: string, to: string) => void;
+  /** Moves the dragged row into `folder`. */
+  dropInto: (folder: string) => void;
+  /** After a delete: a folder made again with that name starts closed. */
+  deleted: (path: string) => void;
 }
 
 /** New file, Rename, Duplicate, Delete and the rest, for an entry or (null) the session's root (X98). */
@@ -67,13 +71,13 @@ function entryItems(e: DirEntry | null, tree: Tree): MenuItem[] {
       label: "Duplicate",
       icon: <Copy size={14} className="text-muted" />,
       onSelect: () =>
-        void rpc<{ path: string }>(host, M.fsDuplicate, { root: ws.path, path: e.path })
+        void rpc<FsDuplicated>(host, M.fsDuplicate, { root: ws.path, path: e.path })
           .then((r) => tree.setEditing({ kind: "rename", path: r.path }))
           .catch(errorToast),
     },
     terminal,
     { kind: "divider" },
-    { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void deleteEntry(host, ws, e) },
+    { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void deleteEntry(host, ws, e).then((ok) => ok && tree.deleted(e.path)) },
   ];
 }
 
@@ -102,9 +106,9 @@ function RowActions({ e, tree }: { e: DirEntry; tree: Tree }) {
           </IconButton>
         )}
         items={[
-          { kind: "label", label: "Open in" },
+          ...(choices.length ? [{ kind: "label", label: "Open in" } as MenuItem] : []),
           ...choices.map((t) => ({ label: t.label, onSelect: () => void open(t).catch(errorToast) })),
-          ...(tree.changes ? [{ kind: "divider" } as MenuItem, ...entryItems(e, tree)] : []),
+          ...(tree.offersActions ? [...(choices.length ? [{ kind: "divider" } as MenuItem] : []), ...entryItems(e, tree)] : []),
         ]}
       />
     </span>
@@ -126,13 +130,18 @@ function NameField({ initial, dir, onSave, onCancel }: { initial: string; dir: b
     el.focus();
     el.setSelectionRange(...renameSelection(initial, dir));
   }, []);
-  const save = async () => {
+  /** Enter keeps the field open on a bad name; leaving it gives up. */
+  const save = async (leaving = false) => {
     const name = value.trim();
     if (!name || name === initial) {
       done.current = true;
       return onCancel();
     }
     const problem = nameProblem(name);
+    if (problem && leaving) {
+      done.current = true;
+      return onCancel();
+    }
     if (problem) {
       setBad(true);
       return toast(problem);
@@ -165,7 +174,7 @@ function NameField({ initial, dir, onSave, onCancel }: { initial: string; dir: b
         }
       }}
       onBlur={() => {
-        if (!done.current) void save();
+        if (!done.current) void save(true);
       }}
     />
   );
@@ -221,11 +230,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
   const drop = (ev: React.DragEvent, e: DirEntry) => {
     ev.preventDefault();
     ev.stopPropagation();
-    const from = tree.dragging.current;
-    const to = from && dropTarget(from, e.is_dir ? e.path : parentOf(e.path));
-    tree.setDropOn(null);
-    tree.dragging.current = null;
-    if (from && to) void moveEntry(host, tree.ws, from, to).then((ok) => ok && tree.moved(from, to));
+    tree.dropInto(e.is_dir ? e.path : parentOf(e.path));
   };
   return (
     <>
@@ -239,7 +244,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
               aria-expanded={e.is_dir ? !!open[e.path] : undefined}
               aria-selected={selected === e.path}
               title={e.path}
-              draggable={tree.changes && !renaming}
+              draggable={tree.offersActions && !renaming}
               className={cx(
                 "group mx-2 flex h-[30px] cursor-default items-center gap-2.5 rounded-md pr-1 ui-text-14",
                 selected === e.path || tree.dropOn === e.path ? "bg-raised" : "hover:bg-panel-2",
@@ -250,7 +255,7 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
               onContextMenu={(ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
-                if (tree.changes) tree.onMenu(ev, e);
+                if (tree.offersActions) tree.onMenu(ev, e);
               }}
               onDragStart={(ev) => {
                 tree.dragging.current = e.path;
@@ -344,11 +349,22 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
   const dragging = useRef<string | null>(null);
+  const dropInto = (folder: string) => {
+    const from = dragging.current;
+    const to = from && dropTarget(from, folder);
+    setDropOn(null);
+    dragging.current = null;
+    if (from && to) void moveEntry(host, ws, from, to).then((ok) => ok && moved(from, to));
+  };
+  const deleted = (path: string) => {
+    setOpenState((s) => Object.fromEntries(Object.entries(s).filter(([p]) => !isUnder(p, path))));
+    setEditing((e) => (e && isUnder(e.kind === "new" ? e.folder : e.path, path) ? null : e));
+  };
   const [menu, setMenu] = useState<{ x: number; y: number; entry: DirEntry | null } | null>(null);
   const onMenu = useCallback((ev: React.MouseEvent, entry: DirEntry | null) => setMenu({ x: ev.clientX, y: ev.clientY, entry }), []);
   const closeMenu = useCallback(() => setMenu(null), []);
-  const changes = offersFileActions(host);
-  const tree: Tree = { host, ws, root: ws.path, showIgnored, version, selected, targets, onOpen, open, setOpen, editing, setEditing, changes, dropOn, setDropOn, dragging, onMenu, moved };
+  const offersActions = offersFileActions(host);
+  const tree: Tree = { host, ws, root: ws.path, showIgnored, version, selected, targets, onOpen, open, setOpen, editing, setEditing, offersActions, dropOn, setDropOn, dragging, onMenu, moved, dropInto, deleted };
   /** A drop on the panel's empty space moves the row to the session's root. */
   const toRoot = (ev: React.DragEvent) => {
     const from = dragging.current;
@@ -362,7 +378,7 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
         <span className="mr-auto truncate font-mono ui-text-11" title={ws.path}>
           {ws.path.split("/").slice(-2).join("/")}
         </span>
-        {changes && (
+        {offersActions && (
           <>
             <IconButton title="New file" onClick={() => setEditing({ kind: "new", folder: ws.path, dir: false })}>
               <FilePlus size={12} />
@@ -383,17 +399,13 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
           className={cx("min-h-full rounded-md", dropOn === ws.path && "bg-panel-2")}
           onContextMenu={(ev) => {
             ev.preventDefault();
-            if (changes) onMenu(ev, null);
+            if (offersActions) onMenu(ev, null);
           }}
           onDragOver={toRoot}
           onDragLeave={(ev) => ev.currentTarget === ev.target && setDropOn(null)}
           onDrop={(ev) => {
             ev.preventDefault();
-            const from = dragging.current;
-            const to = from && dropTarget(from, ws.path);
-            setDropOn(null);
-            dragging.current = null;
-            if (from && to) void moveEntry(host, ws, from, to).then((ok) => ok && moved(from, to));
+            dropInto(ws.path);
           }}
         >
           <Dir path={ws.path} depth={0} tree={tree} />

@@ -3,6 +3,9 @@
 // does the work (`fs.create`, `fs.rename`, `fs.duplicate`, `fs.delete`).
 
 import { parseCopyHost } from "./copyHost";
+import type { ConfirmOptions } from "./confirmOptions";
+import { hostPath, pathOn } from "./hostPath";
+import { isUnder, movedPath } from "./layout";
 
 /** Why `name` can't be a file's or a folder's name, or null when it can.
  *  Spaces around it are dropped before it is used. */
@@ -24,7 +27,7 @@ export function renameSelection(name: string, dir: boolean): [number, number] {
 /** The path an entry dragged from `from` moves to when dropped on the
  *  folder `folder`, or null where the drop would do nothing or can't be. */
 export function dropTarget(from: string, folder: string): string | null {
-  if (folder === from || folder.startsWith(`${from}/`) || folder === parentOf(from)) return null;
+  if (isUnder(folder, from) || folder === parentOf(from)) return null;
   return `${folder}/${baseName(from)}`;
 }
 
@@ -42,4 +45,30 @@ export const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
  *  not in another member's session (X72), whose files its member owns. */
 export function offersFileActions(host: string): boolean {
   return !parseCopyHost(host);
+}
+
+/** The unsaved marks after `from` moved to `to` on `host`. */
+export function movedDirty(dirty: Readonly<Record<string, true>>, host: string, from: string, to: string): Record<string, true> {
+  const out: Record<string, true> = {};
+  for (const key of Object.keys(dirty)) {
+    const path = pathOn(host, key);
+    const moved = path === null ? null : movedPath(path, from, to);
+    out[moved === null ? key : hostPath(host, moved)] = true;
+  }
+  return out;
+}
+
+/** The unsaved marks of `path` on `host`, or of the files in it. */
+export function dirtyUnder(dirty: Readonly<Record<string, true>>, host: string, path: string): string[] {
+  return Object.keys(dirty).filter((key) => {
+    const p = pathOn(host, key);
+    return p !== null && isUnder(p, path);
+  });
+}
+
+/** The question Delete asks: about the Trash when the host has one. */
+export function deletePrompt(e: { name: string; dir: boolean; trash: boolean; unsaved: number }): ConfirmOptions {
+  const question = e.trash ? `Move ${e.name} to the Trash?` : `Delete ${e.name}? This can't be undone.`;
+  const lost = e.unsaved ? ` Unsaved edits in ${e.unsaved} open ${e.unsaved === 1 ? "file" : "files"} are lost.` : "";
+  return { title: e.dir ? "Delete folder" : "Delete file", message: question + lost, action: e.trash ? "Move to Trash" : "Delete", variant: "danger" };
 }

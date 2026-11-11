@@ -63,6 +63,18 @@ describe("File actions in the Files tab (X98)", () => {
     await expect($(item("Rename"))).not.toBeExisting();
   });
 
+  it("offers the same actions under Open in", async () => {
+    // The row's buttons show on hover; the embedded driver's click reaches them through the DOM.
+    await browser.execute((x: string) => {
+      const r = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      (r.querySelector('button[title="Open in…"]') as HTMLElement).click();
+    }, row("src"));
+    await expect($(sel.text("Open in"))).toBeDisplayed();
+    for (const label of ["Finder", "New file", "Rename", "Duplicate", "Open terminal here", "Delete"]) await expect($(sel.button(label))).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(sel.text("Open in"))).not.toBeExisting();
+  });
+
   it("creates a file in a folder and opens it", async () => {
     await act("src", "New file");
     await fill('//input[@aria-label="New file name"]', "notes.md");

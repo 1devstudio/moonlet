@@ -936,6 +936,11 @@ export interface DirEntry {
   ignored: boolean;
 }
 
+/** `fs.duplicate`'s result (X98): the copy's path. */
+export interface FsDuplicated {
+  path: string;
+}
+
 /** `fs.delete`'s result (X98): moved to the Trash, or deleted for good. */
 export interface FsDeleted {
   trashed: boolean;
@@ -1548,6 +1553,8 @@ export const M = {
   fsRename: "fs.rename",
   fsDuplicate: "fs.duplicate",
   fsDelete: "fs.delete",
+  /** Whether `fs.delete` moves to a Trash on the host (X98). */
+  fsHasTrash: "fs.has_trash",
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",

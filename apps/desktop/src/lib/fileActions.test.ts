@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropTarget, nameProblem, offersFileActions, renameSelection, terminalFolder } from "./fileActions";
+import { deletePrompt, dirtyUnder, dropTarget, movedDirty, nameProblem, offersFileActions, renameSelection, terminalFolder } from "./fileActions";
 
 describe("nameProblem (X98)", () => {
   it("accepts a plain name, a dotfile and a name with spaces", () => {
@@ -59,5 +59,48 @@ describe("offersFileActions (X98)", () => {
     expect(offersFileActions("local")).toBe(true);
     expect(offersFileActions("studio-mini")).toBe(true);
     expect(offersFileActions("studio-mini#copy:5e7f9a1b3c5d")).toBe(false);
+  });
+});
+
+describe("unsaved marks after a rename or a delete (X98)", () => {
+  const dirty = { "local|/w/shop/src/a.ts": true, "local|/w/shop/src2/b.ts": true, "studio-mini|/w/shop/src/a.ts": true } as const;
+
+  it("moves the unsaved marks of the files in a renamed folder, on its host only", () => {
+    expect(movedDirty(dirty, "local", "/w/shop/src", "/w/shop/app")).toEqual({
+      "local|/w/shop/app/a.ts": true,
+      "local|/w/shop/src2/b.ts": true,
+      "studio-mini|/w/shop/src/a.ts": true,
+    });
+  });
+
+  it("names the unsaved files a delete would lose", () => {
+    expect(dirtyUnder(dirty, "local", "/w/shop/src")).toEqual(["local|/w/shop/src/a.ts"]);
+    expect(dirtyUnder(dirty, "local", "/w/shop/src2/b.ts")).toEqual(["local|/w/shop/src2/b.ts"]);
+    expect(dirtyUnder(dirty, "local", "/w/shop/lib")).toEqual([]);
+  });
+});
+
+describe("deletePrompt (X98)", () => {
+  it("asks to move a file to the Trash where the host has one", () => {
+    expect(deletePrompt({ name: "util.ts", dir: false, trash: true, unsaved: 0 })).toEqual({
+      title: "Delete file",
+      message: "Move util.ts to the Trash?",
+      action: "Move to Trash",
+      variant: "danger",
+    });
+  });
+
+  it("warns that a delete can't be undone where the host has no Trash", () => {
+    expect(deletePrompt({ name: "src", dir: true, trash: false, unsaved: 0 })).toEqual({
+      title: "Delete folder",
+      message: "Delete src? This can't be undone.",
+      action: "Delete",
+      variant: "danger",
+    });
+  });
+
+  it("says unsaved edits in open tabs are lost", () => {
+    expect(deletePrompt({ name: "src", dir: true, trash: true, unsaved: 2 }).message).toBe("Move src to the Trash? Unsaved edits in 2 open files are lost.");
+    expect(deletePrompt({ name: "util.ts", dir: false, trash: false, unsaved: 1 }).message).toBe("Delete util.ts? This can't be undone. Unsaved edits in 1 open file are lost.");
   });
 });

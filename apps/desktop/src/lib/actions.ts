@@ -2,11 +2,12 @@
 // keyboard shortcuts.
 
 import { rpc, sendInput } from "./daemon";
-import { addTab, closeDiff, closeFile, closeFilesUnder, closeJob, cycleFocus, movedPath, moveFiles, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
+import { addTab, closeDiff, closeFile, closeFilesUnder, closeJob, cycleFocus, moveFiles, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
 import { M, type FsDeleted, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
 import { killParams, runningLine, stillRunningLine, withRunning } from "./sessionProcesses";
 import { copyRefused } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
+import { deletePrompt, dirtyUnder, movedDirty } from "./fileActions";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession, hostPath } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
@@ -49,16 +50,10 @@ async function spawnShell(host: string, ws: Session, cwd?: string): Promise<Term
   });
 }
 
-export async function newTab() {
-  await shellTab();
-}
+export const newTab = () => newTabIn();
 
-/** Opens a terminal tab in `cwd`, a folder of the selected session: Open terminal here (X98). */
-export async function newTabIn(cwd: string) {
-  await shellTab(cwd);
-}
-
-async function shellTab(cwd?: string) {
+/** Opens a terminal tab in the selected session, in `cwd` if given: Open terminal here (X98). */
+export async function newTabIn(cwd?: string) {
   const c = forNewTab();
   if (!c) return;
   try {
@@ -157,39 +152,33 @@ export async function moveEntry(host: string, ws: Session, from: string, to: str
     return false;
   }
   setLayout(host, ws.id, moveFiles(getLayout(host, ws.id), from, to));
-  useStore.setState((s) => {
-    const dirtyFiles: Record<string, true> = {};
-    for (const [key, dirty] of Object.entries(s.dirtyFiles)) {
-      const moved = key.startsWith(`${host}|`) ? movedPath(key.slice(host.length + 1), from, to) : null;
-      dirtyFiles[moved === null ? key : hostPath(host, moved)] = dirty;
-    }
-    return { dirtyFiles };
-  });
+  useStore.setState((s) => ({ dirtyFiles: movedDirty(s.dirtyFiles, host, from, to) }));
   return true;
 }
 
 /** Deletes an entry of a session's Files tab after asking (X98): to the
- *  Trash on a Mac, for good on another host. Its editor tabs close. */
-export async function deleteEntry(host: string, ws: Session, entry: { path: string; name: string; is_dir: boolean }) {
-  const local = (useStore.getState().hosts[host]?.kind ?? (host === "local" ? "local" : "ssh")) === "local";
-  const ok = await askConfirm(
-    local
-      ? { title: entry.is_dir ? "Delete folder" : "Delete file", message: `Move ${entry.name} to the Trash?`, action: "Move to Trash", variant: "danger" }
-      : { title: entry.is_dir ? "Delete folder" : "Delete file", message: `Delete ${entry.name}? This can't be undone.`, action: "Delete", variant: "danger" },
-  );
-  if (!ok) return;
+ *  Trash where its host has one, for good elsewhere. Its editor tabs
+ *  close, unsaved edits and all. False when nothing was deleted. */
+export async function deleteEntry(host: string, ws: Session, entry: { path: string; name: string; is_dir: boolean }): Promise<boolean> {
+  const unsaved = dirtyUnder(useStore.getState().dirtyFiles, host, entry.path);
+  const prompt = (trash: boolean) => deletePrompt({ name: entry.name, dir: entry.is_dir, trash, unsaved: unsaved.length });
+  // The host says whether it keeps deleted files; until then the modal waits.
+  const ok = await askConfirm({ ...prompt(false), checking: "Checking for a Trash…" }, rpc<boolean>(host, M.fsHasTrash, {}).then(prompt));
+  if (!ok) return false;
   try {
     const r = await rpc<FsDeleted>(host, M.fsDelete, { root: ws.path, path: entry.path });
     toast(r.trashed ? `Moved ${entry.name} to the Trash` : `Deleted ${entry.name}`);
   } catch (e) {
-    return errorToast(e);
+    errorToast(e);
+    return false;
   }
   setLayout(host, ws.id, closeFilesUnder(getLayout(host, ws.id), entry.path));
   useStore.setState((s) => {
     const dirtyFiles = { ...s.dirtyFiles };
-    for (const key of Object.keys(dirtyFiles)) if (key.startsWith(`${host}|`) && movedPath(key.slice(host.length + 1), entry.path, entry.path) !== null) delete dirtyFiles[key];
+    for (const key of dirtyUnder(dirtyFiles, host, entry.path)) delete dirtyFiles[key];
     return { dirtyFiles };
   });
+  return true;
 }
 
 /** Open file… (X96): asks for a file of the selected session by name. */
