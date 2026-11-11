@@ -10,6 +10,9 @@
 //! the webview is made with: turned on after a load, frames never load. A
 //! WebKit without it (a later macOS may rename or drop it) gets no
 //! configuration, and the window is made as before.
+//!
+//! Off unless `MOONLET_SITE_ISOLATION=1` since 2026-11-11: it crashed the
+//! whole app when a card's frame was let go (ADR 0013).
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -20,6 +23,15 @@ use objc2_web_kit::WKWebViewConfiguration;
 
 /// The private feature's key.
 const FEATURE: &str = "SiteIsolationEnabled";
+
+/// The environment variable that turns site isolation on (ADR 0013).
+pub const SWITCH: &str = "MOONLET_SITE_ISOLATION";
+
+/// Whether the window gets site isolation, given `SWITCH`'s value: only
+/// `1` turns it on.
+pub fn wanted(switch: Option<&std::ffi::OsStr>) -> bool {
+    switch.is_some_and(|v| v == "1")
+}
 
 /// A webview configuration with site isolation on, or why there is none.
 pub fn configuration() -> Result<Retained<WKWebViewConfiguration>, &'static str> {
@@ -64,5 +76,21 @@ fn key(feature: &AnyObject) -> Option<Retained<NSString>> {
         }
         let key: Option<Retained<AnyObject>> = msg_send![feature, key];
         key?.downcast::<NSString>().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn site_isolation_is_on_only_when_the_switch_is_1() {
+        assert_eq!(SWITCH, "MOONLET_SITE_ISOLATION");
+        assert!(!wanted(None));
+        assert!(wanted(Some(OsStr::new("1"))));
+        for other in ["", "0", "true", "yes", " 1"] {
+            assert!(!wanted(Some(OsStr::new(other))), "{other:?} turned it on");
+        }
     }
 }

@@ -1,11 +1,12 @@
-// A design card that never stops running (X64): each card renders in its own
-// web process, through WebKit site isolation and a per-card host, so the
-// app's window keeps answering and its other cards keep running.
+// A design card that never stops running (X64): with WebKit site isolation
+// on, each card renders in its own web process on a per-card host, so the
+// app's window keeps answering and its other cards keep running. Site
+// isolation is off by default (ADR 0013), and these tests with it.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { projectId, rpc, world } from "../fixtures";
+import { projectId, rpc, siteIsolation, world } from "../fixtures";
 
 const w = world();
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
@@ -32,7 +33,9 @@ type Heard = { heard?: string[] };
 /** `p`'s value, or "timed out" when it takes longer than `ms`. */
 const within = <T>(ms: number, p: Promise<T>) => Promise.race([p, new Promise<"timed out">((r) => setTimeout(() => r("timed out"), ms))]);
 
-describe("A design card that never stops running", () => {
+// Runs only with site isolation on (`E2E_SITE_ISOLATION=1 pnpm e2e`): without
+// it, a looping card freezes the window (ADR 0013).
+(siteIsolation ? describe : describe.skip)("A design card that never stops running", () => {
   before(async () => {
     // The app keeps its mode and system across runs: start where no card shows.
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();
