@@ -43,8 +43,11 @@ describe("removing a design frame (ADR 0013)", () => {
     const { parent, box, got, page } = framed();
     expect(parent.removeChild(box)).toBe(box);
     expect(box.parentNode).toBe(parent);
+    // Unseen, out of the way of the pointer, the keyboard and the layout.
     expect(box.style.opacity).toBe("0");
-    expect(box.style.pointerEvents).toBe("none");
+    expect(box.hasAttribute("inert")).toBe(true);
+    expect(box.getAttribute("aria-hidden")).toBe("true");
+    expect(box.style.position).toBe("absolute");
     expect(got).toEqual(["moonlet:release"]);
     released(page);
     expect(box.isConnected).toBe(false);
@@ -72,6 +75,15 @@ describe("removing a design frame (ADR 0013)", () => {
     vi.advanceTimersByTime(900);
     expect(box.isConnected).toBe(true);
     vi.advanceTimersByTime(100);
+    expect(box.isConnected).toBe(false);
+  });
+
+  it("asks a page that loads while its box is held to clear itself too", () => {
+    const { parent, box, frame, got, page } = framed();
+    parent.removeChild(box);
+    frame.dispatchEvent(new Event("load"));
+    expect(got).toEqual(["moonlet:release", "moonlet:release"]);
+    released(page);
     expect(box.isConnected).toBe(false);
   });
 

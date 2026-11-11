@@ -168,6 +168,16 @@ body { position: relative; }
         timeout: 10_000,
         timeoutMsg: `round ${round}: the card did not scroll`,
       });
+      // Its file written again: the card loads in a frame of its own, and the
+      // old frame is let go.
+      await browser.execute(() => {
+        (window as unknown as Heard).heard = [];
+      });
+      writeFileSync(join(w.home, "design", "library", "systems", SCROLLS, "components", "custom", "scroller", "scroller.html"), card + `<!-- round ${round} -->\n`);
+      await browser.waitUntil(() => browser.execute((m: string) => ((window as unknown as Heard).heard ?? []).includes(m), SCROLLED), {
+        timeout: 10_000,
+        timeoutMsg: `round ${round}: the card written again did not scroll`,
+      });
       // Let the scrolled card's layers reach the window, then let its frame go.
       await browser.pause(300);
       await mode("Sessions").click();

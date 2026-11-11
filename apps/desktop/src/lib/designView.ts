@@ -91,6 +91,20 @@ export function designUrl(place: DesignPlace, path: string, rev = 0, query: Reco
   return params ? `${url}?${params}` : url;
 }
 
+/** The key a frame showing `src` is given, so React makes it a frame of its
+ *  own: each address with the loader, as WebKit may not load a frame sent
+ *  to a new address in a hidden window's suspended process; each host
+ *  without it, as a frame sent to another host would drop its page's web
+ *  process with no chance to clear it (ADR 0013). */
+export function frameKey(src: string, loader: boolean): string {
+  if (loader) return src;
+  try {
+    return new URL(src).host || src;
+  } catch {
+    return src;
+  }
+}
+
 /** A design system's card (`path` in the system) on a host of its own (X64). */
 export function cardUrl(workspace: string, slug: string, path: string, rev = 0): string {
   return designUrl(workspace, `systems/${slug}/${path}`, rev);
