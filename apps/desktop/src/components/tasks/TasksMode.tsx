@@ -38,6 +38,8 @@ import {
   showBoard,
   syncTasks,
   taskColumns,
+  loadProjectStates,
+  projectStatesOf,
   toggleExpanded,
   trackersConfig,
   useTasks,
@@ -54,7 +56,7 @@ import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { revealFound } from "../../lib/boardSearch";
 import { FindTask } from "./BoardSearch";
-import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateChoices } from "../../lib/boardScreen";
+import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateMenu, statesSource } from "../../lib/boardScreen";
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, Pane, StateGlyph } from "../ui";
@@ -1110,7 +1112,8 @@ function PriorityBars({ n }: { n: number }) {
 /**
  * The task's state, as a menu that moves it (X45 detail, X46 task bar and Task tab): on a
  * tracker board, the board's columns by name, each moving to its first
- * status (X50); otherwise the four columns, or Open and Closed on GitHub.
+ * status (X50); a tracker's task on no board, its project's states by name
+ * once read, the four columns until then; Open and Closed on GitHub.
  */
 export function StateMenu({ host, workspaceId, task, chip }: { host: string; workspaceId: string; task: Task; chip?: Column }) {
   // The board's columns as saved, and the task's board after each sync.
@@ -1122,8 +1125,15 @@ export function StateMenu({ host, workspaceId, task, chip }: { host: string; wor
   // Setting a Project item's Status needs gh's project scope: without it the menu says what to run.
   const lock = projectMoveLock(task, scopes);
   const locked = lock !== null;
-  if (columns.length) {
-    const { choices, current } = stateChoices(columns, task);
+  // A tracker's task on no board of the workspace (a linked one finished long ago): its project's states (X50).
+  const source = statesSource(columns, task);
+  const states = useTasks((t) => (source ? projectStatesOf(task.connection, source, t) : null));
+  useEffect(() => {
+    if (source) void loadProjectStates(task.connection, source);
+  }, [task.connection, source]);
+  const menu = stateMenu(columns, states, task);
+  if (menu) {
+    const { choices, current } = menu;
     const select = (
       <select
         aria-label={`State of ${task.key}`}
