@@ -9,7 +9,7 @@ import { keepCard } from "@desktop/lib/tasksView";
 import type { AgentState, GitStatus, PullRequest, Session } from "@desktop/lib/protocol";
 import { type Task, taskId, trackerName, trackerOf } from "@desktop/lib/tasks";
 import { count } from "@desktop/lib/workspaces";
-import type { BoardInput, BoardSession, Card, RowMeta } from "@desktop/lib/tasksBoard";
+import { type BoardInput, type BoardSession, type Card, type RowMeta, worktreesNotUsedElsewhere } from "@desktop/lib/tasksBoard";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
@@ -104,7 +104,7 @@ export function boardInput(b: PhoneBoard, d: HostData, details: Details, moving:
       return m ? withStatus(t, m.status, m.name) : t;
     }),
     sessions,
-    worktrees: b.snapshot.worktrees,
+    worktrees: worktreesNotUsedElsewhere(b.snapshot.worktrees, d.sessions, b.workspace),
     sessionStartRule: (t) => ((trackers as Record<string, typeof trackers.github | undefined>)[trackerOf(t.connection) ?? "github"] ?? trackers.github).rules.session_starts,
     link: b.snapshot.link,
   };

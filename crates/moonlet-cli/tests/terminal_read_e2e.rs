@@ -12,10 +12,20 @@ use moonlet_proto::types::{Project, Session, TerminalInfo};
 use serde_json::{Value, json};
 
 fn target_bin(name: &str) -> PathBuf {
+    // Built binaries sit in the profile's folder (`target/debug`), a varying
+    // number of levels above this test's own executable: Rust 1.100's cargo
+    // puts test executables deeper than before.
     let exe = std::env::current_exe().unwrap();
-    let p = exe.parent().unwrap().parent().unwrap().join(name);
-    assert!(p.exists(), "{} missing: run `cargo test --workspace`", p.display());
-    p
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "{name} missing above {}: run `cargo test --workspace`",
+                exe.display()
+            )
+        })
 }
 
 struct Daemon {

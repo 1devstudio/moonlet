@@ -2054,6 +2054,29 @@ describe("an archived session's pull request (X86)", () => {
   });
 });
 
+describe("a worktree a session of another workspace works in", () => {
+  const identity = { origin: "github.com/acme/web", root: "r1" };
+  const issue = { connection: "github:github.com", key: "acme/web#7", title: "Looker docs", url: "", column: "done" as const, priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, github: { repo: "acme/web", number: 7, closingPrs: [] } };
+  const data: TasksData = { tasks: [issue], worktrees: [{ path: "/w/explore", branch: "7-looker-docs", originRepo: "acme/web", project: "p1" }], sources: [], repos: { p1: "acme/web" }, syncedAt: null, error: null };
+  const explore: Session = { id: "s1", project_id: "p1", name: "Explore", branch: "moonlet/explore", base: "main", path: "/w/explore", agent: null, archived: false, created_at: 0, workspace_id: "personal", terminals: [], layout: null };
+  const projects = { local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }] };
+  const cardOf = (state: Parameters<typeof boardInput>[0]) => Object.values(tasksBoard(boardInput(state, "local", "work", data, DEFAULT_CONFIG))).flat().find((c) => c.task.key === "acme/web#7")!;
+  // Earlier tests leave a move of acme/web#7 behind.
+  beforeEach(() => useTasks.setState({ moving: {} }));
+
+  it("is not offered for Clean up on a board of the project's other workspace", () => {
+    const state = { ...useStore.getState(), prs: {}, sessions: { local: [explore] }, projects };
+    const card = cardOf(state);
+    expect([card.task.key, card.empty, card.orphans.length, card.drift]).toEqual(["acme/web#7", "No sessions", 0, null]);
+  });
+
+  it("is offered once its session is archived", () => {
+    const state = { ...useStore.getState(), prs: {}, sessions: { local: [{ ...explore, archived: true }] }, projects };
+    const card = cardOf(state);
+    expect([card.empty, card.drift?.text, card.drift?.fix]).toEqual(["1 worktree, no session", "1 worktree", "Clean up"]);
+  });
+});
+
 describe("a board's sessions across the members of an account (X68)", () => {
   const identity = { origin: "github.com/acme/web", root: "r1" };
   const session = (id: string, project_id: string): Session => ({ id, project_id, name: id, branch: `moonlet/${id}`, base: "main", path: `/w/${id}`, agent: null, archived: false, created_at: 0, workspace_id: "W", terminals: [], layout: null });
