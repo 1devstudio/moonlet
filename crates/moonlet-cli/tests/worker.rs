@@ -10,9 +10,20 @@ use moonlet_core::client::{Client, wait_for_socket};
 use serde_json::{Value, json};
 
 fn target_bin(name: &str) -> PathBuf {
+    // Built binaries sit in the profile's folder (`target/debug`), a varying
+    // number of levels above this test's own executable: Rust 1.100's cargo
+    // puts test executables deeper than before.
     let exe = std::env::current_exe().unwrap();
-    let dir = exe.parent().unwrap().parent().unwrap();
-    dir.join(name)
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "{name} missing above {}: run `cargo test --workspace`",
+                exe.display()
+            )
+        })
 }
 
 struct Host {
