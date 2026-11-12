@@ -1042,11 +1042,14 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
         originRepo: repoOf(h, x.project_id),
       })),
   );
+  // A project in two workspaces lists its worktrees on both boards: one a
+  // session of the other workspace works in is that session's, not loose.
+  const busy = new Set((s.sessions[host] ?? []).filter((x) => !x.archived && x.workspace_id !== workspaceId).map((x) => x.path));
   return {
     // The board's columns as saved now, so a change shows without a sync (X44, X50).
     tasks: placedTasks({ ...data, tasks: shownMoved(data.tasks) }, config),
     sessions,
-    worktrees: data.worktrees,
+    worktrees: data.worktrees.filter((w) => !busy.has(w.path)),
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
     link: config.link ?? DEFAULT_LINK,
   };
