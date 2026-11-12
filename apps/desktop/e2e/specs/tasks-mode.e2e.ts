@@ -480,6 +480,24 @@ describe("Tasks mode", () => {
     await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
   });
 
+  it("shows on the card why a Clean up failed, with Retry", async () => {
+    await $('//button[@title="Refresh tasks"]').click();
+    await expect($('//button[starts-with(@aria-label, "Closed: ")]')).toHaveAttribute("aria-label", "Closed: 2 tasks, 1 needs clean-up", { wait: 15_000 });
+    // #16's worktree goes outside moonlet, before the board syncs again: the daemon refuses to remove it.
+    git("worktree", "remove", "--force", wt16);
+    git("branch", "-D", "16-old-banner");
+    await $('//button[starts-with(@aria-label, "Closed: ")]').click();
+    const sixteen = card("acme/storefront#16", "Closed");
+    await sixteen.$(`.${sel.button("Clean up")}`).click();
+    await $(sel.confirmButton("Clean up")).click();
+    const alert = sixteen.$('.//div[@role="alert"][contains(normalize-space(), "is not a worktree of this project")]');
+    await expect(alert).toBeDisplayed({ wait: 10_000 });
+    await expect(alert.$(`.${sel.button("Retry")}`)).toBeDisplayed();
+    await $('//button[@title="Closed options"]').click();
+    await $(sel.button("Fold")).click();
+    await expect($('//button[starts-with(@aria-label, "Closed: ")]')).toBeDisplayed({ wait: 10_000 });
+  });
+
   it("shows the whole description in the detail, its Markdown rendered", async () => {
     await card("acme/storefront#12", "Open").$('.//button[normalize-space()="Fix checkout button"]').click();
     await expectRenderedDescription('//aside[@aria-label="Task detail"]');
