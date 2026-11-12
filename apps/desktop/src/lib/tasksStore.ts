@@ -19,7 +19,7 @@ import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTarge
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard } from "./tasksBoard";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard, worktreesNotUsedElsewhere } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
 import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
@@ -1042,14 +1042,11 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
         originRepo: repoOf(h, x.project_id),
       })),
   );
-  // A project in two workspaces lists its worktrees on both boards: one a
-  // session of the other workspace works in is that session's, not loose.
-  const busy = new Set((s.sessions[host] ?? []).filter((x) => !x.archived && x.workspace_id !== workspaceId).map((x) => x.path));
   return {
     // The board's columns as saved now, so a change shows without a sync (X44, X50).
     tasks: placedTasks({ ...data, tasks: shownMoved(data.tasks) }, config),
     sessions,
-    worktrees: data.worktrees.filter((w) => !busy.has(w.path)),
+    worktrees: worktreesNotUsedElsewhere(data.worktrees, s.sessions[host] ?? [], workspaceId),
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
     link: config.link ?? DEFAULT_LINK,
   };

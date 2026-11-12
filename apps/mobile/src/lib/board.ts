@@ -9,7 +9,7 @@ import { keepCard } from "@desktop/lib/tasksView";
 import type { AgentState, GitStatus, PullRequest, Session } from "@desktop/lib/protocol";
 import { type Task, taskId, trackerName, trackerOf } from "@desktop/lib/tasks";
 import { count } from "@desktop/lib/workspaces";
-import type { BoardInput, BoardSession, Card, RowMeta } from "@desktop/lib/tasksBoard";
+import { type BoardInput, type BoardSession, type Card, type RowMeta, worktreesNotUsedElsewhere } from "@desktop/lib/tasksBoard";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
@@ -98,15 +98,13 @@ export function boardInput(b: PhoneBoard, d: HostData, details: Details, moving:
       originRepo: b.snapshot.repos[s.project_id] ?? null,
     }));
   const trackers = b.snapshot.trackers;
-  // A worktree a session of another workspace works in is that session's, not loose.
-  const busy = new Set(d.sessions.filter((s) => !s.archived && s.workspace_id !== b.workspace).map((s) => s.path));
   return {
     tasks: b.snapshot.tasks.map((t) => {
       const m = moving[taskId(t)];
       return m ? withStatus(t, m.status, m.name) : t;
     }),
     sessions,
-    worktrees: b.snapshot.worktrees.filter((w) => !busy.has(w.path)),
+    worktrees: worktreesNotUsedElsewhere(b.snapshot.worktrees, d.sessions, b.workspace),
     sessionStartRule: (t) => ((trackers as Record<string, typeof trackers.github | undefined>)[trackerOf(t.connection) ?? "github"] ?? trackers.github).rules.session_starts,
     link: b.snapshot.link,
   };
