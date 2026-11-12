@@ -227,6 +227,8 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, 
   const face = cardFace(card.task, fields, estimate);
   // A Project's item moves only with gh's project scope, as its State menu (X50, X53).
   const locked = useTasks((t) => projectMoveLock(card.task, t.ghScopes[host]) !== null);
+  // A fix that failed says why on the card too, not only in the detail.
+  const failure = useTasks(() => failureOf(card.task));
   return (
     <article
       aria-label={`${card.task.key} ${card.task.title}`}
@@ -298,6 +300,14 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, 
               {card.drift.fix}
             </button>
           )}
+        </div>
+      )}
+      {failure && (
+        <div role="alert" title={failure} className="flex items-start gap-2 rounded-md bg-error/[0.08] px-2 py-1 ui-text-12 text-error">
+          <span className="line-clamp-3 min-w-0 flex-1 break-words">{failure}</span>
+          <button className="shrink-0 font-medium hover:underline" onClick={() => void retryTask(card.task)}>
+            Retry
+          </button>
         </div>
       )}
     </article>
