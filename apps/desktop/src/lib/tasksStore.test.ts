@@ -10,7 +10,7 @@ import { answerTaskRequest, createIssue, findTask, linkTask, pairedPhones, searc
 import type { Task } from "./tasks";
 import { cardOfSession, tasksBoard } from "./tasksBoard";
 import { workspaceBoard } from "./workspaceBoard";
-import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadProjectStates, loadTrackersConfig, lookUpPasted, moveTask, projectStatesOf, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -31,6 +31,11 @@ vi.mock("./daemon", () => ({
           : (sent.push(req), Promise.resolve()),
     trackerComments: (id: string, task: string) => Promise.resolve(answers[`tracker_comments ${id} ${task}`]?.({}) ?? { comments: [], more: false }),
     trackerComment: (id: string, task: string, body: string) => (posted.push({ id, task, body }), Promise.resolve()),
+    // A project's, team's or list's states (X50 the State menu of a task on no board).
+    trackerStates: (id: string, source: string) => {
+      const answer = answers[`tracker_states ${id} ${source}`];
+      return answer ? Promise.resolve(answer({})) : Promise.reject(new Error(`Jira: No project could be found with key '${source}'.`));
+    },
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     // Find a task (X93): a tracker's search, and what a typed key names.
     trackerSearch: (req: { id: string; query: string; scope: string[] }) => (searches.push(req), Promise.resolve().then(() => answers[`tracker_search ${req.id}`]?.(req as object) ?? [])),
@@ -1129,6 +1134,31 @@ describe("moving a task from its state menu, and its activity (X45, X46)", () =>
     await moveTask("local", "personal", linearTask, "in_review", 5_000);
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-1", source: "MOON", column: "in_review" }]);
     expect(activityOf(linearTask)[0]).toEqual({ at: 5_000, text: "moonlet moved it to In Review" });
+  });
+
+  it("moves a task on no board to a state of its project's, by its name (X50)", async () => {
+    sent.length = 0;
+    const jiraTask = { ...linearTask, connection: "jira:acme.atlassian.net", key: "OPS-9", column: "done" as const, tracker: { id: "10900", state: "Done", source: "OPS" } };
+    await moveTask("local", "personal", jiraTask, "in_progress", 5_000, "In Testing");
+    expect(sent).toEqual([{ id: "jira:acme.atlassian.net", task: "10900", source: "OPS", column: "in_progress", status: "In Testing" }]);
+    expect(activityOf(jiraTask)[0]).toEqual({ at: 5_000, text: "moonlet moved it to In Testing" });
+  });
+
+  it("reads a project's states for the State menu of a task on no board, and keeps none when the tracker refuses (X50)", async () => {
+    answers["tracker_states jira:acme.atlassian.net OPS"] = () => [
+      { name: "To Do", column: "todo" },
+      { name: "In Testing", column: "in_progress" },
+      { name: "Done", column: "done" },
+    ];
+    expect(projectStatesOf("jira:acme.atlassian.net", "OPS")).toBeNull();
+    await loadProjectStates("jira:acme.atlassian.net", "OPS");
+    expect(projectStatesOf("jira:acme.atlassian.net", "OPS")).toEqual([
+      { name: "To Do", column: "todo" },
+      { name: "In Testing", column: "in_progress" },
+      { name: "Done", column: "done" },
+    ]);
+    await loadProjectStates("jira:acme.atlassian.net", "GONE");
+    expect(projectStatesOf("jira:acme.atlassian.net", "GONE")).toBeNull();
   });
 
 

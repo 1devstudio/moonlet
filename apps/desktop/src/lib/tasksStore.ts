@@ -79,6 +79,8 @@ interface TasksState {
   filters: Omit<BoardFilters, "mine">;
   /** gh's token scopes on each host, as its last GitHub Project sync read them (X50 moves need `project`). */
   ghScopes: Record<string, string[]>;
+  /** A project's, team's or list's states, by `connection source`, for the State menu of a task on no board (X50). */
+  projectStates: Record<string, { name: string; column: Column }[]>;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
   assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
@@ -166,6 +168,7 @@ export const useTasks = create<TasksState>(() => ({
   filters: storedFilters(),
   assignee: storedAssignee(),
   ghScopes: {},
+  projectStates: {},
   attention: {},
   activity: {},
   search: {},
@@ -1059,8 +1062,33 @@ function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connec
   const columns = taskColumns(host, workspaceId, task);
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
-  return { status: to, name: columns.find((c) => to !== undefined && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
+  // On no board, the status is the state's own name (X50).
+  const named = columns.length ? columns.find((c) => to !== undefined && c.statuses.includes(to))?.name : to;
+  return { status: to, name: named ?? COLUMN_LABEL[category] };
 }
+
+/** The states of tracker `source` (a Jira project, Linear team or ClickUp list) as last read, or null before. */
+export const projectStatesOf = (connection: string, source: string) => useTasks.getState().projectStates[`${connection} ${source}`] ?? null;
+
+/**
+ * Reads the states of `source` from its tracker once a session, for the
+ * State menu of a task on no board of the workspace (X50). A tracker that
+ * refuses leaves none, and the menu its four categories.
+ */
+export async function loadProjectStates(connection: string, source: string) {
+  const key = `${connection} ${source}`;
+  if (useTasks.getState().projectStates[key] || statesLoading.has(key)) return;
+  statesLoading.add(key);
+  try {
+    const states = await hostsApi.trackerStates(connection, source);
+    useTasks.setState((t) => ({ projectStates: { ...t.projectStates, [key]: states } }));
+  } catch {
+    // The four categories still move it.
+  } finally {
+    statesLoading.delete(key);
+  }
+}
+const statesLoading = new Set<string>();
 
 /** Sets a GitHub Project item's Status to `status` (X50), through gh on `host`. */
 async function moveProjectItem(host: string, workspaceId: string, task: Task, status: string) {

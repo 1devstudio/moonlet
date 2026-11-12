@@ -7,7 +7,7 @@ import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
 import { initials } from "./taskDetails";
 import type { Board, BoardInput, Card } from "./tasksBoard";
-import { type Task, taskId, type TrackerKind, trackerOf } from "./tasks";
+import { type Column, type Task, taskId, type TrackerKind, trackerOf } from "./tasks";
 import type { TasksData } from "./tasksStore";
 import { syncedLabel } from "./tasksView";
 
@@ -59,6 +59,20 @@ export function columnCounts(columns: BoardColumn[]): { shown: number; folded: n
 export function stateChoices(columns: BoardColumn[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
   const shown = movesTo(columns);
   return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => holds(c, task)) };
+}
+
+const CATEGORY_ORDER: Category[] = ["todo", "in_progress", "in_review", "done"];
+
+/**
+ * The State menu of a tracker task on no board of the workspace (X50): its
+ * project's, team's or list's states (`tracker_states`) by name, by category
+ * and else in the tracker's order, each moving to that state. A state
+ * moonlet doesn't show is left out, as a board hides its column.
+ */
+export function projectStateChoices(states: { name: string; column: Column }[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
+  const shown = states.flatMap((s) => (s.column === "hidden" ? [] : [{ name: s.name, category: s.column }]));
+  const sorted = CATEGORY_ORDER.flatMap((c) => shown.filter((s) => s.category === c));
+  return { choices: sorted.map((s) => ({ label: s.name, category: s.category, status: s.name })), current: sorted.findIndex((s) => s.name === task.tracker?.state) };
 }
 
 /** The columns a task can move to (X50 State menu, X53 drop): those drawn, shown or folded, with a status. */

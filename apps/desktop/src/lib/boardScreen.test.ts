@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, projectStateChoices, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
 import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
@@ -91,6 +91,47 @@ describe("stateChoices (X50 the detail's State menu)", () => {
     });
     // In a hidden column: no current choice.
     expect(stateChoices(OPS, { ...qa, tracker: { ...qa.tracker, statusId: "10000" } }).current).toBe(-1);
+  });
+});
+
+describe("projectStateChoices (X50 the State menu of a task on no board)", () => {
+  // tracker_states for a Jira project, in Jira's order: statuses of each issue type, each once.
+  const states = [
+    { name: "Done", column: "done" as const },
+    { name: "To Do", column: "todo" as const },
+    { name: "In Progress", column: "in_progress" as const },
+    { name: "In Review", column: "in_review" as const },
+    { name: "In Testing", column: "in_progress" as const },
+    { name: "Tested - Needs Release", column: "in_progress" as const },
+  ];
+  it("lists the project's states by name, To Do first and Done last, each moving to that state, with the task's own marked", () => {
+    const done = { ...task("OPS-9", "done"), tracker: { id: "9", state: "Done", statusId: "10002", source: "OPS" } };
+    expect(projectStateChoices(states, done)).toEqual({
+      current: 5,
+      choices: [
+        { label: "To Do", category: "todo", status: "To Do" },
+        { label: "In Progress", category: "in_progress", status: "In Progress" },
+        { label: "In Testing", category: "in_progress", status: "In Testing" },
+        { label: "Tested - Needs Release", category: "in_progress", status: "Tested - Needs Release" },
+        { label: "In Review", category: "in_review", status: "In Review" },
+        { label: "Done", category: "done", status: "Done" },
+      ],
+    });
+  });
+  it("leaves out a state moonlet doesn't show, as a board hides its column", () => {
+    const backlog = { ...task("MOON-3", "hidden"), connection: "linear:acme", tracker: { id: "3", state: "Backlog", source: "MOON" } };
+    const linear = [
+      { name: "Backlog", column: "hidden" as const },
+      { name: "Todo", column: "todo" as const },
+      { name: "Done", column: "done" as const },
+    ];
+    expect(projectStateChoices(linear, backlog)).toEqual({
+      current: -1,
+      choices: [
+        { label: "Todo", category: "todo", status: "Todo" },
+        { label: "Done", category: "done", status: "Done" },
+      ],
+    });
   });
 });
 
