@@ -7,7 +7,7 @@ import type { AgentState } from "./protocol";
 import type { BoardData } from "./tasksStore";
 import { initials } from "./taskDetails";
 import type { Board, BoardInput, Card } from "./tasksBoard";
-import { type Column, type Task, taskId, type TrackerKind, trackerOf } from "./tasks";
+import { type Task, taskId, type TrackerKind, type TrackerState, trackerOf } from "./tasks";
 import type { TasksData } from "./tasksStore";
 import { syncedLabel } from "./tasksView";
 
@@ -56,22 +56,41 @@ export function columnCounts(columns: BoardColumn[]): { shown: number; folded: n
  * columns, each moving to its first status, and which one holds the task
  * (-1 when none does, as in a hidden column).
  */
-export function stateChoices(columns: BoardColumn[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
+export function stateChoices(columns: BoardColumn[], task: Task): StateMenu {
   const shown = movesTo(columns);
   return { choices: shown.map((c) => ({ label: c.name, category: c.category, status: c.statuses[0] })), current: shown.findIndex((c) => holds(c, task)) };
 }
 
-const CATEGORY_ORDER: Category[] = ["todo", "in_progress", "in_review", "done"];
+/** A State menu's choices and which one holds the task (-1 when none does). */
+export interface StateMenu {
+  choices: { label: string; category: Category; status: string }[];
+  current: number;
+}
+
+/** The tracker source whose states the State menu of `task` needs (X50): a tracker's task on no board, else none. */
+export const statesSource = (columns: BoardColumn[], task: Task): string | null => (!columns.length && !task.github && task.tracker ? task.tracker.source : null);
 
 /**
- * The State menu of a tracker task on no board of the workspace (X50): its
- * project's, team's or list's states (`tracker_states`) by name, by category
- * and else in the tracker's order, each moving to that state. A state
- * moonlet doesn't show is left out, as a board hides its column.
+ * The State menu of a task (X50): a board's columns while it is on one; on
+ * no board, its project's, team's or list's states once read (`states`).
+ * Null for the four categories, or Open and Closed on GitHub.
  */
-export function projectStateChoices(states: { name: string; column: Column }[], task: Task): { choices: { label: string; category: Category; status: string }[]; current: number } {
+export function stateMenu(columns: BoardColumn[], states: TrackerState[] | null, task: Task): StateMenu | null {
+  if (columns.length) return stateChoices(columns, task);
+  return statesSource(columns, task) !== null && states?.length ? projectStateChoices(states, task) : null;
+}
+
+/** Where a state goes in the menu: To Do first, the started ones in the tracker's order, Done last. */
+const RANK: Record<Category, number> = { todo: 0, in_progress: 1, in_review: 1, done: 2 };
+
+/**
+ * Its project's states by name, each moving to that state. A state moonlet
+ * doesn't show is left out, as a board hides its column.
+ */
+function projectStateChoices(states: TrackerState[], task: Task): StateMenu {
   const shown = states.flatMap((s) => (s.column === "hidden" ? [] : [{ name: s.name, category: s.column }]));
-  const sorted = CATEGORY_ORDER.flatMap((c) => shown.filter((s) => s.category === c));
+  // A stable sort: within a rank, the tracker's order.
+  const sorted = [...shown].sort((a, b) => RANK[a.category] - RANK[b.category]);
   return { choices: sorted.map((s) => ({ label: s.name, category: s.category, status: s.name })), current: sorted.findIndex((s) => s.name === task.tracker?.state) };
 }
 

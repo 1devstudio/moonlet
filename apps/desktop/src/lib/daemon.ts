@@ -136,7 +136,7 @@ export const hostsApi = {
   trackerComment: (id: string, task: string, text: string) => invoke("tracker_comment", { id, task, text }),
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
-  trackerStates: (id: string, source: string) => invoke<{ name: string; column: import("./tasks").Column }[]>("tracker_states", { id, source }),
+  trackerStates: (id: string, source: string) => invoke<import("./tasks").TrackerState[]>("tracker_states", { id, source }),
   /** A Jira connection's boards (X50 Add a board). */
   trackerBoards: (id: string) => invoke<{ id: number; name: string; kind: string; project: string | null }[]>("tracker_boards", { id }),
   /** A GitHub Project's columns from its Status options (X50). */

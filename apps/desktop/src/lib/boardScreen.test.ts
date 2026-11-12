@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, projectStateChoices, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "./boardScreen";
+import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, shownBoardOf, sidebarBoards, stateChoices, stateMenu, statesSource, workspaceViews } from "./boardScreen";
 import { isDimmed } from "./tasksBoard";
 import type { BoardSession } from "./tasksBoard";
 import { type BoardColumn, type BoardConfig, cardFields } from "./boards";
@@ -94,7 +94,7 @@ describe("stateChoices (X50 the detail's State menu)", () => {
   });
 });
 
-describe("projectStateChoices (X50 the State menu of a task on no board)", () => {
+describe("stateMenu and statesSource (X50 the State menu of a task on no board)", () => {
   // tracker_states for a Jira project, in Jira's order: statuses of each issue type, each once.
   const states = [
     { name: "Done", column: "done" as const },
@@ -104,19 +104,36 @@ describe("projectStateChoices (X50 the State menu of a task on no board)", () =>
     { name: "In Testing", column: "in_progress" as const },
     { name: "Tested - Needs Release", column: "in_progress" as const },
   ];
-  it("lists the project's states by name, To Do first and Done last, each moving to that state, with the task's own marked", () => {
-    const done = { ...task("OPS-9", "done"), tracker: { id: "9", state: "Done", statusId: "10002", source: "OPS" } };
-    expect(projectStateChoices(states, done)).toEqual({
+  const done = { ...task("OPS-9", "done"), tracker: { id: "9", state: "Done", statusId: "10002", source: "OPS" } };
+  it("lists a task on no board its project's states by name, To Do first and Done last, the started ones in the tracker's order, each moving to that state", () => {
+    expect(statesSource([], done)).toBe("OPS");
+    expect(stateMenu([], states, done)).toEqual({
       current: 5,
       choices: [
         { label: "To Do", category: "todo", status: "To Do" },
         { label: "In Progress", category: "in_progress", status: "In Progress" },
+        { label: "In Review", category: "in_review", status: "In Review" },
         { label: "In Testing", category: "in_progress", status: "In Testing" },
         { label: "Tested - Needs Release", category: "in_progress", status: "Tested - Needs Release" },
-        { label: "In Review", category: "in_review", status: "In Review" },
         { label: "Done", category: "done", status: "Done" },
       ],
     });
+  });
+  it("offers the four categories until the project's states are read, or when the tracker refused them", () => {
+    expect(stateMenu([], null, done)).toBeNull();
+    expect(stateMenu([], [], done)).toBeNull();
+  });
+  it("keeps a task on a board to the board's columns, even with none it can move to", () => {
+    const qa = { ...task("OPS-1", "in_review"), tracker: { id: "1", state: "QA", statusId: "10020", source: "OPS" } };
+    expect(statesSource(OPS, qa)).toBeNull();
+    expect(stateMenu(OPS, states, qa)?.choices.map((c) => c.label)).toEqual(["To Do", "In Progress", "QA", "Ready for Release", "Done"]);
+    const hiddenOnly: BoardColumn[] = [{ name: "Backlog", statuses: ["10000"], category: "todo", show: "hide" }];
+    expect(stateMenu(hiddenOnly, states, qa)).toEqual({ choices: [], current: -1 });
+  });
+  it("reads no states for a GitHub issue", () => {
+    const gh: Task = { ...task("acme/web#7", "open"), connection: "github:github.com", github: { repo: "acme/web", number: 7, closingPrs: [] } };
+    expect(statesSource([], gh)).toBeNull();
+    expect(stateMenu([], states, gh)).toBeNull();
   });
   it("leaves out a state moonlet doesn't show, as a board hides its column", () => {
     const backlog = { ...task("MOON-3", "hidden"), connection: "linear:acme", tracker: { id: "3", state: "Backlog", source: "MOON" } };
@@ -125,7 +142,7 @@ describe("projectStateChoices (X50 the State menu of a task on no board)", () =>
       { name: "Todo", column: "todo" as const },
       { name: "Done", column: "done" as const },
     ];
-    expect(projectStateChoices(linear, backlog)).toEqual({
+    expect(stateMenu([], linear, backlog)).toEqual({
       current: -1,
       choices: [
         { label: "Todo", category: "todo", status: "Todo" },

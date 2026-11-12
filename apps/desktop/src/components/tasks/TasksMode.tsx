@@ -39,6 +39,7 @@ import {
   syncTasks,
   taskColumns,
   loadProjectStates,
+  projectStatesOf,
   toggleExpanded,
   trackersConfig,
   useTasks,
@@ -55,7 +56,7 @@ import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { revealFound } from "../../lib/boardSearch";
 import { FindTask } from "./BoardSearch";
-import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, projectStateChoices, sidebarBoards, stateChoices } from "../../lib/boardScreen";
+import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateMenu, statesSource } from "../../lib/boardScreen";
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, Pane, StateGlyph } from "../ui";
@@ -1125,13 +1126,13 @@ export function StateMenu({ host, workspaceId, task, chip }: { host: string; wor
   const lock = projectMoveLock(task, scopes);
   const locked = lock !== null;
   // A tracker's task on no board of the workspace (a linked one finished long ago): its project's states (X50).
-  const source = !columns.length && !task.github && task.tracker ? task.tracker.source : null;
-  const states = useTasks((t) => (source ? t.projectStates[`${task.connection} ${source}`] : undefined));
+  const source = statesSource(columns, task);
+  const states = useTasks((t) => (source ? projectStatesOf(task.connection, source, t) : null));
   useEffect(() => {
     if (source) void loadProjectStates(task.connection, source);
   }, [task.connection, source]);
-  const menu = columns.length ? stateChoices(columns, task) : states?.length ? projectStateChoices(states, task) : null;
-  if (menu?.choices.length) {
+  const menu = stateMenu(columns, states, task);
+  if (menu) {
     const { choices, current } = menu;
     const select = (
       <select

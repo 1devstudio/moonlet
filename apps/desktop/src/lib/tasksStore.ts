@@ -14,7 +14,7 @@ import { modeOf, setMode, toggleMode } from "./mode";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerName, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, type TrackerState, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerName, trackerOf } from "./tasks";
 import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTargets } from "./boardSearch";
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
@@ -80,7 +80,7 @@ interface TasksState {
   /** gh's token scopes on each host, as its last GitHub Project sync read them (X50 moves need `project`). */
   ghScopes: Record<string, string[]>;
   /** A project's, team's or list's states, by `connection source`, for the State menu of a task on no board (X50). */
-  projectStates: Record<string, { name: string; column: Column }[]>;
+  projectStates: Record<string, TrackerState[]>;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
   assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
@@ -1058,17 +1058,17 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
  * category, and that column's name; no status when the task is on no board
  * with columns.
  */
-function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">, category: Category, status?: string): { status?: string; name: string } {
+function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">, category: Category, status?: string): { status?: string; name: string; onBoard: boolean } {
   const columns = taskColumns(host, workspaceId, task);
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
   // On no board, the status is the state's own name (X50).
   const named = columns.length ? columns.find((c) => to !== undefined && c.statuses.includes(to))?.name : to;
-  return { status: to, name: named ?? COLUMN_LABEL[category] };
+  return { status: to, name: named ?? COLUMN_LABEL[category], onBoard: columns.length > 0 };
 }
 
-/** The states of tracker `source` (a Jira project, Linear team or ClickUp list) as last read, or null before. */
-export const projectStatesOf = (connection: string, source: string) => useTasks.getState().projectStates[`${connection} ${source}`] ?? null;
+/** The states of tracker `source` (a Jira project, Linear team or ClickUp list) as last read, or null before; from `t` in a selector. */
+export const projectStatesOf = (connection: string, source: string, t: Pick<TasksState, "projectStates"> = useTasks.getState()): TrackerState[] | null => t.projectStates[sourceKey(connection, source)] ?? null;
 
 /**
  * Reads the states of `source` from its tracker once a session, for the
@@ -1076,8 +1076,8 @@ export const projectStatesOf = (connection: string, source: string) => useTasks.
  * refuses leaves none, and the menu its four categories.
  */
 export async function loadProjectStates(connection: string, source: string) {
-  const key = `${connection} ${source}`;
-  if (useTasks.getState().projectStates[key] || statesLoading.has(key)) return;
+  const key = sourceKey(connection, source);
+  if (projectStatesOf(connection, source) || statesLoading.has(key)) return;
   statesLoading.add(key);
   try {
     const states = await hostsApi.trackerStates(connection, source);
@@ -1559,8 +1559,9 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
-      move = start(status, name);
+      const { status, name, onBoard } = boardTarget(host, workspaceId, task, column, toStatus);
+      // Shown under way on its board only: no sync of a task on none would clear it (X53).
+      move = onBoard ? start(status, name) : null;
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
       recordActivity(task, `moonlet moved it to ${name}`, now);
     } else return;
