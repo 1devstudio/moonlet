@@ -689,6 +689,40 @@ impl SessionManager {
         }
     }
 
+    /// This member's sessions as its apps and phones see them (X73):
+    /// without those the account gives another member, which this member
+    /// is about to let go of. Until then they would show twice: here, and
+    /// where they run now. One it runs anyway ([`Self::set_run_here`]) stays.
+    pub fn listed_sessions(&self) -> Vec<Session> {
+        let here = self.run_here.lock().unwrap().clone();
+        let given = self.with_log(|log| {
+            let Some(me) = log_owner(log.member()) else {
+                return BTreeSet::new();
+            };
+            sessions_in(log)
+                .into_iter()
+                .filter(|(_, r)| r.get("owner").and_then(Value::as_str).is_some_and(|o| o != me))
+                .map(|(id, _)| id)
+                .collect::<BTreeSet<String>>()
+        });
+        self.list_sessions()
+            .into_iter()
+            .filter(|s| !given.contains(&s.id) || here.contains(&s.id))
+            .collect()
+    }
+
+    /// Whether this member runs session `id` whatever the account's record
+    /// says (X73): a takeover the central host has not answered yet.
+    pub fn set_run_here(&self, id: &str, yes: bool) {
+        let changed = {
+            let mut here = self.run_here.lock().unwrap();
+            if yes { here.insert(id.to_string()) } else { here.remove(id) }
+        };
+        if changed {
+            self.emit_sessions();
+        }
+    }
+
     /// Whether this member shares an account (X68).
     pub fn has_account(&self) -> bool {
         self.account.lock().unwrap().is_some()
@@ -2996,6 +3030,44 @@ mod tests {
             .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
+    }
+
+    #[tokio::test]
+    async fn a_session_the_account_gives_another_member_is_no_longer_listed_as_this_members() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let new = |name: &str| SessionCreate {
+            name: Some(name.into()),
+            agent: Some("none".into()),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&p.id)
+        };
+        let moved = book.create_session(new("Fix cart")).await.unwrap();
+        let kept = book.create_session(new("Docs pass")).await.unwrap();
+        sync(&book, &mini);
+        book.set_central_account(Some("mini".into()));
+        let names = |m: &SessionManager| m.listed_sessions().into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
+
+        // studio-mini takes Fix cart; the MacBook has not let go of it yet.
+        assert!(mini.set_session_owner(&moved.id, "mini", 2, None));
+        sync(&book, &mini);
+        assert_eq!(names(&book), ["Docs pass"]);
+        assert!(book.session(&moved.id).is_ok(), "still here until it is let go of");
+        let _ = kept;
+        // Taken over anyway while studio-mini was offline: the MacBook runs
+        // it before the account says so.
+        book.set_run_here(&moved.id, true);
+        assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
+        book.set_run_here(&moved.id, false);
+        assert_eq!(names(&book), ["Docs pass"]);
     }
 
     /// The MacBook's session "Fix cart", made on `book` and known to `mini`.

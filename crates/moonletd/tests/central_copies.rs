@@ -1885,15 +1885,7 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
         .await;
 
     book.restart().await;
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
     // Its agent stopped, and what it did meanwhile is kept.
     let terminals: Vec<Value> = book.call("terminal.list", json!({})).await;
     assert!(terminals.iter().all(|t| t["id"] != agent));
@@ -2159,15 +2151,7 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
         .await;
 
     book.restart().await;
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
     // The gap's folder names the file it deleted.
     let gap: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
         .unwrap()
@@ -3852,22 +3836,39 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     book.restart().await;
     // For longer than the first few tries take.
     tokio::time::sleep(Duration::from_secs(45)).await;
-    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
     assert!(
-        own.iter().any(|s| s["id"] == made["id"]),
+        copies.iter().all(|c| c["session"] != made["id"]),
         "let go of before its gap was kept"
     );
-    // Once the worktree is free, the MacBook lets go by itself.
+    // Meanwhile it is listed once, as studio-mini's, never as the
+    // MacBook's own too (X73).
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "listed as the MacBook's own while studio-mini runs it");
+    let all: Vec<Value> = book.call("session.list", json!({ "copies": true })).await;
+    let listed: Vec<&Value> = all.iter().filter(|s| s["id"] == made["id"]).collect();
+    assert_eq!(listed.len(), 1, "listed {} times", listed.len());
+    assert_eq!(listed[0]["owner"]["worker"], json!(MINI));
+    // Once the worktree is free, the MacBook lets go by itself, and follows
+    // studio-mini with a live copy.
     std::fs::remove_file(&lock).unwrap();
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
+    within(Duration::from_secs(30), "the MacBook's live copy of fix-cart", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        copies.iter().any(|c| c["session"] == made["id"])
+    })
     .await;
+}
+
+/// Waits until the MacBook `book` has let go of session `made`: it follows
+/// it with a live copy then, and no longer lists it as its own (X73).
+async fn let_go_of(book: &Daemon, made: &Value) {
+    within(Duration::from_secs(30), "fix-cart let go of", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        copies.iter().any(|c| c["session"] == made["id"])
+    })
+    .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "still the MacBook's own");
 }
 
 /// Sets `dir` read-only (`0o555`), or writable again.
@@ -3924,21 +3925,13 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
     // Nothing can be written beside the transcript as the MacBook comes back.
     lost_while_away(&mini, &mut book, &made, || read_only(&folder, true)).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
     read_only(&folder, false);
     assert!(
-        own.iter().any(|s| s["id"] == made["id"]),
+        copies.iter().all(|c| c["session"] != made["id"]),
         "let go of before its conversation was forked"
     );
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
     let forks = named(&folder, ".fork-");
     let jsonl: Vec<&PathBuf> = forks
         .iter()
@@ -3971,18 +3964,10 @@ async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
     })
     .await;
     tokio::time::sleep(Duration::from_secs(8)).await;
-    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
     read_only(&parent, false);
-    assert!(own.iter().any(|s| s["id"] == made["id"]));
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    assert!(copies.iter().all(|c| c["session"] != made["id"]), "let go of before its worktree could move");
+    let_go_of(&book, &made).await;
     let leftovers = book.home.path().join("sync-leftovers");
     let kept: Vec<PathBuf> = named(&leftovers, "")
         .into_iter()

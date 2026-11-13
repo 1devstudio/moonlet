@@ -352,6 +352,10 @@ pub struct SessionManager {
     account: Mutex<Option<account::Account>>,
     /// The design store (X101), once the daemon has set it.
     design: std::sync::OnceLock<crate::design::store::Store>,
+    /// Sessions this member runs whatever the account's record says, as
+    /// one taken over while the central host was offline (X73): listed as
+    /// its own all the same.
+    run_here: Mutex<std::collections::BTreeSet<String>>,
 }
 
 fn new_id() -> String {
@@ -476,6 +480,7 @@ impl SessionManager {
             chats: std::sync::OnceLock::new(),
             save_blocked,
             lifecycles: Mutex::new(HashMap::new()),
+            run_here: Mutex::new(std::collections::BTreeSet::new()),
             account: Mutex::new(None),
             design: std::sync::OnceLock::new(),
         });
@@ -574,7 +579,7 @@ impl SessionManager {
     fn emit_sessions(&self) {
         self.terminals.emit(Message::event(
             methods::EV_SESSIONS_CHANGED,
-            self.list_sessions(),
+            self.listed_sessions(),
         ));
     }
 

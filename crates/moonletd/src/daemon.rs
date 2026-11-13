@@ -6092,14 +6092,17 @@ impl Daemon {
             }
             m::SESSION_LIST => {
                 let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();
-                let mut list = w.list_sessions();
+                // Without those another member runs now (X73): they are
+                // listed from where they run.
+                let mut list = w.listed_sessions();
                 // Each kept with Move to… says where (X73).
                 let records = self.sessions.session_records();
                 for s in &mut list {
                     s.pinned = records.get(&s.id).and_then(|r| r.get("pinned")).and_then(Value::as_str).map(str::to_string);
                 }
                 if r.copies {
-                    list.extend(self.member_sessions());
+                    let own: std::collections::HashSet<String> = list.iter().map(|s| s.id.clone()).collect();
+                    list.extend(self.member_sessions().into_iter().filter(|s| !own.contains(&s.id)));
                 }
                 ok(list)
             }
