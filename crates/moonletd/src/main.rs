@@ -4,6 +4,7 @@
 //! * `moonletd start` starts it detached if it is not running.
 //! * `moonletd proxy` bridges stdio to the daemon socket, starting the daemon
 //!   first. Remote hosts are reached with `ssh host moonletd proxy`.
+//! * `moonletd restart [--force]` replaces the running daemon (X97).
 //! * `moonletd stop` / `moonletd status`.
 
 mod clones;
@@ -20,7 +21,10 @@ mod link;
 mod machines;
 mod mobile;
 mod notify;
+mod peer;
+mod relay;
 mod render;
+mod restart;
 mod server;
 mod service;
 mod power;
@@ -77,6 +81,13 @@ enum Cmd {
     },
     /// Replace the running daemon with this binary, keeping every session.
     Upgrade,
+    /// Restart the daemon, handing its terminals to a fresh process; exits 3
+    /// when it is stuck and only `--force` can restart it (X97).
+    Restart {
+        /// Kill the running daemon and start a new one; its terminals end.
+        #[arg(long)]
+        force: bool,
+    },
     /// Start the daemon at login: a launchd LaunchAgent (macOS) or a systemd user unit (Linux).
     Service {
         #[command(subcommand)]
@@ -133,6 +144,13 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
         Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
+        Cmd::Restart { force } => match rt.block_on(restart::restart(&socket, std::env::current_exe()?, force))? {
+            restart::Outcome::Restarted => Ok(()),
+            restart::Outcome::Stuck(why) => {
+                eprintln!("{why}");
+                std::process::exit(restart::STUCK)
+            }
+        },
         Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
@@ -324,7 +342,10 @@ fn run_daemon(
         mobile::spawn(daemon.clone());
         // A design's snapshot when its agent ends a turn (X65).
         daemon.snapshot_agent_turns();
-        // Design systems and designs follow a merged workspace (X71).
+        // Design systems kept per workspace move into the library (X95),
+        // before their copies are looked at.
+        daemon.move_systems_to_library().await;
+        // Designs follow a merged workspace (X71).
         daemon.follow_merges();
         // Design systems and designs on every member of the account (X71).
         daemon.keep_design_copies();
@@ -333,6 +354,8 @@ fn run_daemon(
         power::spawn(daemon.clone());
         // The session designs saved before a restart, watched again at once.
         daemon.watch_saved_session_designs();
+        // Designs of sessions archived meanwhile become workspace designs (X101).
+        daemon.adopt_session_designs().await;
         // Cloud machines: the sweep and the startup deadlines (X63).
         daemon.machines.start();
         // Live copies, before the link they may open (X60).

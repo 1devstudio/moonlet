@@ -50,7 +50,7 @@ A structured agent is a **terminal** with `chat: true` (no PTY). It appears in `
 ## UI
 
 - **Conversation:**
-  - User messages are right-aligned bubbles. Assistant text renders as sanitized Markdown with code highlighting. Thinking is a `Thinking` row with the full thought under it; clicking the row folds it to one line, see [X14](X14-collapsed-tool-calls.md).
+  - User messages are right-aligned bubbles, rendered as Markdown too, with their typed line breaks kept ([X92](X92-formatted-user-messages.md)). Assistant text renders as sanitized Markdown with code highlighting. Thinking is a `Thinking` row with the full thought under it; clicking the row folds it to one line, see [X14](X14-collapsed-tool-calls.md).
   - Tool calls are compact rows: an icon, a summary (`Bash  git status`, `Edit  src/app.ts  +12 −3`, `Read  README.md`) and a status mark, expandable to show the output or the diff. By default, runs of tool calls are folded into one `N tool calls` row ([X14](X14-collapsed-tool-calls.md)).
   - Permission requests are an inline card with the tool and summary, the reason, and **Allow**, **Always allow** and **Deny** buttons.
   - Questions from Claude (`AskUserQuestion`) get a question card instead, see below.
@@ -93,6 +93,7 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
   - Tool permissions and subagents' asks are not kept: the agent asks again when it continues.
 - A live daemon upgrade hands chats over by restarting them with resume. The transcript is kept, but a running turn is interrupted. Pipe handoff is a possible later improvement.
 - Restored chats keep their terminal id. The agent process is only started by the next message, so a restart costs nothing until the user continues.
+- A restored chat whose folder was removed (a deleted worktree) does not start its agent: the next message, or Ask aside, ends with the error `This session's folder no longer exists: <path>`.
 - Permission cards for edits include the diff. Paths inside the session worktree are shown relative to it.
 - The floating agent card is not shown for chat terminals in the open session, because the conversation already shows the outcome or the approval.
 
@@ -114,6 +115,7 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
 - [ ] **Codex live** (after `codex login`): the same flow.
 - [x] Agent state, sidebar dots and notifications work for chat terminals (verified live). The approval inbox uses the same agent state but was not checked separately.
 - [x] A daemon restart restores the conversation and resumes the agent (verified through two live upgrades).
+- [x] A restored chat whose folder is gone says so when the agent would start or Ask aside runs (`a_chat_whose_folder_is_gone_says_so`).
 - [x] A question or plan waiting at a daemon restart is still waiting afterwards, and answering it resumes the agent with the answer as a message (`a_question_waits_through_a_daemon_restart_and_its_answer_resumes_claude`, `skipping_a_question_after_a_daemon_restart_tells_claude`, `a_plan_approved_after_a_daemon_restart_resumes_claude_in_the_chosen_mode`, `a_plan_approved_to_ask_before_edits_after_a_daemon_restart_resumes_claude_in_manual`, `approving_a_plan_proposed_again_after_a_daemon_restart_closes_the_new_call`, `plan_feedback_after_a_daemon_restart_reaches_claude_still_in_plan_mode`).
 - [x] A new message or Stop instead of an answer drops a card kept through a daemon restart (`a_new_message_instead_of_an_answer_after_a_daemon_restart_drops_the_question`, `stop_ends_a_question_kept_through_a_daemon_restart`).
 - [x] Tool permissions and subagents' asks waiting at a daemon restart end with "Interrupted by a daemon restart" (`tool_permissions_and_subagent_asks_end_at_a_daemon_restart`).

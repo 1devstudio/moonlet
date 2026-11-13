@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { holdFramesOnRemove } from "./lib/frameRelease";
 import { installNoNativeMenu } from "./lib/nativeMenu";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -29,6 +30,8 @@ window.addEventListener("error", (e) => console.error(e.error ?? e.message));
 window.addEventListener("unhandledrejection", (e) => console.error(e.reason));
 
 installNoNativeMenu();
+// A design frame removed waits for its page to clear itself (ADR 0013).
+holdFramesOnRemove(window);
 
 window.addEventListener("keydown", (e) => e.key === "Tab" && document.body.classList.add("kbd-nav"), true);
 window.addEventListener("mousedown", () => document.body.classList.remove("kbd-nav"), true);

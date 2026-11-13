@@ -82,12 +82,12 @@ describe("the New design system dialog's folder (X64)", () => {
   });
 
   it("shows no folder until the workspace's systems are listed, as a used name would change it", () => {
-    expect(systemFolder("w-1devstudio", "moonlet desktop", undefined)).toBeNull();
+    expect(systemFolder("moonlet desktop", undefined)).toBeNull();
   });
 
-  it("shows where it will be, numbered as the daemon numbers a used name", () => {
-    expect(systemFolder("w-1devstudio", "moonlet desktop", [])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop");
-    expect(systemFolder("w-1devstudio", "moonlet desktop", ["moonlet-desktop", "moonlet-desktop-2"])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop-3");
+  it("shows where it will be, in the library (X95), numbered as the daemon numbers a used name", () => {
+    expect(systemFolder("moonlet desktop", [])).toBe("~/.moonlet/design/library/systems/moonlet-desktop");
+    expect(systemFolder("moonlet desktop", ["moonlet-desktop", "moonlet-desktop-2"])).toBe("~/.moonlet/design/library/systems/moonlet-desktop-3");
   });
 });
 

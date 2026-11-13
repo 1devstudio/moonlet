@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
+import { projectFiles } from "../lib/projectFiles";
 import { slashMenu, type SlashRow } from "../lib/sessionDesign";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
@@ -78,7 +79,7 @@ import {
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
-import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
+import { codeToCopy, fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdownAs, type ChatMarkdownKind } from "../lib/markdown";
 import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
@@ -109,6 +110,7 @@ import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 import { useCopyReadOnly } from "./CopyLine";
 import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
@@ -144,10 +146,10 @@ export function useProjectFiles(host: string, root: string, reloadWhen: unknown)
   return useMemo(() => (path: string) => !!files?.has(path), [files]);
 }
 
-/** Chat Markdown; `task` renders a task's description (X46), at the panel's smaller size. */
-export const Markdown = memo(function Markdown({ text, task = false }: { text: string; task?: boolean }) {
+/** Chat Markdown, rendered as its `kind` says (`renderChatMarkdownAs`); a task, user message or brief also gets its own size and colours (`.task-md`, `.user-md`, `.brief-md`). */
+export const Markdown = memo(function Markdown({ text, kind = "chat" }: { text: string; kind?: ChatMarkdownKind }) {
   const files = useContext(FileLinks);
-  const html = useMemo(() => (task ? renderTaskMarkdown(text) : renderChatMarkdown(text, files?.exists)), [text, task, files?.exists]);
+  const html = useMemo(() => renderChatMarkdownAs(text, kind, files?.exists), [text, kind, files?.exists]);
   const [link, setLink] = useState<{ url: string; rect: DOMRect } | null>(null);
   const hideTimer = useRef<number>(undefined);
   const keep = () => window.clearTimeout(hideTimer.current);
@@ -182,7 +184,7 @@ export const Markdown = memo(function Markdown({ text, task = false }: { text: s
   return (
     <>
       <div
-        className={cx("chat-md selectable", task && "task-md")}
+        className={cx("chat-md selectable", kind !== "chat" && `${kind}-md`)}
         // Sanitized: markdown-it with HTML disabled, then DOMPurify.
         dangerouslySetInnerHTML={{ __html: html }}
         onKeyDown={(e) => copyCode(e, e.key)}
@@ -504,7 +506,9 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "user":
       return (
         <div className="flex justify-end py-1">
-          <div className="selectable max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2 ui-text-14 leading-relaxed">{item.text}</div>
+          <div className="min-w-0 max-w-[85%] break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2">
+            <Markdown text={item.text} kind="user" />
+          </div>
         </div>
       );
     case "assistant":
@@ -592,8 +596,18 @@ function LaunchedCard({ tools, rows }: { tools: ChatItem[]; rows: AgentRow[] }) 
   );
 }
 
+/** The brief the main agent gave a subagent (X42), as formatted text. */
+export function BriefCard({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cx("rounded-lg border border-border bg-panel-2 px-3.5 py-3", className)}>
+      <Markdown text={text} kind="brief" />
+    </div>
+  );
+}
+
 /** An agent that finished or failed, or a whole batch that ended (X42). */
 function AgentNoteView({ note }: { note: AgentNote }) {
+  const [brief, setBrief] = useState(false);
   if (note.kind === "all") {
     return (
       <div className="my-2 flex h-10 items-center gap-2.5 rounded-xl border border-border bg-panel px-3.5 ui-text-13">
@@ -611,13 +625,22 @@ function AgentNoteView({ note }: { note: AgentNote }) {
   const a = note.agent;
   const failed = a.status === "failed";
   return (
-    <div className="my-2">
+    <div className="my-2" data-agent-note={a.description}>
       <div className="flex items-center gap-2.5 ui-text-13">
         <StateGlyph state={failed ? "error" : "done"} size={12} />
         <span className="min-w-0 truncate text-fg">{a.description}</span>
         <span className={failed ? "text-error" : "text-faint"}>{failed ? "failed" : "finished"}</span>
-        <span className="ml-auto font-mono ui-text-12 tabular-nums text-faint">{clock(agentMs(a, Date.now()))}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-3">
+          {a.prompt.trim() && (
+            <button className="flex items-center gap-0.5 ui-text-12.5 text-muted hover:text-fg" aria-expanded={brief} onClick={() => setBrief(!brief)}>
+              {brief ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              Brief
+            </button>
+          )}
+          <span className="font-mono ui-text-12 tabular-nums text-faint">{clock(agentMs(a, Date.now()))}</span>
+        </span>
       </div>
+      {brief && <BriefCard text={a.prompt} className="ml-[22px] mt-2" />}
       {(failed ? a.error : a.report) && (
         <div className={cx("selectable ml-[5px] mt-1.5 border-l-2 border-border pl-4 ui-text-13 leading-[1.6]", failed && "text-error")}>
           {failed ? a.error : <Markdown text={a.report ?? ""} />}
@@ -882,20 +905,6 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 }
 
 // ------------------------------------------------------------ editor
-
-const fileCache = new Map<string, Promise<string[]>>();
-
-function projectFiles(host: string, root: string, fresh = false): Promise<string[]> {
-  const key = `${host}|${root}`;
-  let p = fresh ? undefined : fileCache.get(key);
-  if (!p) {
-    p = rpc<string[]>(host, M.fsFiles, { root }).catch(() => [] as string[]);
-    fileCache.set(key, p);
-    // Refresh on the next use after a while.
-    setTimeout(() => fileCache.delete(key), 30_000);
-  }
-  return p;
-}
 
 function ChatEditor({
   host,
@@ -1217,7 +1226,8 @@ function ChatEditor({
 }
 
 /** Tailwind classes for the X51 layout's px values. */
-const PAD_X: Record<number, string> = { 24: "px-6", 16: "px-4", 12: "px-3" };
+// The composer's sides in px, as the design gives them (X94); the app's rem is 13.5 px, not 16.
+const PAD_X: Record<number, string> = { 24: "px-[24px]", 16: "px-[16px]", 12: "px-[12px]" };
 const INSET_X: Record<number, string> = { 16: "pl-4", 12: "pl-3" };
 /** The input card's padding by its inset: 14 px above and below, 11 px when compact. */
 const CARD_PAD: Record<number, string> = { 16: "py-3.5 pl-4", 12: "py-[11px] pl-3" };
@@ -1655,7 +1665,9 @@ export function AgentView({
       const page = new Promise<string>((resolve, reject) => copyOnly.current.set(name, { resolve, reject }));
       const copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": page.then((u) => new Blob([u], { type: "text/plain" })) })]);
       void mcpCall("auth", name);
-      return Promise.all([copied, page]).then(() => toast("Copied sign-in link"));
+      return Promise.all([copied, page]).then(() => {
+        toast("Copied sign-in link");
+      });
     },
   };
   const addDir = async () => {
@@ -1702,16 +1714,19 @@ export function AgentView({
           <PlanPanel view={plan} />
         </Dialog>
       )}
-      <div
+      {/* The transcript (X94): 24 px above and below, 28 at the sides, the pane's full width; fades and Latest. */}
+      <ScrollArea
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto"
+        latest
+        // Wide tables scroll sideways, as before.
+        x
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
         <FileLinks.Provider value={fileLinks}>
-          <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
+          <div data-transcript className="flex flex-col gap-0.5 px-[28px] py-[24px]">
             {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
@@ -1797,8 +1812,9 @@ export function AgentView({
             })}
           </div>
         </FileLinks.Provider>
-      </div>
-      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", PAD_X[layout.padX])}>
+      </ScrollArea>
+      {/* 4 px above the composer, 14 below (X94). */}
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-[14px] pt-[4px]", PAD_X[layout.padX])}>
         {replies && !working && (
           <div role="group" aria-label="Suggested replies" className="mb-2 flex flex-wrap items-center gap-1.5">
             {replies.map((r, i) => (

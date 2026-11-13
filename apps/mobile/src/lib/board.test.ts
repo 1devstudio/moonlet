@@ -141,6 +141,15 @@ describe("boardScreen (X76)", () => {
     expect(cols.map((c) => c.line)).toEqual(["To do · 1 task", "In progress · 2 tasks", "In review · 1 task", "Done · 1 task · 1 needs clean-up"]);
   });
 
+  it("leaves a done task's worktree alone while a session of another workspace works in it", () => {
+    const all = [...TASKS, task("MOON-130", "Pairing", "s-done", "done")];
+    const done = snapshot({ tasks: all, boardData: { moon: { keys: all.map((t) => `${LINEAR} ${t.key}`) } }, worktrees: [{ path: "/w/explore", branch: "moon-130-pairing", originRepo: null, project: "moonlet" }] });
+    const explore = session("explore", "Explore pairing", { project_id: "moonlet", path: "/w/explore", workspace_id: "acme" });
+    const d = data({ ...mac(done), sessions: [...mac(done).sessions, explore] });
+    const [b] = phoneBoards(hosts, { mac: d }, personal);
+    expect(boardScreen(b, d, details, {}).columns.map((c) => c.line)).toEqual(["To do · 1 task", "In progress · 2 tasks", "In review · 1 task", "Done · 1 task"]);
+  });
+
   it("counts the board's out-of-sync cards for the Tasks badge", () => {
     expect(screen().outOfSync).toBe(1);
   });

@@ -1,0 +1,39 @@
+/* PageHeading and PageBody (components/settings/controls.tsx). */
+.page-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.page-heading__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.page-heading__title {
+  margin: 0;
+  font-size: var(--ui-text-20);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+}
+.page-heading__subtitle {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--ui-text-13);
+}
+
+/* The page's scrolling column: 680px, centred, sections 32px apart. */
+.page-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-3) var(--space-12) 64px;
+}
+.page-body__column {
+  display: flex;
+  max-width: 680px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: var(--space-8);
+}

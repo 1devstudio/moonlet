@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { archiveSession, restoreSession } from "./actions";
+import { archiveSession, restoreSession, runAction } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
 import { answerConfirm, type ConfirmOptions } from "./confirm";
@@ -10,12 +10,12 @@ const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 
-// Answers the confirm modal as soon as it opens, like a click on its buttons,
-// keeping what it asked.
+// Answers the confirm modal once it has checked what to ask, like a click on
+// its buttons, keeping what it asked.
 let reply: { ok: boolean; checked: boolean; alt?: boolean } = { ok: true, checked: false };
 let asked: ConfirmOptions | null = null;
 useStore.subscribe((s) => {
-  if (!s.confirm) return;
+  if (!s.confirm || s.confirm.options.checking) return;
   asked = s.confirm.options;
   answerConfirm(reply.ok, reply.checked, reply.alt);
 });
@@ -56,6 +56,35 @@ describe("archiveSession", () => {
     vi.useFakeTimers();
   });
   afterEach(() => vi.useRealTimers());
+
+  it("opens the prompt before the host says what the archive would take (X55)", async () => {
+    let unpushed!: (work: unknown) => void;
+    daemon.rpc.mockImplementation((_h: string, method: string) =>
+      method === "git.unpushed" ? new Promise((r) => (unpushed = r)) : Promise.resolve(method === "session.processes" ? { processes: [], leftovers: [] } : true),
+    );
+    reply = { ok: false, checked: false };
+    const done = archiveSession();
+    await vi.advanceTimersByTimeAsync(0);
+    const open = useStore.getState().confirm?.options;
+    expect(open?.checking).toBe("Checking for unpushed work…");
+    expect(open?.action).toBe("Archive");
+    unpushed({ files: [{ status: "M", path: "src/app.ts" }], commits: 0, upstream: null });
+    await vi.runAllTimersAsync();
+    await done;
+    expect(asked?.checking).toBeUndefined();
+    expect(asked?.action).toBe("Archive anyway");
+    expect(asked?.unpushed?.heading).toBe("This work is only on this Mac");
+    expect(archived()).toEqual([]);
+  });
+
+  it("says it checks what still runs when the unpushed-work warning is off (X55)", async () => {
+    useStore.setState({ gitSettings: { local: { ...DEFAULT_GIT_SETTINGS, archive_branch: "ask", warn_unpushed: false } } });
+    daemon.rpc.mockImplementation((_h: string, method: string) => (method === "session.processes" ? new Promise(() => {}) : Promise.resolve(true)));
+    void archiveSession();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useStore.getState().confirm?.options.checking).toBe("Checking what still runs…");
+    answerConfirm(false, false);
+  });
 
   it("keeps the branch unless the modal's box is checked", async () => {
     const done = archiveSession();
@@ -296,5 +325,20 @@ describe("restoreSession (X86)", () => {
     await restoreSession("local", old);
     const st = useStore.getState();
     expect([st.sessions.local[0].archived, st.toasts.map((t) => t.text)]).toEqual([true, ["cannot add the worktree"]]);
+  });
+});
+
+describe("Open file… (X96)", () => {
+  it("asks for a file of the selected session", () => {
+    useStore.setState({ sessions: { local: [ws] }, selected: { host: "local", session: "s1" }, dialog: null, toasts: [] });
+    runAction("open-file");
+    expect(useStore.getState().dialog).toEqual({ kind: "open-file", host: "local", session: "s1", root: "/w/s1" });
+  });
+
+  it("opens nothing with no session selected, and says why", () => {
+    useStore.setState({ sessions: { local: [ws] }, selected: null, dialog: null, toasts: [] });
+    runAction("open-file");
+    const st = useStore.getState();
+    expect([st.dialog, st.toasts.map((t) => t.text)]).toEqual([null, ["Select a session to open its files"]]);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardColumn, BoardConfig } from "./boards";
-import { boardShows, createLockOn, createsIn, fitDraft, isJira, labelProblem, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, newIssueDraft } from "./newIssue";
+import { boardShows, createLockOn, createsIn, fitDraft, isJira, labelProblem, githubRepoOf, jiraProjectUrl, jiraProjects, needsPlace, projectRepos, withAccess, withCreated, canSubmit, createLock, createTarget, firstCreateColumn, newIssueDraft } from "./newIssue";
 import type { Task } from "./tasks";
 
 const linear: BoardConfig = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" } };
@@ -143,5 +143,22 @@ describe("the column + (X52)", () => {
     expect(createLockOn(project, "devbox", { ...state, hosts: { devbox: { status: "reconnecting" } } })).toBe("The host that runs gh is offline");
     expect(createLockOn(project, "devbox", { ...state, scopes: { devbox: ["repo"] } })).toBe("Adding issues to a Project needs gh's project scope: run gh auth refresh -s project");
     expect(createLockOn(linear, "devbox", { ...state, attention: { "linear:acme": "Linear no longer accepts this token" } })).toBe("Reconnect Linear to create issues: Linear no longer accepts this token");
+  });
+});
+
+describe("Create “…” from Find a task's No match (X93)", () => {
+  it("starts the form with the text searched for as its title", () => {
+    expect(newIssueDraft(linear, "  xyzzy ")).toEqual({ title: "xyzzy", description: "", assignee: "me", labels: [] });
+  });
+
+  it("creates in the board's first column that takes new issues", () => {
+    const columns: BoardColumn[] = [
+      { name: "Backlog", statuses: ["Backlog"], category: "todo", show: "hide" },
+      { name: "Triage", statuses: [], category: "todo" },
+      { name: "Todo", statuses: ["Todo"], category: "todo" },
+      { name: "In Progress", statuses: ["In Progress"], category: "in_progress" },
+    ];
+    expect(firstCreateColumn(linear, columns)?.name).toBe("Todo");
+    expect(firstCreateColumn(linear, columns.slice(0, 2))).toBeNull();
   });
 });

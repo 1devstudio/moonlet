@@ -39,7 +39,8 @@ export function approvalBanner(info: HeavyInfo, machines: string[]): { title: st
       : `${joinNames(env)} ${env.length === 1 ? "was" : "were"} added to Pass to the worker since you approved the list`;
   return {
     title,
-    text: `Approving the list lets agents run it without asking, on ${joinNames(machines)}. Approved commands can run code from the project, including code the agent wrote, on this Mac.`,
+    // Approved for the account, they run on its hosts, not only here (X89).
+    text: `Approving the list lets agents run it without asking, on ${joinNames(machines)}. Approved commands can run code from the project, including code the agent wrote, ${info.account ? "on each of those hosts" : "on this Mac"}.`,
   };
 }
 
@@ -48,6 +49,12 @@ const SECRET = /(_TOKEN|_KEY|_SECRET|_PASSWORD)$|^(TOKEN|KEY|SECRET|PASSWORD)$/i
 /** The warning under a variable name that looks like a secret, or null. */
 export function secretWarning(name: string): string | null {
   return SECRET.test(name) ? `${name} looks like a secret. It reaches every machine that runs these commands, cloud machines too.` : null;
+}
+
+/** The page's state once another member approved (X89): the new approval,
+ * keeping the list as the page shows it, with any edits not saved yet. */
+export function withApproval(shown: HeavyInfo, fresh: HeavyInfo): HeavyInfo {
+  return { ...shown, approved: fresh.approved, account: fresh.account, error: fresh.error };
 }
 
 /** The toast after **Approve**. `unreachable` are machines the app could not approve on. */

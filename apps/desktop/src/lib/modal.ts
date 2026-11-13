@@ -22,3 +22,11 @@ export function tabWrap(panel: Element, active: Element | null, back: boolean): 
   if (!back && active === last) return first;
   return null;
 }
+
+/** The confirm dialog's button that Enter presses (X23, X55): a usable alt,
+ *  such as "Push, then archive"; Cancel when the alt is disabled next to a
+ *  danger action, so Enter never archives anyway; otherwise the action. */
+export function confirmFocus(alt?: { label: string; disabled?: string }): "alt" | "cancel" | "action" {
+  if (!alt) return "action";
+  return alt.disabled ? "cancel" : "alt";
+}

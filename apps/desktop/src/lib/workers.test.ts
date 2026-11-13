@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { workerHost, workersPage } from "./workers";
-import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
+import { settingsToast, workerHost, workersPage } from "./workers";
+import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo, WorkerSettingsEntry } from "./protocol";
 
 const worker = (id: string, name: string, extra: Partial<WorkerInfo> = {}): WorkerInfo => ({
   id,
@@ -47,6 +47,7 @@ describe("the Workers page (X62)", () => {
       rtt: "6 ms",
       running: [{ session: "fix-cart", command: "pnpm test", since: 1000 }],
       approve: null,
+      settings: null,
     });
     expect(page.rows[1]).toMatchObject({ name: "studio-mini", badges: ["Central host"], slots: "0 of 2", rtt: "–", line: { tone: "muted", text: "macOS · 12 cores" } });
     expect(page.empty).toBe(false);
@@ -159,5 +160,108 @@ describe("cloud machines on the Workers page (X63)", () => {
   it("is not empty with only cloud machines", () => {
     const page = workersPage({ workers: [], status: status(), me: null, sessions, cloud: [machine({ state: "starting" })], now: 0, cloudSessions: {} });
     expect(page.empty).toBe(false);
+  });
+});
+
+describe("every member's worker settings on the Workers page (X89)", () => {
+  const entry = (worker: string, name: string, heavy: boolean, slots = 2): WorkerSettingsEntry => ({ worker, name, heavy, slots });
+  // worker.settings from the central host: itself first.
+  const settings = [
+    entry("mini", "studio-mini", true),
+    entry("air", "Alex's MacBook Air", true, 3),
+    entry("mbp", "Alex's MacBook Pro", true),
+    entry("old", "Old Mac", false),
+  ];
+  const workers = [worker("mbp", "Alex's MacBook Pro"), worker("old", "Old Mac", { heavy: false })];
+
+  it("lists every member with its switch and slots", () => {
+    const page = workersPage({ workers, status: status(), me: "mbp", sessions, settings });
+    expect(page.rows.map((r) => [r.name, r.settings])).toEqual([
+      ["Alex's MacBook Air", { worker: "air", heavy: true, slots: 3 }],
+      ["Alex's MacBook Pro", { worker: "mbp", heavy: true, slots: 2 }],
+      ["Old Mac", { worker: "old", heavy: false, slots: 2 }],
+      ["studio-mini", { worker: "mini", heavy: true, slots: 2 }],
+    ]);
+    expect(page.rows[2]).toMatchObject({ line: { tone: "muted", text: "macOS · 10 cores" }, slots: "0 of 2" });
+    expect(page.update).toBeNull();
+  });
+
+  it("an offline member's row", () => {
+    const page = workersPage({ workers, status: status(), me: "mbp", sessions, settings });
+    expect(page.rows[0]).toEqual({
+      id: "air",
+      name: "Alex's MacBook Air",
+      badges: [],
+      line: { tone: "muted", text: "Not connected · changes apply when it links" },
+      load: null,
+      slots: "–",
+      rtt: "–",
+      running: [],
+      approve: null,
+      settings: { worker: "air", heavy: true, slots: 3 },
+    });
+  });
+
+  it("the summary line counts the account's slots", () => {
+    // The linked members that take heavy commands, and the central host;
+    // not a member that is off, nor one that is not connected.
+    const page = workersPage({ workers: [worker("mbp", "Alex's MacBook Pro", { slots: 4 }), worker("old", "Old Mac", { heavy: false })], status: status(), me: null, sessions, settings });
+    expect(page.summary).toBe("0 commands running · 0 of 6 slots in use");
+    // Nobody takes heavy commands yet: the rows stay, with a hint.
+    const none = workersPage({ workers: [worker("old", "Old Mac", { heavy: false })], status: status(), me: null, sessions, settings: [entry("mini", "studio-mini", false), entry("old", "Old Mac", false)] });
+    expect(none.rows.map((r) => r.name)).toEqual(["Old Mac", "studio-mini"]);
+    expect(none.empty).toBe(false);
+    expect(none.hint).toBe("No host runs heavy commands for the others yet. Turn on Takes heavy commands from other hosts on a host below.");
+    expect(page.hint).toBeNull();
+  });
+
+  it("says to update an older central host", () => {
+    // worker.settings is unknown there: the page stays as X62 had it.
+    const page = workersPage({ workers, status: status(), me: "mbp", sessions, settings: null });
+    expect(page.update).toBe("Update moonlet on studio-mini to run commands between your hosts");
+    expect(page.rows.map((r) => [r.name, r.settings])).toEqual([
+      ["Alex's MacBook Pro", null],
+      ["studio-mini", null],
+    ]);
+  });
+
+  it("lists what each host runs for other hosts, and for whom", () => {
+    const air = worker("air", "Alex's MacBook Air", {
+      running: [
+        { host: "Alex's MacBook Pro", session: "Fix cart", command: "pnpm check", started_at: 5000 },
+        // studio-mini's own command, already listed from its jobs.
+        { host: "studio-mini", session: "s1", command: "pnpm test", started_at: 6000 },
+      ],
+    });
+    const page = workersPage({
+      workers: [air],
+      status: status({
+        running: [{ job: "j1", session: "s1", command: "pnpm test", worker: "Alex's MacBook Air", started_at: 6000 }],
+        serving: [{ host: "Alex's MacBook Pro", session: "Add search", command: "cargo test", started_at: 7000 }],
+      }),
+      me: null,
+      sessions,
+      settings: [entry("mini", "studio-mini", true), entry("air", "Alex's MacBook Air", true)],
+    });
+    expect(page.rows[0].running).toEqual([
+      { session: "fix-cart", command: "pnpm test", since: 6000 },
+      { session: "Fix cart", command: "pnpm check", since: 5000, host: "Alex's MacBook Pro" },
+    ]);
+    expect(page.rows[1].running).toEqual([{ session: "Add search", command: "cargo test", since: 7000, host: "Alex's MacBook Pro" }]);
+    expect(page.rows[0].slots).toBe("2 of 2");
+  });
+
+  it("a host's slots in use are what it reports, its own sessions' commands too", () => {
+    // The Air runs one command for the MacBook and two of its own.
+    const air = worker("air", "Alex's MacBook Air", { slots: 4, used: 3, running: [{ host: "Alex's MacBook Pro", session: "Fix cart", command: "pnpm check", started_at: 1 }] });
+    const page = workersPage({ workers: [air], status: status(), me: null, sessions, settings: [entry("mini", "studio-mini", true), entry("air", "Alex's MacBook Air", true, 4)] });
+    expect(page.rows[0].slots).toBe("3 of 4");
+  });
+
+  it("says what a change of the switch or slots did", () => {
+    expect(settingsToast("studio-mini", { heavy: true })).toBe("studio-mini takes heavy commands from your other hosts");
+    expect(settingsToast("studio-mini", { heavy: false })).toBe("studio-mini no longer takes heavy commands from your other hosts");
+    expect(settingsToast("devbox", { slots: 4 })).toBe("devbox runs at most 4 heavy commands at once");
+    expect(settingsToast("devbox", { slots: 1 })).toBe("devbox runs at most 1 heavy command at once");
   });
 });

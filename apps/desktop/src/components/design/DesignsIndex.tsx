@@ -19,6 +19,7 @@ import { useSize } from "../../lib/useSize";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { Button } from "../ui";
 import { CardFrame } from "./Frame";
+import { ScrollArea } from "../ScrollArea";
 
 const NO_DESIGNS: Design[] = [];
 
@@ -28,6 +29,7 @@ export function DesignsIndex({
   name,
   systems,
   inSessions: across,
+  shared: sharedList,
   inset,
 }: {
   host: string;
@@ -36,6 +38,8 @@ export function DesignsIndex({
   systems: DesignSystem[] | undefined;
   /** Every member's session designs, with the host each session runs on (X71). */
   inSessions: { host: string; design: Design }[] | undefined;
+  /** The designs shared with every workspace, the library's (X95). */
+  shared?: Design[];
   inset: number;
 }) {
   const own = useDesign((d) => designsOf(d, host, workspace));
@@ -45,7 +49,8 @@ export function DesignsIndex({
   const hostsOfSessions = useMemo(() => [...new Set([host, ...(across ?? []).map((e) => e.host)])], [host, across]);
   const sessions = useStore(useShallow((s) => hostsOfSessions.flatMap((h) => s.sessions[h] ?? [])));
   const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
-  const list = useMemo(() => (own ? [...inSessions, ...own, ...inProjects] : undefined), [own, inSessions, inProjects]);
+  const shared = useMemo(() => (sharedList ?? NO_DESIGNS).map((d) => ({ ...d, shared: true })), [sharedList]);
+  const list = useMemo(() => (own ? [...inSessions, ...own, ...shared, ...inProjects] : undefined), [own, inSessions, shared, inProjects]);
   // A changed first page is framed again: its thumbnail's address carries its revision.
   const pageRevs = useDesign((d) => d.pageRevs);
   const groups = useMemo(
@@ -59,6 +64,7 @@ export function DesignsIndex({
   const acts: { [K in CardAction["kind"]]: (a: Extract<CardAction, { kind: K }>, key: string) => void } = {
     session: (a) => void openSessionDesign(across?.find((e) => e.design.session === a.session)?.host ?? host, workspace, a.session, a.slug, true),
     workspace: (a) => showDesign(host, workspace, a.slug),
+    shared: (a) => showDesign(host, workspace, a.slug, true),
     project: (a, key) => {
       setStarting(key);
       void startFromProjectDesign(host, workspace, a.design)
@@ -69,7 +75,7 @@ export function DesignsIndex({
   const act = (c: IndexCard) => (acts[c.act.kind] as (a: CardAction, key: string) => void)(c.act, c.key);
   return (
     <section aria-label="Designs" className="flex min-h-0 flex-1 flex-col">
-      <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2.5 border-b border-border bg-panel pr-4" style={{ paddingLeft: inset + 20 }}>
+      <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-4" style={{ paddingLeft: inset + 20 }}>
         <h1 className="ui-text-14 font-semibold text-fg">Designs</h1>
         <span className="truncate ui-text-12.5 text-muted">{name}</span>
         <span className="flex-1" />
@@ -77,7 +83,7 @@ export function DesignsIndex({
           <Plus size={12} /> New design
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-2" {...{ [NEAR_ROOT]: "" }}>
+      <ScrollArea frame="overflow-hidden rounded-[10px] bg-bg" className="px-6 pb-10 pt-4" {...{ [NEAR_ROOT]: "" }}>
         {empty && <p className="py-10 text-center ui-text-13 text-muted">{empty}</p>}
         {groups.map((g) => (
           <section key={g.title} aria-label={g.title} className="mt-6">
@@ -92,7 +98,7 @@ export function DesignsIndex({
             </div>
           </section>
         ))}
-      </div>
+      </ScrollArea>
     </section>
   );
 }

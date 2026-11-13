@@ -9,6 +9,7 @@ import type { Layer } from "../../lib/designBridge";
 import { EDITS_HEADER, lineRead, type EditLineRead } from "../../lib/designEdits";
 import { cx } from "../../lib/cx";
 import { OffSystemDot } from "./Inspector";
+import { ScrollArea } from "../ScrollArea";
 
 /** The selection's blue, as the page's outline draws it. */
 const SELECTED = "bg-[rgba(91,156,255,0.16)] text-[#cfe0ff]";
@@ -23,7 +24,7 @@ export function LayersTab({ layers, selected, off, onSelect }: { layers: Layer[]
   }, [selected]);
   if (layers.length === 0) return <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The page's elements show here once it has loaded.</p>;
   return (
-    <div ref={list} role="tree" aria-label="Layers" className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2 font-mono ui-text-12">
+    <ScrollArea ref={list} role="tree" aria-label="Layers" className="px-1.5 py-2 font-mono ui-text-12">
       {layers.map((l, i) => {
         const parent = (layers[i + 1]?.depth ?? -1) > l.depth;
         return (
@@ -44,7 +45,7 @@ export function LayersTab({ layers, selected, off, onSelect }: { layers: Layer[]
           </button>
         );
       })}
-    </div>
+    </ScrollArea>
   );
 }
 

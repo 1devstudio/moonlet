@@ -11,6 +11,7 @@ import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
 import { originText } from "./addBoard";
 import { trackerName } from "./tasks";
+import { DESIGN_STORES } from "./projectSettings";
 import { ROW_STYLES, rowStyle } from "./sessionRows";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
@@ -129,6 +130,7 @@ function index(c: SearchContext): Entry[] {
     app("general", "App › General › Updates", "claude-update", "Claude Code version", c.claudeInstalled ?? ""),
     app("general", "App › General › Updates", "auto-update", "Check for updates automatically", onOff(s.autoUpdateCheck)),
     app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login items background items SMAppService"),
+    app("general", "App › General › Background daemon", "daemon-restart", "Restart the daemon", "", "moonletd stuck not answering force restart kill"),
     app("appearance", "App › Appearance", "font-size", "Font size", `${t.fontSize}px`, "text zoom scale"),
     app("appearance", "App › Appearance", "editor-theme", "Colour theme of files and diffs", labelOf(EDITOR_THEMES, resolveEditorTheme(s.editorTheme)), "color syntax editor"),
     app("appearance", "App › Appearance", "session-rows", "Session rows", labelOf(ROW_STYLES, rowStyle(s.sessionRows)), "sidebar task issue number"),
@@ -157,9 +159,10 @@ function index(c: SearchContext): Entry[] {
     app("hooks", "Claude Code › Hooks", undefined, "Claude Code hooks", "", "Codex skill install"),
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
     app("hosts", "Machines › Hosts", "tailnet", "Allow connections from my tailnet", "", "pair Mac Tailscale"),
-    app("hosts", "Machines › Hosts", "heavy-commands", "Use this Mac for heavy commands", "", "central host worker link"),
+    app("hosts", "Machines › Hosts", "heavy-commands", "Takes heavy commands from other hosts", "", "central host worker link use this mac"),
     app("hosts", "Machines › Hosts", "heavy-slots", "Run at most", "", "slots at once routed"),
     app("workers", "Machines › Workers", undefined, "Workers", "", "central host load slots routed running"),
+    app("workers", "Machines › Workers", undefined, "Every host's switch and slots", "", "takes other hosts run at most member worker settings"),
     app("cloud", "Machines › Cloud workers", undefined, "Cloud workers", "", "cloud provider Hetzner Google Cloud GCP Compute Engine token service account key rent machines"),
     app("cloud", "Machines › Cloud workers", "cloud-tailscale", "Tailscale OAuth client", "", "tag policy auth key"),
     app("cloud", "Machines › Cloud workers", "cloud-idle", "Remove a machine after", "", "cloud idle minutes"),
@@ -192,6 +195,7 @@ function index(c: SearchContext): Entry[] {
         { label: "Custom agents", path, route, setting: "project-agents", value: cfg ? (agents ? n(agents, "agent") : "None") : "" },
         { label: "Base branch", path, route, setting: "project-base", value: cfg?.base_branch?.trim() || p.base_branch },
         { label: "Branch prefix", path, route, setting: "project-branch-prefix", value: cfg?.branch_prefix?.trim() ?? "", also: "git" },
+        { label: "Session designs", path, route, setting: "project-design-store", value: cfg ? DESIGN_STORES[cfg.design?.store === "moonlet" ? 1 : 0].label : "", also: "design folder" },
         { label: "Heavy commands", path, route, setting: "project-heavy", value: cfg ? n(cfg.heavy?.commands.length ?? 0, "command") : "", also: "routed workers approve" },
       ];
     }),

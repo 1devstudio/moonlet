@@ -10,7 +10,7 @@ import { moveSelection, searchSettings, type SearchResult } from "../../lib/sett
 import { updateStatus } from "../../lib/updater";
 import { useStore } from "../../lib/store";
 import { useTasks } from "../../lib/tasksStore";
-import { IconButton, Kbd, cx } from "../ui";
+import { IconButton, Kbd, Pane, cx } from "../ui";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
 import { PageBody } from "./controls";
 import { ProjectPage } from "./ProjectPage";
@@ -29,6 +29,7 @@ import { removalError } from "../../lib/cloudSettings";
 import { useCloud } from "../../lib/cloudStore";
 import { useSync } from "../../lib/syncStore";
 import { devicesOfKind } from "../../lib/mobile";
+import { ScrollArea } from "../ScrollArea";
 
 const ICONS: Record<AppPage, typeof Settings> = {
   general: Settings,
@@ -99,9 +100,9 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
     [hosts, phones, workspaces, profiles, defaultAccount, listedWorkspaces, allProjects, attention, central, cloudRemovalFailed],
   );
   return (
-    <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-panel">
+    <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col bg-window">
       {/* The traffic lights sit here. */}
-      <div data-tauri-drag-region className="drag h-[52px] shrink-0" />
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" />
       <div className="flex shrink-0 flex-col gap-2 px-2.5 pb-2.5">
         <button type="button" onClick={closeSettings} className="no-drag flex h-7 items-center gap-2 rounded-md px-2 ui-text-12.5 text-muted hover:bg-hover hover:text-fg">
           <ArrowLeft size={14} />
@@ -125,7 +126,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
           <Kbd>⌘F</Kbd>
         </label>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-auto px-2.5 pb-3 pt-1">
+      <ScrollArea tone="window" className="flex flex-col gap-3.5 px-2.5 pb-3 pt-1">
         {groups.map((g) => (
           <div key={g.title} className="flex flex-col gap-px">
             <span className="flex h-6 items-center px-2 ui-text-11 font-medium uppercase tracking-[0.1em] text-faint">{g.title}</span>
@@ -149,7 +150,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
             })}
           </div>
         ))}
-      </div>
+      </ScrollArea>
       <div className="flex shrink-0 items-center gap-1.5 border-t border-border px-[18px] pb-3 pt-2.5 ui-text-11.5 text-faint">
         <span className="font-mono">moonlet {version ?? "…"}</span>
         {status && (
@@ -346,10 +347,10 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
   }, [routeKey(route)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div ref={root} role="region" aria-label="Settings" data-settings-searching={searching || undefined} className="fixed inset-0 z-40 flex bg-bg text-fg">
+    <div ref={root} role="region" aria-label="Settings" data-settings-searching={searching || undefined} className="fixed inset-0 z-40 flex bg-window text-fg">
       <Nav route={route} phones={mobile ? devicesOfKind(mobile, "phone").length : 0} search={search} />
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">
+      <main className="flex min-w-0 flex-1 flex-col pb-[6px] pr-[6px]">
+        <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">
           {crumbs.map((c, i) => (
             <span key={i} className="flex items-center gap-2">
               {i > 0 && <ChevronRight size={12} />}
@@ -361,11 +362,14 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
             <X size={14} />
           </IconButton>
         </header>
-        {searching && <SearchResults query={query} results={results} selected={selected} onOpen={openResult} />}
-        {/* Kept mounted while searching, so a page's unsaved edits survive. */}
-        <div className={cx("flex min-h-0 flex-1 flex-col", searching && "hidden")}>
-          <Page key={routeKey(route)} route={route} mobile={mobile} />
-        </div>
+        {/* The page's pane (X94). */}
+        <Pane className="flex flex-col">
+          {searching && <SearchResults query={query} results={results} selected={selected} onOpen={openResult} />}
+          {/* Kept mounted while searching, so a page's unsaved edits survive. */}
+          <div className={cx("flex min-h-0 flex-1 flex-col", searching && "hidden")}>
+            <Page key={routeKey(route)} route={route} mobile={mobile} />
+          </div>
+        </Pane>
       </main>
     </div>
   );

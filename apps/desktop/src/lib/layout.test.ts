@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addTab, allSessions, closeDiff, closeFile, closeJob, cycleFocus, emptyLayout, leaves, openDiff, openFile, openJob, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
+import { addTab, allSessions, closeDiff, closeFile, closeFilesUnder, closeJob, cycleFocus, emptyLayout, leaves, movedPath, moveFiles, openDiff, openFile, openJob, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
 
 describe("layout", () => {
   it("opens a tab per unseen session and drops dead ones", () => {
@@ -77,6 +77,19 @@ describe("file tabs (X26)", () => {
     const l = openFile(openFile(emptyLayout(), file), file, 42);
     expect(l.tabs).toHaveLength(1);
     expect(l.tabs[0].root).toEqual({ type: "file", path: file, line: 42 });
+  });
+
+  it("opens a file at a range of lines, and an open one at a new range (X96)", () => {
+    const l = openFile(emptyLayout(), file, 49, 53);
+    expect(l.tabs[0].root).toEqual({ type: "file", path: file, line: 49, endLine: 53 });
+    const again = openFile(l, file, 12);
+    expect(again.tabs).toHaveLength(1);
+    expect(again.tabs[0].root).toEqual({ type: "file", path: file, line: 12 });
+  });
+
+  it("reads a file tab's range back from a stored layout (X96)", () => {
+    const stored = { tabs: [{ id: "a", root: { type: "file", path: file, line: 49, endLine: 53 } }], active: "a", focused: null };
+    expect(parseLayout(stored).tabs).toEqual([{ id: "a", root: { type: "file", path: file, line: 49, endLine: 53 } }]);
   });
 
   it("keeps file tabs when the terminals are synced", () => {
@@ -194,5 +207,43 @@ describe("diff tabs (X77)", () => {
     expect(l.tabs.map((t) => t.root)).toEqual([{ type: "leaf", session: 1 }]);
     expect(l.active).toBe(l.tabs[0].id);
     expect(l.focused).toBe(1);
+  });
+});
+
+describe("file tabs after a rename, a move or a delete (X98)", () => {
+  const src = "/w/shop/src";
+
+  it("points the tabs of a renamed file, and of files in a moved folder, to their new paths", () => {
+    let l = openFile(openFile(openFile(reconcile(emptyLayout(), [1]), `${src}/util.ts`, 12), `${src}/lib/index.ts`), "/w/shop/src2/a.ts");
+    l = moveFiles(l, `${src}/util.ts`, `${src}/helpers.ts`);
+    l = moveFiles(l, src, "/w/shop/app");
+    expect(l.tabs.map((t) => t.root)).toEqual([
+      { type: "leaf", session: 1 },
+      { type: "file", path: "/w/shop/app/helpers.ts", line: 12 },
+      { type: "file", path: "/w/shop/app/lib/index.ts" },
+      { type: "file", path: "/w/shop/src2/a.ts" },
+    ]);
+    // The active tab stays the one it was.
+    expect(l.active).toBe(l.tabs[3].id);
+  });
+
+  it("closes the tabs of a deleted file, and of the files in a deleted folder", () => {
+    const opened = openFile(openFile(openFile(reconcile(emptyLayout(), [1]), `${src}/util.ts`), `${src}/lib/index.ts`), "/w/shop/src2/a.ts");
+    const closed = closeFilesUnder(opened, src);
+    expect(closed.tabs.map((t) => t.root)).toEqual([
+      { type: "leaf", session: 1 },
+      { type: "file", path: "/w/shop/src2/a.ts" },
+    ]);
+    // The active tab, src2/a.ts, stays active.
+    expect(closed.tabs.find((t) => t.id === closed.active)?.root).toEqual({ type: "file", path: "/w/shop/src2/a.ts" });
+    expect(closeFilesUnder(opened, `${src}/util.ts`).tabs).toHaveLength(3);
+  });
+});
+
+describe("movedPath (X98)", () => {
+  it("gives a path's new place after its folder or itself moved, and null for others", () => {
+    expect(movedPath("/w/src/a.ts", "/w/src", "/w/app")).toBe("/w/app/a.ts");
+    expect(movedPath("/w/src", "/w/src", "/w/app")).toBe("/w/app");
+    expect(movedPath("/w/src2/a.ts", "/w/src", "/w/app")).toBeNull();
   });
 });

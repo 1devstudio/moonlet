@@ -10,7 +10,8 @@ import { ConfirmHost } from "./components/ConfirmHost";
 import { SyncPopoverHost } from "./components/SyncPopover";
 import { ReadHost } from "./components/ReadHost";
 import { CommandPalette } from "./components/CommandPalette";
-import { Button, IconButton, Kbd, cx } from "./components/ui";
+import { OpenFileDialog } from "./components/OpenFileDialog";
+import { Button, IconButton, Kbd, Pane, cx, TRAFFIC_LIGHTS } from "./components/ui";
 import { dismissToast, selectedSession, startStore, useStore } from "./lib/store";
 import { startSync } from "./lib/syncStore";
 import { startCloud } from "./lib/cloudStore";
@@ -28,6 +29,7 @@ import { loadTrackersConfig, shareTasksWithPhones } from "./lib/tasksStore";
 import { modeOf } from "./lib/mode";
 import { sessionDesignsOf, startDesign, useDesign } from "./lib/designStore";
 import { designPanelWidth } from "./lib/sessionDesign";
+import { clampSidebarWidth } from "./lib/sidebar";
 import { startEditor } from "./lib/designEditor";
 import { DesignMain } from "./components/design/DesignMode";
 import { OlderHostsAnnouncer } from "./components/HostUpdate";
@@ -74,9 +76,9 @@ function Home() {
   const hasRepos = useStore((s) => Object.values(s.projects).some((r) => r.length > 0));
   const local = useStore((s) => s.hosts.local);
   return (
-    <div className="flex h-full flex-col bg-bg">
-      <div data-tauri-drag-region className="drag h-[52px] shrink-0 bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+    <div className="flex h-full flex-col">
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
+      <Pane className="flex flex-col items-center justify-center gap-4 text-center">
         <div className="font-mono ui-text-22 tracking-tight">
           <span className="text-accent">❯</span> moonlet
         </div>
@@ -97,7 +99,7 @@ function Home() {
         <div className="mt-2 font-mono ui-text-11.5 text-faint">
           <Kbd>⌘K</Kbd> run action · <Kbd>⌘T</Kbd> new agent · <Kbd>⌘D</Kbd> split · <Kbd>⇧⌘D</Kbd> changes
         </div>
-      </div>
+      </Pane>
     </div>
   );
 }
@@ -179,7 +181,6 @@ export default function App() {
     document.documentElement.style.setProperty("--ui-scale", String(scale));
   }, [scale]);
 
-  const clampSide = (w: number) => Math.max(200, Math.min(420, w));
   const clampRight = (w: number) => Math.max(320, Math.min(window.innerWidth * 0.6, w));
   // A session's Design tab (X65) takes more room: its canvas beside the chat.
   const rightWidth = designTab ? designPanelWidth(designWidth, window.innerWidth) : s.rightWidth;
@@ -194,17 +195,21 @@ export default function App() {
           <div style={{ width: s.sidebarWidth }} className="shrink-0" inert={!!s.settingsPage}>
             <Sidebar />
           </div>
-          <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSide(st.sidebarWidth + d) }))} />
+          <Splitter dir="row" gap onDrag={(d) => useStore.setState((st) => ({ sidebarWidth: clampSidebarWidth(st.sidebarWidth + d) }))} />
         </>
       )}
-      <main className="relative min-w-0 flex-1" inert={!!s.settingsPage}>
+      {/* 6 px between the panes and the window's edges (X94): the gaps between columns are the splitters. */}
+      <main
+        className={cx("relative min-w-0 flex-1 pb-[6px]", !s.sidebarOpen && "pl-[6px]", !(s.rightOpen && sessions && ws && host && !ws.archived) && "pr-[6px]")}
+        inert={!!s.settingsPage}
+      >
         {mode === "tasks" ? <TasksMode /> : mode === "design" ? <DesignMain /> : ws && host ? ws.archived ? <ArchivedSession key={host + ws.id} host={host} ws={ws} /> : <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
         {finding && ws && sessions && <FindBar onClose={() => setFinding(false)} />}
       </main>
       {s.rightOpen && sessions && ws && host && !ws.archived && (
         <>
-          <Splitter dir="row" onDrag={(d) => (designTab ? setDesignWidth(clampRight(rightWidth - d)) : useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) })))} />
-          <div style={{ width: rightWidth }} className="shrink-0" inert={!!s.settingsPage}>
+          <Splitter dir="row" gap onDrag={(d) => (designTab ? setDesignWidth(clampRight(rightWidth - d)) : useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) })))} />
+          <div style={{ width: rightWidth }} className="shrink-0 pb-[6px] pr-[6px]" inert={!!s.settingsPage}>
             <RightPanel host={host} ws={ws} />
           </div>
         </>
@@ -214,6 +219,7 @@ export default function App() {
       <SyncPopoverHost />
       <SignInRunning />
       {s.dialog?.kind === "palette" && <CommandPalette />}
+      {s.dialog?.kind === "open-file" && <OpenFileDialog host={s.dialog.host} session={s.dialog.session} root={s.dialog.root} />}
       <ConfirmHost />
       <ReadHost />
       <Toasts />

@@ -26,7 +26,7 @@ export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Pr
   if (node.type === "file")
     return (
       <Suspense fallback={null}>
-        <FileEditor host={host} wsId={wsId} path={node.path} line={node.line} visible={visible} />
+        <FileEditor host={host} wsId={wsId} path={node.path} line={node.line} endLine={node.endLine} visible={visible} />
       </Suspense>
     );
   if (node.type === "diff")

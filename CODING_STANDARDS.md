@@ -17,7 +17,7 @@ Read during review. Each rule is one this repo has broken before; tooling does n
 
 - **Old files keep loading.** A key removed from a config or state file (`trackers.toml`, `.moonlet/config.toml`, `moonlet.settings`) is still read without error and is not written back; a test parses a file that has it.
 - **A string format has one build and one parse.** An id such as `<connection>/<key>` is written and read by one pair of functions (`trackerLink`/`parseTrackerLink`), never by inline `indexOf` or template strings at each site.
-- **Ids are compared with their host.** A project, session or workspace id is unique per host only (`projects[host]`); a lookup that crosses hosts compares `host` and `id`.
+- **Ids are compared with their host.** A project, session or workspace id is unique per host only (`projects[host]`); a lookup that crosses hosts compares `host` and `id`. The one exception is a session within one account: it keeps its id on every member (X72), so the same id on two members is the same session, listed once (`apps/desktop/src/lib/sessionsOnce.ts`).
 
 ## Settings
 

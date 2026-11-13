@@ -3,18 +3,19 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { M, type FileContent } from "../lib/protocol";
-import { errorToast, toast, useStore } from "../lib/store";
+import { errorToast, toast, useStore, hostPath } from "../lib/store";
 import { editorFont } from "../lib/uiScale";
 import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { isMarkdownPath } from "../lib/markdown";
 import { afterRead, afterSave } from "../lib/fileSync";
+import { rangeToShow } from "../lib/openFileQuery";
 
 /**
  * A file in an editor tab of the main window (X26): writable at once, ⌘S
  * saves. A change on disk shows when there are no unsaved edits.
  */
-export default function FileEditor({ host, wsId, path, line, visible }: { host: string; wsId: string; path: string; line?: number; visible: boolean }) {
+export default function FileEditor({ host, wsId, path, line, endLine, visible }: { host: string; wsId: string; path: string; line?: number; endLine?: number; visible: boolean }) {
   const [file, setFile] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const editor = useRef<Parameters<OnMount>[0] | null>(null);
@@ -22,9 +23,14 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
   const saved = useRef("");
   const fontSize = useStore((s) => s.settings.term.fontSize);
   const root = useStore((s) => s.sessions[host]?.find((w) => w.id === wsId)?.path ?? null);
-  const fsVersion = useStore((s) => (root ? (s.fsVersion[`${host}|${root}`] ?? 0) : 0));
-  const language = useEditorLanguage(path);
-  const key = `${host}|${path}`;
+  const fsVersion = useStore((s) => (root ? (s.fsVersion[hostPath(host, root)] ?? 0) : 0));
+  const loaded = useEditorLanguage(path);
+  // A rename to another extension (X98) loads a new grammar: the editor
+  // keeps the last one meanwhile, so it stays mounted with its unsaved edits.
+  const lastLanguage = useRef<string | null>(null);
+  if (loaded) lastLanguage.current = loaded;
+  const language = loaded ?? lastLanguage.current;
+  const key = hostPath(host, path);
   const readOnly = !file || file.truncated;
   const markdown = isMarkdownPath(path);
   /** The editor's text while a markdown file shows rendered; null shows the source. */
@@ -85,24 +91,37 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
   // The ⌘S command is registered once; it calls the latest save.
   const saveRef = useRef(save);
   saveRef.current = save;
+  /** The line and range to show, for the reveal after the first layout. */
+  const at = useRef({ line, endLine });
+  at.current = { line, endLine };
 
-  const reveal = (ed: Parameters<OnMount>[0], at: number | undefined) => {
-    if (!at) return;
-    ed.revealLineInCenter(at);
-    ed.setPosition({ lineNumber: at, column: 1 });
+  /** Scrolls to line `at`, with lines `at` to `end` selected (X96). */
+  const reveal = (ed: Parameters<OnMount>[0], at: number | undefined, end: number | undefined) => {
+    const model = ed.getModel();
+    const range = model && rangeToShow(at, end, { lineCount: model.getLineCount(), lineEnd: (n) => model.getLineMaxColumn(n) });
+    if (!range) return;
+    ed.setSelection(range);
+    ed.revealRangeInCenter(range);
   };
 
   const onMount: OnMount = (ed) => {
     editor.current = ed;
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void saveRef.current());
-    reveal(ed, line);
+    reveal(ed, line, endLine);
+    // The editor lays itself out after mounting (automaticLayout), and a
+    // scroll before that is lost: reveal again once it has a height (X96).
+    const laidOut = ed.onDidLayoutChange((l) => {
+      if (l.height <= 0) return;
+      laidOut.dispose();
+      reveal(ed, at.current.line, at.current.endLine);
+    });
     if (visible) ed.focus();
   };
 
-  // Opened again at another line, from a terminal link (F3).
+  // Opened again at another line, from a terminal link (F3) or Open file (X96).
   useEffect(() => {
-    if (editor.current) reveal(editor.current, line);
-  }, [line]);
+    if (editor.current) reveal(editor.current, line, endLine);
+  }, [line, endLine]);
 
   useEffect(() => {
     if (visible) editor.current?.focus();
@@ -110,7 +129,7 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
 
   const rel = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
   return (
-    <div className="flex h-full flex-col bg-[#121212]">
+    <div className="flex h-full flex-col bg-bg">
       <div className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border px-4 ui-text-12">
         <span className="truncate font-mono text-muted" title={path}>
           {rel}

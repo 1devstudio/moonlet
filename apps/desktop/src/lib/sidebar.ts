@@ -4,6 +4,14 @@
 import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace } from "./protocol";
 import { agentCount } from "./subagents";
 import { parseCopyHost } from "./copyHost";
+import { firstListings } from "./sessionsOnce";
+
+/**
+ * The sidebar's width, from 260px, where the workspace switcher's square,
+ * attention dot and chevron fit beside the traffic lights and the mode
+ * switch (X32), to 420px.
+ */
+export const clampSidebarWidth = (w: number) => Math.max(260, Math.min(420, w));
 
 export interface Group {
   key: string;
@@ -28,14 +36,18 @@ const STATUS_ORDER: { state: AgentState | null; label: string }[] = [
   { state: null, label: "No agent" },
 ];
 
+/** An agent that works or waits for the user: on top of a recent activity sort. */
+const live = (state: AgentState | null) => state === "working" || state === "blocked";
+
 /** How a section orders its sessions, newest or most active first, or by
- * name; `of` finds the session in an item, `activeAt` its last activity. */
-export function bySort<T>(sortBy: Section["view"]["sort_by"], of: (x: T) => Session, activeAt: (x: T) => number): (a: T, b: T) => number {
+ * name; `of` finds the session in an item, `activeAt` its last activity and
+ * `stateOf` its agent's state, so live agents lead the most active. */
+export function bySort<T>(sortBy: Section["view"]["sort_by"], of: (x: T) => Session, activeAt: (x: T) => number, stateOf: (x: T) => AgentState | null): (a: T, b: T) => number {
   return (a, b) => {
     const [x, y] = [of(a), of(b)];
     if (sortBy === "name") return x.name.localeCompare(y.name);
     if (sortBy === "created") return y.created_at - x.created_at;
-    return activeAt(b) - activeAt(a) || y.created_at - x.created_at;
+    return Number(live(stateOf(b))) - Number(live(stateOf(a))) || activeAt(b) - activeAt(a) || y.created_at - x.created_at;
   };
 }
 
@@ -58,7 +70,7 @@ export function arrange(
   const byId = new Map(projects.map((p) => [p.id, p]));
   const rest = sessions
     .filter((s) => (!s.archived || archiving(s)) && s.workspace_id === workspaceId && visible.includes(s.project_id))
-    .sort(bySort(sec.view.sort_by, (s) => s, activeAt));
+    .sort(bySort(sec.view.sort_by, (s) => s, activeAt, stateOf));
 
   const groups: Group[] = [];
   if (sec.view.group_by === "project") {
@@ -191,14 +203,21 @@ export function arrangeShared(
     out.push(g);
   }
   const activeAt = (e: HostSession) => o.activeAt(e.host, e.session);
-  for (const g of out) g.sessions.sort(bySort(view.sort_by, (e: HostSession) => e.session, activeAt));
+  const stateOf = (e: HostSession) => o.stateOf(e.host, e.session);
+  const compare = bySort(view.sort_by, (e: HostSession) => e.session, activeAt, stateOf);
+  for (const g of out) {
+    // A session two parts bring, as while it moves between two members
+    // (X73), is the first one's: one row, with one key.
+    g.sessions = firstListings([g.sessions], (e) => e.session.id)[0];
+    g.sessions.sort(compare);
+  }
   if (view.group_by === "status") {
     const order = STATUS_ORDER.map((x) => x.label);
     out.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
   } else if (view.group_by === "task") {
     // Tasks by their first session in the section's order, sessions without
     // one last.
-    const all = out.flatMap((g) => g.sessions).sort(bySort(view.sort_by, (e: HostSession) => e.session, activeAt));
+    const all = out.flatMap((g) => g.sessions).sort(compare);
     const first = (g: SharedGroup) => (g.key === "task:none" ? Infinity : Math.min(...g.sessions.map((e) => all.indexOf(e))));
     out.sort((a, b) => first(a) - first(b));
   }
@@ -247,7 +266,9 @@ export const connectedHosts = (hosts: Record<string, { id: string; status: strin
  * first holder's is `sec` itself. A holder's side also has the sessions
  * other members run that it holds copies of (X88), each under its copy
  * host, except one a host the app is connected to (`connected`, every host
- * when not given) lists as its own: a copy keeps its session's id (X72). */
+ * when not given) lists as its own: a copy keeps its session's id (X72).
+ * A session two holders list, as while it moves between them (X73), is
+ * the first one's only. */
 export function sectionParts(
   holding: string[],
   sec: Section,
@@ -258,6 +279,10 @@ export function sectionParts(
       .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
       .flatMap(([, list]) => list.map((x) => x.id)),
   );
+  const unclaimed = firstListings(
+    holding.map((h) => of.sessions[h] ?? []),
+    (x) => x.id,
+  );
   return holding.map((h, i) => {
     const copies = Object.entries(of.sessions).flatMap(([key, list]) =>
       parseCopyHost(key)?.host === h ? list.filter((x) => !own.has(x.id)).map((x) => ({ key, session: x })) : [],
@@ -266,7 +291,7 @@ export function sectionParts(
       host: h,
       sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
       projects: of.projects[h] ?? [],
-      sessions: [...(of.sessions[h] ?? []), ...copies.map((c) => c.session)],
+      sessions: [...unclaimed[i], ...copies.map((c) => c.session)],
       ...(copies.length && { hostOf: Object.fromEntries(copies.map((c) => [c.session.id, c.key])) }),
     };
   });

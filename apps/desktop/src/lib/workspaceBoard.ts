@@ -2,7 +2,8 @@ import { asBoard, mapCards, shownBoardOf, workspaceViews } from "./boardScreen";
 import { workspaceBoards } from "./boards";
 import { withoutPutOffCard, withRules } from "./keepInStep";
 import { hostWorkspaces, type useStore } from "./store";
-import { type Card, sessionsWithoutTask } from "./tasksBoard";
+import { type Board, type BoardInput, type Card, drawn, sessionsWithoutTask, tasksBoard } from "./tasksBoard";
+import { taskId } from "./tasks";
 import { boardInput, type Moving, rulesFor, type TasksData, type TrackersConfig } from "./tasksStore";
 import { workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 
@@ -47,7 +48,25 @@ function layOut(st: BoardStore, ws: WorkspaceRef | null, data: TasksData | undef
   const all = workspaceViews(workspaceBoards(knobs.config.boards, key, knobs.shownId), data, input).map((b) => ({ ...b, views: mapCards(b.views, clean) }));
   const shownBoard = shownBoardOf(knobs.config.boards, key, knobs.shownId);
   const shown = shownBoard ? { board: shownBoard, views: all.find((b) => b.board.id === shownBoard.id)?.views ?? [] } : null;
-  return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
+  return { ws, data, board: withLinked(asBoard(all), input, data, clean), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
+}
+
+/**
+ * `board` with a card for each task a session is linked to by hand that no
+ * board shows (X46): an Epic, someone else's issue, one outside every board's
+ * query or in a hidden column. Its session works on it, in its tracker's
+ * column; no board's columns show it.
+ */
+function withLinked(board: Board, input: BoardInput, data: TasksData, clean: (c: Card) => Card | null): Board {
+  // Those a board reads into a hidden column (a Backlog) have no card there either.
+  const shown = new Set(input.tasks.filter(drawn).map(taskId));
+  const wanted = new Set(input.sessions.flatMap((s) => (s.task ? [taskId(s.task)] : [])));
+  // One its tracker closed as not planned is finished work.
+  const tasks = (data.linked ?? []).filter((t) => wanted.has(taskId(t)) && !shown.has(taskId(t))).map((t) => (drawn(t) ? t : { ...t, column: "done" as const }));
+  if (!tasks.length) return board;
+  const extra = tasksBoard({ ...input, tasks });
+  const add = (column: keyof Board) => [...board[column], ...extra[column].flatMap((c) => clean({ ...c, offBoard: true }) ?? [])];
+  return { todo: add("todo"), in_progress: add("in_progress"), in_review: add("in_review"), done: add("done") };
 }
 
 export type WorkspaceBoard = ReturnType<typeof layOut>;

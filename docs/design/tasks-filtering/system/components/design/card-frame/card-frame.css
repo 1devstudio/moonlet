@@ -1,0 +1,20 @@
+/* CardFrame (components/design/Frame.tsx): a design card or page rendered at
+   a scale. The box is the viewport times the scale; the frame inside is the
+   full viewport, scaled from its top left corner, and never takes the pointer
+   unless the frame is interactive. Not live, the box is empty. */
+.card-frame {
+  position: relative;
+  overflow: hidden;
+}
+.card-frame__page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 0;
+  background: transparent;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.card-frame--interactive .card-frame__page {
+  pointer-events: auto;
+}

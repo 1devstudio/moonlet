@@ -9,6 +9,7 @@ import { RESTORE_WAITS } from "../../lib/designBars";
 import type { DesignSnapshot } from "../../lib/protocol";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button } from "../ui";
+import { ScrollArea } from "../ScrollArea";
 
 function KindIcon({ kind }: { kind: HistoryRow["kind"] }) {
   return (
@@ -40,7 +41,7 @@ export function HistoryTab({
   return (
     <div aria-label="History" className="flex min-h-0 flex-1 flex-col">
       <p className="shrink-0 border-b border-border px-4 py-3 ui-text-12.5 text-muted">Snapshots of pages/ and assets/. The last 50 are kept.</p>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <ScrollArea>
         {snapshots && rows.length === 0 && <p className="px-4 py-6 text-center ui-text-12.5 text-faint">No snapshots yet. One is taken when Claude ends a turn, and when edits by hand stop for 10 seconds.</p>}
         {rows.map((r) => {
           const shown = previewed === r.n;
@@ -69,7 +70,7 @@ export function HistoryTab({
             </article>
           );
         })}
-      </div>
+      </ScrollArea>
     </div>
   );
 }

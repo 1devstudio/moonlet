@@ -1,12 +1,24 @@
-import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
-import { GitBranch, SquareTerminal, X } from "lucide-react";
+import { type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode, forwardRef, useEffect, useRef } from "react";
+import { GitBranch, Loader2, SquareTerminal, X } from "lucide-react";
 import type { AgentState } from "../lib/protocol";
-import { fromOtherDialog, tabWrap } from "../lib/modal";
+import { confirmFocus, fromOtherDialog, tabWrap } from "../lib/modal";
 
 import { cx } from "../lib/cx";
 import { type TrackerKind, trackerOf } from "../lib/tasks";
 
 export { cx };
+
+/** The px the traffic lights take at the left of a header row while the sidebar is closed (X32, X94). */
+export const TRAFFIC_LIGHTS = 84;
+
+/** What a column shows (X94): a block of the pane's tone with rounded corners, on the window's tone. */
+export function Pane({ className, children, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div className={cx("min-h-0 flex-1 overflow-hidden rounded-[10px] bg-bg", className)} {...rest}>
+      {children}
+    </div>
+  );
+}
 
 type Variant = "primary" | "ghost" | "subtle" | "danger";
 
@@ -247,6 +259,7 @@ export function ConfirmDialog({
   width,
   alt,
   onAlt,
+  checking,
   children,
 }: {
   title: string;
@@ -267,9 +280,23 @@ export function ConfirmDialog({
    * of it; `disabled` is why it can't be used (X55). */
   alt?: { label: string; disabled?: string };
   onAlt?: () => void;
+  /** Shown while the dialog waits for what to ask (X55): the confirming
+   * buttons are disabled and the dialog holds the focus, so Enter does
+   * nothing; they take it once it is ready. */
+  checking?: string;
   /** Shown under the message, such as the text an agent would read. */
   children?: ReactNode;
 }) {
+  const first = confirmFocus(alt);
+  // The button Enter presses, once the dialog is not checking.
+  const focus = (which: typeof first) => ({ autoFocus: !checking && first === which, "data-first": first === which || undefined });
+  const dialog = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const d = dialog.current;
+    if (checking) d?.focus();
+    // Checked: the button takes the focus, unless the user moved it.
+    else if (d && document.activeElement === d) d.querySelector<HTMLElement>("[data-first]")?.focus();
+  }, [checking]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -285,6 +312,7 @@ export function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 pt-[12vh]" onMouseDown={onCancel}>
       <div
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -309,6 +337,12 @@ export function ConfirmDialog({
         </div>
         <div className="p-4">
           <p className="whitespace-pre-line ui-text-12.5 leading-[1.55] text-pretty text-muted">{message}</p>
+          {checking && (
+            <p role="status" className="mt-3 flex items-center gap-2 ui-text-12 text-muted">
+              <Loader2 size={13} className="animate-spin" />
+              {checking}
+            </p>
+          )}
           {children}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border bg-panel-2 px-4 py-2.5">
@@ -318,17 +352,15 @@ export function ConfirmDialog({
               {checkbox}
             </label>
           )}
-          {/* With a disabled alt (a danger action next to it), Enter must not
-              archive anyway: Cancel takes the focus. */}
-          <Button variant="ghost" className={ring} autoFocus={!!alt?.disabled} onClick={onCancel}>
+          <Button variant="ghost" className={ring} {...focus("cancel")} onClick={onCancel}>
             {cancel}
           </Button>
           {alt && (
-            <Button variant="primary" className={ring} autoFocus={!alt.disabled} disabled={!!alt.disabled} title={alt.disabled} onClick={onAlt}>
+            <Button variant="primary" className={ring} {...focus("alt")} disabled={!!checking || !!alt.disabled} title={alt.disabled} onClick={onAlt}>
               {alt.label}
             </Button>
           )}
-          <Button variant={variant} className={ring} autoFocus={!alt} onClick={onConfirm}>
+          <Button variant={variant} className={ring} {...focus("action")} disabled={!!checking} onClick={onConfirm}>
             {action}
           </Button>
         </div>

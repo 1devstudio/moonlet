@@ -233,7 +233,8 @@ impl ChatManager {
 
     /// A chat that goes on from `history`, another member's chat of the same
     /// session (X73): its items stay, and its agent resumes the same
-    /// conversation. What it had running or asking is over: it starts idle.
+    /// conversation with the chat's next message. What it had running or
+    /// asking is over: it starts idle.
     pub fn create_continuing(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
         self.create_from(req, Some(history))
     }
@@ -305,15 +306,17 @@ impl ChatManager {
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
-        // Start right away so the agent is warm when the first message comes.
         {
             let mut inner = chat.inner.lock().unwrap();
-            // A continued conversation was put in this host's profile for
-            // the session (X73): it is resumed there, not started anew.
             if continuing {
+                // A continued conversation was put in this host's profile
+                // for the session (X73): its next message resumes it there,
+                // not anew, as after a daemon start. Until then no agent
+                // runs, so many sessions moving at once start none.
                 inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
-            }
-            if let Err(e) = self.spawn(&chat, &mut inner) {
+            } else if let Err(e) = self.spawn(&chat, &mut inner) {
+                // A new chat starts right away, so the agent is warm when
+                // the first message comes.
                 self.fail(&chat, &mut inner, &format!("{e:#}"));
             }
             self.save(&chat, &mut inner);
@@ -902,11 +905,8 @@ impl ChatManager {
     fn may_rest(&self, inner: &Inner) -> bool {
         let st = &inner.state;
         !inner.frozen
-            && !super::busy(st)
-            && st.pending.is_empty()
-            && st.queued.is_empty()
+            && !super::at_work(st)
             && inner.kept.is_empty()
-            && !st.subagents.iter().any(|a| a.status == "running")
             && now_ms().saturating_sub(inner.active_at) >= self.rest_after.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -1120,6 +1120,7 @@ impl ChatManager {
             let env = self.agent_env(id, &inner, launch.env);
             ("claude".to_string(), args, inner.cfg.cwd.clone(), env)
         };
+        require_folder(&cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let run = tokio::process::Command::new(&exe).args(&args).current_dir(&cwd).env_clear().envs(&env).stdin(Stdio::null()).kill_on_drop(true).output();
         let out = tokio::time::timeout(ASIDE_TIMEOUT, run).await.map_err(|_| anyhow::anyhow!("The aside took too long."))?.context("failed to start claude")?;
@@ -1148,6 +1149,7 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let env = self.agent_env(chat.id, inner, launch.env);
+        require_folder(&cfg.cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
             .args(&args)
@@ -1320,6 +1322,11 @@ impl ChatManager {
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
         let mut state_changed = false;
+        // What the chat shows is its activity, as a PTY's output is; a new
+        // model or mode alone is not.
+        if outs.iter().any(|o| matches!(o, Out::Item(_))) {
+            self.terms.touch(chat.id);
+        }
         for o in outs {
             match o {
                 Out::Write(line) => {
@@ -1371,6 +1378,15 @@ impl ChatManager {
 /// The chats directory under a moonlet home.
 pub fn chats_dir(home: &Path) -> PathBuf {
     home.join("chats")
+}
+
+/// An agent runs in its session's folder: a removed worktree is named as
+/// such, not as an agent that failed to start.
+fn require_folder(cwd: &str) -> Result<()> {
+    if !Path::new(cwd).is_dir() {
+        bail!("This session's folder no longer exists: {cwd}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1539,6 +1555,31 @@ done
         terms.kill(info.id, true).unwrap();
         assert!(!chats.is_chat(info.id));
         assert!(!dir.path().join("chats").join(format!("{}.json", info.id)).exists());
+    }
+
+    /// A chat restored after its session's folder was removed (a deleted
+    /// worktree) says so, instead of a bare "failed to start claude".
+    #[tokio::test]
+    async fn a_chat_whose_folder_is_gone_says_so() {
+        let (dir, terms, chats) = setup().await;
+        let folder = dir.path().join("wt");
+        std::fs::create_dir(&folder).unwrap();
+        let info = chats.create(ChatCreate { cwd: folder.display().to_string(), agent: "claude".into(), name: "t".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.shutdown().await;
+        std::fs::remove_dir_all(&folder).unwrap();
+
+        let terms2 = TerminalManager::new(dir.path().join("sock2"), terms.base_env().clone());
+        let chats2 = ChatManager::new(terms2, dir.path().join("chats"));
+        assert_eq!(chats2.restore(), 1);
+        let err = chats2.send(info.id, "hi", &[]).unwrap_err();
+        let expected = format!("This session's folder no longer exists: {}", folder.display());
+        assert_eq!(format!("{err:#}"), expected);
+        let st = chats2.state(info.id).unwrap();
+        assert_eq!(st.items.iter().rev().find(|i| i.kind == "error").unwrap().text, expected);
+        // Ask aside runs Claude in the same folder (X49).
+        let err = chats2.aside(info.id, "which port?").await.unwrap_err();
+        assert_eq!(format!("{err:#}"), expected);
     }
 
     /// X86: an archived session's chat leaves the live chats, its transcript
@@ -1959,6 +2000,34 @@ done
         }
         let sock = dir.path().join("sock");
         assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("{}\n{}\n", sock.display(), info.id));
+        chats.shutdown().await;
+    }
+
+    /// A structured agent has no PTY output: its turns are its activity, for
+    /// the sidebar's recent activity sort.
+    #[tokio::test]
+    async fn a_turn_moves_the_agents_activity_time() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        let started = terms.get(info.id).unwrap().info().last_output_at;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+        assert!(terms.get(info.id).unwrap().info().last_output_at >= started + 50);
+        chats.shutdown().await;
+    }
+
+    /// A new model, effort or mode is the user's doing, not the agent's.
+    #[tokio::test]
+    async fn changing_a_chats_settings_leaves_its_activity_time() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        let before = terms.get(info.id).unwrap().info().last_output_at;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        chats.settings(info.id, Some("opus".into()), Some("high".into()), Some("plan".into())).unwrap();
+        assert_eq!(terms.get(info.id).unwrap().info().last_output_at, before);
         chats.shutdown().await;
     }
 

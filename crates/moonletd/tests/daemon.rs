@@ -593,15 +593,24 @@ async fn pulled_base_branch_is_where_new_sessions_start() {
     assert_eq!((st.ahead, st.behind), (0, 1));
     assert_eq!(st.commits[0].subject, "Merge pull request #128");
 
+    // Another app on this daemon, such as the central host's own when a
+    // member pulls there, hears of the pull and can clear its chip (X13),
+    // by the project's own path however the folder was spelt.
+    let mut app = d.client().await;
     let pulled: BasePull = c
         .request(
             methods::GIT_PULL_BASE,
-            serde_json::json!({"path": p.path, "branch": p.base_branch}),
+            serde_json::json!({"path": format!("{}/", p.path), "branch": p.base_branch}),
         )
         .await
         .unwrap();
     assert_eq!(pulled.pulled, 1);
     assert_eq!(pulled.head, merged);
+    let heard = next_event(&mut app, "git.base_pulled", |_| true).await;
+    assert_eq!(
+        heard,
+        serde_json::json!({"path": p.path, "branch": "main", "pulled": 1, "head": merged})
+    );
 
     let ws: Session = c
         .request(
@@ -708,6 +717,22 @@ async fn a_new_sessions_branch_takes_the_hosts_prefix_unless_its_project_has_one
         .request::<_, serde_json::Value>(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": "my prefix/"}))
         .await;
     assert!(refused.is_err());
+}
+
+#[tokio::test]
+async fn a_given_branch_gets_no_prefix_and_a_suffix_when_taken() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_repo, p) = project_with_repo(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::GIT_SET_SETTINGS, serde_json::json!({"branch_prefix": "feature/"}))
+        .await
+        .unwrap();
+    let given = |name: &str| serde_json::json!({"project_id": p.id, "name": name, "branch": "fix/cart", "agent": "none"});
+    let first: moonlet_proto::types::Session = c.request(methods::SESSION_CREATE, given("Fix cart")).await.unwrap();
+    assert_eq!(first.branch, "fix/cart");
+    let second: moonlet_proto::types::Session = c.request(methods::SESSION_CREATE, given("Fix cart again")).await.unwrap();
+    assert_eq!(second.branch, "fix/cart-2");
 }
 
 #[tokio::test]
@@ -1167,6 +1192,12 @@ impl HomeDaemon {
 
     async fn client(&self) -> Client {
         Client::connect_app(&self.socket, self.home.path()).await.unwrap()
+    }
+
+    /// A connection the daemon counts as the app's: its credential is in
+    /// the daemon's home, `.moonlet` under this one (X75).
+    async fn app(&self) -> Client {
+        Client::connect_app(&self.socket, &self.home.path().join(".moonlet")).await.unwrap()
     }
 }
 
@@ -1658,15 +1689,19 @@ async fn worktrees_made_outside_moonlet_are_listed_and_can_be_adopted() {
     assert!(err.to_string().contains("is used by session"), "{err}");
 }
 
+/// Writes an executable script at `path`.
+fn write_script(path: &std::path::Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// A daemon whose `gh` is `script`. moonletd takes PATH from a login shell, so
 /// the fake goes first in every startup file of a scratch HOME (as the e2e
 /// world does). The temp dirs live as long as the daemon is used.
 async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
-    use std::os::unix::fs::PermissionsExt;
     let bin = tempfile::tempdir().unwrap();
-    let gh = bin.path().join("gh");
-    std::fs::write(&gh, script).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_script(&bin.path().join("gh"), script);
     let home = tempfile::tempdir().unwrap();
     let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.path().display());
     for rc in [".profile", ".zshenv", ".zprofile", ".zshrc"] {
@@ -1679,6 +1714,29 @@ async fn fake_gh_daemon(script: &str) -> (TestDaemon, Vec<tempfile::TempDir>) {
     ])
     .await;
     (d, vec![bin, home])
+}
+
+/// A login shell that does not print its environment in time (as during an
+/// upgrade on a busy Mac) leaves terminals and agents the PATH the daemon
+/// inherited, not a bare system one that lacks `~/.local/bin` and the like.
+#[tokio::test]
+async fn a_slow_login_shell_leaves_the_inherited_path() {
+    let bin = tempfile::tempdir().unwrap();
+    write_script(&bin.path().join("gh"), "#!/bin/sh\necho '{\"number\":7,\"title\":\"Gift cards\",\"body\":\"\",\"url\":\"https://github.com/acme/web/issues/7\",\"state\":\"OPEN\",\"stateReason\":\"\",\"assignees\":[],\"labels\":[],\"updatedAt\":\"2026-10-14T09:00:00Z\",\"closedByPullRequestsReferences\":[]}'\n");
+    let shell = bin.path().join("slow-shell");
+    write_script(&shell, "#!/bin/sh\nexec sleep 30\n");
+    let d = TestDaemon::start_with(&[
+        ("SHELL", shell.display().to_string()),
+        ("PATH", format!("{}:/usr/bin:/bin", bin.path().display())),
+    ])
+    .await;
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+    let task: serde_json::Value = c
+        .request(methods::GH_TASK, serde_json::json!({"path": repo, "repo": "acme/web", "number": 7}))
+        .await
+        .unwrap();
+    assert_eq!(task["title"].as_str(), Some("Gift cards"));
 }
 
 #[tokio::test]
@@ -2361,7 +2419,7 @@ async fn design_systems_over_rpc() {
         .await
         .unwrap();
     assert_eq!((created["slug"].as_str(), created["agent"].as_u64()), (Some("moonlet-desktop"), None));
-    let config = std::fs::read_to_string(d.home.path().join("design").join(w).join("systems/moonlet-desktop/config.toml")).unwrap();
+    let config = std::fs::read_to_string(d.home.path().join("design").join("library").join("systems/moonlet-desktop/config.toml")).unwrap();
     assert!(config.contains("cover = \"all\""), "{config}");
     let bad = c
         .request::<_, serde_json::Value>(
@@ -2371,7 +2429,7 @@ async fn design_systems_over_rpc() {
         .await;
     assert!(bad.is_err());
     let slug = "moonlet-desktop".to_string();
-    let dir = d.home.path().join("design").join(w).join("systems/moonlet-desktop");
+    let dir = d.home.path().join("design").join("library").join("systems/moonlet-desktop");
     for (path, text) in [
         ("styles.css", "@import \"components.css\";\n"),
         ("components.css", ".btn { color: var(--color-fg); }\n"),
@@ -2497,7 +2555,7 @@ async fn a_new_design_system_starts_its_sync_agent() {
     assert_eq!(created["agent_error"], serde_json::Value::Null);
     let agent = created["agent"].as_u64().expect("an agent") as u32;
 
-    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    let dir = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     let real_repo = repo.canonicalize().unwrap().display().to_string();
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
@@ -2555,7 +2613,7 @@ async fn a_new_design_system_starts_its_sync_agent() {
         .await
         .unwrap();
     let other_agent = other["agent"].as_u64().expect("an agent");
-    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/moonlet-desktop.toml");
+    let record = d.home.path().join(".moonlet/design").join("library").join(".records/moonlet-desktop.toml");
     let text = std::fs::read_to_string(&record).unwrap();
     let text = text.replace(&format!("agent = {agent}"), &format!("agent = {other_agent}"));
     std::fs::write(&record, text).unwrap();
@@ -2630,7 +2688,7 @@ async fn workspace_with_system(d: &HomeDaemon, c: &mut Client) -> String {
         )
         .await
         .unwrap();
-    let system = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::write(system.join("README.md"), "# moonlet desktop\n\nLink styles.css; buttons are .btn.\n").unwrap();
     ws.id
 }
@@ -2665,7 +2723,7 @@ async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
         .unwrap();
     let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
     let real_dir = dir.canonicalize().unwrap().display().to_string();
-    let real_system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop").canonicalize().unwrap().display().to_string();
+    let real_system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop").canonicalize().unwrap().display().to_string();
     assert_eq!(
         (&created["slug"], &created["name"], &created["kind"], &created["system"], &created["agent_error"]),
         (&serde_json::json!("settings-page"), &serde_json::json!("Settings page"), &serde_json::json!("workspace"), &serde_json::json!("moonlet-desktop"), &serde_json::Value::Null)
@@ -3019,7 +3077,7 @@ async fn a_designs_kit_gives_its_systems_tokens_and_snippet_cards() {
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
         .await
         .unwrap();
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::create_dir_all(system.join("tokens")).unwrap();
     std::fs::write(system.join("styles.css"), "@import \"tokens/scale.css\";\n").unwrap();
     std::fs::write(system.join("tokens/scale.css"), ":root { --space-4: 16px; }\n").unwrap();
@@ -3185,7 +3243,7 @@ async fn a_design_source_never_reaches_outside_its_project() {
     let created: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, create("mobile", "apps/mobile")).await.unwrap();
     assert_eq!(created["slug"], "mobile");
     // A record that names a folder outside the project anyway.
-    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/mobile.toml");
+    let record = d.home.path().join(".moonlet/design").join("library").join(".records/mobile.toml");
     let text = std::fs::read_to_string(&record).unwrap();
     assert!(text.contains("subdir = \"apps/mobile\""), "{text}");
     std::fs::write(&record, text.replace("subdir = \"apps/mobile\"", "subdir = \"apps/out\"")).unwrap();
@@ -3217,7 +3275,7 @@ async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_
         .unwrap();
     let agent = created["agent"].as_u64().expect("an agent");
     // The agent renames the system in the file it may edit.
-    let config = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/storefront/config.toml");
+    let config = d.home.path().join(".moonlet/design").join("library").join("systems/storefront/config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     std::fs::write(&config, text.replace("name = \"storefront\"", "name = \"shop\"")).unwrap();
     let again: serde_json::Value =
@@ -3252,7 +3310,7 @@ async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
         .await
         .unwrap();
     // Enough files that recording the sync takes a while.
-    let assets = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing/assets");
+    let assets = d.home.path().join(".moonlet/design").join("library").join("systems/pricing/assets");
     std::fs::create_dir_all(&assets).unwrap();
     let body = "x".repeat(16 * 1024);
     for i in 0..2000 {
@@ -3293,7 +3351,7 @@ async fn a_card_edited_by_hand_before_sync_is_not_changed_by_that_sync() {
         )
         .await
         .unwrap();
-    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing");
+    let dir = d.home.path().join(".moonlet/design").join("library").join("systems/pricing");
     let put = |path: &str, body: &str| {
         std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
         std::fs::write(dir.join(path), format!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n{body}\n")).unwrap();
@@ -3367,11 +3425,12 @@ async fn a_file_written_in_a_design_system_is_announced() {
         .await
         .unwrap();
     let mut listener = d.client().await;
-    let card = d.home.path().join("design").join(&ws.id).join("systems/storefront/components/buttons/button/button.html");
+    let card = d.home.path().join("design").join("library").join("systems/storefront/components/buttons/button/button.html");
     std::fs::create_dir_all(card.parent().unwrap()).unwrap();
     std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
     let data = next_change_of(&mut listener, "components/buttons/button/button.html").await;
-    assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
+    // A design system is the library's (X95).
+    assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some("library"), Some("storefront")));
 }
 
 /// X65: a page written in a workspace design reaches every client as
@@ -3404,7 +3463,7 @@ async fn render_fixture(d: &TestDaemon) -> (Client, String, PathBuf) {
         .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}))
         .await
         .unwrap();
-    let dir = d.home.path().join("design").join(&ws.id).join("systems/storefront");
+    let dir = d.home.path().join("design").join("library").join("systems/storefront");
     for (path, text) in [
         ("styles.css", "@import \"components.css\";\n"),
         ("components.css", ".btn { color: red; }\n"),
@@ -4384,7 +4443,7 @@ async fn a_design_removed_while_its_edits_by_hand_wait_for_quiet_does_not_come_b
 async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, &str)]) -> (String, moonlet_proto::types::Project, moonlet_proto::types::Session) {
     use moonlet_proto::types::{Project, Section, Session};
     let ws = workspace_with_system(d, c).await;
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     for (path, text) in [
         ("styles.css", "@import \"tokens/colors.css\";\n"),
         ("tokens/colors.css", ":root { --color-accent: #3b82f6; }\n"),
@@ -4501,6 +4560,188 @@ async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and
     assert_eq!(unknown.unwrap_err().to_string(), "invalid_params: no session \"nope\"");
     let missing = c.request::<_, serde_json::Value>(methods::DESIGN_PAGE, serde_json::json!({"session": session.id, "slug": "nope", "page": "index"})).await;
     assert!(missing.is_err());
+}
+
+/// `.moonlet/config.toml` of a project that keeps its session designs in
+/// moonlet (X101).
+const KEEP_IN_MOONLET: (&str, &str) = (".moonlet/config.toml", "[design]\nstore = \"moonlet\"\n");
+
+/// The directories a chat's agent may work in, as `chat.state` gives them.
+async fn add_dirs(c: &mut Client, chat: u32) -> Vec<String> {
+    let state: serde_json::Value = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat})).await.unwrap();
+    state["add_dirs"].as_array().map(|a| a.iter().filter_map(|d| d.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+/// X101: in a project that keeps its session designs in moonlet, a
+/// session's agent may work in the session's own folder under
+/// `~/.moonlet/design/.sessions/`; a session design is made there, with its
+/// comments and system copy beside it (`side`), nothing in the worktree, and
+/// every design RPC reaches it by `{session, slug}`.
+#[tokio::test]
+async fn a_session_in_a_project_keeping_designs_in_moonlet_makes_them_outside_its_worktree() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[KEEP_IN_MOONLET]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let mine = d.home.path().join(".moonlet/design/.sessions").join(&session.id);
+    assert_eq!(add_dirs(&mut c, session.terminals[0]).await, [mine.display().to_string()]);
+    let created: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let dir = mine.join("designs/settings-page");
+    assert_eq!(
+        (&created["kind"], &created["session"], &created["path"], &created["side"]),
+        (
+            &serde_json::json!("session"),
+            &serde_json::json!(session.id),
+            &serde_json::json!(dir),
+            &serde_json::json!(mine.join(".moonlet/design/settings-page"))
+        )
+    );
+    assert_eq!(std::fs::read_to_string(mine.join(".moonlet/design/settings-page/system/_ds_sync.json")).unwrap(), "{\"cards\":{}}\n");
+    let worktree = std::path::PathBuf::from(&session.path);
+    assert!(!worktree.join("docs/design").exists() && !worktree.join(".moonlet/design").exists());
+
+    let at = |more: serde_json::Value| {
+        let mut v = serde_json::json!({"session": session.id, "slug": "settings-page"});
+        v.as_object_mut().unwrap().extend(more.as_object().unwrap().clone());
+        v
+    };
+    std::fs::write(dir.join("pages/index.html"), "<body data-mid=\"m1\">kept in moonlet</body>\n").unwrap();
+    let read: serde_json::Value = c.request(methods::DESIGN_PAGE, at(serde_json::json!({"page": "index"}))).await.unwrap();
+    assert_eq!(read["html"], "<body data-mid=\"m1\">kept in moonlet</body>\n");
+    let file: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(file["content"], "PGJvZHkgZGF0YS1taWQ9Im0xIj5rZXB0IGluIG1vb25sZXQ8L2JvZHk+Cg==");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let found = list.as_array().unwrap().iter().find(|d| d["kind"] == "session").expect("the session design");
+    assert_eq!((&found["slug"], &found["path"]), (&serde_json::json!("settings-page"), &serde_json::json!(dir)));
+}
+
+/// X101: a session whose agent started before its project kept its session
+/// designs in moonlet was not given its folder, so making a design there is
+/// refused, and the folder is given to its agent from its next message.
+#[tokio::test]
+async fn a_session_started_before_its_project_kept_designs_in_moonlet_gets_its_folder_from_the_next_message() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    assert_eq!(add_dirs(&mut c, session.terminals[0]).await, Vec::<String>::new());
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
+    std::fs::write(repo.join(KEEP_IN_MOONLET.0), KEEP_IN_MOONLET.1).unwrap();
+    let refused = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await;
+    let mine = d.home.path().join(".moonlet/design/.sessions").join(&session.id);
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        format!("invalid_params: The agent can write designs in {} from its next message. Send a message, then make the design again.", mine.display())
+    );
+    assert!(mine.is_dir());
+    assert_eq!(add_dirs(&mut c, session.terminals[0]).await, [mine.display().to_string()]);
+    let worktree = std::path::PathBuf::from(&session.path);
+    assert!(!worktree.join("docs/design").exists());
+    // From then on it is made there.
+    let created: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created["path"], serde_json::json!(mine.join("designs/settings-page")));
+}
+
+/// X101: Build it in a project that keeps its session designs in moonlet
+/// copies the design into the new session's own folder, never its worktree.
+#[tokio::test]
+async fn building_a_design_in_a_project_keeping_designs_in_moonlet_copies_it_outside_the_worktree() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[KEEP_IN_MOONLET]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "A left nav"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(
+        design.join("pages/index.html"),
+        "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">index</body>\n",
+    )
+    .unwrap();
+    let session: Session = c
+        .request(
+            methods::SESSION_CREATE,
+            serde_json::json!({
+                "project_id": project.id, "name": "Implement settings page", "workspace_id": ws, "agent": "claude",
+                "design": {"workspace": ws, "slug": "settings-page", "pages": ["index"]}
+            }),
+        )
+        .await
+        .unwrap();
+    let mine = d.home.path().join(".moonlet/design/.sessions").join(&session.id);
+    assert_eq!(
+        std::fs::read_to_string(mine.join("designs/settings-page/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">index</body>\n"
+    );
+    assert!(!std::path::Path::new(&session.path).join("docs/design").exists());
+    assert_eq!(add_dirs(&mut c, session.terminals[0]).await, [mine.display().to_string()]);
+}
+
+/// X101: archiving a session turns the designs it kept in moonlet into
+/// workspace designs of its workspace, and its own folder goes.
+#[tokio::test]
+async fn archiving_a_session_turns_its_designs_kept_in_moonlet_into_workspace_designs() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[KEEP_IN_MOONLET]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let mine = d.home.path().join(".moonlet/design/.sessions").join(&session.id);
+    std::fs::write(
+        mine.join("designs/settings-page/pages/index.html"),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">kept</body>\n",
+    )
+    .unwrap();
+    let _: serde_json::Value = c
+        .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": session.id, "remove_worktree": true, "delete_branch": false, "delete_remote": false}))
+        .await
+        .unwrap();
+    assert!(!mine.exists());
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let found = list.as_array().unwrap().iter().find(|d| d["slug"] == "settings-page").expect("the design, now the workspace's");
+    assert_eq!((&found["kind"], &found["session"]), (&serde_json::json!("workspace"), &serde_json::Value::Null));
+    assert_eq!(
+        std::fs::read_to_string(d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">kept</body>\n"
+    );
 }
 
 /// A session design as merged: what `docs/design/settings-page/` holds on a
@@ -4838,7 +5079,7 @@ async fn a_session_design_is_marked_when_its_design_system_syncs_and_update_brin
     let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     assert_eq!(session_design(&list).get("system_updated"), None);
 
-    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    let system = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop");
     std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
     std::fs::write(system.join("components/buttons/button/button.html"), "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n").unwrap();
     std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
@@ -5144,7 +5385,7 @@ async fn a_design_file_is_found_only_through_a_workspace_or_a_session_moonlet_ha
     let (_, _, session) = workspace_with_session(&d, &mut c, &[]).await;
     let gone = workspace_with_system(&d, &mut c).await;
     let _: bool = c.request(methods::WORKSPACE_DELETE, serde_json::json!({"id": gone})).await.unwrap();
-    let left = d.home.path().join(".moonlet/design").join(&gone).join("systems/moonlet-desktop/README.md");
+    let left = d.home.path().join(".moonlet/design").join("library").join("systems/moonlet-desktop/README.md");
     assert!(left.is_file(), "the gone workspace's design folder is still there");
     let path = "systems/moonlet-desktop/README.md";
     for (call, refusal) in [
@@ -5633,4 +5874,400 @@ async fn a_workers_link_neither_lists_nor_stops_a_sessions_processes() {
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
     let listed: serde_json::Value = cli.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
     assert!(listed["processes"].is_array(), "{listed}");
+}
+
+/// X95: a daemon started on a home whose design systems are still kept per
+/// workspace moves them into the library. The account's first workspace
+/// keeps a slug both use; the other's becomes `<slug>-2`, and its designs
+/// follow it.
+#[tokio::test]
+async fn systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts() {
+    use moonlet_proto::types::Workspace;
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let first: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay"})).await.unwrap();
+    let second: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "clay"})).await.unwrap();
+    drop(c);
+    let design = d.home.path().join(".moonlet/design");
+    for ws in [&first.id, &second.id] {
+        let dir = design.join(ws).join("systems/acme-web");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "name = \"Acme web\"\ncreated_at = 1\n").unwrap();
+        std::fs::write(dir.join("styles.css"), format!("/* {} */\n", if ws == &first.id { "app" } else { "site" })).unwrap();
+    }
+    let pricing = design.join(&second.id).join("designs/pricing");
+    std::fs::create_dir_all(pricing.join("pages")).unwrap();
+    std::fs::write(pricing.join("design.toml"), "name = \"Pricing\"\nsystem = \"acme-web\"\n").unwrap();
+
+    d.restart().await;
+
+    let mut c = d.client().await;
+    let systems: Vec<serde_json::Value> = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": second.id})).await.unwrap();
+    let names: Vec<(&str, &str)> = systems.iter().map(|s| (s["slug"].as_str().unwrap(), s["name"].as_str().unwrap())).collect();
+    assert_eq!(names, vec![("acme-web", "Acme web"), ("acme-web-2", "Acme web 2")]);
+    assert_eq!(std::fs::read_to_string(design.join("library/systems/acme-web/styles.css")).unwrap(), "/* app */\n");
+    assert_eq!(std::fs::read_to_string(design.join("library/systems/acme-web-2/styles.css")).unwrap(), "/* site */\n");
+    let designs: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": second.id})).await.unwrap();
+    assert_eq!(designs[0]["system"], "acme-web-2");
+    assert!(!design.join(&second.id).join("systems").exists());
+}
+
+/// Fake Claude Code that also notes the Claude profile it runs in (X33).
+const FAKE_CLAUDE_PROFILE: &str = r#"#!/bin/sh
+echo "${CLAUDE_CONFIG_DIR:-default}" >> claude-profile
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X95: a library system has no workspace, so its sync agent runs in the
+/// Claude profile of the workspace whose sections hold its first source
+/// project, whichever workspace it was made from; with no workspace holding
+/// that project, in the default profile.
+#[tokio::test]
+async fn a_systems_sync_agent_runs_in_the_profile_of_its_first_sources_workspace() {
+    use moonlet_proto::types::{ClaudeProfile, Project, Section, Workspace};
+    let d = fake_claude_daemon(FAKE_CLAUDE_PROFILE).await;
+    let repo = |name: &str| {
+        let repo = d.home.path().join(name);
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+        for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+            assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+        }
+        repo
+    };
+    let (web, loose) = (repo("acme-web"), repo("loose"));
+    let mut c = d.client().await;
+    let work = d.home.path().join("claude-work");
+    let profile: ClaudeProfile = c.request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": work})).await.unwrap();
+    let app: Workspace = c
+        .request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay", "claude_profile": profile.id}))
+        .await
+        .unwrap();
+    let site: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "blue"})).await.unwrap();
+    let section: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": app.id, "name": "Acme"})).await.unwrap();
+    let web: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": section.id, "path": web})).await.unwrap();
+    let loose: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": loose})).await.unwrap();
+
+    for (name, project) in [("Acme web", &web.id), ("Loose", &loose.id)] {
+        let created: serde_json::Value = c
+            .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": site.id, "name": name, "sources": [{"project": project}]}))
+            .await
+            .unwrap();
+        assert_eq!(created["agent_error"], serde_json::Value::Null);
+    }
+
+    let library = d.home.path().join(".moonlet/design/library/systems");
+    let profile_of = |slug: &str| {
+        let file = library.join(slug).join("claude-profile");
+        move || std::fs::read_to_string(&file).unwrap_or_default()
+    };
+    let (acme, other) = (profile_of("acme-web"), profile_of("loose"));
+    for _ in 0..100 {
+        if !acme().is_empty() && !other().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(acme(), format!("{}\n", profile.path));
+    assert_eq!(other(), "default\n");
+}
+
+/// X95: a system the move into the library renames (its slug taken there)
+/// is followed by the session designs of its workspace's open sessions, so
+/// their Update compares with the system they were made from.
+#[tokio::test]
+async fn an_open_sessions_design_follows_its_system_renamed_by_the_move_into_the_library() {
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    drop(c);
+    // As before X95: the system kept in its workspace's folder, while the
+    // library already holds another one of that slug.
+    let design = d.home.path().join(".moonlet/design");
+    std::fs::create_dir_all(design.join(&ws).join(".records")).unwrap();
+    std::fs::create_dir_all(design.join(&ws).join("systems")).unwrap();
+    std::fs::rename(design.join("library/systems/moonlet-desktop"), design.join(&ws).join("systems/moonlet-desktop")).unwrap();
+    std::fs::rename(design.join("library/.records/moonlet-desktop.toml"), design.join(&ws).join(".records/moonlet-desktop.toml")).unwrap();
+    std::fs::create_dir_all(design.join("library/systems/moonlet-desktop")).unwrap();
+    std::fs::write(design.join("library/systems/moonlet-desktop/config.toml"), "name = \"moonlet desktop\"\ncreated_at = 1\n").unwrap();
+
+    d.restart().await;
+
+    let mut c = d.client().await;
+    let designs: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let ours = designs.iter().find(|d| d["kind"] == "session").expect("the session's design");
+    assert_eq!((&ours["slug"], &ours["system"]), (&serde_json::json!("settings-page"), &serde_json::json!("moonlet-desktop-2")));
+}
+
+/// Each design `design.list` gives a workspace, by slug, and whether it is
+/// shared (X95).
+async fn shared_listing(c: &mut Client, ws: String) -> Vec<(String, bool)> {
+    let list: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    list.into_iter().map(|d| (d["slug"].as_str().unwrap().to_string(), d["shared"].as_bool().unwrap_or(false))).collect()
+}
+
+/// X95: a workspace design shared with every workspace moves into the
+/// library: every workspace lists it as shared, and only the app shares
+/// it. Stopping sharing it moves it into the workspace the user is in.
+#[tokio::test]
+async fn a_design_shared_with_every_workspace_is_listed_in_each_and_stopping_moves_it_into_one() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let app = workspace_with_system(&d, &mut c).await;
+    let site: moonlet_proto::types::Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "blue"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": app, "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_SHARE, serde_json::json!({"workspace": app, "slug": "pricing"})).await;
+    assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("forbidden")), "{refused:?}");
+
+    let mut c = d.app().await;
+    // Refused while its agent works on its first message.
+    let mut shared = Err(anyhow::anyhow!("not tried"));
+    for _ in 0..100 {
+        shared = c.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": app, "slug": "pricing"})).await;
+        if !shared.as_ref().is_err_and(|e| e.to_string().starts_with("busy")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let shared = shared.unwrap();
+    assert_eq!(shared, "pricing");
+    assert_eq!(shared_listing(&mut c, app.clone()).await, vec![("pricing".to_string(), true)]);
+    assert_eq!(shared_listing(&mut c, site.id.clone()).await, vec![("pricing".to_string(), true)]);
+    std::fs::write(d.home.path().join(".moonlet/design/library/designs/pricing/pages/index.html"), "<p>plans</p>\n").unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"workspace": "library", "path": "designs/pricing/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page["content_type"], "text/html; charset=utf-8");
+
+    let back: String = c.request(methods::DESIGN_UNSHARE, serde_json::json!({"workspace": "library", "slug": "pricing", "into": site.id})).await.unwrap();
+    assert_eq!(back, "pricing");
+    assert_eq!(shared_listing(&mut c, app.clone()).await, vec![]);
+    assert_eq!(shared_listing(&mut c, site.id.clone()).await, vec![("pricing".to_string(), false)]);
+}
+
+/// X95: Build it on a shared design starts the session in the workspace the
+/// user is in, on one of that workspace's projects; the design is copied
+/// into its worktree as a workspace design's is.
+#[tokio::test]
+async fn a_shared_design_is_built_in_a_session_of_the_workspace_the_user_is_in() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = d
+        .app()
+        .await
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let page = d.home.path().join(".moonlet/design/library/designs/pricing/pages/index.html");
+    std::fs::write(&page, "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">plans</body>\n").unwrap();
+    let create = |workspace: Option<&str>| {
+        serde_json::json!({
+            "project_id": project.id, "name": "Build pricing", "workspace_id": workspace, "agent": "none",
+            "design": {"workspace": "library", "slug": "pricing", "pages": ["index"]}
+        })
+    };
+
+    let refused = c.request::<_, Session>(methods::SESSION_CREATE, create(None)).await;
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: a session building a shared design names its workspace");
+
+    let session: Session = c.request(methods::SESSION_CREATE, create(Some(&ws))).await.unwrap();
+    assert_eq!(session.workspace_id.as_deref(), Some(ws.as_str()));
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&session.path).join("docs/design/pricing/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">plans</body>\n"
+    );
+}
+
+/// X95: a shared design's agent runs in the Claude profile of the
+/// workspace that holds its design system's first source project.
+#[tokio::test]
+async fn a_shared_designs_agent_runs_in_the_profile_of_its_systems_first_sources_workspace() {
+    use moonlet_proto::types::{ClaudeProfile, Project, Section, Workspace};
+    let d = fake_claude_daemon(FAKE_CLAUDE_PROFILE).await;
+    let repo = d.home.path().join("acme-web");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let profile: ClaudeProfile = c
+        .request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")}))
+        .await
+        .unwrap();
+    let app: Workspace = c
+        .request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay", "claude_profile": profile.id}))
+        .await
+        .unwrap();
+    let section: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": app.id, "name": "Acme"})).await.unwrap();
+    let web: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": section.id, "path": repo})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": app.id, "name": "Acme web", "sources": [{"project": web.id}], "agent": false}))
+        .await
+        .unwrap();
+
+    let _: serde_json::Value = d
+        .app()
+        .await
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "acme-web", "brief": "b"}))
+        .await
+        .unwrap();
+
+    let file = d.home.path().join(".moonlet/design/library/designs/pricing/claude-profile");
+    let seen = until_contains(|| std::fs::read_to_string(&file).unwrap_or_default(), "\n").await;
+    assert_eq!(seen, format!("{}\n", profile.path));
+}
+
+/// X95: a design whose agent is working is neither shared nor moved: its
+/// agent works in its folder.
+#[tokio::test]
+async fn a_design_whose_agent_works_is_not_shared() {
+    // Takes its first message and never ends the turn.
+    const WORKING: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+  esac
+done
+"#;
+    let d = fake_claude_daemon(WORKING).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let mut app = d.app().await;
+    let mut refused = String::new();
+    for _ in 0..50 {
+        refused = match app.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": ws, "slug": "pricing"})).await {
+            Ok(slug) => format!("shared as {slug}"),
+            Err(e) => e.to_string(),
+        };
+        if refused.starts_with("busy") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(refused, "busy: its agent is working: try again when it is done");
+    assert_eq!(shared_listing(&mut c, ws).await, vec![("pricing".to_string(), false)]);
+}
+
+/// X95: a design is made in the library only by the app; an agent's CLI
+/// could otherwise put its work in every workspace without Share.
+#[tokio::test]
+async fn only_the_app_makes_a_design_in_the_library() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    workspace_with_system(&d, &mut c).await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli
+        .request::<_, serde_json::Value>(methods::DESIGN_CREATE, serde_json::json!({"workspace": "library", "name": "Pricing", "system": "moonlet-desktop", "brief": "b"}))
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "forbidden: only the moonlet app manages a shared design");
+}
+
+/// X99: `design.standalone` gives a design's page as one file, its design
+/// system's styles and its own assets inlined, and lists what it could not
+/// read; nothing outside the design's files is ever read into it.
+#[tokio::test]
+async fn a_designs_page_comes_as_one_file_with_its_styles_and_assets_inlined() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::create_dir_all(design.join("assets")).unwrap();
+    std::fs::write(design.join("assets/logo.png"), [1u8, 2, 3]).unwrap();
+    std::fs::write(d.home.path().join(".moonlet/design/library/systems/moonlet-desktop/styles.css"), ".btn { color: red; }").unwrap();
+    std::fs::write(
+        design.join("pages/index.html"),
+        "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\"><img src=\"../assets/logo.png\"><img src=\"../../../../git.toml\">",
+    )
+    .unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        page,
+        serde_json::json!({
+            "html": "<style>.btn { color: red; }</style><img src=\"data:image/png;base64,AQID\"><img src=\"../../../../git.toml\">",
+            "missing": ["../../../../git.toml"],
+        })
+    );
+    let gone = c
+        .request::<_, serde_json::Value>(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page/pages/gone.html"}))
+        .await;
+    assert!(gone.is_err());
+}
+
+/// X99: `design.standalone` gives a snapshot's page as the snapshot has it,
+/// on the path the canvas frames it at (`designs/<slug>@<n>/…`).
+#[tokio::test]
+async fn a_snapshots_page_comes_as_one_file_as_the_snapshot_has_it() {
+    let d = fake_claude_daemon(WRITING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "Again"})).await.unwrap();
+    history_of(&mut c, &ws, 2).await;
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"workspace": ws, "path": "designs/settings-page@1/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page, serde_json::json!({"html": "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n", "missing": []}));
+}
+
+/// X99: `design.standalone` reaches a session design's page by its session
+/// alone, as `design.file` does, its assets inlined from the worktree.
+#[tokio::test]
+async fn a_session_designs_page_comes_as_one_file_by_its_session_alone() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let dir = std::path::PathBuf::from(&session.path).join("docs/design/settings-page");
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("assets/logo.png"), [1u8, 2, 3]).unwrap();
+    std::fs::write(dir.join("pages/index.html"), "<img src=\"../assets/logo.png\">").unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_STANDALONE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(page, serde_json::json!({"html": "<img src=\"data:image/png;base64,AQID\">", "missing": []}));
 }

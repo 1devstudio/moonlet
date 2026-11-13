@@ -3,6 +3,7 @@
 //! PTY output to the webview over a binary channel.
 
 mod attach;
+mod design_download;
 mod design_render;
 mod design_scheme;
 mod hosts;
@@ -222,17 +223,17 @@ fn url_path(path: &str) -> Result<String, RpcError> {
     url_escape(path, true)
 }
 
-/// Opens a workspace in another app. Remote paths open through the editor's
-/// SSH remote support where it has one.
-#[tauri::command]
-fn open_in(target: String, path: String, host: Option<String>) -> Result<(), RpcError> {
-    let remote = host.filter(|h| h != hosts::LOCAL);
-    let mut cmd = std::process::Command::new("open");
-    match (target.as_str(), remote) {
-        ("finder", None) => cmd.arg(&path),
-        ("reveal", None) => cmd.args(["-R", &path]),
+/// What `open` is given to open `path` in `target`. Remote paths open
+/// through the editor's SSH remote support where it has one. A local app
+/// gets `root` before `path`: Zed then opens `path` in that worktree's
+/// window, not in whichever window is in front.
+fn open_args(target: &str, path: &str, host: Option<&str>, root: Option<&str>) -> Result<Vec<String>, RpcError> {
+    let remote = host.filter(|h| *h != hosts::LOCAL);
+    Ok(match (target, remote) {
+        ("finder", None) => vec![path.to_string()],
+        ("reveal", None) => vec!["-R".to_string(), path.to_string()],
         (app @ ("vscode" | "cursor"), Some(h)) => {
-            cmd.arg(format!("{app}://vscode-remote/ssh-remote+{}{}", url_escape(&h, false)?, url_path(&path)?))
+            vec![format!("{app}://vscode-remote/ssh-remote+{}{}", url_escape(h, false)?, url_path(path)?)]
         }
         (_, Some(_)) => {
             return Err(RpcError::new(
@@ -246,10 +247,16 @@ fn open_in(target: String, path: String, host: Option<String>) -> Result<(), Rpc
                 .find(|(id, _, _)| *id == t)
                 .map(|(_, _, b)| *b)
                 .ok_or_else(|| RpcError::new("invalid_params", "unknown app"))?;
-            cmd.args(["-a", bundle, &path])
+            ["-a", bundle].into_iter().chain(root).chain([path]).map(String::from).collect()
         }
-    };
-    let status = cmd.status().map_err(err)?;
+    })
+}
+
+/// Opens a session's folder or file in another app (`open_args`).
+#[tauri::command]
+fn open_in(target: String, path: String, host: Option<String>, root: Option<String>) -> Result<(), RpcError> {
+    let args = open_args(&target, &path, host.as_deref(), root.as_deref())?;
+    let status = std::process::Command::new("open").args(&args).status().map_err(err)?;
     if !status.success() {
         return Err(RpcError::new(
             "failed",
@@ -303,6 +310,36 @@ async fn daemon_service(action: String) -> Result<Value, RpcError> {
     }
     let status: Value = serde_json::from_slice(&status.stdout).map_err(err)?;
     serde_json::to_value(login_item::Service::from_moonletd(&status).map_err(err)?).map_err(err)
+}
+
+/// Restarts this Mac's daemon with the bundled `moonletd restart` (X97):
+/// a handoff that keeps terminals, or with `force` a new daemon in place of
+/// a stuck one. `not_responding` when only a force restart can do it. The
+/// local host reconnects right away instead of waiting for its backoff.
+#[tauri::command]
+async fn restart_daemon(hosts: Hosts<'_>, force: bool) -> Result<(), RpcError> {
+    let moonletd = hosts::sibling_binary("moonletd").map_err(err)?;
+    let mut cmd = tokio::process::Command::new(&moonletd);
+    cmd.arg("restart");
+    if force {
+        cmd.arg("--force");
+    }
+    let out = cmd.output().await.map_err(err)?;
+    restart_result(out.status.code(), &String::from_utf8_lossy(&out.stderr))?;
+    hosts.reconnect(hosts::LOCAL)
+}
+
+/// What `moonletd restart` exiting with `code` means to the webview (X97):
+/// 3, moonletd's `STUCK`, is `not_responding`, so the app offers a force
+/// restart; any other failure is `failed`. `None` is a signal.
+fn restart_result(code: Option<i32>, stderr: &str) -> Result<(), RpcError> {
+    let message = stderr.trim();
+    match code {
+        Some(0) => Ok(()),
+        Some(3) => Err(RpcError::new("not_responding", message)),
+        Some(n) => Err(RpcError::new("failed", format!("moonletd restart failed (exit {n}): {message}"))),
+        None => Err(RpcError::new("failed", format!("moonletd restart failed (killed by a signal): {message}"))),
+    }
 }
 
 /// Opens System Settings › Login Items, where the user allows the login
@@ -475,8 +512,9 @@ fn app_info() -> Value {
 
 /// The main window, as `tauri.conf.json` describes it. It is made here
 /// (`"create": false` there) because on macOS its webview needs site
-/// isolation from its first load, so each design card runs in its own web
-/// process (X64). A WebKit without the feature gets the window as before.
+/// isolation from its first load to run each design card in its own web
+/// process (X64). Site isolation is on unless `isolation::SWITCH` turns it
+/// off (ADR 0013); a WebKit without the feature gets the window as before.
 fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
     let config = app
         .config()
@@ -488,12 +526,16 @@ fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
         .unwrap_or_default();
     let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
     #[cfg(target_os = "macos")]
-    let builder = match isolation::configuration() {
-        Ok(webview) => builder.with_webview_configuration(webview),
-        Err(why) => {
-            tracing::warn!("design cards share the window's web process: {why}");
-            builder
+    let builder = if isolation::wanted(std::env::var_os(isolation::SWITCH).as_deref()) {
+        match isolation::configuration() {
+            Ok(webview) => builder.with_webview_configuration(webview),
+            Err(why) => {
+                tracing::warn!("design cards share the window's web process: {why}");
+                builder
+            }
         }
+    } else {
+        builder
     };
     builder.build()
 }
@@ -557,6 +599,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            design_download::design_download,
             host_pair,
             host_list,
             host_add,
@@ -575,6 +618,7 @@ pub fn run() {
             open_targets,
             open_in,
             daemon_service,
+            restart_daemon,
             open_login_items,
             log_js,
             play_sound,
@@ -587,6 +631,7 @@ pub fn run() {
             trackers::tracker_disconnect,
             trackers::tracker_sources,
             trackers::tracker_task,
+            trackers::tracker_search,
             trackers::tracker_update,
             trackers::tracker_comments,
             trackers::tracker_comment,
@@ -610,6 +655,42 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zed_gets_the_worktree_before_the_file_and_other_apps_get_the_entry_alone() {
+        let args = |target, path, host, root| open_args(target, path, host, root);
+        assert_eq!(
+            args("zed", "/w/fix-cart/src/cart.ts", Some("local"), Some("/w/fix-cart")),
+            Ok(vec!["-a".to_string(), "Zed".into(), "/w/fix-cart".into(), "/w/fix-cart/src/cart.ts".into()])
+        );
+        assert_eq!(args("zed", "/w/fix-cart", None, None), Ok(vec!["-a".to_string(), "Zed".into(), "/w/fix-cart".into()]));
+        assert_eq!(args("reveal", "/w/fix-cart/src", None, Some("/w/fix-cart")), Ok(vec!["-R".to_string(), "/w/fix-cart/src".into()]));
+        assert_eq!(
+            args("cursor", "/w/fix-cart", Some("devbox"), None),
+            Ok(vec!["cursor://vscode-remote/ssh-remote+devbox/w/fix-cart".to_string()])
+        );
+        assert_eq!(
+            args("zed", "/w/fix-cart/a.ts", Some("devbox"), Some("/w/fix-cart")),
+            Err(RpcError::new("unsupported", "this app cannot open remote folders"))
+        );
+    }
+
+    #[test]
+    fn moonletd_restart_exiting_3_asks_the_app_to_offer_a_force_restart() {
+        assert_eq!(restart_result(Some(0), ""), Ok(()));
+        assert_eq!(
+            restart_result(Some(3), "the daemon isn't answering\n"),
+            Err(RpcError::new("not_responding", "the daemon isn't answering"))
+        );
+        assert_eq!(
+            restart_result(Some(1), "Error: failed to spawn moonletd\n"),
+            Err(RpcError::new("failed", "moonletd restart failed (exit 1): Error: failed to spawn moonletd"))
+        );
+        assert_eq!(
+            restart_result(None, ""),
+            Err(RpcError::new("failed", "moonletd restart failed (killed by a signal): "))
+        );
+    }
 
     #[test]
     fn tracker_settings_are_read_and_saved_in_trackers_toml() {

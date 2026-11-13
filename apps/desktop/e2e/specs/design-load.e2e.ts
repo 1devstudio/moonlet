@@ -53,7 +53,7 @@ describe("A design's page that does not load", () => {
     chmodSync(FAKE, 0o755);
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Load kit", sources: [], agent: false });
-    writeFileSync(join(w.home, "design", ws, "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
     rpc(w, "design.create", { workspace: ws, name: "Settings page", system: SYSTEM, brief: "A settings page" });
     // A slip a browser recovers from: no space after a quoted value.
     writeFileSync(pageFile("index"), page("Settings", '<p data-mid="m3" class="a"title="b">Tom & Jerry</div>'));

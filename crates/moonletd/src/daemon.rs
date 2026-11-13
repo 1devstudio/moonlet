@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use moonlet_core::design::history::Take;
+use moonlet_core::design::library::LIBRARY;
 use moonlet_core::design::place::{DesignAt, Place};
 use moonlet_core::fs::Watchers;
 use moonlet_core::hooks::{self, HookPaths};
@@ -16,7 +17,7 @@ use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
 use moonlet_core::terminal_read::{self, TerminalReads};
 use moonlet_core::tasks::{TaskRelay, TaskSnapshots};
-use moonlet_core::{fs, git, git_settings, tasks};
+use moonlet_core::{file_actions, fs, git, git_settings, tasks};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
 use moonlet_proto::{Message, PROTOCOL_VERSION, RpcError};
@@ -26,6 +27,13 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::server::Conn;
+
+/// How often a member looks again for sessions to bring back (X73).
+const BRING_BACK_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How many times a session waiting to come back is tried (X73): about
+/// ten minutes at [`BRING_BACK_EVERY`].
+const BRING_BACK_TRIES: u32 = 120;
 
 /// What the Mac's last sleep left to its wake (X73).
 #[derive(Default)]
@@ -37,6 +45,8 @@ struct Asleep {
     /// How many sleeps began: a wake that a newer sleep overtook leaves
     /// what it holds to that sleep's wake.
     sleeps: u64,
+    /// Between a sleep and its wake: no session comes back meanwhile.
+    sleeping: bool,
 }
 
 /// What looks for sessions another member now owns keep between them (X73).
@@ -61,6 +71,14 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
+    /// One look at a time for sessions to bring back (X73).
+    bringing_back: tokio::sync::Mutex<()>,
+    /// How often each session waiting to come back was tried (X73).
+    bring_tries: Mutex<HashMap<String, u32>>,
+    /// On the central host: the user items each session's chats held as
+    /// it took the session in (X73), so only one typed here since counts
+    /// as using it.
+    took_with: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// The copied files of this member's checkouts (X74).
     checkouts: crate::copied_files::Checkouts,
     /// Where the user was last active (X75).
@@ -115,7 +133,7 @@ pub struct Daemon {
     mine_since: Mutex<HashMap<String, u64>>,
     /// The watches of the sessions' worktrees that hold session designs,
     /// by session, which announce their changes as `design.changed` (X65).
-    session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
+    session_watches: Mutex<HashMap<(String, PathBuf), moonlet_core::design::watch::Watching>>,
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
@@ -147,12 +165,14 @@ pub struct Daemon {
     /// ones this daemon serves as a central host (X60).
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
-    heavy: Arc<crate::heavy::Heavy>,
+    pub(crate) heavy: Arc<crate::heavy::Heavy>,
     /// Cloud workers' settings and machines (X63).
     cloud: Arc<crate::cloud::CloudSettings>,
     pub machines: Arc<crate::machines::Machines>,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
+    /// Routed commands passed between two members (X89).
+    pub relay: Arc<crate::relay::Relay>,
     /// Every session's routed commands, with their output (X62).
     jobs: Arc<crate::jobs::Jobs>,
     /// Board snapshots the app shares, and the phone's requests to it (X76).
@@ -282,8 +302,9 @@ const DESIGN_ADDRESSED: &[&str] = &[
 
 /// The design calls that gate what their own parsed params name (X65):
 /// `design.check`, a design system's workspace or a design, and
-/// `design.file`, a workspace's file or a session design's.
-const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
+/// `design.file` and `design.standalone`, a workspace's file or a session
+/// design's.
+const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE, m::DESIGN_STANDALONE];
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
@@ -305,6 +326,8 @@ pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
 /// What a cloud machine may call on its central host (X63).
 const CLOUD_METHODS: &[&str] = &[
     m::WORKER_REGISTER,
+    // Calls back the member whose command it runs (X89).
+    m::PEER_CALL,
     m::WORKER_STEP,
     m::SYNC_OPEN,
     m::SYNC_FETCH,
@@ -557,6 +580,8 @@ impl Daemon {
         );
         let chats = ChatManager::new(terminals.clone(), chats_dir(&moonlet_core::paths::home()));
         sessions.set_chats(chats.clone());
+        // A session's agent gets its design folder there (X101).
+        sessions.set_design_store(moonlet_core::design::store::Store::new(&moonlet_core::paths::home()));
         // Profiles' skills too (X33), under the same rule as the default's.
         if !own_home {
             for p in sessions.list_profiles() {
@@ -590,6 +615,18 @@ impl Daemon {
         );
         let emitter = terminals.clone();
         let workers = Arc::new(crate::workers::Workers::new(moonlet_core::paths::home().join("workers.json"), move |m| emitter.emit(m)));
+        // A member that ran another's command went away: that member runs
+        // it again (X89).
+        let relay = crate::relay::Relay::new();
+        {
+            let (r, w) = (Arc::downgrade(&relay), Arc::downgrade(&workers));
+            workers.on_gone(move |id| {
+                if let (Some(r), Some(w)) = (r.upgrade(), w.upgrade()) {
+                    r.runner_gone(&w, id);
+                    r.router_gone(&w, id);
+                }
+            });
+        }
         let emitter = terminals.clone();
         let sync = crate::sync::LiveCopies::new(
             moonlet_core::paths::home(),
@@ -649,6 +686,9 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
+            bringing_back: Default::default(),
+            bring_tries: Mutex::new(HashMap::new()),
+            took_with: Mutex::new(HashMap::new()),
             checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             presence: Mutex::new(Presence::default()),
             waiting_shows: Default::default(),
@@ -678,6 +718,7 @@ impl Daemon {
             cloud,
             machines,
             runs,
+            relay,
             jobs,
             clones,
             terminals,
@@ -800,6 +841,70 @@ impl Daemon {
             ));
         }
         Ok(())
+    }
+
+    /// Tests only: a central host from before X89, which knows none of the
+    /// methods members route through.
+    fn before_x89(method: &str) -> Result<(), RpcError> {
+        if std::env::var_os("MOONLET_TEST_BEFORE_X89").is_some() {
+            return Err(RpcError::new("unknown_method", format!("unknown method {method}")));
+        }
+        Ok(())
+    }
+
+    /// The member linked on `conn`, by worker id and name (X89): a paired
+    /// Mac's daemon registered as a worker, never a cloud machine, a phone
+    /// or an agent's CLI.
+    fn member_on(&self, conn: &Conn) -> Result<(String, String), RpcError> {
+        let refused = || RpcError::new("forbidden", "only a member routes commands here");
+        if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(refused());
+        }
+        let id = self.workers.worker_on(conn.id).ok_or_else(refused)?;
+        let name = self
+            .workers
+            .list()
+            .into_iter()
+            .find(|w| w.worker.id == id)
+            .map(|w| w.worker.name)
+            .ok_or_else(refused)?;
+        Ok((id, name))
+    }
+
+    /// Every member's worker settings, this host's first (X89): off and 2
+    /// slots until set.
+    pub fn worker_settings(&self) -> Vec<m::WorkerSettingsEntry> {
+        let me = self.link.info().worker;
+        let kept = self.sessions.worker_settings();
+        let mut names = self.sessions.member_names();
+        names.insert(me.id.clone(), me.name.clone());
+        let mut out: Vec<m::WorkerSettingsEntry> = names
+            .into_iter()
+            .map(|(worker, name)| {
+                let s = kept.get(&worker).copied().unwrap_or_default();
+                let (heavy, slots) = if worker == me.id {
+                    (me.enabled, me.slots)
+                } else {
+                    (s.heavy.unwrap_or(false), s.slots.unwrap_or_else(m::default_slots))
+                };
+                m::WorkerSettingsEntry {
+                    worker,
+                    name,
+                    heavy,
+                    slots,
+                }
+            })
+            .collect();
+        out.sort_by_key(|e| (e.worker != me.id, e.name.clone(), e.worker.clone()));
+        out
+    }
+
+    /// Tells the apps every member's worker settings (X89).
+    pub fn worker_settings_changed(&self) {
+        self.terminals.emit(Message::event(
+            m::EV_WORKER_SETTINGS_CHANGED,
+            self.worker_settings(),
+        ));
     }
 
     /// Every change to profiles or their accounts sends the full list, as
@@ -1649,7 +1754,12 @@ impl Daemon {
                 self.link_managers_only(conn, false)?;
                 let r: m::LinkSet = params(p)?;
                 self.link_managers_only(conn, r.central.is_some())?;
-                ok(self.link.set(r, &crate::mobile::tailscale_addresses())?)
+                let settings = r.worker.as_ref().is_some_and(|w| w.enabled.is_some() || w.slots.is_some());
+                let info = self.link.set(r, &crate::mobile::tailscale_addresses())?;
+                if settings {
+                    self.worker_settings_changed();
+                }
+                ok(info)
             }
             m::LINK_RETRY => {
                 self.link_managers_only(conn, false)?;
@@ -1687,6 +1797,9 @@ impl Daemon {
                             commands: crate::heavy::sorted(&r.commands),
                             env: crate::heavy::sorted(&r.env),
                         };
+                        // Only this worker's own, which a worker from
+                        // before X89 runs by; the account's approval is the
+                        // project page's, checked against its config (X89).
                         self.sync.approve_heavy(identity, approval)?;
                         // Its central host no longer says it has not approved.
                         self.link.register_again();
@@ -1721,6 +1834,11 @@ impl Daemon {
                     local: crate::exec::Command { argv: r.argv, cwd: checked.cwd, env },
                     os: checked.os,
                     outputs: checked.outputs,
+                    setup: checked.setup,
+                    identity: session
+                        .as_ref()
+                        .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))
+                        .map(|p| p.identity),
                     host: me.name,
                     slots: me.slots,
                 };
@@ -1811,7 +1929,176 @@ impl Daemon {
             }
             m::EXEC_CANCEL => {
                 let r: m::ExecCancel = params(p)?;
+                // A member stops a command this central host runs for it (X89).
+                if conn.client == crate::link::WORKER_CLIENT {
+                    return ok(self.runs.cancel_here(conn.id, r.run));
+                }
                 ok(self.runs.cancel(conn.id, r.run).await)
+            }
+            // A routing call from one member to another (X89).
+            m::PEER_CALL => {
+                Self::before_x89(method)?;
+                // A member, or a cloud machine calling back the member whose
+                // command it runs (X89).
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                let from = if cloud && conn.client == crate::link::WORKER_CLIENT {
+                    // Not once its machine is being removed (X63).
+                    conn.phone
+                        .as_deref()
+                        .and_then(|d| self.machines.machine_of(d))
+                        .ok_or_else(|| RpcError::new("forbidden", "this machine is being removed"))?;
+                    self.workers
+                        .worker_on(conn.id)
+                        .ok_or_else(|| RpcError::new("forbidden", "only a member routes commands here"))?
+                } else {
+                    self.member_on(conn)?.0
+                };
+                let mut r: m::PeerCall = params(p)?;
+                // A cloud machine runs what its central host passes on
+                // without an approval of its own (X63): the central host
+                // checks a member's command against the account's approval
+                // of the machine's project, and gives its own setup (X89).
+                if let Some(to) = r.to.as_deref()
+                    && let Some(key) = self.machines.key_of_worker(to)
+                {
+                    let project = self
+                        .sessions
+                        .list_projects()
+                        .into_iter()
+                        .find(|p| crate::heavy::key(&p.identity).as_deref() == Some(key.as_str()))
+                        .ok_or_else(|| RpcError::new("forbidden", "this host does not have the machine's project"))?;
+                    match r.method.as_str() {
+                        m::EXEC_START => {
+                            let start: m::ExecStart = serde_json::from_value(r.params.clone())
+                                .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                            let approved = self.heavy.approval(&project.identity).map_err(internal)?;
+                            if !crate::heavy::runs_approved(&start.argv, &start.env, approved.as_ref()) {
+                                return Err(RpcError::new("not_approved", "not an approved heavy command of the machine's project"));
+                            }
+                        }
+                        m::EXEC_PREPARE => {
+                            let config = moonlet_core::project_config::load(Path::new(&project.path), project.base_branch.clone());
+                            r.params["setup"] = config
+                                .config
+                                .setup
+                                .filter(|c| !c.trim().is_empty())
+                                .map_or(Value::Null, Value::from);
+                        }
+                        _ => {}
+                    }
+                }
+                ok(self.relay.call(&self.workers, &self.machines, conn, from, cloud, r).await?)
+            }
+            // The members a member may route a command to through this
+            // central host: those that take other hosts' commands (X89).
+            m::WORKER_PEERS => {
+                Self::before_x89(method)?;
+                let (member, _) = self.member_on(conn)?;
+                let r: m::WorkerPeers = params(p).unwrap_or_default();
+                let status = |w: m::WorkerInfo, cloud: bool| m::WorkerStatus {
+                    id: w.worker.id,
+                    name: w.worker.name,
+                    heavy: true,
+                    os: w.worker.os,
+                    cores: w.worker.cores,
+                    load: w.load.unwrap_or(0.0),
+                    slots: w.worker.slots,
+                    used: w.used.unwrap_or(0),
+                    rtt_ms: w.rtt_ms,
+                    cloud,
+                };
+                let not_cloud = |id: &str| {
+                    self.workers
+                        .conn(id)
+                        .is_some_and(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed))
+                };
+                let mut peers: Vec<m::WorkerStatus> = self
+                    .workers
+                    .list()
+                    .into_iter()
+                    .filter(|w| w.worker.id != member && w.worker.heavy && w.worker.peer && not_cloud(&w.worker.id))
+                    .map(|w| status(w, false))
+                    .collect();
+                // The project's ready cloud machines, under its own rules
+                // (X63), for a member's session as for this host's own.
+                if let Some(project) = r.identity.as_ref().and_then(|i| self.machines.project_with(i)) {
+                    let ready = self.machines.workers_for(&project);
+                    peers.extend(
+                        self.workers
+                            .list()
+                            .into_iter()
+                            .filter(|w| ready.contains(&w.worker.id))
+                            .map(|w| status(w, true)),
+                    );
+                }
+                ok(peers)
+            }
+            // A member's command found no free machine: the project's
+            // cloud machine starts when its overflow is on (X89, X63).
+            m::CLOUD_OVERFLOW => {
+                self.member_on(conn)?;
+                let r: m::CloudOverflow = params(p)?;
+                let project = self.machines.project_with(&r.identity);
+                if r.asked {
+                    // The member's session asked for the cloud (X63's
+                    // composer checkbox): the machine on its way, or a new one.
+                    let project = project.ok_or_else(|| RpcError::new("not_found", "this host does not have the project"))?;
+                    let (id, name) = self.machines.for_member(&project)?;
+                    return ok(serde_json::json!({ "id": id, "name": name }));
+                }
+                if let Some(project) = project {
+                    self.machines.overflow(&project);
+                }
+                ok(true)
+            }
+            // A member asks whether this central host takes its heavy
+            // commands, then has it run one in a routing copy of its
+            // session (X89).
+            m::WORKER_STATUS => {
+                Self::before_x89(method)?;
+                self.member_on(conn)?;
+                ok(self.runs.status_for_members(&self.link.info().worker))
+            }
+            m::EXEC_PREPARE => {
+                let member = self.member_on(conn)?;
+                if !self.link.info().worker.enabled {
+                    return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                }
+                let r: m::ExecPrepare = params(p)?;
+                ok(self.sync.prepare_run(r.session, Some(member), r.setup).await?)
+            }
+            // A member archived the session: its routing copy here goes
+            // (X89).
+            m::SYNC_CLOSING if conn.client == crate::link::WORKER_CLIENT => {
+                let (member, _) = self.member_on(conn)?;
+                let r: m::SyncClosing = params(p)?;
+                if self.sync.copy_member(&r.copy).as_deref() != Some(member.as_str()) {
+                    return Err(RpcError::new("not_found", "no such routing copy"));
+                }
+                ok(self.sync.closing(r).await?)
+            }
+            m::EXEC_START | m::SYNC_UPDATE => {
+                let (member, _) = self.member_on(conn)?;
+                let me = self.link.info().worker;
+                if !me.enabled {
+                    return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                }
+                let copy = p["copy"].as_str().unwrap_or_default().to_string();
+                // Only a routing copy this member's commands run in.
+                if self.sync.copy_member(&copy).as_deref() != Some(member.as_str()) {
+                    return Err(RpcError::new("not_found", "no such routing copy"));
+                }
+                if method == m::EXEC_START {
+                    let r: m::ExecStart = params(p)?;
+                    let peer = crate::peer::Peer::Conn(conn.clone());
+                    return ok(self.runs.clone().start_here(r, self.sync.clone(), peer, me.slots, false).await?);
+                }
+                let r: m::SyncUpdate = params(p)?;
+                let pack = match r.pack {
+                    Some(t) => Some(conn.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
+                    None => None,
+                };
+                ok(self.sync.update(r, pack).await?)
             }
             // A worker's run ended: its changes come into the session
             // before `moonlet exec` hears the exit status (X62).
@@ -1820,32 +2107,8 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only a worker ends a run"));
                 }
                 let r: m::ExecDone = params(p)?;
-                let Some(outputs) = self.runs.runs_on(conn.id, r.run, &r.copy) else {
-                    return Err(RpcError::new("not_found", "no such run"));
-                };
                 let host = self.link.info().worker.name;
-                let began = std::time::Instant::now();
-                let brought = match r.pack {
-                    Some(t) => conn
-                        .take_pack(t)
-                        .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive")),
-                    None => Ok(Vec::new()),
-                };
-                let brought = match brought {
-                    Ok(pack) => {
-                        let pack = r.pack.map(|_| pack);
-                        self.sync.run_back(conn, &r, pack, &host, &outputs).await
-                    }
-                    Err(e) => Err(e),
-                };
-                let back_ms = began.elapsed().as_millis() as u64;
-                // The run ends either way: its client is told what was lost.
-                let ended = brought.clone().unwrap_or_else(|e| m::ExecBrought {
-                    notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
-                    ..Default::default()
-                });
-                self.runs.done(conn.id, r.run, r.status, ended, back_ms);
-                ok(brought?)
+                ok(self.runs.take_done(&self.sync, &crate::peer::Peer::Conn(conn.clone()), r, &host).await?)
             }
             m::JOB_LIST => {
                 jobs_reader(conn)?;
@@ -1878,6 +2141,38 @@ impl Daemon {
                 ok(self.heavy.route(&r))
             }
             m::WORKER_LIST => ok(self.workers.list()),
+            m::WORKER_SETTINGS => ok(self.worker_settings()),
+            // Turning a host on lets it run other hosts' agents' commands:
+            // never an agent's CLI nor a phone (X89).
+            m::WORKER_SETTINGS_SET => {
+                self.app_or_paired_mac(conn, "worker settings")?;
+                let r: m::WorkerSettingsSet = params(p)?;
+                if r.slots.is_some_and(|n| !(1..=64).contains(&n)) {
+                    return Err(RpcError::new("invalid_params", "slots must be from 1 to 64"));
+                }
+                if r.worker == self.link.info().worker.id {
+                    let req = m::LinkSet {
+                        central: None,
+                        worker: Some(m::LinkWorkerSet {
+                            enabled: r.heavy,
+                            slots: r.slots,
+                            name: None,
+                        }),
+                    };
+                    self.link.set(req, &[])?;
+                } else {
+                    if !self.sessions.member_names().contains_key(&r.worker) {
+                        return Err(RpcError::new("not_found", format!("no member {}", r.worker)));
+                    }
+                    let set = moonlet_core::session::WorkerSettings {
+                        heavy: r.heavy,
+                        slots: r.slots,
+                    };
+                    self.sessions.set_worker_settings(&r.worker, set).map_err(internal)?;
+                }
+                self.worker_settings_changed();
+                ok(true)
+            }
             m::ACCOUNT_SYNC => {
                 // Only a linked Mac's daemon: a paired Mac's connection that
                 // registered as a worker, never a phone, nor an agent's CLI,
@@ -1936,7 +2231,15 @@ impl Daemon {
                     Some(m::DeviceKind::Phone) => return Err(RpcError::new("forbidden", "only a Mac or a cloud machine registers")),
                     Some(_) => {}
                 }
-                let r: m::WorkerRegister = params(p)?;
+                let mut r: m::WorkerRegister = params(p)?;
+                // Only a member of the account runs other members' commands:
+                // never a cloud machine, whatever it says (X89).
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed)
+                    || self.machines.machine_of(device).is_some()
+                    || self.mobile.kind_of(device) != Some(m::DeviceKind::Desktop);
+                if cloud {
+                    r.peer = false;
+                }
                 let id = r.id.clone();
                 let mobile = self.mobile.clone();
                 self.workers.register(conn.clone(), device, r, |owner| mobile.is_paired(owner))?;
@@ -2024,12 +2327,12 @@ impl Daemon {
                             }
                             None => {}
                         }
-                        ok(self.sync.open(conn, r).await?)
+                        ok(self.sync.open(&crate::peer::Peer::Conn(conn.clone()), r).await?)
                     }
-                    m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
+                    m::SYNC_FETCH => ok(self.sync.fetch(&crate::peer::Peer::Conn(conn.clone()), params(p)?).await?),
                     m::SYNC_CLOSE => {
                         let r: m::CopyRef = params(p)?;
-                        ok(self.sync.close(conn, &r.copy).await?)
+                        ok(self.sync.close(&crate::peer::Peer::Conn(conn.clone()), &r.copy).await?)
                     }
                     _ => {
                         let r: m::SyncOffer = params(p)?;
@@ -2039,7 +2342,7 @@ impl Daemon {
                             })?),
                             None => None,
                         };
-                        ok(self.sync.reconcile_offer(conn, r, pack).await?)
+                        ok(self.sync.reconcile_offer(&crate::peer::Peer::Conn(conn.clone()), r, pack).await?)
                     }
                 }
             }
@@ -2339,10 +2642,10 @@ impl Daemon {
                     // folder swapped for a link after a path was given
                     // would lead the reader out of it.
                     (None, Some(session)) => {
-                        let (s, folder) = self.design_session(&session)?;
+                        let (s, shelves) = self.design_session(&session)?;
                         self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
                         let rel = r.path.clone();
-                        let bytes = blocking(move || moonlet_core::design::session::session_file(Path::new(&s.path), &folder, &rel))
+                        let bytes = blocking(move || moonlet_core::design::session::session_file_on(&shelves, &rel))
                             .await
                             .map_err(|_| RpcError::new("invalid_params", format!("{} is no file of a session design", r.path)))?;
                         use base64::Engine;
@@ -2353,6 +2656,33 @@ impl Daemon {
                     (None, None) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session")),
                 }
             }
+            m::DESIGN_STANDALONE => {
+                let r: m::DesignFile = params(p)?;
+                let page = r.path.clone();
+                // Every file read as design.file reads it: nothing outside
+                // the workspace's design folder (and the library's systems)
+                // or the session's design folder.
+                let read: Box<dyn FnMut(&str) -> Option<Vec<u8>> + Send> = match (r.workspace, r.session, r.project) {
+                    (Some(workspace), None, None) => {
+                        self.workspace_exists(&workspace)?;
+                        let store = store.clone();
+                        Box::new(move |path: &str| store.resolve(&workspace, path).ok().and_then(|real| std::fs::read(real).ok()))
+                    }
+                    (None, Some(session), None) => {
+                        let (s, shelves) = self.design_session(&session)?;
+                        self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
+                        Box::new(move |path: &str| moonlet_core::design::session::session_file_on(&shelves, path).ok())
+                    }
+                    _ => return Err(RpcError::new("invalid_params", "name a design's page by its workspace or by its session")),
+                };
+                ok(blocking(move || {
+                    let mut read = read;
+                    let html = read(&page).ok_or_else(|| anyhow::anyhow!(RpcError::new("invalid_params", format!("{page} is no page of a design"))))?;
+                    let out = moonlet_core::design::standalone::inline(&page, &String::from_utf8_lossy(&html), read);
+                    Ok(serde_json::json!({"html": out.html, "missing": out.missing}))
+                })
+                .await?)
+            }
             m::DESIGN_DETECT => {
                 let r: m::DesignDetect = params(p)?;
                 ok(blocking(move || Ok(moonlet_core::design::stack::detect(&path(&r.path)))).await?)
@@ -2360,7 +2690,15 @@ impl Daemon {
             m::DESIGN_LIST => {
                 let r: m::DesignWorkspace = params(p)?;
                 let ws = r.workspace.clone();
-                let mut designs = blocking(move || store.designs(&ws)).await?;
+                let mut designs = blocking(move || {
+                    let mut designs = store.designs(&ws)?;
+                    // Then the designs shared with every workspace (X95).
+                    if ws != LIBRARY {
+                        designs.extend(store.designs(LIBRARY)?.into_iter().map(|d| moonlet_proto::types::DesignInfo { shared: true, ..d }));
+                    }
+                    Ok(designs)
+                })
+                .await?;
                 // A workspace design built in a session: that session's project.
                 for d in &mut designs {
                     if let Some(built) = &mut d.built_in {
@@ -2376,8 +2714,9 @@ impl Daemon {
                     .into_iter()
                     .map(|d| {
                         let d = self.design_info(d, &terminals);
+                        let place = if d.shared { LIBRARY } else { r.workspace.as_str() };
                         let owner = (d.kind == moonlet_proto::types::DesignKind::Workspace)
-                            .then(|| owners.get(&moonlet_core::design::replica::Item::design(&r.workspace, &d.slug)).cloned())
+                            .then(|| owners.get(&moonlet_core::design::replica::Item::design(place, &d.slug)).cloned())
                             .flatten();
                         let mut v = serde_json::to_value(&d).unwrap_or_default();
                         add_owner(&mut v, owner);
@@ -2388,15 +2727,20 @@ impl Daemon {
             }
             m::DESIGN_CREATE => {
                 let r: m::DesignCreate = params(p)?;
+                // A shared design is the user's choice (X95), as Share is.
+                if r.workspace == LIBRARY {
+                    app_only(conn, "a shared design")?;
+                }
                 // A session design: the session's agent writes it (X65).
                 if let Some(session) = r.session.clone() {
-                    let (s, folder) = self.design_session(&session)?;
+                    let (s, _) = self.design_session(&session)?;
                     if s.workspace_id.as_deref() != Some(r.workspace.as_str()) {
                         return Err(RpcError::new("invalid_params", format!("session \"{session}\" is not in workspace \"{}\"", r.workspace)));
                     }
+                    let shelf = self.new_design_shelf(&s)?;
                     let (made, r, watched) = (store.clone(), r.clone(), session.clone());
                     let at = blocking(move || {
-                        made.create_session_design(&r.workspace, &r.system, &session, Path::new(&s.path), &folder, &r.name, &r.brief, now_ms())
+                        made.create_session_design(&r.workspace, &r.system, &session, &shelf.root, &shelf.folder, &r.name, &r.brief, now_ms())
                     })
                     .await?;
                     // Its folders are there now: watch them.
@@ -2465,6 +2809,28 @@ impl Daemon {
                 let agent_error = self.start_design_agent(&at, Some(intro)).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
                 ok(moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error })
+            }
+            m::DESIGN_SHARE => {
+                // The user's choice, never an agent's: an agent could move its
+                // own design into every workspace.
+                app_only(conn, "sharing a design")?;
+                let r: m::DesignShare = params(p)?;
+                if r.workspace == LIBRARY {
+                    return Err(RpcError::new("invalid_params", "the design is shared already"));
+                }
+                ok(self.move_design_to(&r.workspace, &r.slug, LIBRARY).await?)
+            }
+            m::DESIGN_UNSHARE => {
+                app_only(conn, "sharing a design")?;
+                let r: m::DesignUnshare = params(p)?;
+                if r.workspace != LIBRARY {
+                    return Err(RpcError::new("invalid_params", "only a shared design stops being shared"));
+                }
+                if r.into == LIBRARY {
+                    return Err(RpcError::new("invalid_params", "name the workspace it moves into"));
+                }
+                self.workspace_exists(&r.into)?;
+                ok(self.move_design_to(LIBRARY, &r.slug, &r.into).await?)
             }
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;
@@ -2585,8 +2951,9 @@ impl Daemon {
     }
 
     /// Asks a design system's sync agent to build it, or to sync it again
-    /// (X64). Its chat is reused while it exists; otherwise a new one starts in
-    /// the workspace's Claude profile, with the sources read only.
+    /// (X64). Its chat is reused while it exists; otherwise a new one starts,
+    /// with the sources read only, in the Claude profile of the workspace
+    /// that holds its first source (X95).
     async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
         use moonlet_core::design::{agent, anchor, store};
         // One start or sync at a time per system, so two never make two agents.
@@ -2633,10 +3000,23 @@ impl Daemon {
             slug: slug.to_string(),
             name,
         };
-        self.agent_chat(&launch, tag, |id| match id {
+        let profile = record.sources.first().and_then(|s| self.workspace_holding(&s.project));
+        self.agent_chat(&launch, tag, profile, |id| match id {
             Some(id) => self.design.set_agent(workspace, slug, id, &fingerprint),
             None => self.design.clear_agent(workspace, slug),
         })
+    }
+
+    /// The first workspace, in the account's order, whose sections hold
+    /// `project`: whose Claude profile a library system's agent runs in
+    /// (X95). None when no workspace holds it.
+    fn workspace_holding(&self, project: &str) -> Option<String> {
+        let sections = self.sessions.list_sections();
+        self.sessions
+            .list_workspaces()
+            .into_iter()
+            .find(|w| sections.iter().any(|s| w.section_ids.contains(&s.id) && s.project_ids.iter().any(|p| p == project)))
+            .map(|w| w.id)
     }
 
     /// A design as `design.list` gives it (X65): its agent only while that
@@ -2674,9 +3054,9 @@ impl Daemon {
         };
         let slug = at.slug.clone();
         // The folders come from the store, never from what the agent edits:
-        // `design.toml` names the design system, which must be the workspace's.
+        // `design.toml` names the design system, the library's (X95).
         let (store, ws, design) = (self.design.clone(), workspace.clone(), at.clone());
-        let (launch, name) = blocking(move || {
+        let (launch, name, source) = blocking(move || {
             let dir = design.folder().canonicalize()?;
             let mut config = store.design_config(&design)?;
             if let Some(intro) = intro {
@@ -2684,23 +3064,32 @@ impl Daemon {
             }
             let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
             let readme = store.readme(&ws, &config.system)?;
+            let source = store.record(&ws, &config.system)?.sources.first().map(|s| s.project.clone());
             let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
-            Ok((launch, config.name))
+            Ok((launch, config.name, source))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.clone(), slug: slug.clone(), name };
-        self.agent_chat(&launch, tag, |id| self.design.set_design_agent(at, id))
+        // A shared design has no workspace (X95): its system's first source's.
+        let profile = if workspace == LIBRARY { source.and_then(|p| self.workspace_holding(&p)) } else { Some(workspace.clone()) };
+        self.agent_chat(&launch, tag, profile, |id| self.design.set_design_agent(at, id))
     }
 
     /// Starts the chat of a Design mode agent (X64, X65): Claude Code, with
-    /// no session, in the Claude profile of the workspace its tag names,
-    /// started as `launch` says and tagged so. `record` saves the chat as its
+    /// no session, in the Claude profile of workspace `profile` (the default
+    /// one without), started as `launch` says and tagged so. `record` saves the chat as its
     /// system's or design's agent (`Some`), or forgets it (`None`); then the
     /// chat gets `launch.prompt` as its first message. When saving the record
     /// or sending that message fails, the chat is stopped and removed and the
     /// record forgotten, so a failed start leaves no agent behind.
-    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent, record: impl Fn(Option<u32>) -> anyhow::Result<()>) -> anyhow::Result<u32> {
+    fn agent_chat(
+        &self,
+        launch: &moonlet_core::design::agent::Launch,
+        tag: moonlet_proto::types::DesignAgent,
+        profile: Option<String>,
+        record: impl Fn(Option<u32>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<u32> {
         let info = self.chats.create(ChatCreate {
             cwd: launch.cwd.clone(),
             agent: "claude".into(),
@@ -2713,7 +3102,7 @@ impl Daemon {
             env: Default::default(),
             add_dirs: launch.add_dirs.clone(),
             settings: Some(launch.settings.clone()),
-            workspace: Some(tag.workspace.clone()),
+            workspace: profile,
             design: Some(tag),
         })?;
         let id = info.id;
@@ -2761,9 +3150,10 @@ impl Daemon {
         blocking(move || store.write_render_check(&ws, &sl, &results)).await.map_err(RenderError::Failed)
     }
 
-    /// The lock of one design system (see `design_locks`).
-    fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.design_locks.lock().unwrap().entry(design_key(workspace, slug)).or_default().clone()
+    /// The lock of one design system (see `design_locks`): the library's
+    /// (X95), one lock whatever workspace a call names.
+    fn design_lock(&self, _workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_locks.lock().unwrap().entry(design_key(LIBRARY, slug)).or_default().clone()
     }
 
     /// One of a design's locks (X65), by what it guards (see [`DesignLock`]).
@@ -2783,19 +3173,52 @@ impl Daemon {
                 blocking(move || store.workspace_design(&workspace, &slug)).await
             }
             m::DesignRef::Session { session, slug } => {
-                let (s, folder) = self.design_session(&session)?;
+                let (s, shelves) = self.design_session(&session)?;
                 self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
-                blocking(move || moonlet_core::design::session::session_design(&session, Path::new(&s.path), &folder, &slug)).await
+                blocking(move || moonlet_core::design::session::session_design_on(&session, &shelves, &slug)).await
             }
         }
     }
 
-    /// Refuses a workspace moonlet does not have.
+    /// Refuses a workspace moonlet does not have. The library (X95) is one:
+    /// its systems' agents run in its folders and name it.
     fn workspace_exists(&self, workspace: &str) -> Result<(), RpcError> {
-        if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
+        if workspace != LIBRARY && !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
             return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
         }
         Ok(())
+    }
+
+    /// Moves design `slug` of `from` into `into` (X95): into the library to
+    /// share it, out of it to stop sharing it. Refused while its agent
+    /// works; otherwise its agent stops, and its next message starts it in
+    /// the new place. This member's copy entry and its record follow it
+    /// (X71). Gives its slug there.
+    async fn move_design_to(&self, from: &str, slug: &str, into: &str) -> Result<String, RpcError> {
+        use moonlet_core::design::replica::Item;
+        use moonlet_proto::types::AgentState;
+        let at = self
+            .locate(&m::DesignRef::Workspace { workspace: from.to_string(), slug: slug.to_string() })
+            .await?;
+        let lock = self.lock_of(&at, DesignLock::Agent);
+        let _held = lock.lock().await;
+        let pages = self.lock_of(&at, DesignLock::Pages);
+        let _pages = pages.lock().await;
+        let history = self.lock_of(&at, DesignLock::History);
+        let _history = history.lock().await;
+        if let Some(agent) = self.design_agent(&at).await? {
+            if matches!(agent.agent_state, AgentState::Working | AgentState::Blocked) {
+                return Err(RpcError::new("busy", "its agent is working: try again when it is done"));
+            }
+            let _ = self.terminals.kill(agent.id, true);
+        }
+        self.take_hand_edits(&at);
+        let (store, f, s, i) = (self.design.clone(), from.to_string(), slug.to_string(), into.to_string());
+        let to = blocking(move || if i == LIBRARY { store.share_design(&f, &s) } else { store.unshare_design(&s, &i) }).await?;
+        if let Err(e) = self.copies.moved(&Item::design(from, slug), &Item::design(into, &to)).await {
+            tracing::warn!("cannot note where design {slug} moved: {e:#}");
+        }
+        Ok(to)
     }
 
     /// The workspace a design is in: a workspace design's own, a session
@@ -2807,35 +3230,68 @@ impl Daemon {
         }
     }
 
-    /// A session that may hold session designs (X65), and the folder of
-    /// its project's session designs, from the worktree's own config.
-    fn design_session(&self, id: &str) -> Result<(moonlet_proto::types::Session, String), RpcError> {
+    /// A session that may hold session designs (X65), and where they are:
+    /// its own folder under `~/.moonlet/design/.sessions/` when it has one
+    /// (X101), then its worktree's design folder, from the worktree's own
+    /// config. Each is watched.
+    fn design_session(&self, id: &str) -> Result<(moonlet_proto::types::Session, Vec<moonlet_core::design::session::Shelf>), RpcError> {
         let s = self.sessions.session(id).map_err(|_| RpcError::new("invalid_params", format!("no session \"{id}\"")))?;
         let config = moonlet_core::session::read_config(Path::new(&s.path));
         let folder = moonlet_core::design::session::design_folder(&config).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
-        self.watch_session_designs(&s, &folder);
-        Ok((s, folder))
+        let shelves = self.design.session_shelves(&s.id, Path::new(&s.path), &folder);
+        for shelf in &shelves {
+            self.watch_session_designs(&s, shelf);
+        }
+        Ok((s, shelves))
     }
 
-    /// Watches an open session's worktree for its session designs'
-    /// changes, and announces them as `design.changed` with the design, its
-    /// session and its workspace (X65). A design folder not there yet is
-    /// watched for from the nearest folder above it, so a design another
-    /// tool makes there later is announced too. Every design call that reaches a session's designs, and their
-    /// listing, starts it, so once the session is unarchived it starts
-    /// again as the app lists the designs; after a restart the daemon starts
-    /// it (see `watch_saved_session_designs`). An archived
-    /// session's designs are not watched (see `prune_session_watches`).
-    fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
-        let worktree = Path::new(&s.path);
+    /// Where a new session design of `s` is made (X101): its own folder
+    /// when its project keeps its session designs in moonlet, else its
+    /// worktree's design folder. A session whose agent was not given its
+    /// folder as it started gets it from its next message, and is told so.
+    fn new_design_shelf(&self, s: &moonlet_proto::types::Session) -> Result<moonlet_core::design::session::Shelf, RpcError> {
+        let project = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id);
+        let in_moonlet = project
+            .is_some_and(|p| moonlet_core::design::session::keeps_in_moonlet(&moonlet_core::session::read_config(Path::new(&p.path))));
+        let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))
+            .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+        match self.design.new_design_shelf(&s.id, Path::new(&s.path), &folder, in_moonlet) {
+            Ok(shelf) => Ok(shelf),
+            Err(e) if e.is::<moonlet_core::design::session::NoSessionDir>() => {
+                let dir = self.design.make_session_dir(&s.id, s.workspace_id.as_deref().unwrap_or_default()).map_err(internal)?;
+                for t in self.terminals.list() {
+                    if t.session_id.as_deref() == Some(s.id.as_str()) && t.chat && t.agent.as_deref() == Some("claude") {
+                        let _ = self.chats.add_dir(t.id, &dir.display().to_string());
+                    }
+                }
+                Err(RpcError::new("invalid_params", e.to_string()))
+            }
+            Err(e) => Err(RpcError::new("invalid_params", format!("{e:#}"))),
+        }
+    }
+
+    /// Watches where an open session keeps its session designs, a shelf of
+    /// its worktree or its own folder (X101), for their changes, and
+    /// announces them as `design.changed` with the design, its session and
+    /// its workspace (X65). A design folder not there yet is watched for
+    /// from the nearest folder above it, so a design another tool makes
+    /// there later is announced too. Every design call that reaches a
+    /// session's designs, and their listing, starts it, so once the session
+    /// is unarchived it starts again as the app lists the designs; after a
+    /// restart the daemon starts it (see `watch_saved_session_designs`). An
+    /// archived session's designs are not watched (see
+    /// `prune_session_watches`).
+    fn watch_session_designs(&self, s: &moonlet_proto::types::Session, shelf: &moonlet_core::design::session::Shelf) {
+        let (worktree, folder) = (shelf.root.as_path(), shelf.folder.as_str());
         let roots = [worktree.join(folder), worktree.join(moonlet_core::design::session::SIDE_DIR)];
         let mut watches = self.session_watches.lock().unwrap();
+        let key = (s.id.clone(), shelf.root.clone());
         // A watch started while a folder was not there arms it only once
         // the watch hears it made; a design call coming once both are there
         // while it has not armed them yet starts the watch again, armed on
         // them before it returns.
         let there = roots.iter().all(|r| r.is_dir());
-        if s.archived || watches.get(&s.id).is_some_and(|w| !there || roots.iter().all(|r| w.watches_whole(r))) {
+        if s.archived || watches.get(&key).is_some_and(|w| !there || roots.iter().all(|r| w.watches_whole(r))) {
             return;
         }
         let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
@@ -2847,7 +3303,7 @@ impl Daemon {
         });
         match watching {
             Ok(watching) => {
-                watches.insert(s.id.clone(), watching);
+                watches.insert(key, watching);
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
         }
@@ -2859,10 +3315,33 @@ impl Daemon {
     pub fn watch_saved_session_designs(&self) {
         for s in self.sessions.list_sessions() {
             if !s.archived
-                && Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir()
+                && (Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir()
+                    || self.design.session_dir(&s.id).is_ok_and(|d| d.is_dir()))
                 && let Err(e) = self.design_session(&s.id)
             {
                 tracing::warn!("cannot watch the designs of session {}: {}", s.id, e.message);
+            }
+        }
+    }
+
+    /// Turns the designs kept in moonlet by sessions that are archived or
+    /// gone into workspace designs (X101); one that cannot be moved yet is
+    /// logged and tried again at the next archive or start.
+    pub async fn adopt_session_designs(&self) {
+        let store = self.design.clone();
+        let Ok(dirs) = blocking(move || store.session_dirs()).await else { return };
+        for id in dirs {
+            if self.sessions.session(&id).is_ok_and(|s| !s.archived) {
+                continue;
+            }
+            let (store, session) = (self.design.clone(), id.clone());
+            match blocking(move || store.adopt_session_designs(&session, now_ms())).await {
+                Ok(done) => {
+                    for (slug, error) in &done.left {
+                        tracing::warn!("cannot move design {slug} of session {id} into its workspace: {error}");
+                    }
+                }
+                Err(e) => tracing::warn!("cannot move the designs of session {id}: {}", e.message),
             }
         }
     }
@@ -2872,7 +3351,7 @@ impl Daemon {
     fn prune_session_watches(&self) {
         let open: std::collections::HashSet<String> =
             self.sessions.list_sessions().into_iter().filter(|s| !s.archived).map(|s| s.id).collect();
-        self.session_watches.lock().unwrap().retain(|id, _| open.contains(id));
+        self.session_watches.lock().unwrap().retain(|(id, _), _| open.contains(id));
     }
 
     /// A session design as `design.list` gives it: with its session and
@@ -2896,11 +3375,11 @@ impl Daemon {
             if s.archived || s.workspace_id.as_deref() != Some(workspace) {
                 continue;
             }
-            let Ok((_, folder)) = self.design_session(&s.id) else { continue };
+            let Ok((_, shelves)) = self.design_session(&s.id) else { continue };
             let id = s.id.clone();
             let (store, ws) = (self.design.clone(), workspace.to_string());
             let listed = blocking(move || {
-                let mut out = store.session_designs(&s.id, Path::new(&s.path), &folder, &ws)?;
+                let mut out = store.session_designs_on(&s.id, &shelves, &ws)?;
                 for d in &mut out {
                     d.project = Some(s.project_id.clone());
                 }
@@ -3079,8 +3558,9 @@ impl Daemon {
     /// writes could go with them; none does on a design with edits waiting
     /// (the first message comes as the design is made, and a queued one
     /// after the turn's snapshot). Runs for the daemon's life.
-    /// Moves the design systems and designs of each merged workspace into
-    /// the one it merged into (X71): now, and whenever the workspaces
+    /// Moves the designs of each merged workspace into the one it merged
+    /// into (X71), after any design system still kept per workspace moved
+    /// into the library (X95): now, and whenever the workspaces
     /// change, as they do when a merge comes from another member. Runs for
     /// the daemon's life.
     pub fn follow_merges(self: &Arc<Self>) {
@@ -3107,7 +3587,62 @@ impl Daemon {
         });
     }
 
+    /// Moves the design systems kept under workspaces before X95 into the
+    /// library (X95), in the account's order of workspaces, and stops the
+    /// sync agent each one's record named: it ran in the folder that moved.
+    /// Its next Sync starts a new one in the library. Nothing to move is
+    /// quick, so it runs again with each look at merges, for a move that
+    /// failed.
+    pub async fn move_systems_to_library(&self) {
+        let order: Vec<String> = self.sessions.list_workspaces().into_iter().map(|w| w.id).collect();
+        let root = moonlet_core::paths::home().join("design");
+        let root = root.canonicalize().unwrap_or(root);
+        match self.copies.to_library(order).await {
+            Ok(moved) if !moved.is_empty() => {
+                let terminals = self.terminals.list();
+                for mv in &moved {
+                    let old = root.join(&mv.workspace).join("systems").join(&mv.from);
+                    if let Some(id) = folder_agent(&terminals, mv.agent, &old) {
+                        let _ = self.terminals.kill(id, true);
+                    }
+                    if mv.to != mv.from {
+                        self.follow_renamed_system(mv).await;
+                    }
+                }
+                // Only once each moved system's agent stopped and the open
+                // sessions' designs followed it: until then, the next look
+                // gives these moves again, and each step is safe to repeat.
+                let store = self.design.clone();
+                if let Err(e) = blocking(move || store.library_move_done()).await {
+                    tracing::warn!("cannot end the move into the library: {}", e.message);
+                }
+                tracing::info!("moved {} design systems into the library", moved.len());
+                self.copies.kick();
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("cannot move design systems into the library: {e:#}"),
+        }
+    }
+
+    /// Points the session designs of workspace `mv.workspace`'s open
+    /// sessions at the slug its system took in the library (X95). One that
+    /// cannot be changed is logged, and keeps the old slug.
+    async fn follow_renamed_system(&self, mv: &moonlet_core::design::library::ToLibrary) {
+        for s in self.sessions.list_sessions() {
+            if s.archived || s.workspace_id.as_deref() != Some(mv.workspace.as_str()) {
+                continue;
+            }
+            for at in self.session_designs_at(&s.id).await {
+                let (store, from, to, slug) = (self.design.clone(), mv.from.clone(), mv.to.clone(), at.slug.clone());
+                if let Err(e) = blocking(move || store.follow_renamed_system(&at, &from, &to)).await {
+                    tracing::warn!("cannot point design {slug} of session {} at {}: {}", s.id, mv.to, e.message);
+                }
+            }
+        }
+    }
+
     async fn move_merged_designs(&self) {
+        self.move_systems_to_library().await;
         for (from, into) in self.sessions.merged_workspaces() {
             self.stop_agents_in(&from).await;
             match self.copies.merge(&from, &into).await {
@@ -3121,24 +3656,18 @@ impl Daemon {
         }
     }
 
-    /// Stops the agents of workspace `from`'s design systems and designs,
-    /// whose folders a merge is about to move: their records forget them,
-    /// and a new one starts in the new place.
+    /// Stops the agents of workspace `from`'s designs, whose folders a
+    /// merge is about to move: their records forget them, and a new one
+    /// starts in the new place. Design systems are the library's (X95) and
+    /// stay, with their agents.
     async fn stop_agents_in(&self, from: &str) {
         let store = self.design.clone();
         let ws = from.to_string();
-        let (systems, designs) = blocking(move || {
-            let systems: Vec<String> = store.systems(&ws).unwrap_or_default().into_iter().map(|s| s.slug).collect();
-            let designs: Vec<String> = store.designs(&ws).unwrap_or_default().into_iter().map(|d| d.slug).collect();
-            Ok((systems, designs))
-        })
-        .await
-        .unwrap_or_default();
-        // Each only while it is still that item's agent, as its terminal
+        let designs = blocking(move || Ok(store.designs(&ws).unwrap_or_default().into_iter().map(|d| d.slug).collect::<Vec<String>>()))
+            .await
+            .unwrap_or_default();
+        // Each only while it is still that design's agent, as its terminal
         // says: a record's id may name a terminal since given to another.
-        for slug in systems {
-            self.stop_sync_agent(from, &slug);
-        }
         for slug in designs {
             let store = self.design.clone();
             let (ws, s) = (from.to_string(), slug.clone());
@@ -3294,7 +3823,18 @@ impl Daemon {
                 }
             }
         }
-        self.sessions.session(session).map_err(internal)
+        let s = self.sessions.session(session).map_err(internal)?;
+        // What its chats hold now never counts as typed here (X73).
+        let held = s
+            .terminals
+            .iter()
+            .filter_map(|t| self.chats.state(*t).ok())
+            .flat_map(|st| st.items)
+            .filter(|i| i.kind == "user")
+            .map(|i| i.id)
+            .collect();
+        self.took_with.lock().unwrap().insert(session.to_string(), held);
+        Ok(s)
     }
 
     /// Makes the copy [`Self::take_in`] took session `session` of this
@@ -3419,6 +3959,14 @@ impl Daemon {
         if running && !r.now && !forced {
             return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
         }
+        // Coming back to the member whose sleep it was taken for (X73):
+        // only while nothing here is at work, and nobody typed into it here.
+        if r.returning {
+            let states: Vec<_> = chats.iter().filter_map(|t| self.chats.state(*t).ok()).collect();
+            let moved_at = self.sessions.session_moved_at(&r.session).unwrap_or(0);
+            let took_with = self.took_with.lock().unwrap().get(&r.session).cloned();
+            crate::session_copies::may_return(&states, moved_at, took_with.as_ref())?;
+        }
         // Taken while this host was offline: what it did meanwhile is kept
         // before the member's work replaces it.
         if forced {
@@ -3469,6 +4017,7 @@ impl Daemon {
             return Err(RpcError::new("internal", "cannot record the session's new owner"));
         }
         self.sessions.give_up_session(&r.session).map_err(internal)?;
+        self.took_with.lock().unwrap().remove(&r.session);
         self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name, states.clone());
         Ok(m::SessionTaken { epoch: epoch + 1, chats: states, transcripts })
     }
@@ -3479,11 +4028,12 @@ impl Daemon {
     /// resuming its conversation. `busy` while a turn runs there, unless
     /// `now`.
     async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
-        self.bring_as(r, false).await
+        self.bring_as(r, false, false).await
     }
 
-    /// [`Self::bring`]; with `pin`, the session is kept here after.
-    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
+    /// [`Self::bring`]; with `pin`, the session is kept here after. With
+    /// `returning`, it comes back only while idle and untouched there (X73).
+    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool, returning: bool) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -3492,6 +4042,14 @@ impl Daemon {
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         if text("owner").as_deref() == Some(me.as_str()) {
+            // Back here already, as when it came back by itself while the
+            // message waited for the turn there to end (X73): it runs here.
+            if let (Some(message), Ok(s)) = (r.message.as_deref(), self.sessions.session(&r.session))
+                && let Some(chat) = s.terminals.iter().copied().find(|t| self.chats.is_chat(*t))
+            {
+                self.chats.send(chat, message, &r.images).map_err(internal)?;
+                return Ok(s);
+            }
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
         // A move (`pin`) keeps it here instead.
@@ -3512,6 +4070,7 @@ impl Daemon {
                     now: r.now,
                     pin,
                     forced: false,
+                    returning,
                 })
                 .map_err(internal)?,
             )
@@ -3527,19 +4086,30 @@ impl Daemon {
             }
             Err::<moonlet_proto::types::Session, _>(e)
         };
+        // The central host's last files first: what it sent while the copy
+        // was held never landed.
+        if let Err(e) = self.sync.catch_up(&held).await {
+            return give_back(e).await;
+        }
         let released = match self.sync.let_go(held) {
             Ok(released) => released,
             Err(e) => return give_back(e).await,
         };
         let path = released.path.clone();
+        // This Mac's own from now on, before the account's news of it comes
+        // (X73): listed as such until then.
+        self.sessions.keep_listed(&r.session, true);
         let adopted = self.adopt_brought(&r.session, &record, &released.repo, &path).await;
         let adopted = match adopted {
             Ok(adopted) => {
                 self.sync.hand_over(released).await;
+                // The news may have come already, before the answer did.
+                self.settle_kept_listed();
                 adopted
             }
             // Its copy stays a copy, rather than a folder no one keeps.
             Err(e) => {
+                self.sessions.keep_listed(&r.session, false);
                 self.sync.restore(released);
                 return give_back(e).await;
             }
@@ -3638,8 +4208,8 @@ impl Daemon {
 
     /// The Mac goes to sleep or woke (X73). Going to sleep, this member
     /// freezes the agents of the sessions it runs, sends what is new, and
-    /// hands the sessions that are not pinned to the central host, which
-    /// continues them. Waking, it lets an agent go on only while its
+    /// hands the sessions at work that are not pinned to the central host,
+    /// which continues them; an idle one stays. Waking, it lets an agent go on only while its
     /// session is still this member's; one handed over is let go of.
     pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
         use crate::power::Power;
@@ -3662,6 +4232,7 @@ impl Daemon {
                 {
                     let mut asleep = self.asleep.lock().unwrap();
                     asleep.sleeps += 1;
+                    asleep.sleeping = true;
                     // An agent that starts from now on starts stopped too.
                     self.chats.hold();
                 }
@@ -3678,10 +4249,22 @@ impl Daemon {
                 // A session the central host would continue from an older
                 // copy stays here, as when the hand-over cannot be sent.
                 let unsent = self.session_copies.send_now().await;
+                // Only one at work or waiting on something: an idle one
+                // stays, so a short idle sleep moves nothing.
+                let at_work = |s: &moonlet_proto::types::Session| {
+                    let states: Vec<_> = s
+                        .terminals
+                        .iter()
+                        .filter(|t| self.chats.is_chat(**t))
+                        .filter_map(|t| self.chats.state(*t).ok())
+                        .collect();
+                    crate::power::hand_over_at_sleep(&states)
+                };
                 let handed: Vec<String> = own
                     .iter()
                     .filter(|s| !unsent.contains(&s.id))
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("pinned")).is_none_or(Value::is_null))
+                    .filter(|s| at_work(s))
                     .map(|s| s.id.clone())
                     .collect();
                 if handed.is_empty() {
@@ -3692,6 +4275,12 @@ impl Daemon {
                     Ok(taken) => {
                         let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
                         tracing::info!("handed {taken:?} to the central host before sleep");
+                        // Each comes back once idle there and untouched.
+                        let epochs: Vec<(String, u64)> = taken
+                            .iter()
+                            .map(|id| (id.clone(), records.get(id).and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1)))
+                            .collect();
+                        self.session_copies.add_returning(&epochs);
                         self.asleep.lock().unwrap().taken.extend(taken);
                     }
                     Err(e) => tracing::warn!("cannot hand sessions over before sleep: {}", e.message),
@@ -3716,9 +4305,14 @@ impl Daemon {
                     if asleep.sleeps != sleeps {
                         return;
                     }
+                    asleep.sleeping = false;
                     asleep.frozen.extend(self.chats.release());
                     (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
                 };
+                // What the central host took for this sleep comes back once
+                // idle there and untouched.
+                let d = self.clone();
+                tokio::spawn(async move { d.bring_back().await });
                 if frozen.is_empty() {
                     return;
                 }
@@ -3770,7 +4364,7 @@ impl Daemon {
                 return self.sessions.session(&r.session).map_err(internal);
             }
             return self
-                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true)
+                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true, false)
                 .await;
         }
         if r.to == central && owner == me {
@@ -3901,7 +4495,7 @@ impl Daemon {
             let asked = host
                 .request(
                     m::SESSION_TAKE,
-                    serde_json::to_value(m::SessionTake { session: session.clone(), epoch: base, now: true, pin: false, forced: true })
+                    serde_json::to_value(m::SessionTake { session: session.clone(), epoch: base, now: true, pin: false, forced: true, returning: false })
                         .unwrap_or_default(),
                 )
                 .await;
@@ -4029,9 +4623,9 @@ impl Daemon {
     /// Lets go of this member's sessions that the central host gave
     /// another member (X73). What this member did meanwhile that the
     /// central host never got is kept: files in a leftovers folder, the
-    /// conversation as a fork. The session's agent and terminals end, its
-    /// worktree goes, and a live copy of it is kept in sync from the
-    /// central host in its place (X60), so typing here can bring it back.
+    /// conversation as a fork. The session's agent and terminals end, and
+    /// its worktree stays where it is as the live copy kept in sync from
+    /// the central host (X60), so typing here can bring it back.
     async fn let_go_of_lost(self: &Arc<Self>) {
         if !self.let_go_once(false).await {
             return;
@@ -4083,7 +4677,9 @@ impl Daemon {
             let Some(owner) = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) else {
                 continue;
             };
-            if owner == info.worker.id || self.session_copies.forced().contains_key(&s.id) {
+            // One this Mac runs whatever the record says stays: a takeover
+            // not answered yet, or one brought here before the news came.
+            if owner == info.worker.id || self.sessions.kept_listed().contains(&s.id) {
                 continue;
             }
             let kept = if one.kept.contains(&s.id) {
@@ -4102,26 +4698,129 @@ impl Daemon {
                 }
             }
             one.kept.insert(s.id.clone());
-            let keep_at = self.session_copies.worktree_keep_folder(&s.path);
-            let kept_at = match self.sessions.let_go_session(&s.id, &keep_at).await {
-                Ok(kept_at) => kept_at,
-                Err(e) => {
-                    tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
-                    again = true;
-                    continue;
-                }
-            };
-            one.kept.remove(&s.id);
-            if let Some(kept_at) = kept_at {
-                tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", kept_at.display());
+            if let Err(e) = self.sessions.let_go_session(&s.id).await {
+                tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
+                again = true;
+                continue;
             }
+            one.kept.remove(&s.id);
             self.session_copies.forget_sent(&s.id);
-            tracing::info!(session = %s.id, %owner, "another member runs this session now; keeping a copy of it");
-            if let Err(e) = self.sync.start(s.id.clone()) {
+            tracing::info!(session = %s.id, %owner, "another member runs this session now; its worktree stays, as a copy of it");
+            // Its worktree, where it is, becomes the live copy (X60): the
+            // new owner's files replace the ones there, whose gap was kept;
+            // one changed there from now on keeps its version.
+            let made_from = crate::copied_files::snapshot(&self.sessions, Path::new(&s.path), moonlet_core::sync::MAX_FILE)
+                .await
+                .ok()
+                .map(|t| t.tree);
+            if let Err(e) = self.sync.start_in_place(&s, made_from) {
                 tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);
             }
         }
         again
+    }
+
+    /// Stops keeping a session listed as this Mac's own whatever its record
+    /// says (X73) once the record names this Mac, unless it is a takeover
+    /// the central host has not answered yet.
+    fn settle_kept_listed(&self) {
+        let me = self.link.info().worker.id;
+        let records = self.sessions.session_records();
+        let forced = self.session_copies.forced();
+        for id in self.sessions.kept_listed() {
+            let owner = records.get(&id).and_then(|r| r.get("owner")).and_then(Value::as_str);
+            if owner == Some(me.as_str()) && !forced.contains_key(&id) {
+                self.sessions.keep_listed(&id, false);
+            }
+        }
+    }
+
+    /// Brings back the sessions the central host took for this Mac's sleep
+    /// (X73), each once it is idle there and nobody typed into it: the
+    /// central host decides, and refuses one at work (`busy`, tried again
+    /// later, up to [`BRING_BACK_TRIES`] times) or used there (`used`,
+    /// left there). The first time, every session this Mac made that the
+    /// central host runs is looked at too: an older version handed them
+    /// all over at every sleep. Never while this Mac sleeps.
+    async fn bring_back(self: &Arc<Self>) {
+        let info = self.link.info();
+        if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() {
+            return;
+        }
+        if !matches!(info.state, m::LinkState::Connected { .. }) {
+            return;
+        }
+        let _one = self.bringing_back.lock().await;
+        let me = info.worker.id;
+        let waiting = self.session_copies.returning();
+        let first = self.session_copies.first_look_due();
+        let mut ids: std::collections::BTreeSet<String> = waiting.keys().cloned().collect();
+        if first {
+            ids.extend(self.sessions.sessions_made_here());
+        }
+        let records = self.sessions.session_records();
+        let here: std::collections::HashSet<String> = self.sessions.list_sessions().into_iter().map(|s| s.id).collect();
+        let stop = |id: &str| {
+            self.session_copies.drop_returning(id);
+            self.bring_tries.lock().unwrap().remove(id);
+        };
+        for id in ids {
+            if self.asleep.lock().unwrap().sleeping {
+                return;
+            }
+            let Some(r) = records.get(&id) else {
+                stop(&id);
+                continue;
+            };
+            let owner = r.get("owner").and_then(Value::as_str);
+            let epoch = r.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+            let archived = r.get("archived").and_then(Value::as_bool).unwrap_or(false);
+            let pinned = r.get("pinned").and_then(Value::as_str).is_some();
+            if owner == Some(me.as_str()) {
+                // The record from before the hand-over, its news not here
+                // yet: it waits. A newer one here means it is back.
+                let stale = waiting.get(&id).is_some_and(|handed| epoch <= *handed);
+                if !stale && here.contains(&id) {
+                    stop(&id);
+                }
+                continue;
+            }
+            if owner.is_none() || archived || pinned {
+                stop(&id);
+                continue;
+            }
+            let bring = m::SessionBring { session: id.clone(), now: false, message: None, terminal: None, images: Vec::new() };
+            match self.bring_as(bring, false, true).await {
+                Ok(_) => {
+                    tracing::info!(session = %id, "brought back the session the central host ran while this Mac slept");
+                    stop(&id);
+                }
+                Err(e) if e.code == "disconnected" || e.code == "unreachable" => return,
+                // At work there, this Mac's copy not made yet, or a hitch:
+                // later, a while.
+                Err(e) if matches!(e.code.as_str(), "busy" | "no_copy" | "timeout" | "failed" | "internal") => {
+                    let tries = {
+                        let mut all = self.bring_tries.lock().unwrap();
+                        let n = all.entry(id.clone()).or_insert(0);
+                        *n += 1;
+                        *n
+                    };
+                    if tries >= BRING_BACK_TRIES {
+                        tracing::info!(session = %id, "leaves the session where it runs after {tries} tries: {}", e.message);
+                        stop(&id);
+                    } else if !waiting.contains_key(&id) {
+                        self.session_copies.add_returning(&[(id.clone(), epoch)]);
+                    }
+                }
+                Err(e) => {
+                    tracing::info!(session = %id, "leaves the session where it runs: {}", e.message);
+                    stop(&id);
+                }
+            }
+        }
+        if first {
+            self.session_copies.mark_looked_back();
+        }
     }
 
     /// Sends this member's sessions to the central host, and keeps the
@@ -4136,17 +4835,38 @@ impl Daemon {
             }
         });
         // Sessions the central host gave another member, now and as the
-        // news comes (X73).
+        // news comes (X73); and those brought here, once it names this Mac.
         let d = Arc::downgrade(self);
         self.sessions.on_account_applied(move |changes| {
             if let Some(d) = d.upgrade()
                 && changes.iter().any(|c| c.kind == "session")
             {
+                d.settle_kept_listed();
                 tokio::spawn(async move { d.let_go_of_lost().await });
             }
         });
         let d = self.clone();
         tokio::spawn(async move { d.let_go_of_lost().await });
+        // Sessions the central host took for this Mac's sleep come back
+        // (X73): looked at each time the link comes up, and again while one
+        // still waits for its turn there to end.
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut looked: Option<u64> = None;
+            loop {
+                tokio::time::sleep(BRING_BACK_EVERY).await;
+                let Some(d) = d.upgrade() else { return };
+                let since = match d.link.info().state {
+                    m::LinkState::Connected { since } => Some(since),
+                    _ => None,
+                };
+                let waiting = !d.session_copies.returning().is_empty();
+                if since.is_some() && (since != looked || waiting) {
+                    d.bring_back().await;
+                }
+                looked = since;
+            }
+        });
         // Takeovers made while the central host was offline, once it is back.
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -4162,6 +4882,14 @@ impl Daemon {
             Box::pin(async move {
                 let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
                 d.forwarded(r).await
+            })
+        }));
+        let d = Arc::downgrade(self);
+        self.link.set_files_fetcher(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                Ok(serde_json::to_value(d.files_fetched(r, true).await?).unwrap())
             })
         }));
         let d = Arc::downgrade(self);
@@ -4866,8 +5594,14 @@ impl Daemon {
                     // A cloud machine's routed copies, when its central
                     // host lets them have the files.
                     let Some(host) = d.link.host() else { continue };
-                    for (session, path, _) in d.sync.copies_of(m::CopyKind::Run) {
-                        if let Err(e) = d.fetch_copied_files(&host, &session, &path, None).await {
+                    for (session, path, member) in d.sync.run_copies() {
+                        // A member's session's files come from that member,
+                        // through the central host (X89).
+                        let peer = match member {
+                            Some(m) => crate::peer::Peer::Relay(host.clone(), m),
+                            None => crate::peer::Peer::Link(host.clone()),
+                        };
+                        if let Err(e) = d.fetch_copied_files(&peer, &session, &path, None).await {
                             tracing::debug!(%session, "no copied files: {e:#}");
                         }
                     }
@@ -4878,7 +5612,7 @@ impl Daemon {
                 }
                 let Some(host) = d.link.host() else { continue };
                 for (session, path, identity) in d.sync.live_copies() {
-                    if let Err(e) = d.fetch_copied_files(&host, &session, &path, identity.as_ref()).await {
+                    if let Err(e) = d.fetch_copied_files(&crate::peer::Peer::Link(host.clone()), &session, &path, identity.as_ref()).await {
                         tracing::debug!(%session, "cannot fetch the copied files: {e:#}");
                     }
                 }
@@ -4897,7 +5631,7 @@ impl Daemon {
         });
     }
 
-    async fn fetch_copied_files(&self, host: &moonlet_link::Host, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
+    async fn fetch_copied_files(&self, host: &crate::peer::Peer, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
         // A cloud machine has no account: it takes the central host's list.
         let cloud = self.link.info().worker.cloud;
         let patterns = match crate::copied_files::lists().lock().unwrap().get(session) {
@@ -4910,7 +5644,11 @@ impl Daemon {
             .map(|e| (e.path, e.sha))
             .collect();
         let fetched = host
-            .request(m::SESSION_FILES_FETCH, serde_json::to_value(m::SessionFilesFetch { session: session.to_string(), have })?)
+            .request(
+                m::SESSION_FILES_FETCH,
+                serde_json::to_value(m::SessionFilesFetch { session: session.to_string(), have })?,
+                std::time::Duration::from_secs(60),
+            )
             .await
             .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
         let fetched: m::SessionFilesFetched = serde_json::from_value(fetched)?;
@@ -5123,9 +5861,9 @@ impl Daemon {
     /// The session designs in a session's worktree (X65), found as the
     /// resolver finds them; none when they cannot be listed.
     async fn session_designs_at(&self, session: &str) -> Vec<DesignAt> {
-        let Ok((s, folder)) = self.design_session(session) else { return Vec::new() };
+        let Ok((_, shelves)) = self.design_session(session) else { return Vec::new() };
         let (store, id) = (self.design.clone(), session.to_string());
-        blocking(move || store.session_design_ats(&id, Path::new(&s.path), &folder)).await.unwrap_or_default()
+        blocking(move || store.session_design_ats_on(&id, &shelves)).await.unwrap_or_default()
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
@@ -5363,6 +6101,10 @@ impl Daemon {
                 let r: m::GhTaskGet = params(p)?;
                 ok(git::gh_task(&path(&r.path), &r.repo, r.number).await.map_err(internal)?)
             }
+            m::GH_SEARCH => {
+                let r: m::GhSearch = params(p)?;
+                ok(git::gh_search(&path(&r.path), &r.repo, &r.query, r.limit).await.map_err(internal)?)
+            }
             m::GH_TASKS => {
                 let r: m::GhTasks = params(p)?;
                 ok(git::gh_tasks(&path(&r.path), r.mine).await.map_err(internal)?)
@@ -5443,6 +6185,7 @@ impl Daemon {
                 w.remove_project(&r.id).map_err(internal)?;
                 // Its sessions are gone: so are their designs' watches.
                 self.prune_session_watches();
+                self.adopt_session_designs().await;
                 ok(true)
             }
             m::PROJECT_CONFIG => {
@@ -5497,21 +6240,42 @@ impl Daemon {
                 // Build it (X65): the workspace design, its pages and the
                 // session's workspace checked before any worktree is made…
                 let from = self.locate(&m::DesignRef::Workspace { workspace: pick.workspace.clone(), slug: pick.slug.clone() }).await?;
-                match req.workspace_id.as_deref() {
-                    None => req.workspace_id = Some(pick.workspace.clone()),
-                    Some(ws) if ws == pick.workspace => {}
-                    Some(_) => return Err(RpcError::new("invalid_params", "a session builds a design of its own workspace")),
-                }
-                if !self.workspace_projects(&pick.workspace).iter().any(|p| p.id == req.project_id) {
+                // A shared design (X95) is built in the workspace the user is
+                // in, which the request names.
+                let workspace = match (req.workspace_id.clone(), pick.workspace == LIBRARY) {
+                    (None, true) => return Err(RpcError::new("invalid_params", "a session building a shared design names its workspace")),
+                    (None, false) => pick.workspace.clone(),
+                    (Some(ws), true) => ws,
+                    (Some(ws), false) if ws == pick.workspace => ws,
+                    (Some(_), false) => return Err(RpcError::new("invalid_params", "a session builds a design of its own workspace")),
+                };
+                if !self.workspace_projects(&workspace).iter().any(|p| p.id == req.project_id) {
                     return Err(RpcError::new("invalid_params", "the project is not in the design's workspace"));
                 }
+                req.workspace_id = Some(workspace);
                 let (store, checked, pages) = (self.design.clone(), from.clone(), pick.pages.clone());
                 blocking(move || store.has_pages(&checked, &pages)).await?;
                 // …then copied into the worktree before its agent starts…
                 let (store, copied) = (self.design.clone(), from.clone());
+                // Into the session's own folder when its project keeps its
+                // session designs in moonlet (X101), made before its agent
+                // starts, which is given it.
+                let in_moonlet = self
+                    .sessions
+                    .list_projects()
+                    .into_iter()
+                    .find(|p| p.id == req.project_id)
+                    .is_some_and(|p| moonlet_core::design::session::keeps_in_moonlet(&moonlet_core::session::read_config(Path::new(&p.path))));
                 let prepare = move |s: moonlet_proto::types::Session| async move {
                     let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))?;
-                    blocking(move || store.copy_to_session(&copied, &pick.pages, &s.id, Path::new(&s.path), &folder, now_ms())).await?;
+                    blocking(move || {
+                        if in_moonlet {
+                            store.make_session_dir(&s.id, s.workspace_id.as_deref().unwrap_or_default())?;
+                        }
+                        let shelf = store.new_design_shelf(&s.id, Path::new(&s.path), &folder, in_moonlet)?;
+                        store.copy_to_session(&copied, &pick.pages, &s.id, &shelf.root, &shelf.folder, now_ms())
+                    })
+                    .await?;
                     Ok(())
                 };
                 // …and recorded as built there once the session is saved,
@@ -5539,14 +6303,19 @@ impl Daemon {
             }
             m::SESSION_LIST => {
                 let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();
-                let mut list = w.list_sessions();
+                // Without those another member runs now (X73): they are
+                // listed from where they run.
+                let mut list = w.listed_sessions();
                 // Each kept with Move to… says where (X73).
                 let records = self.sessions.session_records();
                 for s in &mut list {
                     s.pinned = records.get(&s.id).and_then(|r| r.get("pinned")).and_then(Value::as_str).map(str::to_string);
                 }
                 if r.copies {
-                    list.extend(self.member_sessions());
+                    // By id alone: a session keeps its id on every member
+                    // of the account (X72), so this is the same session.
+                    let own: std::collections::HashSet<String> = list.iter().map(|s| s.id.clone()).collect();
+                    list.extend(self.member_sessions().into_iter().filter(|s| !own.contains(&s.id)));
                 }
                 ok(list)
             }
@@ -5562,6 +6331,8 @@ impl Daemon {
                 self.reads.clear_grant(&id);
                 // Its designs are watched again once it is unarchived.
                 self.prune_session_watches();
+                // Those it kept in moonlet become workspace designs (X101).
+                self.adopt_session_designs().await;
                 ok(done)
             }
             m::SESSION_UNARCHIVE => {
@@ -5736,9 +6507,22 @@ impl Daemon {
             }
             m::GIT_PULL_BASE => {
                 let r: m::GitBase = params(p)?;
-                ok(git::pull_base(&path(&r.path), &r.branch)
-                    .await
-                    .map_err(internal)?)
+                let dir = path(&r.path);
+                let pulled = git::pull_base(&dir, &r.branch).await.map_err(internal)?;
+                // Every app on this host re-reads the branch: a pull another
+                // host asked for would otherwise leave this app's chip behind.
+                // Apps know the project by its top folder, however the
+                // request spelt it.
+                let top = git::toplevel(&dir).await.unwrap_or(dir);
+                self.terminals.emit(Message::event(
+                    m::EV_GIT_BASE_PULLED,
+                    moonlet_proto::types::BasePulled {
+                        path: top.to_string_lossy().into_owned(),
+                        branch: r.branch,
+                        pull: pulled.clone(),
+                    },
+                ));
+                ok(pulled)
             }
             m::GH_PR_CREATE => {
                 let r: m::PrCreate = params(p)?;
@@ -5788,6 +6572,29 @@ impl Daemon {
                 blocking(move || fs::write_inside(&r.root, &r.path, &r.content)).await?;
                 ok(true)
             }
+            m::FS_CREATE => {
+                let r: m::FsCreate = params(p)?;
+                blocking(move || file_actions::create(&r.root, &r.path, r.dir)).await?;
+                ok(true)
+            }
+            m::FS_RENAME => {
+                let r: m::FsRename = params(p)?;
+                blocking(move || file_actions::rename(&r.root, &r.from, &r.to)).await?;
+                ok(true)
+            }
+            m::FS_DUPLICATE => {
+                let r: m::FsEntry = params(p)?;
+                let path = blocking(move || file_actions::duplicate(&r.root, &r.path)).await?;
+                ok(m::FsDuplicated { path })
+            }
+            m::FS_DELETE => {
+                let r: m::FsEntry = params(p)?;
+                let trash = file_actions::Trash::here();
+                let trashed =
+                    blocking(move || file_actions::delete(&r.root, &r.path, &trash)).await?;
+                ok(m::FsDeleted { trashed })
+            }
+            m::FS_HAS_TRASH => ok(file_actions::Trash::here().keeps()),
             m::FS_WATCH => {
                 let r: m::FsPath = params(p)?;
                 self.watchers.watch(&r.path, conn.id).map_err(internal)?;

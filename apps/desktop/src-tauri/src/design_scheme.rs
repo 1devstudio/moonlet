@@ -179,19 +179,22 @@ pub fn bridging(url: &str) -> bool {
     asks(url, "moonlet-bridge")
 }
 
-/// The script served first in an HTML page asked for at `url` on `place`:
-/// the render page's measuring script, or the canvas's bridge; none for a
-/// project design, which is only ever shown, read only (X65).
-pub fn script_for(place: &Place, url: &str) -> Option<&'static str> {
-    if matches!(place, Place::Project(_)) {
-        None
-    } else if measuring(url) {
-        Some(MEASURE)
-    } else if bridging(url) {
-        Some(BRIDGE)
-    } else {
-        None
-    }
+/// The script that clears a page when the app lets its frame go (ADR
+/// 0013), served first in every page.
+const RELEASE: &str = include_str!("design_release.js");
+
+/// The scripts served first, in this order, in an HTML page asked for at
+/// `url` on `place`: the release script, then the render page's measuring
+/// script or the canvas's bridge; never the bridge for a project design,
+/// which is only ever shown, read only (X65).
+pub fn scripts_for(place: &Place, url: &str) -> Vec<&'static str> {
+    let other = match place {
+        Place::Project(_) => None,
+        _ if measuring(url) => Some(MEASURE),
+        _ if bridging(url) => Some(BRIDGE),
+        _ => None,
+    };
+    std::iter::once(RELEASE).chain(other).collect()
 }
 
 /// Whether `url`'s query has the parameter `name`.
@@ -264,7 +267,8 @@ pub fn refusal(url: &str, status: u16, why: &str) -> (u16, Vec<(&'static str, St
         ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string()),
         ("Cache-Control", "no-store".to_string()),
     ];
-    (status, headers, REFUSED.as_bytes().to_vec())
+    // It clears itself when let go, as every page does (ADR 0013).
+    (status, headers, with_script(REFUSED.as_bytes(), format!("<script>{RELEASE}</script>").as_bytes()))
 }
 
 /// Answers a request for `url`: the file this Mac's daemon resolves it to,
@@ -293,7 +297,7 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
     };
-    let script = script_for(&place, url);
+    let scripts = scripts_for(&place, url);
     let params = match &place {
         Place::Workspace(workspace) => serde_json::json!({ "workspace": workspace, "path": path }),
         Place::Session(session) => serde_json::json!({ "session": session, "path": path }),
@@ -318,7 +322,8 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
                 return reply(404, "no such design file");
             };
             let design = moonlet_core::paths::home().join("design");
-            match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await {
+            let rel = path.clone();
+            match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &rel, &real)).await {
                 Ok(Ok(body)) => body,
                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return reply(404, "the file is missing"),
                 _ => return reply(404, "the file cannot be read"),
@@ -333,11 +338,14 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             None => return reply(404, "no such design file"),
         },
     };
-    // The render page's card measures itself, and the canvas's page outlines
-    // and reports its elements (X65), each in its own sandboxed frame.
-    let body = match script {
-        Some(js) if content_type.starts_with("text/html") => with_script(&body, format!("<script>{js}</script>").as_bytes()),
-        _ => body,
+    // Every page clears itself before its frame is let go (ADR 0013); the
+    // render page's card measures itself, and the canvas's page outlines and
+    // reports its elements (X65), each in its own sandboxed frame.
+    let body = if content_type.starts_with("text/html") {
+        let tags: String = scripts.iter().map(|js| format!("<script>{js}</script>")).collect();
+        with_script(&body, tags.as_bytes())
+    } else {
+        body
     };
     let mut res = tauri::http::Response::builder().status(200);
     for (name, value) in headers(content_type, &host) {
@@ -349,13 +357,22 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
 /// The bytes of `path`, opened first and then checked: the file opened must
 /// be inside `workspace`'s folder of the design root `design`, measured from
 /// the design root's real path, so neither a link in the folder nor a
-/// workspace folder that is itself a link leads anywhere else.
+/// workspace folder that is itself a link leads anywhere else. A file asked
+/// as `systems/…` (`rel`, the path in the address) is the library's (X95),
+/// and must be inside the library's `systems/` instead.
 pub fn read_inside(
     design: &std::path::Path,
     workspace: &str,
+    rel: &str,
     path: &std::path::Path,
 ) -> std::io::Result<Vec<u8>> {
-    read_opened(&std::fs::canonicalize(design)?.join(workspace), path)
+    let root = std::fs::canonicalize(design)?;
+    let bound = if rel.starts_with("systems/") {
+        root.join(moonlet_core::design::library::LIBRARY).join("systems")
+    } else {
+        root.join(workspace)
+    };
+    read_opened(&bound, path)
 }
 
 /// The bytes `design.file` gives with a file, its `content` in base64 (a
@@ -458,6 +475,21 @@ mod tests {
         assert_eq!(
             target("moonlet-design://w1/systems/s/styles.css?v=2#top"),
             t("w1", "systems/s/styles.css")
+        );
+    }
+
+    // X95: a shared design's page is framed on the library's host, and asks
+    // the daemon for the library's files.
+    #[test]
+    fn a_shared_designs_page_is_on_the_librarys_host() {
+        assert_eq!(
+            target("moonlet-design://5a1c3e0f9b2d4c67.library/designs/pricing/pages/index.html"),
+            Some(Target {
+                host: "5a1c3e0f9b2d4c67.library".to_string(),
+                key: Some("5a1c3e0f9b2d4c67".to_string()),
+                place: Place::Workspace("library".to_string()),
+                path: "designs/pricing/pages/index.html".to_string(),
+            })
         );
     }
 
@@ -710,7 +742,7 @@ mod tests {
         // A key that names no folder serves nothing.
         assert!(!serves_at("19a1c555a197e847.p-p1a2b3c4d5e6", "settings-page/pages/index.html"));
         let url = "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1";
-        assert_eq!(script_for(&target(url).unwrap().place, url), None);
+        assert_eq!(scripts_for(&target(url).unwrap().place, url), vec![RELEASE]);
     }
 
     #[test]
@@ -765,13 +797,53 @@ mod tests {
         std::fs::create_dir(design.path().join("w3")).unwrap();
         std::fs::write(design.path().join("w3/card.html"), "<p>w3</p>").unwrap();
         assert_eq!(
-            read_inside(design.path(), "w1", &w1.join("card.html")).unwrap(),
+            read_inside(design.path(), "w1", "card.html", &w1.join("card.html")).unwrap(),
             b"<p>card</p>"
         );
-        assert!(read_inside(design.path(), "w1", &w1.join("link.html")).is_err());
-        assert!(read_inside(design.path(), "w1", &w1.join("dir/secret.txt")).is_err());
-        assert!(read_inside(design.path(), "w2", &design.path().join("w2/secret.txt")).is_err());
-        assert!(read_inside(design.path(), "w1", &design.path().join("w3/card.html")).is_err());
+        assert!(read_inside(design.path(), "w1", "link.html", &w1.join("link.html")).is_err());
+        assert!(read_inside(design.path(), "w1", "dir/secret.txt", &w1.join("dir/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w2", "secret.txt", &design.path().join("w2/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w1", "card.html", &design.path().join("w3/card.html")).is_err());
+    }
+
+    #[test]
+    fn a_workspaces_systems_file_is_read_from_the_librarys_systems_and_no_other_library_file() {
+        let design = tempfile::tempdir().unwrap();
+        let library = design.path().join("library");
+        std::fs::create_dir_all(library.join("systems/acme-web")).unwrap();
+        std::fs::create_dir_all(library.join("designs/pricing")).unwrap();
+        std::fs::write(library.join("systems/acme-web/styles.css"), "a{}").unwrap();
+        std::fs::write(library.join("designs/pricing/index.html"), "<p>shared</p>").unwrap();
+        std::fs::create_dir(design.path().join("w1")).unwrap();
+        // A design page of w1 links ../../../systems/acme-web/styles.css (X95).
+        assert_eq!(
+            read_inside(
+                design.path(),
+                "w1",
+                "systems/acme-web/styles.css",
+                &library.join("systems/acme-web/styles.css")
+            )
+            .unwrap(),
+            b"a{}"
+        );
+        assert!(
+            read_inside(
+                design.path(),
+                "w1",
+                "systems/../designs/pricing/index.html",
+                &library.join("designs/pricing/index.html")
+            )
+            .is_err()
+        );
+        assert!(
+            read_inside(
+                design.path(),
+                "w1",
+                "designs/pricing/index.html",
+                &library.join("designs/pricing/index.html")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -822,6 +894,36 @@ mod tests {
         ] {
             assert!(!bridging(plain), "{plain}");
         }
+    }
+
+    #[test]
+    fn every_page_a_frame_is_served_starts_with_the_release_script() {
+        let scripts = |url: &str| scripts_for(&target(url).unwrap().place, url);
+        // A card in the app's window, the render page's card, the canvas's
+        // page and a project design's page, which gets no bridge.
+        assert_eq!(
+            scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/systems/s/components/buttons/button/button.html?v=2"),
+            vec![RELEASE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://w1/systems/s/components/buttons/button/button.html?moonlet-render=3"),
+            vec![RELEASE, MEASURE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1"),
+            vec![RELEASE, BRIDGE]
+        );
+        assert_eq!(
+            scripts("moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1"),
+            vec![RELEASE]
+        );
+        // The page clears itself when its window asks, and says so.
+        assert!(RELEASE.contains("`moonlet:release`"));
+        assert!(RELEASE.contains("`moonlet:released`"));
+        // It has no quote at all, so a page whose attribute quote is never
+        // closed still swallows the scripts after it, as it would without it
+        // (X65 entry 13).
+        assert!(!RELEASE.contains(['"', '\'']));
     }
 
     #[test]
@@ -881,6 +983,8 @@ mod tests {
             ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string())
         );
         assert!(body.contains("bridge.failed"), "{body}");
+        // It clears itself when let go, as every page does (ADR 0013).
+        assert!(body.contains("`moonlet:released`"), "{body}");
         // Why stays out of the page: the app asks the daemon.
         assert!(!body.contains("no such design file"), "{body}");
         // Anything else, a file the page links or a card, is refused in plain text.

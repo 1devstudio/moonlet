@@ -74,13 +74,19 @@ export function WorkspaceSwitcher() {
 
   if (!cur) return null;
   return (
-    <div className="no-drag relative min-w-0">
+    // A flex row, so the button shrinks with a narrow sidebar and truncates
+    // the name instead of running under the mode switch; the title gives the
+    // full name. The sidebar's minimum leaves room for the square and chevron
+    // (clampSidebarWidth); where it doesn't, as at a large interface scale,
+    // the button clips them inside its own box.
+    <div className="no-drag relative flex min-w-0">
       <button
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Switch workspace, current: ${cur.ws.name}`}
+        title={cur.ws.name}
         onClick={() => setOpen(!open)}
-        className={cx("flex h-[30px] min-w-0 max-w-[180px] items-center gap-[7px] rounded-[7px] pl-[5px] pr-[7px] hover:bg-[#222]", open && "bg-[#222]")}
+        className={cx("flex h-[30px] min-w-0 max-w-[180px] overflow-hidden items-center gap-[7px] rounded-[7px] pl-[5px] pr-[7px] hover:bg-raised", open && "bg-raised")}
       >
         <WorkspaceMark name={cur.ws.name} color={cur.ws.color} size={18} />
         <span className="truncate ui-text-13 font-semibold text-fg">{cur.ws.name}</span>
@@ -90,7 +96,7 @@ export function WorkspaceSwitcher() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />
-          <div role="menu" aria-label="Workspaces" className="absolute left-0 top-[34px] z-50 flex w-64 flex-col gap-0.5 rounded-xl border border-border-strong bg-[#1a1a1a] p-1.5 shadow-2xl">
+          <div role="menu" aria-label="Workspaces" className="absolute left-0 top-[34px] z-50 flex w-64 flex-col gap-0.5 rounded-xl border border-border-strong bg-panel-2 p-1.5 shadow-2xl">
             <div className="px-2 pb-1 pt-1.5 ui-text-11.5 text-faint">Workspaces</div>
             {rows.map((r) => {
               const isCur = r === cur;
@@ -104,7 +110,7 @@ export function WorkspaceSwitcher() {
                       setOpen(false);
                       switchWorkspace({ host: r.host, id: r.ws.id, account: r.account });
                     }}
-                    className={cx("flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left hover:bg-[#222]", isCur && "bg-[#222]")}
+                    className={cx("flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left hover:bg-hover", isCur && "bg-[#222]")}
                   >
                     <WorkspaceMark name={r.ws.name} color={r.ws.color} size={26} />
                     <span className="flex min-w-0 flex-1 flex-col gap-px">
@@ -125,7 +131,7 @@ export function WorkspaceSwitcher() {
             <div className="mx-0.5 my-1 h-px bg-border" />
             <button
               role="menuitem"
-              className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-[#222]"
+              className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-hover"
               onClick={() => {
                 setOpen(false);
                 useStore.setState({ dialog: { kind: "new-workspace" } });
@@ -135,7 +141,7 @@ export function WorkspaceSwitcher() {
             </button>
             <button
               role="menuitem"
-              className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-[#222]"
+              className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-hover"
               onClick={() => {
                 setOpen(false);
                 void goSettings({ page: "workspace", host: cur.host, id: cur.ws.id });
@@ -144,13 +150,13 @@ export function WorkspaceSwitcher() {
               <Settings size={14} className="text-muted" /> Workspace settings…
             </button>
             {mergeTargets(rows, cur).length > 0 && (
-              <button role="menuitem" aria-expanded={merging} className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-[#222]" onClick={() => setMerging(!merging)}>
+              <button role="menuitem" aria-expanded={merging} className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-hover" onClick={() => setMerging(!merging)}>
                 <Merge size={14} className="text-muted" /> Merge with…
               </button>
             )}
             {merging &&
               mergeTargets(rows, cur).map((r) => (
-                <button key={wsKey(r.host, r.ws.id)} role="menuitem" className="flex items-center gap-2.5 rounded-lg py-[5px] pl-7 pr-2 text-left hover:bg-[#222]" onClick={() => void merge(cur, r)}>
+                <button key={wsKey(r.host, r.ws.id)} role="menuitem" className="flex items-center gap-2.5 rounded-lg py-[5px] pl-7 pr-2 text-left hover:bg-hover" onClick={() => void merge(cur, r)}>
                   <WorkspaceMark name={r.ws.name} color={r.ws.color} size={18} />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate ui-text-13 text-fg">{r.ws.name}</span>

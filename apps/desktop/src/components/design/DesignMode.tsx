@@ -2,23 +2,25 @@
 // (a design system's view or a design's screen), and the New design system
 // dialog (X64).
 
-import { Command, Lock, MessageSquare, Plus, SwatchBook } from "lucide-react";
+import { Command, Lock, MessageSquare, Plus, Share2, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { designHostOf, designMembersOf, errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { copyLabel, ownerWorking, sessionDesignsAcross } from "../../lib/designCopies";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
-import { workspaceProjects } from "../../lib/tasksStore";
+import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownDesignPlace, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { LIBRARY, sourcesByWorkspace } from "../../lib/designLibrary";
+import { projectsOfWorkspace } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, StateGlyph, inputCls } from "../ui";
+import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, Pane, StateGlyph, inputCls, TRAFFIC_LIGHTS } from "../ui";
 import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
 import { DesignsIndex } from "./DesignsIndex";
+import { ScrollArea } from "../ScrollArea";
 
 /** The shown workspace, its design systems and designs, and the ones shown;
  * `load` lists them when the workspace is shown (the sidebar does, so a
@@ -37,16 +39,22 @@ function useWorkspaceDesign(load = false) {
   const sessionLists = useDesign(useShallow((d) => (ws ? members.map((h) => sessionDesignsIn(d, h, ws.id)) : [])));
   const inSessions = useMemo(() => sessionDesignsAcross(members, (h) => sessionLists[members.indexOf(h)]), [members, sessionLists]);
   const design = useDesign((d) => (ws ? shownDesign(d, ws.host, ws.id) : null));
+  // Where the shown design is: the library for a shared one (X95).
+  const place = useDesign((d) => (ws ? shownDesignPlace(d, ws.host, ws.id) : null));
+  // The designs shared with every workspace, the library's (X95).
+  const shared = useDesign((d) => (ws ? designsOf(d, ws.host, LIBRARY) : undefined));
   const indexed = useDesign((d) => !!ws && indexShownIn(d, ws.host, ws.id));
   useEffect(() => {
     if (ws && load) {
       void loadSystems(ws.host, ws.id).catch(errorToast);
       void loadDesigns(ws.host, ws.id).catch(errorToast);
+      void loadSystems(ws.host, LIBRARY).catch(() => {});
+      void loadDesigns(ws.host, LIBRARY).catch(() => {});
       // Another member's own listing, for its sessions' designs.
       for (const m of members) if (m !== ws.host) void loadDesigns(m, ws.id).catch(() => {});
     }
   }, [ws, load, members]);
-  return { ws, systems, shown, designs, inSessions, design, indexed };
+  return { ws, systems, shown, designs, inSessions, design, place, shared, indexed };
 }
 
 /** Whether a sync agent's chat is at work now, so its system is syncing. */
@@ -79,7 +87,7 @@ function Heading({ label, add, open }: { label: string; add?: { title: string; r
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown, designs: own, inSessions, design, indexed } = useWorkspaceDesign(true);
+  const { ws, systems, shown, designs: own, inSessions, design, place, shared, indexed } = useWorkspaceDesign(true);
   // The workspace designs, then the session designs, which open in their
   // sessions on the host each runs on (X65, X71).
   const entries = useMemo(() => own && ws && [...own.map((d) => ({ host: ws.host, design: d })), ...(inSessions ?? [])], [own, inSessions, ws]);
@@ -87,6 +95,7 @@ export function DesignSidebar() {
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
   const states = useStore(useShallow((s) => (ws ? (entries ?? []).map(({ host, design: d }) => designAgentState(d, d.agent === null ? undefined : s.terminals[host]?.[d.agent]?.agent_state)) : [])));
+  const sharedStates = useStore(useShallow((s) => (ws ? (shared ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
   const now = useNow(true);
   const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
@@ -114,7 +123,7 @@ export function DesignSidebar() {
           <Kbd>⌘K</Kbd>
         </button>
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <ScrollArea tone="window" className="pb-3">
         <Heading label="Design systems" add={{ title: "New design system", run: () => openNewSystem(ws) }} />
         <nav aria-label="Design systems" className="px-2">
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
@@ -150,7 +159,7 @@ export function DesignSidebar() {
           {entries?.map(({ host: on, design: d }, i) => {
             const label = designRow(d, now, states[i] ?? null);
             const session = d.kind === "session" ? d.session : undefined;
-            const current = !session && d.slug === design?.slug;
+            const current = !session && place !== LIBRARY && d.slug === design?.slug;
             return (
               <button
                 key={`${on}/${session ?? ""}/${d.slug}`}
@@ -173,48 +182,75 @@ export function DesignSidebar() {
             );
           })}
         </nav>
-      </div>
+        {!!shared?.length && (
+          <>
+            <Heading label="Shared designs" />
+            <nav aria-label="Shared designs" className="px-2">
+              {shared.map((d, i) => {
+                const current = place === LIBRARY && d.slug === design?.slug;
+                const label = designRow(d, now, sharedStates[i] ?? null);
+                return (
+                  <button
+                    key={d.slug}
+                    aria-current={current ? "page" : undefined}
+                    title="Shared with every workspace"
+                    onClick={() => ws && showDesign(ws.host, ws.id, d.slug, true)}
+                    className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
+                  >
+                    {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
+                    <span className="flex w-[14px] shrink-0 justify-center">{label.state ? <StateGlyph state={label.state} size={14} /> : <Share2 size={12} className="text-muted" />}</span>
+                    <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                    <span title={d.error ?? d.needs_you?.text} className={cx("shrink-0 ui-text-11.5 tabular-nums", TONES[label.tone])}>
+                      {label.text}
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          </>
+        )}
+      </ScrollArea>
     </div>
   );
 }
 
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
-  const { ws, systems, shown, design, indexed, inSessions } = useWorkspaceDesign();
+  const { ws, systems, shown, design, place, shared, indexed, inSessions } = useWorkspaceDesign();
   const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const wsName = useStore((s) => (ws ? (s.workspaces[ws.host]?.find((w) => w.id === ws.id)?.name ?? "") : ""));
   const now = useNow(true);
   if (design && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
-        <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+      <div className="flex h-full flex-col">
+        <DesignScreen key={designCanvasKey(ws.host, place ?? ws.id, design.slug)} host={ws.host} workspace={place ?? ws.id} viewedIn={ws.id} design={design} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   if (indexed && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
-        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} inset={sidebarOpen ? 0 : 84} />
+      <div className="flex h-full flex-col">
+        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} shared={shared} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   if (shown && ws) {
     return (
-      <div className="flex h-full flex-col bg-bg">
-        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : 84} />
+      <div className="flex h-full flex-col">
+        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : TRAFFIC_LIGHTS} />
       </div>
     );
   }
   return (
-    <div className="flex h-full flex-col bg-bg">
-      <div data-tauri-drag-region className="drag h-[52px] shrink-0 border-b border-border bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
+    <div className="flex h-full flex-col">
+      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
       {systems?.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-[10px] bg-bg p-6 text-center">
           <SwatchBook size={18} className="text-muted" />
           <div className="ui-text-14 font-semibold text-fg">No design system yet</div>
           <p className="max-w-md ui-text-13 text-muted">
-            Build one from a project's code. An agent reads the project and writes its tokens, components and screens as plain HTML. Every design in this workspace can then use it.
+            Build one from a project's code. An agent reads the project and writes its tokens, components and screens as plain HTML. Every design in every workspace can then use it.
           </p>
           <Button variant="primary" onClick={() => openNewSystem(ws)}>
             <Plus size={14} /> New design system
@@ -229,7 +265,9 @@ export function DesignMain() {
             ))}
           </ol>
         </div>
-      ) : null}
+      ) : (
+        <Pane />
+      )}
     </div>
   );
 }
@@ -255,7 +293,16 @@ const STEPS = [
 
 /** New design system (X64 journey step 1): a name, the projects it is built from, and what to cover. */
 export function NewDesignSystemDialog({ host, workspace }: { host: string; workspace: string }) {
-  const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  // Every workspace's projects, the shown one's first: a design system is
+  // the library's, and every workspace sees it (X95).
+  const workspaces = useStore((s) => s.workspaces[host]);
+  const sections = useStore((s) => s.sections[host]);
+  const allProjects = useStore((s) => s.projects[host]);
+  const groups = useMemo(
+    () => sourcesByWorkspace(workspaces ?? [], workspace, (ws) => projectsOfWorkspace(workspaces ?? [], sections ?? [], allProjects ?? [], ws)),
+    [workspaces, sections, allProjects, workspace],
+  );
+  const projects = useMemo(() => groups.flatMap((g) => g.projects), [groups]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const taken = useDesign((d) => systemsOf(d, host, workspace))?.map((s) => s.slug);
   const [name, setName] = useState("");
@@ -274,7 +321,7 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
     };
   }, [host, workspace, paths]);
 
-  // A project moved out of the workspace while the dialog is open is dropped.
+  // A project gone from every workspace while the dialog is open is dropped.
   const picks = picksInWorkspace(picked, projects.map((p) => p.id));
   const ready = !!name.trim() && picks.length > 0 && !building;
   const build = async () => {
@@ -308,13 +355,17 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
         </>
       }
     >
-      <Field label="Name" hint={<span className="font-mono">{systemFolder(workspace, name, taken) ?? "\u00a0"}</span>}>
+      <Field label="Name" hint={<span className="font-mono">{systemFolder(name, taken) ?? "\u00a0"}</span>}>
         <input autoFocus className={inputCls} value={name} placeholder="moonlet desktop" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void build()} />
       </Field>
       <div className="mb-1 ui-text-11.5 font-medium text-muted">Built from the code of</div>
       <div role="group" aria-label="Built from the code of" className="overflow-hidden rounded-md border border-border">
-        {projects.length === 0 && <p className="px-3 py-2.5 ui-text-12.5 text-faint">This workspace has no projects yet.</p>}
-        {projects.map((p) => {
+        {projects.length === 0 && <p className="px-3 py-2.5 ui-text-12.5 text-faint">No workspace has projects yet.</p>}
+        {groups.map((g) => [
+          <div key={`ws-${g.workspace.id}`} className="border-b border-border bg-panel-2 px-3 py-1 ui-text-11.5 text-muted">
+            {g.workspace.name}
+          </div>,
+          ...g.projects.map((p) => {
           const on = picked.includes(p.id);
           return (
             <label key={p.id} className={cx("flex cursor-pointer items-center gap-2.5 border-b border-border px-3 py-2 last:border-b-0", on ? "bg-selected" : "hover:bg-panel-2")}>
@@ -329,7 +380,8 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
               <span className="shrink-0 ui-text-12 text-muted">{stacks[p.path] ?? ""}</span>
             </label>
           );
-        })}
+          }),
+        ])}
       </div>
       <p className="mt-1.5 flex items-center gap-1.5 ui-text-12 text-faint">
         <Lock size={11} /> Read only. The agent writes nothing in these projects.

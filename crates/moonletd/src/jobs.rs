@@ -2,7 +2,8 @@
 //! with its output, until the session is archived. A session's jobs live
 //! in `~/.moonlet/jobs/<session>/`: `jobs.json`, the last 50, and one
 //! `<job>.out` each, its output as `[u8 stream][u32 BE length][bytes]`
-//! records.
+//! records, and, once the job has ended, `<job>.log`: the same output as
+//! plain text, for the agent that ran it (X90).
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -142,6 +143,7 @@ impl Jobs {
         };
         for old in dropped {
             let _ = std::fs::remove_file(self.out_file(&session, &old));
+            let _ = std::fs::remove_file(self.log_file(&session, &old));
         }
         self.live.lock().unwrap().insert(
             id.clone(),
@@ -285,6 +287,9 @@ impl Jobs {
             for (stream, data) in &l.tail {
                 let _ = append(&file, *stream, data);
             }
+            if let Err(e) = write_log(&file, &self.log_file(&session, id)) {
+                tracing::warn!("cannot write job {id}'s log: {e}");
+            }
             summary = moonlet_core::job_summary::summarise(&l.last_run, root);
         }
         self.update(id, |j| {
@@ -339,6 +344,19 @@ impl Jobs {
         let _ = std::fs::remove_dir_all(self.dir.join(segment(session)));
     }
 
+    /// Job `id`'s output as plain text, once it has ended (X90).
+    pub fn log(&self, id: &str) -> Option<PathBuf> {
+        let job = self.get(id)?;
+        let file = self.log_file(&job.session, id);
+        file.exists().then_some(file)
+    }
+
+    fn log_file(&self, session: &str, job: &str) -> PathBuf {
+        self.dir
+            .join(segment(session))
+            .join(format!("{}.log", segment(job)))
+    }
+
     fn out_file(&self, session: &str, job: &str) -> PathBuf {
         self.dir
             .join(segment(session))
@@ -381,6 +399,45 @@ fn whole_chars(carry: &mut Vec<u8>, data: &[u8]) -> String {
     let text = String::from_utf8_lossy(carry).into_owned();
     *carry = rest;
     text
+}
+
+/// Writes the records of `out` to `log` as one plain text, in the order
+/// they came, readable by the user only.
+fn write_log(out: &Path, log: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let bytes = std::fs::read(out).or_else(|e| match e.kind() {
+        // A job that printed nothing.
+        std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        _ => Err(e),
+    })?;
+    let mut text = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at + 5 <= bytes.len() {
+        let len = u32::from_be_bytes([bytes[at + 1], bytes[at + 2], bytes[at + 3], bytes[at + 4]])
+            as usize;
+        let end = (at + 5 + len).min(bytes.len());
+        let data = &bytes[at + 5..end];
+        // moonlet's own lines, such as where output was dropped, start a
+        // line of their own, though the output before them was cut mid-line.
+        if bytes[at] == 2
+            && data.starts_with(b"moonlet: ")
+            && text.last().is_some_and(|b| *b != b'\n')
+        {
+            text.push(b'\n');
+        }
+        text.extend_from_slice(data);
+        at = end;
+    }
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(log)?;
+    f.write_all(&text)
 }
 
 /// Appends one output record to `file`.

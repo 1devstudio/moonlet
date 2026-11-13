@@ -1,0 +1,24 @@
+/* ToolGroup (components/AgentView.tsx): a run of tool calls folded into one row (X14).
+   Chevron, "N tool calls", the distinct tool icons, a status mark unless all are ok. */
+.tool-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-13);
+  cursor: pointer;
+}
+.tool-group__header:hover {
+  color: var(--color-fg);
+}
+.tool-group__icon {
+  color: var(--color-faint);
+}
+.tool-group__calls {
+  margin-left: var(--space-2);
+}

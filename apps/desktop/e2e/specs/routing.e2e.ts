@@ -40,7 +40,8 @@ describe("routed commands", () => {
     await expect($(sel.text("echo heavy is not approved yet"))).toBeDisplayed();
     await expect($(`${heavy}//*[normalize-space()="Not approved"]`)).toBeDisplayed();
     await $(sel.settingsButton("Approve")).click();
-    await expect($(sel.text(`Approved echo heavy for ${PROJECT} on this Mac`))).toBeDisplayed();
+    // Kept in the account, so it holds on every member (X89).
+    await expect($(sel.text(`Approved echo heavy for ${PROJECT} on every host of your account`))).toBeDisplayed();
     await expect($(`${heavy}//*[normalize-space()="Approved"]`)).toBeDisplayed();
     const info = rpc<{ approved: { commands: string[]; env: string[] } | null }>(w, "heavy.get", { project: projectId(w) });
     expect(info.approved).toEqual({ commands: ["echo heavy"], env: [] });
@@ -57,8 +58,23 @@ describe("routed commands", () => {
   it("the Workers page says when no other machine runs heavy commands", async () => {
     if (await $(sel.settings).isExisting()) await closeSettings();
     await openSettings("Workers");
-    await expect($(`//*[@data-setting="workers-empty"]//*[starts-with(normalize-space(), "Only ")][contains(normalize-space(), " runs heavy commands")]`)).toBeDisplayed();
-    await $(sel.settingsButton("Open Hosts")).click();
-    await expect($(sel.navEntry("Hosts", true))).toBeExisting();
+    // Since X89 the rows stay, each with its switch, under a hint.
+    await expect($(`//*[@data-setting="workers-hint"][normalize-space()="No host runs heavy commands for the others yet. Turn on Takes heavy commands from other hosts on a host below."]`)).toBeDisplayed();
+    await expect($('//*[starts-with(@data-setting, "worker-settings-")]//button[@role="switch"][@aria-checked="false"]')).toBeDisplayed();
+  });
+
+  it("a host's switch and slots on the Workers page are saved (X89)", async () => {
+    const own = () => rpc<{ worker: { enabled: boolean; slots: number } }>(w, "link.get", {}).worker;
+    const line = '//*[starts-with(@data-setting, "worker-settings-")]';
+    await $(`${line}//button[@role="switch"]`).click();
+    await browser.waitUntil(() => own().enabled, { timeoutMsg: "the switch never reached link.json" });
+    await expect($('//*[contains(normalize-space(), " takes heavy commands from your other hosts")]')).toBeDisplayed();
+    await $(`${line}//button[@title="One more"]`).click();
+    await browser.waitUntil(() => own().slots === 3, { timeoutMsg: `the slots never reached link.json: ${own().slots}` });
+    await expect($(`${line}//*[@aria-label="Commands at once"][normalize-space()="3"]`)).toBeDisplayed();
+    // As it was, for the specs after this one.
+    await $(`${line}//button[@title="One fewer"]`).click();
+    await $(`${line}//button[@role="switch"]`).click();
+    await browser.waitUntil(() => !own().enabled && own().slots === 2, { timeoutMsg: "the settings were not put back" });
   });
 });

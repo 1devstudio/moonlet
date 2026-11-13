@@ -1,0 +1,141 @@
+/* Session row (components/Sidebar.tsx RowView, SessionRow, BranchIcon,
+   TaskLineHeader; X48). One line: glyph, optional number cell, name, badge. */
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  height: var(--size-sidebar-card);
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  cursor: default;
+  text-align: left;
+  transition: background-color var(--duration-fast);
+}
+.session-row:hover {
+  background: var(--color-panel-2);
+}
+.session-row--selected,
+.session-row--selected:hover {
+  background: var(--color-selected);
+  box-shadow: var(--shadow-selected-bar);
+}
+/* Style B: indented 34px row under a task line. */
+.session-row--nested {
+  height: 34px;
+  padding-left: calc(var(--space-2) + 20px);
+}
+.session-row__glyph {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  width: 15px;
+}
+/* Style A: the task number column. */
+.session-row__cell {
+  flex-shrink: 0;
+  min-width: 3ch;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.session-row__cell--out-of-sync {
+  color: var(--color-accent-2);
+}
+.session-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-row-text);
+  font-size: var(--ui-text-14);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row--selected .session-row__name,
+.session-row__name--unread {
+  color: var(--color-fg);
+}
+.session-row__name--unread {
+  font-weight: var(--font-weight-semibold);
+}
+.session-row__mark {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+.session-row__badge {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  font-variant-numeric: tabular-nums;
+}
+.session-row__badge--blocked {
+  color: var(--color-blocked);
+}
+.session-row__badge--agents {
+  color: var(--color-faint);
+}
+.session-row__badge--merged {
+  color: var(--color-merged);
+}
+
+/* BranchIcon: tinted by the PR's state. */
+.branch-icon {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  color: var(--color-muted);
+}
+.branch-icon--open {
+  color: var(--color-done);
+}
+.branch-icon--merged {
+  color: var(--color-merged);
+}
+.branch-icon--closed {
+  color: var(--color-error);
+}
+
+/* Style B's task line above its sessions, with a guide line. */
+.session-task-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--size-control-sm);
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-2);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+}
+.session-task-line__key {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+}
+.session-task-line__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-task-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.session-task-group::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 10px;
+  left: calc(var(--space-4) + 7.5px);
+  width: 1px;
+  background: var(--color-border-strong);
+}

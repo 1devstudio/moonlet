@@ -1,0 +1,294 @@
+/* Changes list (components/ChangesPanel.tsx: SummaryLine, FileRow, StatusBox,
+   ChangeListView, ChangeTreeView, GroupedChanges, CommentBar; X28, D1).
+   The list and tree parts only, not the Monaco diff. Tree depth is the
+   `--depth` custom property on a row: 12px base padding, 18px per level. */
+.changes-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--ui-text-12);
+}
+.changes-toolbar__modes {
+  display: flex;
+  padding: var(--space-0-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+.changes-toolbar__mode {
+  padding: var(--space-0-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  cursor: default;
+}
+.changes-toolbar__mode--selected {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.changes-toolbar__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.changes-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: var(--ui-text-14);
+}
+.changes-summary__warn {
+  color: var(--color-blocked);
+  font-size: var(--ui-text-12);
+}
+.changes-summary__stat {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+  font-variant-numeric: tabular-nums;
+}
+.changes-summary__add,
+.change-row__count--add {
+  color: var(--color-add);
+}
+.changes-summary__del,
+.change-row__count--del {
+  color: var(--color-del);
+}
+
+.changes-list {
+  padding: var(--space-2) 0;
+}
+
+/* A changed file's row. */
+.change-row {
+  --depth: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 34px;
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-3) 0 calc(var(--space-3) + var(--depth) * 18px);
+  border-radius: var(--radius-md);
+  outline: none;
+  text-align: left;
+  cursor: default;
+}
+.change-row:hover,
+.change-row--hover {
+  background: var(--color-raised);
+}
+.change-row__name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ui-text-14);
+}
+.change-row__name--deleted {
+  text-decoration: line-through;
+}
+.change-row__dir {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.change-row__file {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.change-row__file--deleted {
+  color: var(--color-muted);
+}
+.change-row__staged {
+  flex-shrink: 0;
+  color: var(--color-done);
+}
+.change-row__meta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+.change-row__counts {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  font-variant-numeric: tabular-nums;
+}
+.change-row__count {
+  margin-left: var(--space-1-5);
+  color: var(--color-muted);
+}
+/* The stage, unstage and discard icon buttons that replace the counts on hover. */
+.change-row__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+/* StatusBox: a 14px square icon, stroke 1.5. */
+.status-box {
+  flex-shrink: 0;
+  stroke-width: 1.5;
+  color: var(--color-blocked);
+}
+.status-box--add {
+  color: var(--color-add);
+}
+.status-box--del {
+  color: var(--color-del);
+}
+
+/* Tree: folder rows, indent guides. */
+.change-tree {
+  padding: var(--space-2) 0;
+}
+.change-dir {
+  --depth: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: calc(100% - var(--space-4));
+  height: 34px;
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-3) 0 calc(var(--space-3) + var(--depth) * 18px);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-13);
+  text-align: left;
+  cursor: default;
+}
+.change-dir:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.change-dir__chevron {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  width: 14px;
+}
+.change-dir__folder {
+  flex-shrink: 0;
+  stroke-width: 1.5;
+}
+.change-dir__name {
+  margin-left: var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.change-tree__children {
+  --depth: 0;
+  position: relative;
+}
+.change-tree__children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-2) + var(--space-3) + var(--depth) * 18px + 7px);
+  width: 1px;
+  background: var(--color-border);
+}
+
+/* Design, Spec and Code groups (X65). */
+.change-groups {
+  padding: var(--space-1) 0;
+}
+.change-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: calc(100% - var(--space-4));
+  height: var(--size-row);
+  margin: var(--space-1) var(--space-2) 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-faint);
+  font-family: inherit;
+  font-size: var(--ui-text-11-5);
+  letter-spacing: var(--tracking-label);
+  text-align: left;
+  text-transform: uppercase;
+  cursor: default;
+}
+.change-group__head:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.change-group__name {
+  flex: 1;
+}
+.change-group__count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.change-groups__note {
+  margin: var(--space-1) var(--space-4) var(--space-2);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+}
+
+/* CommentBar: a line comment sent to the agent as a prompt. */
+.comment-bar {
+  padding: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+}
+.comment-bar__label {
+  margin-bottom: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--ui-text-11);
+}
+.comment-bar__label code {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+.comment-bar__input {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  outline: none;
+  resize: none;
+}
+.comment-bar__input::placeholder {
+  color: var(--color-faint);
+}
+.comment-bar__input--focus {
+  border-color: var(--color-accent);
+}
+.comment-bar__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1);
+}

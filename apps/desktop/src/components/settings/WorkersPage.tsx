@@ -2,21 +2,21 @@
 // host's heavy commands, their load and slots, what they run now, and why
 // one was skipped. Read from the central host, every two seconds while open.
 
-import { useEffect, useState } from "react";
-import { Check, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { Check, Cloud, Cpu, Laptop, LoaderCircle, Minus, Plus, RotateCw, Server } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { onDaemonEvent, rpc } from "../../lib/daemon";
 import { workerApproval } from "../../lib/heavyCommands";
-import { EV, M, type ExecStatus, type HeavyInfo, type LinkInfo, type Project, type WorkerInfo } from "../../lib/protocol";
+import { EV, M, type ExecStatus, type HeavyInfo, type LinkInfo, type Project, type WorkerInfo, type WorkerSettingsEntry } from "../../lib/protocol";
 import { goSettings } from "../../lib/settingsNavigation";
 import { errorToast, toast, useStore } from "../../lib/store";
-import { centralHostId } from "../../lib/workerLink";
-import { workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
+import { centralHostId, clampSlots } from "../../lib/workerLink";
+import { settingsToast, workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
 import { cloudSummary } from "../../lib/cloudMachines";
 import { retryRemoval, useCloud } from "../../lib/cloudStore";
-import { readLinks } from "../../lib/heavyApproval";
-import { Button, cx } from "../ui";
-import { Card, PageHeading, Section } from "./controls";
+import { readLinks, workerRowApproval } from "../../lib/heavyApproval";
+import { Button, IconButton, cx } from "../ui";
+import { Card, PageHeading, Section, Switch } from "./controls";
 
 const elapsed = (since: number, now: number) => {
   const s = Math.max(0, Math.round((now - since) / 1000));
@@ -39,7 +39,34 @@ function LoadBar({ load }: { load: WorkerRow["load"] }) {
   );
 }
 
-function WorkerLine({ row, now, onApprove }: { row: WorkerRow; now: number; onApprove: (project: string) => void }) {
+/** A member's switch and slots (X89), set from here for any member. */
+function WorkerSettingsLine({ row, onSet }: { row: WorkerRow; onSet: (change: { heavy?: boolean; slots?: number }) => void }) {
+  const id = useId();
+  const s = row.settings!;
+  return (
+    <div data-setting={`worker-settings-${row.id}`} className="ml-[46px] flex flex-wrap items-center gap-x-6 gap-y-2">
+      <label className="flex items-center gap-2.5 ui-text-12.5">
+        <Switch on={s.heavy} labelledBy={id} onChange={(on) => onSet({ heavy: on })} />
+        <span id={id}>Takes heavy commands from other hosts</span>
+      </label>
+      <div className="flex items-center gap-1.5 ui-text-12.5">
+        <span className="text-muted">Run at most</span>
+        <IconButton title="One fewer" disabled={s.slots <= 1} onClick={() => onSet({ slots: clampSlots(s.slots - 1) })}>
+          <Minus size={13} />
+        </IconButton>
+        <span aria-label="Commands at once" className="w-9 rounded-md border border-border-strong bg-panel py-1 text-center font-mono ui-text-12.5">
+          {s.slots}
+        </span>
+        <IconButton title="One more" disabled={s.slots >= 64} onClick={() => onSet({ slots: clampSlots(s.slots + 1) })}>
+          <Plus size={13} />
+        </IconButton>
+        <span className="text-muted">at once</span>
+      </div>
+    </div>
+  );
+}
+
+function WorkerLine({ row, now, onApprove, onSet }: { row: WorkerRow; now: number; onApprove: (project: string) => void; onSet: (change: { heavy?: boolean; slots?: number }) => void }) {
   const central = row.badges.includes("Central host");
   return (
     <div data-setting={`worker-${row.id}`} className="flex flex-col gap-2 px-4 py-3.5">
@@ -68,10 +95,11 @@ function WorkerLine({ row, now, onApprove }: { row: WorkerRow; now: number; onAp
         <span className="w-[64px] font-mono ui-text-12 text-muted">{row.slots}</span>
         <span className="w-[52px] text-right font-mono ui-text-12 text-muted">{row.rtt}</span>
       </div>
+      {row.settings && <WorkerSettingsLine row={row} onSet={onSet} />}
       {row.running.map((r, i) => (
         <div key={i} className="ml-[46px] flex items-center gap-2 rounded-md bg-panel-2 px-3 py-1.5 ui-text-12">
           <LoaderCircle size={12} className="animate-spin text-muted" />
-          <span className="text-muted">{r.session}</span>
+          <span className="text-muted">{r.host ? `${r.session} on ${r.host}` : r.session}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{r.command}</span>
           <span className="font-mono text-muted">{elapsed(r.since, now)}</span>
         </div>
@@ -136,13 +164,18 @@ export function WorkersPage() {
   const name = target === "local" ? (link?.worker.name ?? "this Mac") : (hosts[target]?.label ?? target);
   const sessions = useStore((s) => s.sessions[target]);
   const projects = useStore((s) => s.projects[target]);
-  const [data, setData] = useState<{ workers: WorkerInfo[]; status: ExecStatus } | null>(null);
+  const [data, setData] = useState<{ workers: WorkerInfo[]; status: ExecStatus; settings: WorkerSettingsEntry[] | null } | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     let live = true;
     const read = () =>
-      void Promise.all([rpc<WorkerInfo[]>(target, M.workerList), rpc<ExecStatus>(target, M.execStatus)]).then(
-        ([workers, status]) => live && setData({ workers, status }),
+      void Promise.all([
+        rpc<WorkerInfo[]>(target, M.workerList),
+        rpc<ExecStatus>(target, M.execStatus),
+        // A central host before X89 knows no worker settings.
+        rpc<WorkerSettingsEntry[]>(target, M.workerSettings).catch(() => null),
+      ]).then(
+        ([workers, status, settings]) => live && setData({ workers, status, settings }),
         () => live && setData(null),
       );
     read();
@@ -151,7 +184,7 @@ export function WorkersPage() {
       read();
     }, 2000);
     const off = onDaemonEvent((e) => {
-      if (e.host === target && (e.name === EV.workersChanged || e.name === EV.jobChanged)) read();
+      if (e.host === target && (e.name === EV.workersChanged || e.name === EV.jobChanged || e.name === EV.workerSettingsChanged)) read();
     });
     return () => {
       live = false;
@@ -173,18 +206,39 @@ export function WorkersPage() {
       removed: cloud?.removed ?? [],
       now,
       cloudSessions: Object.fromEntries((sessions ?? []).map((s) => [s.id, { name: s.name, cloud: s.cloud }])),
+      settings: data.settings,
     });
+  // Any member's switch and slots, set on the central host, which passes
+  // them on through the account (X89).
+  const setSettings = async (row: WorkerRow, change: { heavy?: boolean; slots?: number }) => {
+    try {
+      await rpc(target, M.workerSettingsSet, { worker: row.settings!.worker, ...change });
+      toast(settingsToast(row.name, change));
+      const settings = await rpc<WorkerSettingsEntry[]>(target, M.workerSettings);
+      setData((d) => d && { ...d, settings });
+    } catch (e) {
+      errorToast(e);
+    }
+  };
   const approve = async (projectName: string, row: WorkerRow) => {
     const project = (projects ?? []).find((p: Project) => p.name === projectName);
     if (!project) return void toast(`${projectName} is not a project of ${name}`, "error");
-    // The host whose own link is this worker, among those the app reaches.
-    const worker = workerHost(row.id, await readLinks(Object.values(hosts)));
-    if (!worker) return void toast(`Approve ${projectName}'s heavy commands from moonlet on ${row.name}.`, "error");
     try {
       const info = await rpc<HeavyInfo>(target, M.heavyGet, { project: project.id });
+      const lists = { commands: info.config.commands, env: info.config.env };
+      // The account's approval (X89): the project's, on the central host,
+      // with the lists checked against its config there.
+      if (workerRowApproval(info) === "project") {
+        if (!(await askConfirm(workerApproval(projectName, row.name, info)))) return;
+        await rpc(target, M.heavyApprove, { project: project.id, ...lists });
+        return void toast(`Approved ${projectName}'s heavy commands on every host of your account`);
+      }
+      // The host whose own link is this worker, among those the app reaches.
+      const worker = workerHost(row.id, await readLinks(Object.values(hosts)));
+      if (!worker) return void toast(`Approve ${projectName}'s heavy commands from moonlet on ${row.name}.`, "error");
       // The exact lists, seen before they are approved.
       if (!(await askConfirm(workerApproval(projectName, row.name, info)))) return;
-      await rpc(worker, M.heavyApprove, { identity: project.identity, commands: info.config.commands, env: info.config.env });
+      await rpc(worker, M.heavyApprove, { identity: project.identity, ...lists });
       toast(`Approved ${projectName}'s heavy commands on ${row.name}`);
     } catch (e) {
       errorToast(e);
@@ -199,7 +253,9 @@ export function WorkersPage() {
         </span>
       }
     >
-      Machines that run heavy commands for {name}'s sessions. A command goes to the free worker with the lowest load, and runs on {name} when none is free.
+      {data?.settings
+        ? "Your hosts run each other's heavy commands. A command goes to the free host with the lowest load, and runs where its session is when none is free."
+        : `Machines that run heavy commands for ${name}'s sessions. A command goes to the free worker with the lowest load, and runs on ${name} when none is free.`}
     </PageHeading>
   );
   // The central host's cloud machines (X63), and those removed in the last hour.
@@ -237,7 +293,7 @@ export function WorkersPage() {
             <Cpu size={20} />
           </span>
           <span className="ui-text-14 font-medium">Only {name} runs heavy commands</span>
-          <span className="max-w-[440px] ui-text-12.5 text-muted">No machine runs heavy commands for {name} yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host.</span>
+          <span className="max-w-[440px] ui-text-12.5 text-muted">No machine runs heavy commands for {name} yet. Turn on Takes heavy commands from other hosts, or Use for heavy commands on a remote host.</span>
           <Button variant="primary" onClick={() => void goSettings({ page: "hosts" })}>
             <Server size={13} /> Open Hosts
           </Button>
@@ -249,6 +305,16 @@ export function WorkersPage() {
     <>
       {heading}
       {page && <span className="-mt-4 ui-text-12.5 text-muted">{page.summary}</span>}
+      {page?.update && (
+        <span data-setting="workers-update" className="ui-text-12.5 text-blocked">
+          {page.update}
+        </span>
+      )}
+      {page?.hint && (
+        <span data-setting="workers-hint" className="ui-text-12.5 text-muted">
+          {page.hint}
+        </span>
+      )}
       <Section title="Macs and hosts">
         <Card>
           <div className="flex items-center gap-3.5 px-4 py-2 ui-text-11 uppercase tracking-[0.06em] text-faint">
@@ -258,7 +324,7 @@ export function WorkersPage() {
             <span className="w-[52px] text-right">Round trip</span>
           </div>
           {page?.rows.map((r) => (
-            <WorkerLine key={r.id} row={r} now={now} onApprove={(p) => void approve(p, r)} />
+            <WorkerLine key={r.id} row={r} now={now} onApprove={(p) => void approve(p, r)} onSet={(c) => void setSettings(r, c)} />
           ))}
           {!page && <div className="px-4 py-3.5 ui-text-12.5 text-muted">Could not reach {name}.</div>}
         </Card>

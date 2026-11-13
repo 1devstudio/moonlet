@@ -25,6 +25,7 @@ use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
 mod account;
+pub use account::WorkerSettings;
 
 const STATE_VERSION: u32 = 3;
 /// The workspace every install starts with, and that X5's workspaces are
@@ -349,6 +350,12 @@ pub struct SessionManager {
     /// The account state this member shares (X68), once the daemon has
     /// attached it; tests without it keep the state to themselves.
     account: Mutex<Option<account::Account>>,
+    /// The design store (X101), once the daemon has set it.
+    design: std::sync::OnceLock<crate::design::store::Store>,
+    /// Sessions this member runs whatever the account's record says (X73):
+    /// one taken over while the central host was offline, or brought here
+    /// while the news of it is on its way. Listed as its own all the same.
+    kept_listed: Mutex<std::collections::BTreeSet<String>>,
 }
 
 fn new_id() -> String {
@@ -473,10 +480,35 @@ impl SessionManager {
             chats: std::sync::OnceLock::new(),
             save_blocked,
             lifecycles: Mutex::new(HashMap::new()),
+            kept_listed: Mutex::new(std::collections::BTreeSet::new()),
             account: Mutex::new(None),
+            design: std::sync::OnceLock::new(),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
+    }
+
+    /// The design store (X101): a session's agent in a project keeping its
+    /// session designs in moonlet is given its own folder there.
+    pub fn set_design_store(&self, store: crate::design::store::Store) {
+        let _ = self.design.set(store);
+    }
+
+    /// The design folder a session's Claude may work in (X101): its own,
+    /// made for it, when its project keeps its session designs in moonlet;
+    /// none otherwise, or when it cannot be made (logged).
+    fn design_dir(&self, ws: &Session, repo: &Project) -> Option<String> {
+        let store = self.design.get()?;
+        if !crate::design::session::keeps_in_moonlet(&read_config(Path::new(&repo.path))) {
+            return None;
+        }
+        match store.make_session_dir(&ws.id, ws.workspace_id.as_deref().unwrap_or_default()) {
+            Ok(dir) => Some(dir.display().to_string()),
+            Err(e) => {
+                tracing::warn!("cannot make the design folder of session {}: {e:#}", ws.id);
+                None
+            }
+        }
     }
 
     pub fn set_chats(self: &Arc<Self>, chats: Arc<crate::chat::runtime::ChatManager>) {
@@ -547,7 +579,7 @@ impl SessionManager {
     fn emit_sessions(&self) {
         self.terminals.emit(Message::event(
             methods::EV_SESSIONS_CHANGED,
-            self.list_sessions(),
+            self.listed_sessions(),
         ));
     }
 
@@ -1245,55 +1277,19 @@ impl SessionManager {
 
     /// Lets go of session `id`, which the central host gave another member
     /// (X73): it leaves this member's state and its terminals end. Its
-    /// worktree is never deleted: it moves, whole, to `keep_at`, ignored
-    /// files and all, and git forgets it. On another volume than
-    /// `keep_at`, it moves beside itself instead, under `keep_at`'s name.
-    /// Its record is the new owner's, so it is not touched. Gives where the
-    /// worktree went, when it was there.
-    pub async fn let_go_session(&self, id: &str, keep_at: &Path) -> Result<Option<PathBuf>> {
+    /// worktree stays where it is, a git worktree still, and becomes this
+    /// member's live copy of the session (X60). Its record is the new
+    /// owner's, so it is not touched. Gives the session as it was here.
+    pub async fn let_go_session(&self, id: &str) -> Result<()> {
         // Never while it is archived, nor while its terminals start (X65):
         // an archive under way ends first, and then it is not let go of.
         let lifecycle = self.lifecycle(id);
         let _letting_go = lifecycle.lock().await;
-        let s = self.session(id)?;
-        if s.archived {
+        if self.session(id)?.archived {
             bail!("the session was archived meanwhile");
         }
-        let mut kept = None;
-        if Path::new(&s.path).exists() {
-            if let Some(parent) = keep_at.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let to = match std::fs::rename(&s.path, keep_at) {
-                Ok(()) => keep_at.to_path_buf(),
-                // Another volume: beside itself, where it can move.
-                Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-                    let beside = Path::new(&s.path).with_file_name(keep_at.file_name().unwrap_or_default());
-                    std::fs::rename(&s.path, &beside)
-                        .with_context(|| format!("cannot move {} to {}", s.path, beside.display()))?;
-                    beside
-                }
-                Err(e) => {
-                    return Err(e).with_context(|| format!("cannot move {} to {}", s.path, keep_at.display()));
-                }
-            };
-            kept = Some(to);
-        }
-        for t in &s.terminals {
-            let _ = self.terminals.kill(*t, true);
-            if let Some(chats) = self.chats.get() {
-                chats.stop(*t, true);
-            }
-        }
-        self.mutate(|st| {
-            st.sessions.retain(|o| o.id != id);
-            Ok(())
-        })?;
-        if let Ok(repo) = self.project(&s.project_id) {
-            let _ = git::git(Path::new(&repo.path), &["worktree", "prune"]).await;
-        }
-        self.emit_sessions();
-        Ok(kept)
+        self.give_up_session(id)?;
+        Ok(())
     }
 
     /// Gives session `id` up to another member that takes it (X73): it
@@ -1316,7 +1312,8 @@ impl SessionManager {
     }
 
     /// A chat in session `ws` that goes on from `history`, another member's
-    /// chat of it (X73), resuming the same conversation.
+    /// chat of it (X73), resuming the same conversation with its next
+    /// message: no agent runs until then.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
         // Another member's word: a conversation id that is not one starts
@@ -1354,6 +1351,8 @@ impl SessionManager {
                         let real = |p: &str| std::fs::canonicalize(p).ok();
                         Path::new(d).is_dir() && real(d).zip(real(&ws.path)).is_some_and(|(d, w)| d.starts_with(w))
                     })
+                    // Its own design folder here, as this host's word (X101).
+                    .chain(self.design_dir(ws, &repo))
                     .collect(),
                 settings: None,
                 workspace: None,
@@ -1397,6 +1396,14 @@ impl SessionManager {
             req.env.entry(k).or_insert(v);
         }
         let chats = if req.chat { self.chat_runtime(req.agent.as_deref()) } else { None };
+        // Its own design folder, when its project keeps them in moonlet (X101).
+        if chats.is_some()
+            && req.agent.as_deref() == Some("claude")
+            && let Some(dir) = self.design_dir(ws, &repo)
+            && !req.add_dirs.contains(&dir)
+        {
+            req.add_dirs.push(dir);
+        }
         let info = match chats {
             Some(chats) => chats.create(crate::chat::runtime::ChatCreate {
                 cwd: req.cwd.clone(),
@@ -3038,7 +3045,7 @@ mod tests {
     /// X73: another member's chat goes on here in the profile of this
     /// host's workspace, where its conversation was put: it is resumed.
     #[tokio::test]
-    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile() {
+    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message() {
         let (repo, home, mgr, chats) = structured().await;
         let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
         let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
@@ -3051,6 +3058,11 @@ mod tests {
         };
 
         let chat = mgr.continue_chat(&s, history).unwrap();
+        // Idle, it starts no agent until a message comes (X73): many
+        // sessions coming back at once start none.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(lines_of(&Path::new(&s.path).join("claude-args")).is_empty(), "an agent started with no message");
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(args.contains("--resume 0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d"), "{args}");
         assert_eq!(nth_line(&Path::new(&s.path).join("claude-env"), 1).await, folder(&home, "claude-work"));
@@ -3099,6 +3111,8 @@ mod tests {
 
         let chat = mgr.continue_chat(&s, history).unwrap();
         assert_eq!(chats.state(chat.id).unwrap().mode, None);
+        // Its agent starts with its next message.
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(!args.contains("--permission-mode"), "{args}");
     }
@@ -3124,6 +3138,8 @@ mod tests {
 
         let chat = mgr.continue_chat(&s, history).unwrap();
         assert_eq!(chats.state(chat.id).unwrap().add_dirs, vec![web.clone()]);
+        // Its agent starts with its next message.
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(args.contains(&format!("--add-dir {web}")), "{args}");
         assert!(!args.contains("shared-lib"), "{args}");
@@ -3461,6 +3477,48 @@ mod tests {
         }
         let started = std::fs::read_to_string(&args).unwrap();
         assert!(started.contains(&format!("--add-dir {}", extra.display())), "{started}");
+    }
+
+    /// X101: in a project that keeps its session designs in moonlet, a
+    /// session's agent starts with its own design folder under
+    /// `~/.moonlet/design/.sessions/`, made for it; in one that keeps them in
+    /// the project, with no such folder.
+    #[tokio::test]
+    async fn a_sessions_agent_gets_its_design_folder_when_its_project_keeps_designs_in_moonlet() {
+        let (repo, home, mgr, _chats) = structured().await;
+        mgr.set_design_store(crate::design::store::Store::new(home.path()));
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let started = |s: &Session| {
+            let args = std::path::Path::new(&s.path).join("claude-args");
+            async move {
+                for _ in 0..200 {
+                    if args.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                std::fs::read_to_string(&args).unwrap()
+            }
+        };
+        let mut req = spawn_req(&r.id, "In the project", None, None);
+        req.agent = Some("claude".into());
+        let plain = mgr.create_session(req).await.unwrap();
+        assert!(!started(&plain).await.contains("design/.sessions"));
+        assert!(!home.path().join("design/.sessions").exists());
+
+        std::fs::create_dir_all(repo.path().join(".moonlet")).unwrap();
+        std::fs::write(repo.path().join(".moonlet/config.toml"), "[design]\nstore = \"moonlet\"\n").unwrap();
+        let mut req = spawn_req(&r.id, "In moonlet", None, None);
+        req.agent = Some("claude".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let dir = home.path().join("design/.sessions").join(&s.id);
+        assert!(started(&s).await.contains(&format!("--add-dir {}", dir.display())));
+        assert!(dir.is_dir());
+        let workspace = s.workspace_id.clone().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(format!("design/.sessions/{}.toml", s.id))).unwrap(),
+            format!("workspace = \"{workspace}\"\n")
+        );
     }
 
     #[tokio::test]

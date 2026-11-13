@@ -189,7 +189,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
   - "fix-cart has diverged: 1 commit on this Mac, 2 on studio-mini. Files still sync."
   - "Paused: <reason>", with **Retry**
 - **Popover** (click the mark, or **Pick a version**): under the session's mark, or under the window's top bar when the session's row is not in the sidebar (its group folded, another workspace shown). The status line, without the path ("In sync"); the first-use note from Security considerations, until its × is clicked; the copy's path with **Reveal in Finder** and **Open in…**; the files that differ, each with **Keep studio-mini's**, **Keep this Mac's** and **Compare**; files too big to sync; **Use studio-mini's branch** when diverged; **Show output** and **Run setup again** (which asks first unless the command was approved); its **Open in…** menu; **Stop keeping in sync**.
-- **Open in VS Code / Cursor** (X25), hidden for tailnet hosts today (ADR 0011), is shown for a session kept in sync and opens the local copy at the same relative path.
+- **Open in VS Code / Cursor** (X25), hidden for tailnet hosts today (ADR 0011), is shown for a session kept in sync and opens the local copy at the same relative path. Zed opens the copy as its worktree, with the file in it, and a folder opens the copy itself (X25).
 
 ## Protocol and RPCs
 

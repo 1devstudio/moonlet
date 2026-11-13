@@ -27,6 +27,24 @@ export interface Form {
   agents: AgentRow[];
   /** Tracker projects, teams or lists it handles, `<connection>/<key>` (X44). */
   trackers: string[];
+  /** Where its sessions' designs are made, `[design] store` (X101). */
+  design_store: DesignStore;
+}
+
+/** In the project's worktrees, committed, or in ~/.moonlet/design (X101). */
+export type DesignStore = "project" | "moonlet";
+
+/** The choices of Session designs, in the select and in Settings search (X101). */
+export const DESIGN_STORES: { value: DesignStore; label: string }[] = [
+  { value: "project", label: "In the project" },
+  { value: "moonlet", label: "In ~/.moonlet/design" },
+];
+
+/** What a choice of Session designs does, under the select (X101). */
+export function designStoreHint(store: DesignStore, dir: string | null | undefined): string {
+  return store === "moonlet"
+    ? "Designs made in a session stay out of the repository, in ~/.moonlet/design. When the session is archived they become workspace designs."
+    : `Designs made in a session go to ${dir?.trim() || "docs/design"} and are committed with its branch.`;
 }
 
 export interface Errors {
@@ -77,6 +95,7 @@ export function toForm(c: ProjectConfig): Form {
     branch_prefix: c.branch_prefix ?? "",
     agents: Object.entries(c.agents ?? {}).map(([name, cmd]) => ({ id: newRowId(), name, cmd })),
     trackers: c.trackers ?? [],
+    design_store: c.design?.store === "moonlet" ? "moonlet" : "project",
   };
 }
 
@@ -92,6 +111,8 @@ export function fromForm(f: Form): ProjectConfig {
     branch_prefix: s(f.branch_prefix),
     agents: Object.fromEntries(f.agents.map((a) => [a.name.trim(), a.cmd.trim()])),
     trackers: f.trackers,
+    // Only `store`: the daemon leaves `[design] dir` as it is in the file.
+    design: { store: f.design_store },
   };
 }
 

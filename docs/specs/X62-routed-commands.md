@@ -5,6 +5,7 @@
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
 - **Depends on:** [X41](X41-worker-link-and-project-identity.md) (the worker link, `worker.list`, project identity), [X61](X61-remote-hosts-for-heavy-commands.md) (remote hosts as workers) and [X60](X60-keep-in-sync.md) (snapshots, packs, offer and update rounds, setup approval).
+- **Changed by:** [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
 
 ## Summary
 
@@ -62,7 +63,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `pnpm test # all` | no: a comment |
 
   A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
-- [x] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout` and `description` is not routed: `run_in_background`, or one that asks to leave Claude Code's sandbox, goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
+- [x] Only Bash calls of Claude Code agents in sessions on the central host are routed (since [X89](X89-every-host-runs-heavy-commands.md), in sessions on any member): calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout`, `description` and (since [X90](X90-heavy-commands-in-practice.md)) `run_in_background` is not routed: one that asks to leave Claude Code's sandbox goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
 - [x] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [x] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
 - [x] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
@@ -341,7 +342,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 ## Data and config
 
 - **`.moonlet/config.toml`:** a `[heavy]` table with `commands`, `os`, `env` and `outputs`. It is read by `ProjectConfig` and edited by X8's dialog.
-- **Central host, `$MOONLET_HOME/heavy.json`:** the approval per project identity: the exact commands and the exact `env` names, saved together. Example: `{"github.com/acme/shop 4171b03…": {"commands": ["pnpm build", "pnpm test"], "env": ["CI", "NPM_TOKEN"]}}`. A routed command needs both lists to match the config.
+- **Central host, `$MOONLET_HOME/heavy.json`:** the approval per project identity: the exact commands and the exact `env` names, saved together. Example: `{"github.com/acme/shop 4171b03…": {"commands": ["pnpm build", "pnpm test"], "env": ["CI", "NPM_TOKEN"]}}`. A routed command needs both lists to match the config. Since [X89](X89-every-host-runs-heavy-commands.md) the approval is the account state's (`heavy_approval`), once for every member; `heavy.json` only seeds it, and serves a host that shares no account.
 - **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy {commands, env}`, the lists approved for that worker, under X60's `<host> <origin> <root>` key.
 - **`link.json`:** `worker` gains `slots`, on every machine, the central host included.
 - **Routing copies:** `$MOONLET_HOME/runs/`, listed in `sync/copies.json` with `kind: "run"`.
@@ -380,7 +381,7 @@ Where the tests live:
 |---|---|
 | `[heavy]` keys | `heavy_table_reads_commands_os_env_and_outputs` |
 | Which commands are routed (worked examples) | `routes_exactly_the_worked_examples`, `shell_keywords_and_builtins_are_never_routed` |
-| Only Claude Code Bash calls in a session's worktree, not background | `a_background_bash_call_is_not_routed`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
+| Only Claude Code Bash calls in a session's worktree (background ones too since X90) | `a_background_bash_call_is_routed_and_stays_in_the_background`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
 | Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval`, `approving_records_the_commands_and_env_names_together`, `approving_a_list_that_changed_meanwhile_fails` |
 | Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |
 | Each linked worker's own approval | `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`; Vitest "the approval toast names every machine it covers", "a worker that was not reachable is named in the toast" |

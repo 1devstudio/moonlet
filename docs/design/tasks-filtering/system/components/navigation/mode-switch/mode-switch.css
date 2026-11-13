@@ -1,0 +1,75 @@
+/* Mode switch (ModeSwitch in components/tasks/TasksMode.tsx): Sessions | Tasks |
+   Design as three 26px icon buttons in a pill beside the workspace switcher.
+   Also the permission-mode chip of components/ModeMenu.tsx (.mode-switch__chip),
+   whose dropdown is the Menu component. */
+.mode-switch {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+}
+.mode-switch__item {
+  position: relative;
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: none;
+  color: var(--color-muted);
+}
+.mode-switch__item:hover {
+  color: var(--color-fg);
+}
+.mode-switch__item--on,
+.mode-switch__item--on:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.mode-switch__dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+.mode-switch__chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+/* The task glyph inside the Tasks button (TaskGlyph column in_progress). */
+.mode-switch__glyph {
+  flex-shrink: 0;
+  color: var(--color-fg);
+}
+
+/* ModeMenu's trigger: icon, label, chevron. `--bypass` is amber. */
+.mode-switch__chip {
+  display: flex;
+  height: var(--size-control-md);
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+}
+.mode-switch__chip:hover {
+  background: var(--color-hover);
+}
+.mode-switch__chip--bypass {
+  color: var(--color-blocked);
+}
+.mode-switch__chip--icon {
+  padding: 0 var(--space-1-5);
+}

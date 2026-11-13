@@ -16,6 +16,8 @@ async function openArchive() {
   await $('button[title="More"]').click();
   await $(sel.button("Archive session…")).click();
   await expect(modal()).toBeDisplayed();
+  // It opens at once and can be confirmed once the host was asked (X55).
+  await expect($(sel.confirmButton("Archive"))).toBeEnabled();
 }
 
 describe("confirm modal", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
+import { taskGroups } from "./sessionRows";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
 const s = (id: string, project: string, extra: Partial<Session> = {}): Session => ({
@@ -119,6 +120,28 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
     // Nor does a project no member has, which was not picked either.
     expect(g.map((x) => [x.label, x.sessions.map((e) => e.session.id)])).toEqual([["shop", ["s4", "s3", "s1"]]]);
   });
+
+  it("puts live agents first by recent activity, working or needing input, then the rest by their last output", () => {
+    const recent = { ...here, sec: { ...here.sec, view: { ...here.sec.view, sort_by: "recent" as const } }, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a"), s("s6", "a")] };
+    // s1 works and s5 needs input but printed long ago; s4 and s6 are at rest
+    // with fresher output.
+    const state = (_h: string, x: Session) => (x.id === "s1" ? "working" : x.id === "s5" ? "blocked" : x.id === "s4" ? "done" : null);
+    const at: Record<string, number> = { s1: 10, s4: 90, s5: 20, s6: 50 };
+    const g = arrangeShared("personal", [recent], { ...none, stateOf: state, activeAt: (_h, x) => at[x.id] });
+    expect(g[0].sessions.map((e) => e.session.id)).toEqual(["s5", "s1", "s4", "s6"]);
+  });
+
+  it("lists a task with a live agent first in the task sub-header layout, sessions without a task still last (X48)", () => {
+    const recent = { ...here, sec: { ...here.sec, view: { ...here.sec.view, sort_by: "recent" as const } }, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a")] };
+    const g = arrangeShared("personal", [recent], { ...none, stateOf: (_h, x) => (x.id === "s1" ? "working" : "idle"), activeAt: (_h, x) => ({ s1: 10, s4: 90, s5: 50 })[x.id]! });
+    const lines = { s1: { key: "MOON-144", title: "File tabs", column: "in_progress" as const, outOfSync: false }, s5: { key: "MOON-142", title: "Remote hosts", column: "todo" as const, outOfSync: false } };
+    const groups = taskGroups(g[0].sessions.map((e) => e.session.id), lines, { sources: true, groupedByTask: false });
+    expect(groups?.map((t) => [t.key, t.ids])).toEqual([
+      ["MOON-144", ["s1"]],
+      ["MOON-142", ["s5"]],
+      ["", ["s4"]],
+    ]);
+  });
 });
 
 describe("shownSections (X68)", () => {
@@ -174,6 +197,30 @@ describe("shownSections (X68)", () => {
     expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local#copy:s7 s7", "local s1"]]]);
   });
 
+  it("lists a session two members both list, as while it moves between them, once (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const parts = sectionParts(["local", "studio-mini"], { ...named("a", "1devstudio"), project_ids: ["a"] }, {
+      sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }], "studio-mini": [{ ...named("a", "1devstudio"), project_ids: ["x"] }] },
+      projects: { local: [shopA], "studio-mini": [shopX] },
+      // s9 moved to studio-mini; this Mac still lists it until it lets go.
+      sessions: { local: [s("s1", "a"), s("s9", "a")], "studio-mini": [s("s9", "x"), s("s2", "x")] },
+    });
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2", "local s1"]]]);
+  });
+
+  it("holds a session once in a group even when two parts bring it, so its row has one key (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const parts = [
+      { host: "local", sec: { ...named("a", "1devstudio"), project_ids: ["a"] }, projects: [shopA], sessions: [s("s9", "a")] },
+      { host: "studio-mini", sec: { ...named("a", "1devstudio"), project_ids: ["x"] }, projects: [shopX], sessions: [s("s9", "x"), s("s2", "x")] },
+    ];
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2"]]]);
+  });
+
   it("still lists a copy another host listed before it went away (X88)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: false };
     const of = {
@@ -210,6 +257,26 @@ describe("shownSections (X68)", () => {
     ]);
     expect(sharedSessionOrder({ ...base, collapsed: { "ws:local/a": true } })).toEqual([]);
     expect(sharedSessionOrder({ ...base, collapsed: { "local/a/proj:a": true } })).toEqual([]);
+  });
+
+  it("orders a session both members list, as while it moves between them, once for ⌘1–9 (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const order = sharedSessionOrder({
+      shown: { host: "local", id: "W", account: "acct" },
+      hosts: [
+        { host: "local", account: "acct", workspaces: [ws(["a"])], sections: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
+        { host: "studio-mini", account: "acct", workspaces: [ws(["a"])], sections: [{ ...named("a", "1devstudio"), project_ids: ["x"] }] },
+      ],
+      projects: { local: [shopA], "studio-mini": [shopX] },
+      sessions: { local: [s("s1", "a", { workspace_id: "W" })], "studio-mini": [s("s2", "x", { workspace_id: "W" }), s("s1", "x", { workspace_id: "W" })] },
+      activeAt: () => 0,
+      collapsed: {},
+    });
+    expect(order).toEqual([
+      { host: "studio-mini", id: "s2" },
+      { host: "local", id: "s1" },
+    ]);
   });
 });
 
@@ -307,5 +374,14 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
     expect(sessionMenu({ linked: false, sources: true, sync: true })).toEqual(["open", "link-task", "keep-sync", "archive"]);
     expect(sessionMenu({ linked: true, sources: false, sync: true })).toEqual(["open", "keep-sync", "archive"]);
     expect(sessionMenu({ linked: true, sources: false, sync: false })).toEqual(["open", "archive"]);
+  });
+});
+
+describe("clampSidebarWidth", () => {
+  it("keeps the sidebar wide enough for the workspace switcher beside the mode switch, and at most 420px", () => {
+    expect(clampSidebarWidth(200)).toBe(260);
+    expect(clampSidebarWidth(259)).toBe(260);
+    expect(clampSidebarWidth(300)).toBe(300);
+    expect(clampSidebarWidth(500)).toBe(420);
   });
 });

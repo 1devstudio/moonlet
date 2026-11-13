@@ -3,13 +3,14 @@
 
 import { create } from "zustand";
 import type { RowStyle } from "./sessionRows";
+import { clampSidebarWidth } from "./sidebar";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type CheckOutcome, type UpdateState } from "./updater";
 import { afterCloneDone, rememberCloneParent, runsAfterProgress, type CloneRuns } from "./addProject";
-import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
+import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, recheckClaudeOnReconnect, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -17,6 +18,7 @@ import {
   type AgentState,
   type Attention,
   type BasePull,
+  type BasePulled,
   type BaseStatus,
   EV,
   type FsChanged,
@@ -109,6 +111,8 @@ export interface Settings {
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
 export const termKey = (host: string, id: number) => `${host}:${id}`;
+import { hostPath } from "./hostPath";
+export { hostPath };
 export const projKey = (host: string, id: string) => `${host}/${id}`;
 
 /** A project's base branch against origin, for the sidebar's pull chip (X13). */
@@ -127,6 +131,8 @@ function loadJson<T>(key: string, fallback: T): T {
     // Defaults from older versions (wider review panel).
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
     if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
+    // A width saved before the sidebar's minimum went up (X32).
+    if (key === UI_KEY && typeof (v as { sidebarWidth?: unknown }).sidebarWidth === "number") (v as { sidebarWidth: number }).sidebarWidth = clampSidebarWidth((v as { sidebarWidth: number }).sidebarWidth);
     // Tasks mode from older versions, a flag per workspace (X45).
     if (v && typeof v === "object" && "tasksMode" in v) {
       const old = v as { tasksMode?: Record<string, boolean>; mode?: Record<string, string> };
@@ -269,6 +275,8 @@ interface State extends UiPersist {
     /** Add a board, or a board's settings when `board` is given (X50). */
     | { kind: "add-board"; host: string; workspace: string; board?: string; connection?: string; build?: "repo" }
     | { kind: "palette" }
+    /** Open file… (X96): a file of the session at `root`, by name. */
+    | { kind: "open-file"; host: string; session: string; root: string }
     | { kind: "commit" }
     /** A file that differs between the central host and this Mac, side by side (X60). */
     | { kind: "sync-compare"; host: string; session: string; path: string }
@@ -394,10 +402,13 @@ useStore.subscribe((s, prev) => {
 let toastId = 0;
 /** Shows a toast. It closes on its own after a few seconds, unless it is
  * `sticky`: then it stays until the user dismisses it or runs its action. */
-export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"], opts: { sticky?: boolean } = {}) {
+/** Shows a toast, gone after a few seconds unless `sticky`; gives its id,
+ * for `dismissToast`. */
+export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"], opts: { sticky?: boolean } = {}): number {
   const id = ++toastId;
   set((s) => ({ toasts: [...s.toasts, { id, kind, text, action }] }));
   if (!opts.sticky) setTimeout(() => dismissToast(id), action ? 10_000 : kind === "error" ? 7000 : 3500);
+  return id;
 }
 
 export function dismissToast(id: number) {
@@ -487,22 +498,34 @@ const claudeVersion = () => rpc<{ version: string | null; updating: boolean }>(L
 /** Counts updates started or finished, so a check that began before one
  *  does not put back the version from before it. */
 let claudeRuns = 0;
+/** Another check was asked for while one ran. */
+let claudeCheckAgain = false;
 
 /** Compares the installed Claude Code with npm's newest. A side that cannot
  *  be read is unknown, which shows no banner: being offline is not an error. */
-export async function checkClaudeVersion() {
-  if (get().claudeChecking) return;
+export async function checkClaudeVersion(): Promise<void> {
+  // A check asked for during another one (the daemon came back while npm
+  // answered) runs once that one is done, so its answer is the last word.
+  if (get().claudeChecking) {
+    claudeCheckAgain = true;
+    return;
+  }
   set({ claudeChecking: true });
+  claudeCheckAgain = false;
   const runs = claudeRuns;
   const unknown = (what: string) => (e: unknown) => {
     console.warn(`${what} failed`, e);
     return null;
   };
   const [local, latest] = await Promise.all([claudeVersion().catch(unknown("claude --version")), hostsApi.claudeLatest().catch(unknown("Claude Code release check"))]);
-  if (runs !== claudeRuns) return set({ claudeChecking: false });
-  const versions = { installed: local?.version ?? null, latest };
-  const check = { ...versions, updating: local?.updating ?? false };
-  set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
+  if (runs !== claudeRuns) {
+    set({ claudeChecking: false });
+  } else {
+    const versions = { installed: local?.version ?? null, latest, unasked: local === null };
+    const check = { ...versions, updating: local?.updating ?? false };
+    set((s) => ({ claudeChecking: false, claudeVersions: versions, claudeUpdate: afterClaudeCheck(s.claudeUpdate, check, s.settings.claudeUpdateDismissed ?? null) }));
+  }
+  if (claudeCheckAgain) return checkClaudeVersion();
 }
 
 /** Runs `claude update`; its lines move the banner's steps as they come. */
@@ -531,7 +554,7 @@ async function finishClaudeUpdate(run: ClaudeUpdateRun) {
   set({ claudeUpdate: state });
   if (dismiss) updateSettings({ claudeUpdateDismissed: dismiss });
   const now = await claudeVersion().catch(() => null);
-  if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version } }));
+  if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version, unasked: false } }));
 }
 
 /** Later hides the announced release until a newer one is out; the close
@@ -1061,6 +1084,14 @@ export async function pullBaseEverywhere(host: string, projectId: string) {
   if (text) toast(text);
 }
 
+/** A host's daemon pulled a project's base branch, maybe for another
+ *  host's app (X13): read the branch again, without fetching, so the chip
+ *  does not keep the old count until the next fetch. */
+function basePulled(host: string, e: BasePulled) {
+  const p = get().projects[host]?.find((x) => x.path === e.path && x.base_branch === e.branch);
+  if (p) void refreshBase(host, p.id);
+}
+
 /** Fetches another host's copy of the project, as its last fetch may be
  *  old, then fast-forwards it when it is only behind. */
 async function fetchAndPull(host: string, p: Project, folder: string | null): Promise<ElsewherePull> {
@@ -1302,6 +1333,9 @@ function handleEvent(e: DaemonEvent) {
     case EV.gitSettingsChanged:
       set((s) => ({ gitSettings: { ...s.gitSettings, [host]: data as GitSettings } }));
       break;
+    case EV.gitBasePulled:
+      basePulled(host, data as BasePulled);
+      break;
     case EV.sectionsChanged:
       set((s) => ({ sections: { ...s.sections, [host]: data as Section[] } }));
       break;
@@ -1363,7 +1397,7 @@ function handleEvent(e: DaemonEvent) {
     }
     case EV.fsChanged: {
       const ch = data as FsChanged;
-      set((s) => ({ fsVersion: { ...s.fsVersion, [`${host}|${ch.root}`]: (s.fsVersion[`${host}|${ch.root}`] ?? 0) + 1 } }));
+      set((s) => ({ fsVersion: { ...s.fsVersion, [hostPath(host, ch.root)]: (s.fsVersion[hostPath(host, ch.root)] ?? 0) + 1 } }));
       for (const w of get().sessions[host] ?? []) {
         if (ch.root === w.path || ch.root.startsWith(w.path + "/") || w.path.startsWith(ch.root.replace(/\/$/, "") + "/")) scheduleGit(host, w.id);
       }
@@ -1392,6 +1426,7 @@ export async function startStore() {
     const prev = get().hosts[h.id];
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));
     if (h.status === "connected" && prev?.status !== "connected") void loadHost(h.id);
+    if (recheckClaudeOnReconnect(h.id, prev?.status, h.status)) void checkClaudeVersion();
   });
   const hosts = await hostsApi.list();
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });

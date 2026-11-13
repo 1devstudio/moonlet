@@ -1,0 +1,555 @@
+/* Composer (components/Composer.tsx, X5, X54): "What do you want to work on?",
+   the new-session modal. A bar with the project, an optional task slot and the
+   branch / pull request picker; the branch row; the attachments and the prompt;
+   a footer with the model picker, the mode, + and Create. Also SourcePicker,
+   AttachmentRow and the open ModelPicker (Column, Opt). The app centres the
+   panel on a dimmed backdrop; the card renders the panel in place. */
+.composer {
+  width: min(720px, 100%);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-2xl);
+  background: var(--color-modal-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.composer__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+}
+.composer__project {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: calc(var(--space-1) * -1);
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-14);
+  font-weight: var(--font-weight-medium);
+}
+.composer__project:hover {
+  background: var(--color-hover);
+}
+.composer__project .icon {
+  color: var(--color-muted);
+}
+.composer__host {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  font-weight: var(--font-weight-normal);
+}
+.composer__divider {
+  color: var(--color-border-strong);
+}
+.composer__spacer {
+  flex: 1;
+}
+/* The task chip, or the slot that links one (X54). */
+.composer__chip,
+.composer__slot {
+  display: flex;
+  height: 30px;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--ui-text-13);
+}
+.composer__chip {
+  padding: 0 var(--space-1-5) 0 var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-hover);
+}
+.composer__chip-key {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.composer__chip-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-tile-linear);
+  color: var(--color-linear);
+}
+.composer__slot {
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--color-muted);
+}
+.composer__slot-link {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+.composer__slot-link:hover {
+  color: var(--color-fg);
+}
+.composer__slot-dot {
+  color: var(--color-border-strong);
+}
+.composer__slot-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--color-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__slot-key {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.composer__slot-action {
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent-2);
+  font: inherit;
+  font-size: var(--ui-text-12);
+}
+
+/* The git row: branch and base, or the picked pull request (X54). */
+.composer__branch {
+  display: flex;
+  height: var(--size-sidebar-card);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) 0 var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+}
+.composer__branch--pr {
+  background: color-mix(in srgb, var(--color-done) 5%, transparent);
+}
+.composer__branch-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__branch-plain {
+  flex-shrink: 0;
+  color: var(--color-fg);
+}
+.composer__branch-detail {
+  flex-shrink: 0;
+  color: var(--color-faint);
+}
+.composer__branch-pr {
+  flex-shrink: 0;
+  color: var(--color-done);
+}
+.composer__branch .icon--done {
+  color: var(--color-done);
+}
+.composer__branch-undo {
+  display: flex;
+  height: var(--size-control-sm);
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-12);
+}
+.composer__branch-undo:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+
+/* The attachments above the prompt; the prompt fills what is left. */
+.composer__body {
+  display: flex;
+  min-height: 168px;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6) var(--space-2);
+}
+.composer__textarea {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-chat);
+  outline: none;
+  resize: none;
+}
+.composer__textarea::placeholder {
+  color: var(--color-faint);
+}
+.composer__body--attached .composer__textarea {
+  padding-top: var(--space-1);
+}
+.composer__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-5) var(--space-4);
+}
+.composer__mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-14);
+}
+.composer__mode:hover {
+  background: var(--color-hover);
+}
+.composer__create {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-fg);
+  color: var(--color-bg);
+  font: inherit;
+  font-size: var(--ui-text-14);
+  font-weight: var(--font-weight-medium);
+}
+.composer__create:hover {
+  background: var(--color-white);
+}
+.composer__create:disabled {
+  opacity: 0.5;
+}
+
+/* SourcePicker: the branch / pull request trigger and its panel. */
+.source-picker {
+  position: relative;
+}
+.source-picker__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: calc(var(--space-1) * -1) 0;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--color-fg);
+}
+.source-picker__trigger:hover,
+.source-picker__trigger--open {
+  background: var(--color-hover);
+}
+.source-picker__trigger > .icon {
+  color: var(--color-muted);
+}
+.source-picker__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-control-md);
+  height: var(--size-control-md);
+  border-radius: var(--radius-full);
+  background: var(--color-white);
+  color: var(--color-black);
+}
+.source-picker__panel {
+  width: 420px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.source-picker__tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+.source-picker__tab {
+  padding: var(--space-1) var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-13);
+}
+.source-picker__tab--selected {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.source-picker__search {
+  width: 160px;
+  margin-left: auto;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  outline: none;
+}
+.source-picker__search::placeholder {
+  color: var(--color-faint);
+}
+.source-picker__list {
+  max-height: 320px;
+  padding: var(--space-1);
+  overflow-y: auto;
+}
+.source-picker__row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  text-align: left;
+}
+.source-picker__row:hover {
+  background: var(--color-option-hover);
+}
+.source-picker__row > .icon {
+  margin-top: 3px;
+  color: var(--color-muted);
+}
+.source-picker__number {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+}
+.source-picker__text {
+  min-width: 0;
+  flex: 1;
+}
+.source-picker__title {
+  display: block;
+  overflow: hidden;
+  font-size: var(--ui-text-13-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-picker__title--mono {
+  font-family: var(--font-mono);
+}
+.source-picker__head-branch {
+  display: block;
+  overflow: hidden;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-picker__hint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 9px var(--space-3);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  line-height: 1.45;
+}
+.source-picker__hint .icon {
+  margin-top: var(--space-0-5);
+}
+
+/* AttachmentRow: a folded attachment, › to unfold its text, × to remove it. */
+.attachment-row {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-panel-2);
+}
+.attachment-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px var(--space-3);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+}
+.attachment-row__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.attachment-row__line {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-row__file {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+.attachment-row__summary {
+  margin-left: var(--space-2);
+}
+.attachment-row__summary--strong {
+  margin-left: 0;
+  color: var(--color-fg);
+}
+.attachment-row__chevron {
+  transition: transform var(--duration-fast);
+}
+.attachment-row__chevron--open {
+  transform: rotate(90deg);
+}
+.attachment-row__body {
+  max-height: 220px;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+}
+
+/* ModelPicker: agent, model and effort in one panel above the footer. Column and Opt are its parts. */
+.model-picker {
+  position: relative;
+}
+.model-picker__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--ui-text-14);
+}
+.model-picker__trigger:hover {
+  background: var(--color-hover);
+}
+.model-picker__name {
+  color: var(--color-fg);
+}
+.model-picker__effort {
+  color: var(--color-muted);
+}
+.model-picker__trigger > .icon {
+  color: var(--color-muted);
+}
+.model-picker__panel {
+  display: flex;
+  width: max-content;
+  margin-bottom: var(--space-2);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.model-picker__column {
+  min-width: 150px;
+  padding: var(--space-1);
+}
+.model-picker__column-title {
+  padding: var(--space-1-5) var(--space-2-5) var(--space-1);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.model-picker__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-14);
+  text-align: left;
+}
+.model-picker__option:hover {
+  background: var(--color-hover);
+}
+.model-picker__option--checked {
+  background: var(--color-option-checked);
+}
+.model-picker__option-label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* AgentIcon, the marks beside the agents: Claude's in accent, Codex's in the text colour. */
+.model-picker__agent--claude {
+  color: var(--color-accent);
+}
+.model-picker__agent--codex {
+  color: var(--color-fg);
+}
+.model-picker__agent--none {
+  color: var(--color-muted);
+}

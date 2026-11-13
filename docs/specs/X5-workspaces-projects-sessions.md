@@ -20,7 +20,7 @@ The sidebar shows one or more **workspaces**, each a collapsible block holding *
 - The workspace `⋯` menu:
   - **Group by:** Project (default), Status, or None.
   - **Filter by project:** a checklist of the workspace's projects.
-  - **Sort by:** Recent activity (default), Created, or Name.
+  - **Sort by:** Recent activity (default), Created, or Name. Recent activity puts sessions whose agent is working or needs input first, then the rest by their latest output. A structured agent's output is what its chat shows (not a new model, effort or mode). Clients hear of a terminal's output time about every 10 seconds while it prints, and its last output before a quiet spell reaches them too.
   - **New section…:** a named group; rows get "Move to section".
   - **Add project…:** a folder picker or an existing project.
   - Rename and Delete workspace (deleting only removes the grouping; projects and sessions remain).
@@ -37,7 +37,7 @@ The composer's layout and source picks are now X54's: a header with the project,
   - **Footer:** the agent/model picker on the left (`Sonnet 5.5 High ⌄`: agent, model alias, effort), and on the right `+` (attach files: adds paths to the prompt) and **Create ↵** (⌘↵, or ↵ in a single-line prompt).
 - **On Create:**
   - The session name is the prompt's first line, trimmed to 48 characters, or "Untitled".
-  - The branch is `moonlet/<slug>`, made unique.
+  - Unless a branch is given, the branch is `<prefix><slug>`, made unique: the project's `branch_prefix`, else the host's (X55).
   - The worktree is created and the setup script runs.
   - The agent starts with the chosen model and effort: Claude `--model <alias> --effort <level> -n <name>`; Codex `-m <model> -c model_reasoning_effort=<level>`, checked against the Codex source (`utils/cli` shared options and config overrides).
   - The prompt becomes the agent's first message.
@@ -66,6 +66,7 @@ The composer's layout and source picks are now X54's: a header with the project,
 - [x] A new project added to a workspace appears only in that workspace. Test: `new_project_added_to_a_workspace_lands_only_there`.
 - [x] A project can be removed from a workspace from its header's context menu. A shared project is only detached; a project in its last workspace is removed from moonlet after a confirm, and stays while it has unarchived sessions. Tests: `removing_a_shared_project_detaches_it_from_one_workspace`, `removing_a_project_from_its_last_workspace_drops_it`, `a_project_with_live_sessions_stays_in_its_last_workspace`, `a_project_can_be_removed_from_a_workspace_over_rpc`, `projectRemoval` in `sidebar.test.ts`, and `workspace-projects.e2e.ts`.
 - [x] Group, sort and filter work and are persisted in the workspace `view`. Tests: `sidebar.test.ts`.
+- [x] Recent activity lists live agents first, then by latest output, in every row style. Tests: "puts live agents first by recent activity, working or needing input, then the rest by their last output" and "lists a task with a live agent first in the task sub-header layout, sessions without a task still last (X48)" in `sidebar.test.ts`, `output_tells_clients_the_terminals_activity_time`, `the_last_output_before_a_quiet_spell_reaches_clients`, `a_turn_moves_the_agents_activity_time`, `changing_a_chats_settings_leaves_its_activity_time`.
 - [x] Sections: create one, move a session into it (context menu or drag), see it under that section in every group-by mode. Deleting a section returns its sessions to their project. Drag verified in the app with synthesized mouse events, both into a section and back out.
 - [x] The composer creates a session from a prompt: name and branch derived, agent started with the selected model and effort (`names_and_agent_flags`), the prompt delivered. Verified in the app with "Terminal only".
 - [x] Starting from a GitHub issue adds it as an attachment sent with the first message (X54). Starting from a PR fetches `pull/N/head` into its branch and uses it. These need `gh`; not exercised against a live repo here.

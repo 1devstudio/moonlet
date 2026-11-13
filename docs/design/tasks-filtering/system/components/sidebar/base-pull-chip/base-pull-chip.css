@@ -1,0 +1,138 @@
+/* Base pull chip (components/Sidebar.tsx BasePullChip, X13): "main is behind
+   origin" beside a project name, and its details popover. */
+.base-pull-chip {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  height: 22px;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  cursor: default;
+}
+.base-pull-chip:hover {
+  background: var(--color-hover);
+}
+.base-pull-chip--behind {
+  color: var(--color-accent);
+}
+.base-pull-chip--pulling {
+  color: var(--color-muted);
+}
+.base-pull-chip--diverged {
+  color: var(--color-error);
+}
+
+/* The popover: shown on hover for "behind" and "diverged". */
+.base-pull-popover {
+  display: flex;
+  flex-direction: column;
+  width: 276px;
+  padding: var(--space-1);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.base-pull-popover__head {
+  flex-shrink: 0;
+  padding: var(--space-2-5) var(--space-3) var(--space-1-5);
+}
+.base-pull-popover--diverged .base-pull-popover__head {
+  padding-bottom: var(--space-2);
+}
+.base-pull-popover__title {
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+}
+.base-pull-popover__text {
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+  text-wrap: pretty;
+}
+.base-pull-popover__text code,
+.base-pull-popover__note code {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+.base-pull-popover__command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+}
+.base-pull-popover__command-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.base-pull-popover__note {
+  margin-top: var(--space-2);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+}
+.base-pull-popover__commits {
+  display: flex;
+  flex-direction: column;
+  max-height: 190px;
+  min-height: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+}
+.base-pull-popover__commit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+}
+.base-pull-popover__sha {
+  flex-shrink: 0;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.base-pull-popover__subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-row-text);
+  font-size: var(--ui-text-12-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.base-pull-popover__more {
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+}
+.base-pull-popover__foot {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1-5);
+  border-top: 1px solid var(--color-border);
+}
+.base-pull-popover__fetched {
+  overflow: hidden;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

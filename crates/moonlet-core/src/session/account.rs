@@ -39,6 +39,22 @@ const SESSION: RecordKind = RecordKind::Session;
 const PROJECT_FILES: RecordKind = RecordKind::ProjectFiles;
 /// A sign-in of Settings › Machines › Sign-ins (X75).
 const SIGN_IN: RecordKind = RecordKind::SignIn;
+/// A member's worker settings, by worker id (X89).
+const WORKER: RecordKind = RecordKind::Worker;
+
+/// A project's approved heavy commands, by project identity (X89).
+const HEAVY_APPROVAL: RecordKind = RecordKind::HeavyApproval;
+/// The one field of an approval: `{commands, env}`, so the two lists of
+/// one approval always go together.
+const APPROVED: &str = "approved";
+
+/// A member's worker settings as the account holds them (X89): each `None`
+/// until set, which reads as off and 2 slots.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkerSettings {
+    pub heavy: Option<bool>,
+    pub slots: Option<u32>,
+}
 
 /// The sign-ins in `log` (X75), in their order: the records, and each
 /// default that was never edited nor removed.
@@ -425,6 +441,130 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Every member's worker settings (X89), by worker id.
+    pub fn worker_settings(&self) -> Map<String, WorkerSettings> {
+        self.with_log(|log| {
+            log.records(WORKER)
+                .into_iter()
+                .map(|(id, r)| {
+                    let settings = WorkerSettings {
+                        heavy: r.get("heavy").and_then(Value::as_bool),
+                        slots: r.get("slots").and_then(Value::as_u64).map(|n| n as u32),
+                    };
+                    (id, settings)
+                })
+                .collect()
+        })
+    }
+
+    /// Sets member `worker`'s settings as this member's change (X89), and
+    /// sends it on. A field given as `None` stays as it is.
+    pub fn set_worker_settings(&self, worker: &str, set: WorkerSettings) -> Result<()> {
+        self.change_worker_settings(worker, set, false)
+    }
+
+    /// Writes `worker`'s settings, as it kept them before X89, with the
+    /// oldest stamp: only the fields the account has no value for, and
+    /// giving way to any change another member made (X89).
+    pub fn seed_worker_settings(&self, worker: &str, set: WorkerSettings) -> Result<()> {
+        self.change_worker_settings(worker, set, true)
+    }
+
+    fn change_worker_settings(&self, worker: &str, set: WorkerSettings, oldest: bool) -> Result<()> {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("worker settings are kept in the account: pair a Mac first")?;
+            let now = a.log.records(WORKER).remove(worker).unwrap_or_default();
+            let mut log = a.log.clone();
+            let fields = [("heavy", set.heavy.map(|h| json!(h))), ("slots", set.slots.map(|n| json!(n)))];
+            let changes: Vec<Change> = fields
+                .into_iter()
+                .filter_map(|(field, value)| Some((field, value?)))
+                .filter(|(field, value)| {
+                    if oldest {
+                        !now.contains_key(*field)
+                    } else {
+                        now.get(*field) != Some(value)
+                    }
+                })
+                .map(|(field, value)| {
+                    if oldest {
+                        log.set_oldest(WORKER, worker, field, value)
+                    } else {
+                        log.set(now_ms(), WORKER, worker, field, value)
+                    }
+                })
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
+    /// Project `identity`'s approved heavy commands and `env` names (X89),
+    /// approved once for every member; none until approved.
+    pub fn heavy_approval(&self, identity: &ProjectIdentity) -> Option<(Vec<String>, Vec<String>)> {
+        let key = identity_key(identity)?;
+        let r = self.with_log(|log| log.records(HEAVY_APPROVAL).remove(&key))?;
+        let lists = r.get(APPROVED)?;
+        let list = |f: &str| serde_json::from_value::<Vec<String>>(lists.get(f)?.clone()).ok();
+        Some((list("commands")?, list("env")?))
+    }
+
+    /// Approves project `identity`'s `commands` and `env` names for every
+    /// member (X89), as this member's change, and sends it on. Both lists
+    /// are one field, so two approvals made apart never mix: the later one
+    /// stands whole.
+    pub fn set_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String]) -> Result<()> {
+        self.change_heavy_approval(identity, commands, env, false)
+    }
+
+    /// Writes an approval a member kept before X89, with the oldest stamp,
+    /// when the account has none for the project: any approval made on a
+    /// member wins over it.
+    pub fn seed_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String]) -> Result<()> {
+        self.change_heavy_approval(identity, commands, env, true)
+    }
+
+    fn change_heavy_approval(&self, identity: &ProjectIdentity, commands: &[String], env: &[String], oldest: bool) -> Result<()> {
+        let key = identity_key(identity).context("a project without a git root cannot be approved")?;
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("approvals are kept in the account")?;
+            let now = a.log.records(HEAVY_APPROVAL).remove(&key);
+            if oldest && now.is_some() {
+                return Ok(());
+            }
+            let now = now.unwrap_or_default();
+            let mut log = a.log.clone();
+            let value = json!({ "commands": commands, "env": env });
+            let changes: Vec<Change> = [(APPROVED, value)]
+                .into_iter()
+                .filter(|(field, value)| oldest || now.get(*field) != Some(value))
+                .map(|(field, value)| {
+                    if oldest {
+                        log.set_oldest(HEAVY_APPROVAL, &key, field, value)
+                    } else {
+                        log.set(now_ms(), HEAVY_APPROVAL, &key, field, value)
+                    }
+                })
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
     /// The account's sign-ins (X75), in their order: the records, and each
     /// default that was never edited nor removed. The defaults without an
     /// account.
@@ -546,6 +686,78 @@ impl SessionManager {
     pub fn on_account_applied(&self, f: impl Fn(&[Change]) + Send + Sync + 'static) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {
             a.applied.push(Arc::new(f));
+        }
+    }
+
+    /// This member's sessions as its apps and phones see them (X73):
+    /// without those the account gives another member, which this member
+    /// is about to let go of. Until then they would show twice: here, and
+    /// where they run now. One it runs anyway ([`Self::keep_listed`]) stays.
+    pub fn listed_sessions(&self) -> Vec<Session> {
+        let here = self.kept_listed.lock().unwrap().clone();
+        let given = self.with_log(|log| {
+            let Some(me) = log_owner(log.member()) else {
+                return BTreeSet::new();
+            };
+            sessions_in(log)
+                .into_iter()
+                .filter(|(_, r)| r.get("owner").and_then(Value::as_str).is_some_and(|o| o != me))
+                .map(|(id, _)| id)
+                .collect::<BTreeSet<String>>()
+        });
+        self.list_sessions()
+            .into_iter()
+            .filter(|s| !given.contains(&s.id) || here.contains(&s.id))
+            .collect()
+    }
+
+    /// The sessions this member made (X73), whoever runs them now: those
+    /// it named itself the owner of, as their maker does. The central host,
+    /// the referee, has none by this measure.
+    pub fn sessions_made_here(&self) -> BTreeSet<String> {
+        self.with_log(|log| {
+            let Some(me) = log_owner(log.member()) else {
+                return BTreeSet::new();
+            };
+            let referee = log.account().unwrap_or(me);
+            session_claims(log, Some(referee))
+                .into_iter()
+                .filter(|(_, claims)| claims.contains(me))
+                .map(|(id, _)| id.to_string())
+                .collect()
+        })
+    }
+
+    /// When the central host, the referee, last named session `id`'s owner
+    /// (ms): when it last moved (X73). None for a session it never named.
+    pub fn session_moved_at(&self, id: &str) -> Option<u64> {
+        self.with_log(|log| {
+            let me = log_owner(log.member())?;
+            let referee = log.account().unwrap_or(me);
+            log.changes_of(SESSION)
+                .filter(|c| c.id == id && log_owner(&c.stamp.member) == Some(referee))
+                .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
+                .map(|c| c.stamp.ms)
+                .max()
+        })
+    }
+
+    /// The sessions [`Self::keep_listed`] keeps listed now.
+    pub fn kept_listed(&self) -> BTreeSet<String> {
+        self.kept_listed.lock().unwrap().clone()
+    }
+
+    /// Keeps listing session `id` as this member's own whatever the
+    /// account's record says (X73), while `yes`: a takeover the central
+    /// host has not answered yet, or a session brought here before the
+    /// news of it arrived.
+    pub fn keep_listed(&self, id: &str, yes: bool) {
+        let changed = {
+            let mut here = self.kept_listed.lock().unwrap();
+            if yes { here.insert(id.to_string()) } else { here.remove(id) }
+        };
+        if changed {
+            self.emit_sessions();
         }
     }
 
@@ -1412,6 +1624,102 @@ mod tests {
 
     fn sign_in(id: &str, name: &str, login: &str, check: &str) -> moonlet_proto::types::SignIn {
         moonlet_proto::types::SignIn { id: id.into(), name: name.into(), login: login.into(), check: check.into() }
+    }
+
+    fn settings(heavy: Option<bool>, slots: Option<u32>) -> WorkerSettings {
+        WorkerSettings { heavy, slots }
+    }
+
+    #[tokio::test]
+    async fn worker_settings_set_on_one_member_read_the_same_on_another() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.worker_settings().get("air"), Some(&settings(Some(true), Some(4))));
+        // A field left out stays as it was.
+        mini.set_worker_settings("air", settings(None, Some(1))).unwrap();
+        sync(&book, &mini);
+        assert_eq!(book.worker_settings().get("air"), Some(&settings(Some(true), Some(1))));
+    }
+
+    #[tokio::test]
+    async fn seeded_settings_give_way_to_any_set_on_another_member() {
+        let (_a, book) = member("book").await;
+        let (_b, air) = member("air").await;
+        book.set_worker_settings("air", settings(None, Some(5))).unwrap();
+        // Later in wall time, the Air brings what its link.json said.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        air.seed_worker_settings("air", settings(Some(true), Some(3))).unwrap();
+        sync(&book, &air);
+        for m in [&book, &air] {
+            assert_eq!(m.worker_settings().get("air"), Some(&settings(Some(true), Some(5))));
+        }
+        // Seeding again, once the account has values, changes nothing.
+        air.seed_worker_settings("air", settings(Some(false), Some(2))).unwrap();
+        assert_eq!(air.worker_settings().get("air"), Some(&settings(Some(true), Some(5))));
+    }
+
+    fn shop() -> ProjectIdentity {
+        ProjectIdentity { origin: Some("git.invalid/acme/shop".into()), root: Some("4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a".into()) }
+    }
+
+    #[tokio::test]
+    async fn a_heavy_approval_on_one_member_is_every_members() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(mini.heavy_approval(&shop()), None);
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["CI"])).unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
+        // An approval kept before X89 gives way to the account's.
+        mini.seed_heavy_approval(&shop(), &words(&["pnpm test"]), &[]).unwrap();
+        assert_eq!(mini.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
+    }
+
+    /// X89's records reach a member from before X89 as a kind it does not
+    /// know: it keeps them and passes them on, as X68 says.
+    #[tokio::test]
+    async fn a_record_kind_a_member_does_not_know_is_kept_and_passed_on() {
+        let (_a, book) = member("book").await;
+        let (_b, old) = member("old").await;
+        let (_c, air) = member("air").await;
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        // The change, as one from a newer moonlet: a kind of its own.
+        let mut changes = book.account_changes_for(&old.account_version());
+        for c in &mut changes {
+            if c.kind == "worker" {
+                c.kind = "worker_from_a_newer_moonlet".into();
+            }
+        }
+        old.apply_account(changes);
+        let passed: Vec<Change> = old.account_changes_for(&air.account_version());
+        assert!(passed.iter().any(|c| c.kind == "worker_from_a_newer_moonlet"), "{passed:?}");
+        // And it changed nothing it reads.
+        assert_eq!(old.worker_settings().get("air"), None);
+    }
+
+    #[tokio::test]
+    async fn two_approvals_made_apart_never_mix_their_lists() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Both start from one approval, with no env name.
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
+        sync(&book, &mini);
+        // Apart, the MacBook approves NPM_TOKEN, then studio-mini approves
+        // another command with the env names it has, none.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["NPM_TOKEN"])).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        mini.set_heavy_approval(&shop(), &words(&["pnpm check", "pnpm lint"]), &[]).unwrap();
+        sync(&book, &mini);
+        // The later approval stands whole: never its commands with the
+        // MacBook's NPM_TOKEN.
+        for m in [&book, &mini] {
+            assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check", "pnpm lint"]), vec![])));
+        }
     }
 
     #[tokio::test]
@@ -2760,6 +3068,79 @@ mod tests {
             .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
+    }
+
+    #[tokio::test]
+    async fn a_session_the_account_gives_another_member_is_no_longer_listed_as_this_members() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let new = |name: &str| SessionCreate {
+            name: Some(name.into()),
+            agent: Some("none".into()),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&p.id)
+        };
+        let moved = book.create_session(new("Fix cart")).await.unwrap();
+        book.create_session(new("Docs pass")).await.unwrap();
+        sync(&book, &mini);
+        book.set_central_account(Some("mini".into()));
+        let names = |m: &SessionManager| m.listed_sessions().into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
+
+        // studio-mini takes Fix cart; the MacBook has not let go of it yet.
+        assert!(mini.set_session_owner(&moved.id, "mini", 2, None));
+        sync(&book, &mini);
+        assert_eq!(names(&book), ["Docs pass"]);
+        assert!(book.session(&moved.id).is_ok(), "still here until it is let go of");
+        // Taken over anyway while studio-mini was offline: the MacBook runs
+        // it before the account says so.
+        book.keep_listed(&moved.id, true);
+        assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
+        book.keep_listed(&moved.id, false);
+        assert_eq!(names(&book), ["Docs pass"]);
+    }
+
+    #[tokio::test]
+    async fn the_account_says_which_sessions_a_member_made_and_when_each_last_moved() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        book.set_central_account(Some("mini".into()));
+        assert_eq!(book.sessions_made_here(), std::collections::BTreeSet::from([session.id.clone()]));
+        assert!(mini.sessions_made_here().is_empty(), "studio-mini made none");
+
+        let before = now_ms();
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        sync(&book, &mini);
+        let moved = book.session_moved_at(&session.id).expect("moved");
+        assert!(moved >= before && moved <= now_ms(), "{moved} not in {before}..");
+        assert_eq!(mini.session_moved_at(&session.id), Some(moved));
+        // Still the MacBook's making, whoever runs it now.
+        assert_eq!(book.sessions_made_here(), std::collections::BTreeSet::from([session.id.clone()]));
+        assert_eq!(book.session_moved_at("no-such-session"), None);
     }
 
     /// The MacBook's session "Fix cart", made on `book` and known to `mini`.

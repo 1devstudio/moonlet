@@ -10,6 +10,15 @@
 //! the webview is made with: turned on after a load, frames never load. A
 //! WebKit without it (a later macOS may rename or drop it) gets no
 //! configuration, and the window is made as before.
+//!
+//! On macOS 27.0.1, WebKit's UI process crashes the whole app when a card's
+//! frame is let go while its page has a layer clipped by, or held still
+//! against, an element scrolling inside it
+//! (`RemoteScrollingCoordinatorProxy::establishLayerTreeScrollingRelations`,
+//! "Invalid message dispatched"; WebKit bugs 321051 and 325098, fixed after
+//! that release). The app holds such a frame until its page has cleared
+//! itself (`src/lib/frameRelease.ts`, ADR 0013). `MOONLET_SITE_ISOLATION=0`
+//! turns site isolation off, should WebKit crash with it again.
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -20,6 +29,15 @@ use objc2_web_kit::WKWebViewConfiguration;
 
 /// The private feature's key.
 const FEATURE: &str = "SiteIsolationEnabled";
+
+/// The environment variable that turns site isolation off (ADR 0013).
+pub const SWITCH: &str = "MOONLET_SITE_ISOLATION";
+
+/// Whether the window gets site isolation, given `SWITCH`'s value: it is
+/// on unless that is `0`.
+pub fn wanted(switch: Option<&std::ffi::OsStr>) -> bool {
+    switch.is_none_or(|v| v != "0")
+}
 
 /// A webview configuration with site isolation on, or why there is none.
 pub fn configuration() -> Result<Retained<WKWebViewConfiguration>, &'static str> {
@@ -64,5 +82,21 @@ fn key(feature: &AnyObject) -> Option<Retained<NSString>> {
         }
         let key: Option<Retained<AnyObject>> = msg_send![feature, key];
         key?.downcast::<NSString>().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn site_isolation_is_on_unless_the_switch_is_0() {
+        assert_eq!(SWITCH, "MOONLET_SITE_ISOLATION");
+        assert!(wanted(None));
+        assert!(!wanted(Some(OsStr::new("0"))));
+        for other in ["", "1", "true", "false", " 0"] {
+            assert!(wanted(Some(OsStr::new(other))), "{other:?} turned it off");
+        }
     }
 }

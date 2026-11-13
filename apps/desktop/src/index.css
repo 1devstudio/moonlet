@@ -3,13 +3,53 @@
 @import "./styles/moonlet.css";
 @import "./styles/motion.css";
 
+/* The panes (X94) use moonlet.css's tones: bars and the sidebar on the
+   window's (#191919), what a column shows in a pane of the content's
+   (#121212), which terminals and editors draw on too (PANE in
+   lib/terminalTheme.ts). */
+
+/* Scrollbars (X94): 10 px, a rounded thumb inset 3 px from the edges of its
+   view, clear of a pane's rounded corners. The thumb's border is transparent
+   and clipped, so it sits on whatever tone the view has. scrollbar-width and
+   scrollbar-color are reset so WebKit draws these rules. */
+* {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-track:vertical {
+  margin: 10px 0;
+}
+::-webkit-scrollbar-track:horizontal {
+  margin: 0 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2c2c2c;
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* App shell: a fixed, non-scrolling window. */
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
-  background: var(--color-bg);
+  background: var(--color-window);
   color: var(--color-fg);
   font-family: var(--font-sans);
   font-size: calc(13.5px * var(--ui-scale, 1));
@@ -17,6 +57,25 @@ body,
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* A bar's or row's height (X94): the design's px at the default font size,
+   growing with a bigger one (Appearance › Font size) and never shrinking,
+   so text never outgrows its row. `h-ui-44` is 44 px at 13 px, 81 px at 24. */
+@utility h-ui-* {
+  height: max(calc(--value(number) * 1px), calc(--value(number) * 1px * var(--ui-scale, 1)));
+}
+/* A session tab (X94): 184 px wide at most and 112 at least at the default
+   font size, both growing with a bigger one. */
+.session-tab {
+  flex: 0 1 max(184px, calc(184px * var(--ui-scale, 1)));
+  min-width: max(112px, calc(112px * var(--ui-scale, 1)));
+}
+@utility mt-ui-* {
+  margin-top: max(calc(--value(number) * 1px), calc(--value(number) * 1px * var(--ui-scale, 1)));
+}
+@utility min-h-ui-* {
+  min-height: max(calc(--value(number) * 1px), calc(--value(number) * 1px * var(--ui-scale, 1)));
 }
 
 /* A tab not shown stays mounted under `visibility: hidden` (quietWhen). A

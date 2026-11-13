@@ -6,6 +6,7 @@ import { type BoardConfig, sourceKeyOf } from "./boards";
 import type { Column } from "./tasks";
 import { trackerName, trackerOf } from "./tasks";
 import type { Connection, Source } from "./tasksStore";
+import { accountOf, type HostWorkspaces, ownWorkspaces, workspaceMembers, wsKey } from "./workspaces";
 
 /** A board in Settings › Task trackers › Boards (X50). */
 export interface BoardEntry {
@@ -21,9 +22,35 @@ export interface BoardEntry {
 
 /** A workspace's boards with their origin and pin, and why a board's connection needs attention (X44, X50). */
 export function boardList(wsKey: string, boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardEntry[] {
-  return (boards ?? [])
-    .filter((b) => b.workspace === wsKey)
-    .map((b) => ({ id: b.id, connection: b.connection, name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] }));
+  return (boards ?? []).filter((b) => b.workspace === wsKey).map((b) => boardEntry(b, attention));
+}
+
+const boardEntry = (b: BoardConfig, attention: Record<string, string>): BoardEntry => ({ id: b.id, connection: b.connection, name: b.name, origin: originText(b.origin), pinned: b.pinned !== false, attention: attention[b.connection] });
+
+/** A workspace in Settings › Task trackers › Boards (X50): `host` is the
+ * one it shows from, as the switcher lists it, where Add a board saves. */
+export interface BoardWorkspace {
+  host: string;
+  id: string;
+  name: string;
+  /** Its boards, each with the host it is kept under (X68). */
+  boards: (BoardEntry & { host: string })[];
+}
+
+/** Settings › Boards' workspaces: one shared by the hosts of an account
+ * shows once, as the switcher shows it, with the boards kept under any of
+ * those hosts in the order they were added (X50, X68). */
+export function boardWorkspaces(hosts: HostWorkspaces[], boards: BoardConfig[] | undefined, attention: Record<string, string>): BoardWorkspace[] {
+  return ownWorkspaces(hosts).flatMap(({ h, list }) =>
+    list.map((w) => {
+      const keys = new Map(workspaceMembers({ host: h.host, id: w.id, account: accountOf(h) }, hosts).map((m) => [wsKey(m, w.id), m]));
+      const kept = (boards ?? []).flatMap((b) => {
+        const host = keys.get(b.workspace);
+        return host ? [{ ...boardEntry(b, attention), host }] : [];
+      });
+      return { host: h.host, id: w.id, name: w.name, boards: kept };
+    }),
+  );
 }
 
 /** The States dialog's mapping as saved: only states moved off their default column (X44). */

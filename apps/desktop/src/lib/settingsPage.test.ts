@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey, restartDaemon } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -489,6 +489,10 @@ describe("General's update lines (X43)", () => {
     expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: "2.1.301" }, false)).toEqual({ tone: "blocked", text: "Not found on the PATH" });
     expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: null }, true)).toEqual({ tone: "muted", text: "Checking…" });
   });
+
+  it("does not warn about Claude Code when the daemon could not be asked", () => {
+    expect(claudeUpdateLine({ phase: "idle" }, { installed: null, latest: "2.1.301", unasked: true }, false)).toEqual({ tone: "muted", text: "Could not ask moonlet's daemon" });
+  });
 });
 
 describe("the Phones page's access line (X43)", () => {
@@ -538,5 +542,62 @@ describe("Task trackers in the nav (X44)", () => {
     expect(trackers({})?.dot).toBe(undefined);
     expect(trackers({ trackersNeedAttention: 1 })?.dot).toBe("1 connection needs attention");
     expect(trackers({ trackersNeedAttention: 2 })?.dot).toBe("2 connections need attention");
+  });
+});
+
+describe("restart the daemon (X97)", () => {
+  /** The bundled `moonletd restart`, as the Tauri command answers: `stuck` is its message when it can't hand over. */
+  const daemon = (stuck: string | null, other?: { code: string; message: string }) => {
+    const ran: string[] = [];
+    const restart = async (force: boolean) => {
+      ran.push(force ? "restart --force" : "restart");
+      if (other) throw other;
+      if (!force && stuck) throw { code: "not_responding", message: stuck };
+    };
+    return { ran, restart };
+  };
+  /** The confirm dialog, answering `ok`; `asked` is what it showed. */
+  const dialog = (ok: boolean) => {
+    const asked: { title: string; message: string; action: string }[] = [];
+    const ask = async (o: { title: string; message: string; action: string }) => {
+      asked.push(o);
+      return ok;
+    };
+    return { asked, ask };
+  };
+
+  it("restarts with a handoff and keeps terminals", async () => {
+    const d = daemon(null);
+    const c = dialog(true);
+    expect(await restartDaemon(d.restart, c.ask)).toBe("Daemon restarted. Terminals kept running.");
+    expect(d.ran).toEqual(["restart"]);
+    expect(c.asked).toEqual([]);
+  });
+
+  it("forces the restart only after the user agrees", async () => {
+    const d = daemon("the daemon isn't answering");
+    const c = dialog(true);
+    expect(await restartDaemon(d.restart, c.ask)).toBe("Daemon restarted. Its terminals ended; chats carry on.");
+    expect(d.ran).toEqual(["restart", "restart --force"]);
+    expect(c.asked).toEqual([
+      {
+        title: "Force restart the daemon",
+        message: "The daemon isn't answering. Force restart ends every terminal it holds. Agents' chats carry on from where they were.",
+        action: "Force restart",
+      },
+    ]);
+  });
+
+  it("leaves a stuck daemon alone when the user cancels", async () => {
+    const d = daemon("the daemon isn't answering");
+    expect(await restartDaemon(d.restart, dialog(false).ask)).toBeNull();
+    expect(d.ran).toEqual(["restart"]);
+  });
+
+  it("reports other failures without offering a force restart", async () => {
+    const d = daemon(null, { code: "failed", message: "moonletd not found next to moonlet" });
+    const c = dialog(true);
+    await expect(restartDaemon(d.restart, c.ask)).rejects.toEqual({ code: "failed", message: "moonletd not found next to moonlet" });
+    expect(c.asked).toEqual([]);
   });
 });

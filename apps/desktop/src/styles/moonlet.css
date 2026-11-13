@@ -5,9 +5,13 @@
 @theme {
   --color-bg: #121212;
   --color-panel: #161616;
+  /* The window behind the desktop's panes, the sidebar's tone (X94); the phone has none. */
+  --color-window: #191919;
   --color-panel-2: #1a1a1a;
   --color-raised: #1f1f1f;
   --color-hover: #222222;
+  /* A tab or row on the window's background, hovered (X94). */
+  --color-tab-hover: #1e1e1e;
   --color-selected: #2a1f1a;
   --color-border: #242424;
   --color-border-strong: #2e2e2e;
@@ -52,6 +56,14 @@ textarea,
 }
 .no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* A row that scrolls with no scrollbar: the session's tabs (X94). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 .moonlet-term {
@@ -423,8 +435,7 @@ body:not(.kbd-nav) button:focus {
 
 /* A <select> drawn by us, not by macOS: the native popup button ignores
    height and padding. The chevrons stand in for the native arrows. */
-.menu-select,
-.chip-select {
+.menu-select {
   appearance: none;
   background-repeat: no-repeat;
 }
@@ -432,14 +443,6 @@ body:not(.kbd-nav) button:focus {
   padding-right: 28px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3C/svg%3E");
   background-position: right 8px center;
-}
-
-/* The same, as a chip in a row of text: the task bar's state (X46). */
-.chip-select {
-  height: calc(22px * var(--ui-scale, 1));
-  padding-right: 22px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 7px center;
 }
 
 /* One height for a dialog's menus and the buttons beside them, growing
@@ -495,9 +498,17 @@ body:not(.kbd-nav) button:focus {
 .chat-md hr { border: 0; border-top: 1px solid var(--color-border); margin: 1em 0; }
 /* A task's description in the Task tab (X46): the panel's smaller text, checklist items with boxes. */
 .chat-md.task-md { font-size: calc(12.5px * var(--ui-scale, 1)); }
+/* A subagent's brief (X42): smaller than the conversation, in its card. */
+.chat-md.brief-md { font-size: calc(13px * var(--ui-scale, 1)); }
+.chat-md.brief-md :not(pre) > code { background: var(--color-bg); }
 .chat-md li.task-item { list-style: none; margin-left: -1.4em; display: flex; align-items: flex-start; gap: 0.5em; }
 .task-check { flex: none; width: 13px; height: 13px; margin-top: 0.25em; border: 1px solid var(--color-border-strong); border-radius: 3px; }
 .task-check.done { background: var(--color-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5' fill='none' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E") center/100% no-repeat; border-color: var(--color-accent); }
+/* The user's own messages (X92): inline code stands out from the bubble, which is already --color-raised. */
+.chat-md.user-md :not(pre) > code { background: var(--color-bg); }
+/* A message that ends in a code block (X92): its scrollbar keeps clear of the bubble's bottom. With the desktop bubble's
+   py-2 and px-3.5 (ChatItemView), 8px + 6px puts the block as far from the bottom as from the sides. */
+.chat-md.user-md > .code-block:last-child { margin-bottom: 6px; }
 /* Code fences in messages and file contents in tool calls (X17, `.code-hl`). */
 :is(.chat-md, .code-hl) :is(.hljs-keyword, .hljs-selector-tag, .hljs-built_in) { color: #c49bff; }
 :is(.chat-md, .code-hl) :is(.hljs-string, .hljs-attr) { color: #8fd18e; }

@@ -30,11 +30,16 @@ use moonlet_proto::methods::{
 };
 use moonlet_proto::types::ProjectIdentity;
 use moonlet_proto::{Message, RpcError};
+
+use crate::peer::Peer;
+
+/// How long a request over this member's link may take: the link's own
+/// timeout for the method comes first (X89).
+const LINK_WAIT: Duration = Duration::from_secs(660);
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::link::WorkerLink;
-use crate::server::Conn;
 use crate::workers::Workers;
 
 /// The watcher client id the central host's session watches go under.
@@ -119,8 +124,17 @@ struct Kept {
     /// `sync.list` and lives in a repository of its own under `runs/`.
     #[serde(default, skip_serializing_if = "is_live")]
     kind: CopyKind,
-    /// The central host's name.
+    /// The central host's name; for a routing copy of a member's session,
+    /// that member's name (X89).
     host: String,
+    /// The member a routing copy runs commands for, by worker id, when it
+    /// is not this machine's central host (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer: Option<String>,
+    /// A routing copy's setup command, as the host that routes its
+    /// commands has it in its project's main checkout (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup_command: Option<String>,
     session: String,
     /// The copy's worktree; empty until it is made.
     #[serde(default)]
@@ -378,6 +392,14 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", e.to_string())
 }
 
+/// A session's own worktree that becomes its copy where it is (X73).
+#[derive(Default)]
+struct InPlace {
+    path: String,
+    repo: String,
+    made_from: Option<String>,
+}
+
 /// A live copy [`LiveCopies::hold`] holds: nothing else changes it.
 pub struct Holding {
     id: String,
@@ -397,6 +419,13 @@ pub struct Released {
 }
 
 pub struct LiveCopies {
+    /// Cloud machines of this member's central host that it offered for a
+    /// command, reached through it (X89).
+    offered: Mutex<std::collections::HashSet<String>>,
+    /// The machines this host asked to prepare a routing copy of a
+    /// session, by worker id and session (X89): only those open one over
+    /// the link.
+    asked: Mutex<std::collections::HashSet<(String, String)>>,
     file: PathBuf,
     home: PathBuf,
     sessions: Arc<SessionManager>,
@@ -465,6 +494,8 @@ impl LiveCopies {
                 }
             }));
             LiveCopies {
+                offered: Mutex::default(),
+                asked: Mutex::default(),
                 file,
                 home,
                 sessions,
@@ -512,16 +543,88 @@ impl LiveCopies {
     /// Mac's central host now: it talks to the host it was made with only,
     /// which would not know it and might be taken to have archived it.
     fn elsewhere(&self, k: &Kept) -> Option<String> {
+        if let Some(member) = &k.peer {
+            let reached = self.workers.conn(member).is_some() || (self.link.host().is_some() && self.is_member(member));
+            return (!reached).then(|| format!("{} is not linked.", k.host));
+        }
         (self.link.central_name().as_deref() != Some(k.host.as_str()))
             .then(|| format!("{} is no longer this Mac's central host.", k.host))
     }
 
-    /// The link's connection, when it goes to copy `k`'s central host.
-    fn host_for(&self, k: &Kept) -> Option<Arc<moonlet_link::Host>> {
+    /// The connection to the host copy `k` was made for: the link, when it
+    /// goes to copy `k`'s central host, or a member's connection to this
+    /// central host for a routing copy of its session (X89).
+    fn host_for(&self, k: &Kept) -> Option<Peer> {
+        if let Some(member) = &k.peer {
+            return self.peer_for(member);
+        }
         self.elsewhere(k)
             .is_none()
             .then(|| self.link.host())
             .flatten()
+            .map(Peer::Link)
+    }
+
+    /// The host a routing copy kept here runs commands for, by name, and
+    /// its session (X89).
+    pub fn run_copy_for(&self, copy: &str) -> Option<(String, String)> {
+        let k = self.kept(copy).filter(|k| k.kind == CopyKind::Run)?;
+        Some((k.host, k.session))
+    }
+
+    /// The member a routing copy kept here runs commands for, by worker
+    /// id (X89); none for a copy of this machine's central host.
+    pub fn copy_member(&self, copy: &str) -> Option<String> {
+        self.kept(copy).filter(|k| k.kind == CopyKind::Run)?.peer
+    }
+
+    /// The central host offered cloud machine `worker` for a command (X89).
+    pub fn offered(&self, worker: &str) {
+        self.offered.lock().unwrap().insert(worker.to_string());
+    }
+
+    /// Whether the central host offered cloud machine `worker` (X89).
+    pub fn was_offered(&self, worker: &str) -> bool {
+        self.offered.lock().unwrap().contains(worker)
+    }
+
+    /// This host asks `worker` to prepare a routing copy of `session`: it
+    /// may open one now (X89).
+    pub fn expect_open(&self, worker: &str, session: &str) {
+        self.asked.lock().unwrap().insert((worker.to_string(), session.to_string()));
+    }
+
+    /// This member's link to its central host, when it has one (X89).
+    pub fn central_peer(&self) -> Option<Peer> {
+        let id = self.sessions.central_account()?;
+        self.peer_for(&id).filter(|p| matches!(p, Peer::Link(_)))
+    }
+
+    /// The other end of a copy this host serves, by the worker id it keeps:
+    /// a worker's connection, or this member's own central host over its
+    /// link, which runs this member's commands (X89).
+    pub fn peer_for(&self, worker: &str) -> Option<Peer> {
+        if let Some(conn) = self.workers.conn(worker) {
+            return Some(Peer::Conn(conn));
+        }
+        let host = self.link.host()?;
+        if self.sessions.central_account().as_deref() == Some(worker) {
+            return Some(Peer::Link(host));
+        }
+        // Another member of the account, or a cloud machine the central host
+        // offered, through the central host (X89).
+        (self.is_member(worker) || self.offered.lock().unwrap().contains(worker))
+            .then(|| Peer::Relay(host, worker.to_string()))
+    }
+
+    /// Whether worker id `worker` is another member of this machine's
+    /// account (X89); on a cloud machine, any member its central host
+    /// passes a command on from.
+    fn is_member(&self, worker: &str) -> bool {
+        if self.link.info().worker.cloud {
+            return true;
+        }
+        self.sessions.has_account() && self.sessions.member_names().contains_key(worker)
     }
 
     fn kept(&self, id: &str) -> Option<Kept> {
@@ -579,7 +682,7 @@ impl LiveCopies {
     fn setup_of(&self, k: &Kept) -> Option<CopySetup> {
         let mut setup = k.setup.clone()?;
         if setup.state != SetupState::Running
-            && let Some(now) = setup_command(Path::new(&k.path))
+            && let Some(now) = setup_of_copy(k)
         {
             setup.command = now;
         }
@@ -621,6 +724,25 @@ impl LiveCopies {
     }
 
     /// As [`Self::live_copies`], for this machine's copies of `kind`.
+    /// The routing copies this machine keeps, with the member each runs
+    /// commands for (X89), or none for its central host's.
+    pub fn run_copies(&self) -> Vec<(String, PathBuf, Option<String>)> {
+        self.data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty() && k.paused.is_none())
+            .map(|k| (k.session.clone(), PathBuf::from(&k.path), k.peer.clone()))
+            .collect()
+    }
+
+    /// Whether this host asked `worker` to prepare a routing copy of
+    /// `session` (X89).
+    pub fn was_asked(&self, worker: &str, session: &str) -> bool {
+        self.asked.lock().unwrap().contains(&(worker.to_string(), session.to_string()))
+    }
+
     pub fn copies_of(&self, kind: CopyKind) -> Vec<(String, PathBuf, Option<ProjectIdentity>)> {
         self.data
             .lock()
@@ -813,6 +935,25 @@ impl LiveCopies {
     /// `sync.start`: keeps `session` on the central host in sync here. A
     /// session already kept returns its copy.
     pub fn start(self: &Arc<Self>, session: String) -> Result<Copy, RpcError> {
+        self.start_at(session, None)
+    }
+
+    /// [`Self::start`] for session `s`, which this Mac just let go of
+    /// (X73): its worktree becomes the copy where it is, with the central
+    /// host's files. `made_from` is the worktree's files as it was let go
+    /// of: a file changed there since keeps its version. A copy of it not
+    /// made yet takes the worktree too.
+    pub fn start_in_place(self: &Arc<Self>, s: &moonlet_proto::types::Session, made_from: Option<String>) -> Result<Copy, RpcError> {
+        let path = PathBuf::from(&s.path);
+        if !path.is_dir() {
+            tracing::warn!(session = %s.id, "its worktree is gone: a new copy is made instead");
+            return self.start(s.id.clone());
+        }
+        let repo = self.sessions.project(&s.project_id).map(|p| p.path).unwrap_or_default();
+        self.start_at(s.id.clone(), Some(InPlace { path: s.path.clone(), repo, made_from }))
+    }
+
+    fn start_at(self: &Arc<Self>, session: String, in_place: Option<InPlace>) -> Result<Copy, RpcError> {
         let host = self
             .link
             .central_name()
@@ -823,25 +964,40 @@ impl LiveCopies {
             let mut data = self.data.lock().unwrap();
             if let Some(k) = data
                 .worker
-                .iter()
+                .iter_mut()
                 .find(|k| k.session == session && k.host == host && k.kind == CopyKind::Live)
             {
-                let k = k.clone();
-                drop(data);
-                return Ok(self.copy_of(&k));
+                // One not made yet takes the worktree, rather than leave it
+                // to no one.
+                let take = in_place.filter(|_| k.path.is_empty() && k.base.is_none());
+                let Some(w) = take else {
+                    let k = k.clone();
+                    drop(data);
+                    return Ok(self.copy_of(&k));
+                };
+                k.path = w.path;
+                k.repo = w.repo;
+                k.made_from = w.made_from;
+                k.paused = None;
+                k.id.clone()
+            } else {
+                let w = in_place.unwrap_or_default();
+                let kept = Kept {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    host,
+                    session,
+                    path: w.path,
+                    repo: w.repo,
+                    made_from: w.made_from,
+                    ..Kept::default()
+                };
+                let id = kept.id.clone();
+                if !data.auto.contains(&kept.session) {
+                    data.auto.push(kept.session.clone());
+                }
+                data.worker.push(kept);
+                id
             }
-            let kept = Kept {
-                id: uuid::Uuid::new_v4().to_string(),
-                host,
-                session,
-                ..Kept::default()
-            };
-            let id = kept.id.clone();
-            if !data.auto.contains(&kept.session) {
-                data.auto.push(kept.session.clone());
-            }
-            data.worker.push(kept);
-            id
         };
         self.save();
         self.states
@@ -903,7 +1059,7 @@ impl LiveCopies {
             again: true,
         };
         match host
-            .request(m::SYNC_FETCH, serde_json::to_value(req).unwrap())
+            .request(m::SYNC_FETCH, serde_json::to_value(req).unwrap(), LINK_WAIT)
             .await
         {
             Ok(_) => {}
@@ -1020,7 +1176,7 @@ impl LiveCopies {
             kind: k.kind,
         };
         let opened: SyncOpened = serde_json::from_value(
-            host.request(m::SYNC_OPEN, serde_json::to_value(open).unwrap())
+            host.request(m::SYNC_OPEN, serde_json::to_value(open).unwrap(), LINK_WAIT)
                 .await
                 .map_err(making)?,
         )
@@ -1040,7 +1196,7 @@ impl LiveCopies {
             again: false,
         };
         let fetched: SyncFetched = serde_json::from_value(
-            host.request(m::SYNC_FETCH, serde_json::to_value(fetch).unwrap())
+            host.request(m::SYNC_FETCH, serde_json::to_value(fetch).unwrap(), LINK_WAIT)
                 .await
                 .map_err(making)?,
         )
@@ -1151,6 +1307,29 @@ impl LiveCopies {
             path
         };
 
+        // A worktree made before, or the session's own kept where it is
+        // (X73), is on the session's branch with no commits the central
+        // host lacks, or nothing of the central host's replaces its files.
+        if made {
+            match off_branch(&path, &opened.branch).await.map_err(|e| Stop::Paused(format!("{e:#}")))? {
+                Some(b) if b.is_empty() => return Err(Stop::Paused(format!("the copy is on a detached HEAD, not {}.", opened.branch))),
+                Some(b) => return Err(Stop::Paused(format!("the copy is on {b}, not {}.", opened.branch))),
+                None => {}
+            }
+            let own = git_sync::head(&path).await.map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            if own != fetched.head {
+                let behind = git_sync::is_ancestor(&path, &own, &fetched.head)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                if !behind {
+                    return Err(Stop::Paused(format!("{} on this Mac has commits {}'s doesn't.", opened.branch, k.host)));
+                }
+                git_sync::fast_forward(&path, &opened.branch, &own, &fetched.head)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            }
+        }
+
         // The worktree is at the session's commit; its files follow. A
         // worktree made before and edited since keeps those edits.
         let host_name = k.host.clone();
@@ -1163,29 +1342,9 @@ impl LiveCopies {
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
             if local.tree != from {
-                let read = |t: String| {
-                    let repo = repo.clone();
-                    async move { git_sync::read_files(&repo, &t).await }
-                };
-                let (Ok(from_f), Ok(central_f), Ok(local_f)) = (
-                    read(from).await,
-                    read(fetched.tree.clone()).await,
-                    read(local.tree).await,
-                ) else {
-                    return Err(Stop::Paused("cannot read the copy's files".into()));
-                };
-                let r = resume(&from_f, &central_f, &local_f);
-                let write = |f: Files| {
-                    let repo = repo.clone();
-                    async move { git_sync::write_files(&repo, &f).await }
-                };
-                target = write(r.worker)
+                (target, base, differs) = reconciled(&repo, from, fetched.tree.clone(), local.tree)
                     .await
-                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
-                base = write(r.base)
-                    .await
-                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
-                differs = r.differs;
+                    .map_err(Stop::Paused)?;
             }
         }
         apply_tries(&self.sessions, &path, &target, &host_name).await?;
@@ -1475,7 +1634,7 @@ impl LiveCopies {
                 resolve: resolve.clone(),
             };
             let reply = match host
-                .request(m::SYNC_OFFER, serde_json::to_value(req).unwrap())
+                .request(m::SYNC_OFFER, serde_json::to_value(req).unwrap(), LINK_WAIT)
                 .await
             {
                 Ok(v) => v,
@@ -1850,6 +2009,82 @@ impl LiveCopies {
         // Stopped while this waited for it.
         self.kept(&id).filter(live).ok_or_else(none)?;
         Ok(Holding { id, _one: one })
+    }
+
+    /// Brings held copy `h` to the central host's files and commit as they
+    /// are now (X73), once it gave the session up and before the copy
+    /// becomes the session's worktree here: what it sent while the copy
+    /// was held never landed. A file this Mac changed in the copy since
+    /// keeps its version, as when a copy resumes.
+    pub async fn catch_up(&self, h: &Holding) -> Result<(), RpcError> {
+        let k = self
+            .kept(&h.id)
+            .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
+        let host = self
+            .host_for(&k)
+            .ok_or_else(|| RpcError::new("disconnected", "the central host is not connected"))?;
+        let (repo, path) = (PathBuf::from(&k.repo), PathBuf::from(&k.path));
+        let fetch = SyncFetch {
+            copy: k.id.clone(),
+            have: git_sync::have(&repo).await,
+            again: false,
+        };
+        let fetched: SyncFetched = serde_json::from_value(
+            host.request(m::SYNC_FETCH, serde_json::to_value(fetch).unwrap(), LINK_WAIT)
+                .await?,
+        )
+        .map_err(internal)?;
+        object_ids(&[&fetched.tree, &fetched.head])?;
+        if let Some(t) = fetched.pack {
+            let pack = host
+                .take_pack(t)
+                .ok_or_else(|| RpcError::new("failed", "the session's files did not arrive"))?;
+            self.unpack_from_central(&k, &repo, &pack).await?;
+        }
+        self.check_paths(&k, &repo, &fetched.tree).await?;
+        // Each side with commits the other lacks: nothing moves, so neither
+        // side's commits are lost.
+        let own = git_sync::head(&path).await.map_err(internal)?;
+        if own != fetched.head
+            && !git_sync::is_ancestor(&path, &own, &fetched.head).await.map_err(internal)?
+            && !git_sync::is_ancestor(&path, &fetched.head, &own).await.map_err(internal)?
+        {
+            return Err(RpcError::new(
+                "diverged",
+                format!("{} here and {}'s each have commits the other lacks.", k.branch, k.host),
+            ));
+        }
+        let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
+            .await
+            .map_err(internal)?;
+        let from = k.base.clone().or(k.tree.clone()).unwrap_or_else(|| local.tree.clone());
+        let (target, base, differs) = if local.tree == from {
+            (fetched.tree.clone(), fetched.tree.clone(), Vec::new())
+        } else {
+            reconciled(&repo, from, fetched.tree.clone(), local.tree)
+                .await
+                .map_err(internal)?
+        };
+        apply_tries(&self.sessions, &path, &target, &k.host)
+            .await
+            .map_err(|e| match e {
+                Stop::Offline => RpcError::new("disconnected", "the central host is not connected"),
+                Stop::Gone => RpcError::new("not_found", "the session is gone"),
+                Stop::Paused(reason) => RpcError::new("paused", reason),
+            })?;
+        git_sync::set_base_ref(&repo, &k.id, &base)
+            .await
+            .map_err(internal)?;
+        self.update_kept(&k.id, |kept| {
+            kept.base = Some(base.clone());
+            kept.sent_base = Some(fetched.tree.clone());
+            kept.base_head = Some(fetched.head.clone());
+            kept.tree = Some(fetched.tree.clone());
+            kept.too_big = fetched.too_big.clone();
+            kept.differs = differs.clone();
+        });
+        self.follow_head(&k.id, &path, &fetched.head).await?;
+        Ok(())
     }
 
     /// Lets go of held copy `h` and keeps its worktree: this Mac now owns
@@ -2305,7 +2540,7 @@ impl LiveCopies {
     /// approved for its project, and waits for the user otherwise.
     fn begin_setup(self: &Arc<Self>, id: &str) {
         let Some(k) = self.kept(id) else { return };
-        let Some(command) = setup_command(Path::new(&k.path)) else {
+        let Some(command) = setup_of_copy(&k) else {
             self.set_setup(id, None);
             return;
         };
@@ -2335,7 +2570,7 @@ impl LiveCopies {
         if k.path.is_empty() {
             return Err(RpcError::new("not_ready", "the copy is not made yet"));
         }
-        let Some(current) = setup_command(Path::new(&k.path)) else {
+        let Some(current) = setup_of_copy(&k) else {
             return Err(RpcError::new("no_setup", "the copy has no setup script"));
         };
         if current != command {
@@ -2605,12 +2840,16 @@ impl LiveCopies {
             .cloned()
     }
 
-    /// The worker on `conn`, which must own `copy` if it is served already.
-    fn owner(&self, conn: &Conn, copy: &str) -> Result<String, RpcError> {
-        let worker = self
-            .workers
-            .worker_on(conn.id)
-            .ok_or_else(|| RpcError::new("forbidden", "only a linked worker keeps copies"))?;
+    /// The worker on `peer`, which must own `copy` if it is served
+    /// already: a worker linked here, or this member's central host, which
+    /// runs this member's commands over its link (X89).
+    fn owner(&self, peer: &Peer, copy: &str) -> Result<String, RpcError> {
+        let worker = match peer {
+            Peer::Conn(conn) => self.workers.worker_on(conn.id),
+            Peer::Link(_) => self.sessions.central_account(),
+            Peer::Relay(_, to) => Some(to.clone()),
+        }
+        .ok_or_else(|| RpcError::new("forbidden", "only a linked worker keeps copies"))?;
         if let Some(s) = self.served(copy)
             && s.worker != worker
         {
@@ -2622,10 +2861,15 @@ impl LiveCopies {
     /// `sync.open` from a worker: what it needs to make a copy of a session.
     pub async fn open(
         self: &Arc<Self>,
-        conn: &Conn,
+        conn: &Peer,
         req: SyncOpen,
     ) -> Result<SyncOpened, RpcError> {
         let worker = self.owner(conn, &req.copy)?;
+        // Over the link, the central host or another member opens a routing
+        // copy only of a session this host asked it to run a command of.
+        if !matches!(conn, Peer::Conn(_)) && !self.asked.lock().unwrap().contains(&(worker.clone(), req.session.clone())) {
+            return Err(RpcError::new("forbidden", "this host asked no command of that session"));
+        }
         if req.copy.is_empty()
             || !req
                 .copy
@@ -2690,7 +2934,7 @@ impl LiveCopies {
     /// the copy's base. With `again`, the worker asks for an update instead.
     pub async fn fetch(
         self: &Arc<Self>,
-        conn: &Conn,
+        conn: &Peer,
         req: SyncFetch,
     ) -> Result<SyncFetched, RpcError> {
         self.owner(conn, &req.copy)?;
@@ -2716,7 +2960,7 @@ impl LiveCopies {
         let have = git_sync::present(path, &req.have).await.map_err(internal)?;
         let have: Vec<&str> = have.iter().map(String::as_str).collect();
         // A cloud machine gets the commit and the files, never older history.
-        let shallow = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+        let shallow = conn.is_cloud();
         let pack = if shallow {
             git_sync::pack_shallow(path, &head, &snap.tree).await
         } else {
@@ -2738,7 +2982,7 @@ impl LiveCopies {
     }
 
     /// `sync.close` from a worker: it no longer keeps the copy.
-    pub async fn close(&self, conn: &Conn, copy: &str) -> Result<bool, RpcError> {
+    pub async fn close(&self, conn: &Peer, copy: &str) -> Result<bool, RpcError> {
         self.owner(conn, copy)?;
         self.forget(copy).await;
         Ok(true)
@@ -2818,7 +3062,7 @@ impl LiveCopies {
             (s, repo)
         }));
         for (s, repo) in copies {
-            if let Some(conn) = self.workers.conn(&s.worker) {
+            if let Some(conn) = self.peer_for(&s.worker) {
                 let req = SyncClosing {
                     copy: s.id.clone(),
                     reason: CloseReason::Archived,
@@ -2867,7 +3111,7 @@ impl LiveCopies {
     /// the worker's. The other copies of the session get the change.
     pub async fn reconcile_offer(
         self: &Arc<Self>,
-        conn: &Conn,
+        conn: &Peer,
         req: SyncOffer,
         pack: Option<Vec<u8>>,
     ) -> Result<SyncOffered, RpcError> {
@@ -3050,7 +3294,7 @@ impl LiveCopies {
         let (Some(base), Some(base_head)) = (served.base.clone(), served.base_head.clone()) else {
             return;
         };
-        let Some(conn) = self.workers.conn(&served.worker) else {
+        let Some(conn) = self.peer_for(&served.worker) else {
             return;
         };
         let path = Path::new(&served.path);
@@ -3072,7 +3316,7 @@ impl LiveCopies {
 
     async fn push_to(
         &self,
-        conn: &Conn,
+        conn: &Peer,
         served: &Served,
         path: &Path,
         base: &str,
@@ -3252,6 +3496,16 @@ impl LiveCopies {
     }
 }
 
+/// Copy `k`'s setup command: for a routing copy, the one the host that
+/// routes its commands sent (X89); otherwise, or when it sent none, the
+/// copy's own `.moonlet/config.toml`'s.
+fn setup_of_copy(k: &Kept) -> Option<String> {
+    match &k.setup_command {
+        Some(c) if k.kind == CopyKind::Run => Some(c.clone()).filter(|c| !c.trim().is_empty()),
+        _ => setup_command(Path::new(&k.path)),
+    }
+}
+
 /// The copy's setup command, exactly as its `.moonlet/config.toml` has it;
 /// none when blank.
 fn setup_command(copy: &Path) -> Option<String> {
@@ -3347,6 +3601,21 @@ async fn off_branch(path: &Path, branch: &str) -> anyhow::Result<Option<String>>
 
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
+}
+
+/// The files a copy edited here since `from` takes when the central host
+/// has `central` and the copy `local` (all tree ids in `repo`): the files
+/// to apply, the base they count from, and the paths both sides changed,
+/// which keep this Mac's version.
+async fn reconciled(repo: &Path, from: String, central: String, local: String) -> Result<(String, String, Vec<String>), String> {
+    let read = |t: String| async move { git_sync::read_files(repo, &t).await };
+    let (Ok(from_f), Ok(central_f), Ok(local_f)) = (read(from).await, read(central).await, read(local).await) else {
+        return Err("cannot read the copy's files".into());
+    };
+    let r = resume(&from_f, &central_f, &local_f);
+    let target = git_sync::write_files(repo, &r.worker).await.map_err(|e| format!("{e:#}"))?;
+    let base = git_sync::write_files(repo, &r.base).await.map_err(|e| format!("{e:#}"))?;
+    Ok((target, base, r.differs))
 }
 
 /// Why a copy pauses over a pack from `host` that git refused.
@@ -3481,13 +3750,25 @@ pub(crate) fn copies_dir(home: &Path, host: &str, project: &str, session: &str) 
 /// holds its base.
 impl LiveCopies {
     /// `exec.prepare`: this worker's routing copy of `session`, made if it
-    /// has none yet. `setup_pending` while the project's setup runs or
-    /// waits for the user's approval.
-    pub async fn prepare_run(self: &Arc<Self>, session: String) -> Result<m::ExecPrepared, RpcError> {
-        let host = self
-            .link
-            .central_name()
-            .ok_or_else(|| RpcError::new("no_central_host", "this machine has no central host"))?;
+    /// has none yet: a session of this machine's central host, or of a
+    /// member that routed it here, `member` being its worker id and name
+    /// (X89). `setup_pending` while the project's setup runs or waits for
+    /// the user's approval.
+    pub async fn prepare_run(
+        self: &Arc<Self>,
+        session: String,
+        member: Option<(String, String)>,
+        setup: Option<String>,
+    ) -> Result<m::ExecPrepared, RpcError> {
+        let (host, peer) = match member {
+            Some((id, name)) => (name, Some(id)),
+            None => (
+                self.link
+                    .central_name()
+                    .ok_or_else(|| RpcError::new("no_central_host", "this machine has no central host"))?,
+                None,
+            ),
+        };
         // Found and marked in use under its lock, so a sweep removing it
         // meanwhile is waited for, and the copy made anew.
         let (id, _held) = loop {
@@ -3496,7 +3777,7 @@ impl LiveCopies {
                 match data
                     .worker
                     .iter()
-                    .find(|k| k.kind == CopyKind::Run && k.session == session && k.host == host)
+                    .find(|k| k.kind == CopyKind::Run && k.session == session && k.host == host && k.peer == peer)
                 {
                     Some(k) => k.id.clone(),
                     None => {
@@ -3504,6 +3785,7 @@ impl LiveCopies {
                             id: uuid::Uuid::new_v4().to_string(),
                             kind: CopyKind::Run,
                             host: host.clone(),
+                            peer: peer.clone(),
                             session: session.clone(),
                             ..Kept::default()
                         };
@@ -3525,6 +3807,10 @@ impl LiveCopies {
             }
         };
         drop(_held);
+        // The router's setup command, kept for the copy's setup (X89).
+        if setup.is_some() {
+            self.update_kept(&id, |k| k.setup_command = setup.clone());
+        }
         self.save();
         // A routing copy has nobody to retry it: one whose folder went, or
         // that stopped on an error, is made again.
@@ -3635,6 +3921,8 @@ impl LiveCopies {
             .worker
             .iter()
             .filter(|k| k.kind == CopyKind::Run && keep.as_deref() != Some(k.host.as_str()))
+            // A copy a command runs in now stays until it ends (X89).
+            .filter(|k| !k.in_use_until.is_some_and(|t| t > moonlet_core::paths::now_ms()))
             .map(|k| k.id.clone())
             .collect();
         for id in ids {
@@ -3686,6 +3974,32 @@ impl LiveCopies {
     }
 
     /// Call holding [`LiveCopies::run_lock`].
+    /// A run in routing copy `copy` ended while this host takes no heavy
+    /// commands any more: the copy goes now, as the others went when the
+    /// switch went off (X89).
+    pub fn drop_run_copy_if_off(self: &Arc<Self>, copy: &str) {
+        let info = self.link.info();
+        if info.worker.enabled || info.worker.cloud {
+            return;
+        }
+        let me = self.clone();
+        let copy = copy.to_string();
+        tokio::spawn(async move {
+            // Under the copy's lock, as `prepare_run` takes it: not when the
+            // switch went on again meanwhile, nor once another run took it.
+            let lock = me.lock(&copy);
+            let _one = lock.lock().await;
+            let now = moonlet_core::paths::now_ms();
+            let in_use = me.kept(&copy).is_some_and(|k| k.in_use_until.is_some_and(|t| t > now));
+            if me.link.info().worker.enabled || in_use {
+                return;
+            }
+            if let Err(e) = me.remove_held(&copy, CloseReason::Stopped).await {
+                tracing::warn!(%copy, "cannot remove the routing copy: {}", e.message);
+            }
+        });
+    }
+
     pub async fn reset_run(&self, copy: &str) {
         self.update_kept(copy, |k| {
             k.last_used = Some(moonlet_core::paths::now_ms());
@@ -3718,10 +4032,28 @@ impl LiveCopies {
         self.update_projects(&key, |p| p.approved_heavy = Some(approval))
     }
 
-    /// What this worker approved of the project routing copy `copy` is of.
+    /// What is approved of the project routing copy `copy` is of: the
+    /// account's approval, once for every member (X89), and only it while
+    /// this machine shares its central host's account; else what this
+    /// worker approved for its central host (X62).
     pub fn heavy_approval(&self, copy: &str) -> Option<m::HeavyApproval> {
         let k = self.kept(copy)?;
-        let key = project_key(&k.host, k.identity.as_ref()?)?;
+        let identity = k.identity.as_ref()?;
+        // The key checks the identity; the account's approval counts only
+        // for a copy of this machine's own central host, the host whose
+        // account this machine shares.
+        let key = project_key(&k.host, identity)?;
+        let ours = match &k.peer {
+            // A member linked to this central host shares its account (X89).
+            Some(member) => self.workers.conn(member).is_some() || self.is_member(member),
+            None => self.link.central_name().as_deref() == Some(k.host.as_str()),
+        };
+        if ours && self.sessions.has_account() {
+            return self
+                .sessions
+                .heavy_approval(identity)
+                .map(|(commands, env)| m::HeavyApproval { commands, env });
+        }
         self.load_projects().remove(&key)?.approved_heavy
     }
 
@@ -3741,8 +4073,7 @@ impl LiveCopies {
             return Err(not_fenced("the copy is not made"));
         };
         let conn = self
-            .workers
-            .conn(&served.worker)
+            .peer_for(&served.worker)
             .ok_or_else(|| RpcError::new("disconnected", "the worker went away"))?;
         let path = Path::new(&served.path);
         if off_branch(path, &served.branch).await.map_err(internal)?.is_some() {
@@ -3766,7 +4097,7 @@ impl LiveCopies {
     /// `sync-leftovers/<session folder>-run-<when>`.
     pub async fn run_back(
         &self,
-        conn: &Conn,
+        conn: &Peer,
         req: &m::ExecDone,
         pack: Option<Vec<u8>>,
         host: &str,

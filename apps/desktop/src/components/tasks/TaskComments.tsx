@@ -53,7 +53,7 @@ export function TaskComments({ host, workspaceId, task }: { host: string; worksp
                 · {c.ago}
               </span>
             </div>
-            <div className="mt-0.5 ui-text-12.5">{c.markdown ? <Markdown text={c.body} task /> : <p className="whitespace-pre-wrap text-fg">{c.body}</p>}</div>
+            <div className="mt-0.5 ui-text-12.5">{c.markdown ? <Markdown text={c.body} kind="task" /> : <p className="whitespace-pre-wrap text-fg">{c.body}</p>}</div>
           </li>
         ))}
       </ol>

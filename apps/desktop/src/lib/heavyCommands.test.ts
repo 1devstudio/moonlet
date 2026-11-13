@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalBanner, approvedToast, entryStates, heavyChanged, heavyDraft, heavyFromDraft, needsApproval, secretWarning, workerApproval } from "./heavyCommands";
+import { approvalBanner, approvedToast, entryStates, heavyChanged, heavyDraft, heavyFromDraft, needsApproval, secretWarning, withApproval, workerApproval } from "./heavyCommands";
 import type { HeavyInfo } from "./protocol";
 
 const info = (commands: string[], env: string[], approved: HeavyInfo["approved"]): HeavyInfo => ({
@@ -58,6 +58,13 @@ describe("the project page's Heavy commands (X62)", () => {
       "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox",
     );
     expect(approvedToast("shop", ["pnpm test"], ["studio-mini"], [])).toBe("Approved pnpm test for shop on studio-mini");
+  });
+
+  it("keeps the page's list and takes another member's approval (X89)", () => {
+    const shown = info(["pnpm check", "pnpm lint"], [], null);
+    const fresh = { ...info(["pnpm check"], [], { commands: ["pnpm check", "pnpm lint"], env: [] }), account: true };
+    expect(withApproval(shown, fresh)).toEqual({ ...shown, approved: { commands: ["pnpm check", "pnpm lint"], env: [] }, account: true });
+    expect(needsApproval(withApproval(shown, fresh))).toBe(false);
   });
 
   it("a worker that was not reachable is named in the toast", () => {

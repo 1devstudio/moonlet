@@ -317,6 +317,14 @@ pub struct DesignInfo {
     /// copy: **Update** brings the new one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub system_updated: bool,
+    /// A design shared with every workspace (X95): the library's, addressed
+    /// as `{workspace: "library", slug}`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+    /// A session design's folder of its comments, history, built
+    /// screenshots and its agent's copy of the design system (X101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
 }
 
 impl DesignInfo {
@@ -343,6 +351,8 @@ impl DesignInfo {
             project: None,
             built_in: None,
             system_updated: false,
+            shared: false,
+            side: None,
         }
     }
 
@@ -557,6 +567,11 @@ pub struct ProjectDesign {
     /// when not set.
     #[serde(default)]
     pub dir: Option<String>,
+    /// Where its session designs are made (X101): `"moonlet"` keeps them in
+    /// `~/.moonlet/design/.sessions/<session>/`, out of the worktree; any
+    /// other value, or none, in the worktree's design folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<String>,
 }
 
 /// A project's heavy commands, the `[heavy]` table of its config (X62).
@@ -1175,6 +1190,17 @@ pub struct BasePull {
     pub head: String,
 }
 
+/// The `git.base_pulled` event: which project's base branch a pull moved,
+/// and what the pull did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BasePulled {
+    /// The repository's top folder, as `Project::path` holds it.
+    pub path: String,
+    pub branch: String,
+    #[serde(flatten)]
+    pub pull: BasePull,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DirEntry {
     pub name: String,
@@ -1379,6 +1405,10 @@ pub struct Subagent {
     /// Its latest tool calls, without their output.
     #[serde(default)]
     pub tools: Vec<SubagentTool>,
+    /// The report it handed back with `SubagentHandback` during this run,
+    /// which becomes `report` once it is done. The daemon's own; never sent.
+    #[serde(skip)]
+    pub handback: Option<String>,
 }
 
 /// One tool call of a subagent (X42).

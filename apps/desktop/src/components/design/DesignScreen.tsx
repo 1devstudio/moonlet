@@ -5,7 +5,8 @@
 // Palette, Comments and History tabs; a snapshot picked in History is
 // previewed on the canvas, read only.
 
-import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { LIBRARY } from "../../lib/designLibrary";
+import { ArrowRight, ChevronDown, Play as PlayIcon, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, Share2, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatHasItem, chatKey, revealInChat, useChat } from "../../lib/chat";
@@ -25,6 +26,8 @@ import {
   problemsOf,
   reloadPage,
   removeDesign,
+  shareDesign,
+  unshareDesign,
   kitRevOf,
   resolveComment,
   saveViewport,
@@ -68,6 +71,7 @@ import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
+import { Play } from "./Play";
 import { CommentBox, CommentsTab, PinLayer, designMessage, type BoxTarget } from "./Comments";
 import { Breadcrumb, EditsChip, LayersTab } from "./Editor";
 import { InspectorTab, PaletteTab } from "./Inspector";
@@ -98,15 +102,19 @@ export function useDesignBasics(host: string, workspace: string, design: Design)
 }
 
 /** The design screen of workspace design `design`, in workspace
- *  `workspace` of `host`: its agent's chat beside its canvas. */
-export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
+ *  `workspace` of `host`: its agent's chat beside its canvas. A shared
+ *  design (X95) is the library's (`workspace` is `library`), shown in
+ *  workspace `viewedIn`, where Build it starts its session. */
+export function DesignScreen({ host, workspace, viewedIn = workspace, design, inset }: { host: string; workspace: string; viewedIn?: string; design: Design; inset: number }) {
   const { agent, systemName } = useDesignBasics(host, workspace, design);
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
   // Build it (X65): the New session composer, in the design system's first source.
-  const systems = useDesign((d) => systemsOf(d, host, workspace));
-  const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  const systems = useDesign((d) => systemsOf(d, host, viewedIn));
+  const projects = useStore(useShallow((s) => workspaceProjects(s, host, viewedIn)));
+  const viewedName = useStore((s) => s.workspaces[host]?.find((w) => w.id === viewedIn)?.name ?? "this workspace");
+  const shared = workspace === LIBRARY;
   const sessions = useStore((s) => s.sessions[host]);
   const allProjects = useStore((s) => s.projects[host]);
   const building = buildingIn(design, sessions ?? [], allProjects ?? []);
@@ -114,7 +122,19 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const buildIt = () => {
     if (!("project" in target)) return;
     const build: BuildDesign = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
-    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: target.project, design: build } });
+    useStore.setState({ dialog: { kind: "new-session", host, workspace: viewedIn, project: target.project, design: build } });
+  };
+  const share = async () => {
+    const ok = await askConfirm({
+      title: `Share ${design.name} with every workspace?`,
+      message: `It moves out of ${viewedName}'s designs and is listed under Shared designs in each workspace.`,
+      action: "Share",
+    });
+    if (ok) void shareDesign(host, viewedIn, design.slug).catch(errorToast);
+  };
+  const unshare = async () => {
+    const ok = await askConfirm({ title: `Move ${design.name} into ${viewedName}?`, message: "It is no longer listed in the other workspaces.", action: "Stop sharing" });
+    if (ok) void unshareDesign(host, viewedIn, design.slug).catch(errorToast);
   };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
@@ -123,8 +143,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   return (
     <div className="flex min-h-0 flex-1">
       {chatOpen ? (
-        <section ref={chatRef} aria-label={`Design · ${design.name}`} className="flex w-[360px] shrink-0 flex-col border-r border-border">
-          <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1.5 border-b border-border bg-panel pr-2" style={{ paddingLeft: inset + 16 }}>
+        <section ref={chatRef} aria-label={`Design · ${design.name}`} className="mr-[6px] flex w-[360px] shrink-0 flex-col">
+          <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-1.5 pr-2" style={{ paddingLeft: inset + 16 }}>
             <div className="min-w-0 flex-1">
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
@@ -139,24 +159,32 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             {!design.owner && (
               <Menu
                 align="right"
+                width={260}
                 trigger={(open) => (
                   <IconButton title="More" className="no-drag" onClick={open}>
                     <MoreHorizontal size={14} />
                   </IconButton>
                 )}
-                items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+                items={[
+                  shared
+                    ? { label: "Stop sharing", icon: <Share2 size={14} />, onSelect: () => void unshare() }
+                    : { label: "Share with every workspace", icon: <Share2 size={14} />, onSelect: () => void share() },
+                  { label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() },
+                ]}
               />
             )}
             <IconButton title="Hide chat (⌘\)" className="no-drag" onClick={() => setChatOpen(false)}>
               <PanelLeftClose size={14} />
             </IconButton>
           </header>
+          {/* The chat's pane (X94). */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-bg">
           {building && (
             // Built (X65): its session design is the one that changes now.
             <button
               title="Open the session it is building in"
               className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border bg-panel-2 px-4 text-left ui-text-12.5 text-muted hover:text-fg"
-              onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
+              onClick={() => void openSessionDesign(host, viewedIn, building.session, design.slug, true)}
             >
               <GitBranch size={12} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{building.text}</span>
@@ -184,9 +212,10 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <p className="p-5 ui-text-13 text-muted">This design's agent is not running.</p>
             )}
           </div>
+          </div>
         </section>
       ) : (
-        <div className="flex w-11 shrink-0 flex-col items-center gap-2 border-r border-border" style={{ paddingTop: inset ? 60 : 14 }}>
+        <div className="mr-[6px] flex w-11 shrink-0 flex-col items-center gap-2" style={{ paddingTop: inset ? 60 : 14 }}>
           <IconButton title="Show chat (⌘\)" onClick={() => setChatOpen(true)}>
             <PanelLeftOpen size={14} />
           </IconButton>
@@ -274,9 +303,17 @@ export function DesignCanvas({
     inTab.current = inTabAfter({ kind: "opened" });
     tookOpened(host, place.session);
   }, [opened, host, place]);
-  const keysHere = () => canvasTakesKeys(session, inTab.current);
+  const keysHere = () => canvasTakesKeys(session, inTab.current, playingRef.current);
   // The page shown, or null for Overview.
   const [picked, setPicked] = useState<string | null>("index");
+  // The page played full screen (X99), or null; the canvas takes no keys meanwhile.
+  const [playing, setPlaying] = useState<string | null>(null);
+  const playingRef = useRef(false);
+  playingRef.current = playing !== null;
+  const stopPlaying = useCallback((last: string) => {
+    setPicked(last);
+    setPlaying(null);
+  }, []);
   const [zoom, setZoom] = useState<number | null>(null);
   const [details, setDetails] = useState(false);
   const [custom, setCustom] = useState(false);
@@ -511,6 +548,22 @@ export function DesignCanvas({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  // P plays the page shown full screen (X99); in Overview, the first.
+  const playRef = useRef(() => {});
+  playRef.current = () => {
+    const first = page ?? names[0];
+    if (first !== undefined) setPlaying(first);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const { dialog, confirm, settingsPage } = useStore.getState();
+      if (dialog || confirm || settingsPage || !keysRef.current() || keyId(e) !== "p" || isTyping(e.target instanceof Element ? e.target : null)) return;
+      e.preventDefault();
+      playRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
   const asked = useRef(design.needs_you);
@@ -666,7 +719,7 @@ export function DesignCanvas({
   return (
     <div ref={own} className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 border-b border-border bg-panel px-3", session ? "h-10" : "drag h-[52px]")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
+        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 px-3", session ? "h-10 border-b border-border" : "drag h-ui-44")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
           <nav aria-label="Pages" className="no-drag flex min-w-0 items-center gap-0.5 overflow-x-auto">
             {(names.length ? names : ["index"]).map((name) => (
               <button
@@ -691,6 +744,8 @@ export function DesignCanvas({
           </nav>
           {aside}
         </div>
+        {/* The canvas's pane (X94); in a session's Design tab, the right panel's. */}
+        <div className={cx("flex min-h-0 flex-1 flex-col", !session && "overflow-hidden rounded-[10px] bg-bg")}>
         <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
@@ -698,6 +753,14 @@ export function DesignCanvas({
           <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes, readOnly })} onClick={() => travel(true)}>
             <Undo2 size={14} />
           </IconButton>
+          <button
+            title="Play full screen (P)"
+            disabled={!names.length}
+            onClick={() => playRef.current()}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border-strong px-2 text-muted hover:text-fg disabled:text-faint"
+          >
+            <PlayIcon size={12} /> Play
+          </button>
           {/* A snapshot previewed is View only, as the History board shows it: no switch. */}
           {!readOnly && (
           <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
@@ -806,10 +869,11 @@ export function DesignCanvas({
             )
           )}
         </div>
+        </div>
       </div>
       {railOpen && (
-        <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
-          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-2 overflow-x-auto border-b border-border px-3">
+        <aside aria-label="Right rail" className={cx("flex w-[300px] shrink-0 flex-col", session ? "border-l border-border" : "ml-[6px]")}>
+          <div role="tablist" className={cx("flex shrink-0 items-end gap-2 overflow-x-auto px-3", session ? "h-10 border-b border-border" : "h-ui-44")}>
             {RAIL_TABS.map(({ tab: t, label }) => (
               <button
                 key={t}
@@ -823,6 +887,7 @@ export function DesignCanvas({
               </button>
             ))}
           </div>
+          <div className={cx("flex min-h-0 flex-1 flex-col", !session && "overflow-hidden rounded-[10px] bg-bg")}>
           {railTab === "layers" ? (
             <LayersTab
               layers={page === null ? NO_LAYERS : layers}
@@ -867,6 +932,7 @@ export function DesignCanvas({
             onPick={openPin}
           />
           )}
+          </div>
         </aside>
       )}
       {details && <DetailsDialog page={page} problems={problems} onClose={() => setDetails(false)} />}
@@ -880,6 +946,19 @@ export function DesignCanvas({
             updateSettings({ designViewports: withCustomViewport(useStore.getState().settings.designViewports, size) });
             setViewport(size);
           }}
+        />
+      )}
+      {playing !== null && (
+        <Play
+          host={host}
+          place={place}
+          slug={design.slug}
+          name={design.name}
+          pages={names}
+          start={playing}
+          snapshot={previewed?.n ?? null}
+          viewport={viewport}
+          onClose={stopPlaying}
         />
       )}
     </div>

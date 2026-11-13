@@ -220,6 +220,36 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
   return st.state === "loaded" ? { tone: "done", text: "Running under launchd", path } : { tone: "blocked", text: "Installed but not loaded", path };
 }
 
+/** What the force-restart dialog asks (X97). */
+export interface ForceAsk {
+  title: string;
+  message: string;
+  action: string;
+}
+
+/** Restart this Mac's daemon (X97): a handoff that keeps terminals first,
+ *  and when it is stuck, a force restart once the user agrees. The toast to
+ *  show, or null when the user kept the daemon as it is. */
+export async function restartDaemon(restart: (force: boolean) => Promise<unknown>, askForce: (ask: ForceAsk) => Promise<boolean>): Promise<string | null> {
+  try {
+    await restart(false);
+    return "Daemon restarted. Terminals kept running.";
+  } catch (e) {
+    const err = e as { code?: string; message?: string } | null;
+    if (err?.code !== "not_responding") throw e;
+    const why = (err.message ?? "").trim();
+    const sentence = why ? `${why[0].toUpperCase()}${why.slice(1)}${/[.!?]$/.test(why) ? "" : "."} ` : "";
+    const ok = await askForce({
+      title: "Force restart the daemon",
+      message: `${sentence}Force restart ends every terminal it holds. Agents' chats carry on from where they were.`,
+      action: "Force restart",
+    });
+    if (!ok) return null;
+    await restart(true);
+    return "Daemon restarted. Its terminals ended; chats carry on.";
+  }
+}
+
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 
@@ -410,7 +440,7 @@ export function appUpdateLine(u: UpdateState, checking: boolean, error: string |
 export function claudeUpdateLine(s: ClaudeUpdateState, v: ClaudeVersions, checking: boolean): StatusLine | null {
   const text = claudeStatus(s, v, checking);
   if (!text) return null;
-  if (checking || s.phase === "updating") return { tone: "muted", text };
+  if (checking || s.phase === "updating" || v.unasked) return { tone: "muted", text };
   if (!v.installed) return { tone: "blocked", text };
   return { tone: claudeOffer(s, v) ? "accent" : "done", text };
 }

@@ -125,6 +125,9 @@ struct Central {
     session: String,
     /// The session's worktree.
     worktree: PathBuf,
+    /// The project's main checkout, whose `.moonlet/config.toml` lists the
+    /// heavy commands (X90).
+    checkout: PathBuf,
 }
 
 async fn central_with(config: &str, env: &[(&str, &str)]) -> Central {
@@ -174,6 +177,7 @@ async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)])
         project: project["id"].as_str().unwrap().into(),
         session: session["id"].as_str().unwrap().into(),
         worktree: PathBuf::from(session["path"].as_str().unwrap()),
+        checkout: repo,
     }
 }
 
@@ -229,9 +233,10 @@ async fn an_unapproved_entry_is_not_routed() {
     );
 }
 
-/// Edits the session's own `.moonlet/config.toml`, as an agent would.
+/// Edits the project's `.moonlet/config.toml` in its main checkout, the
+/// list routing reads (X90).
 fn edit_config(c: &Central, text: &str) {
-    write(&c.worktree.join(".moonlet/config.toml"), text);
+    write(&c.checkout.join(".moonlet/config.toml"), text);
 }
 
 #[tokio::test]
@@ -289,6 +294,8 @@ async fn approving_records_the_commands_and_env_names_together() {
             "config": { "commands": ["pnpm test", "pnpm build"], "os": "any", "env": ["CI"], "outputs": [] },
             "approved": null,
             "error": null,
+            // Kept in the account, for every member (X89).
+            "account": true,
         })
     );
     c.approve(&["pnpm build", "pnpm test"], &["CI"]).await;
@@ -384,6 +391,44 @@ async fn a_deny_rule_in_the_worktree_keeps_the_command_here() {
         json!({ "route": false, "reason": "claude_rule" })
     );
     assert_eq!(c.route("pnpm test").await["route"], json!(true));
+}
+
+#[tokio::test]
+async fn a_worktree_without_a_moonlet_folder_routes_the_main_checkouts_list() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    // A project that keeps `.moonlet/` out of git: a worktree made from git
+    // has none.
+    std::fs::remove_dir_all(c.worktree.join(".moonlet")).unwrap();
+    assert_eq!(
+        c.route("pnpm test").await,
+        json!({ "route": true, "reason": null })
+    );
+}
+
+#[tokio::test]
+async fn an_entry_only_the_worktree_lists_is_not_routed() {
+    let c = central_with("[heavy]\ncommands = [\"pnpm test\", \"pnpm lint\"]\n", &[]).await;
+    c.approve(&["pnpm test", "pnpm lint"], &[]).await;
+    // Taken off the main checkout's list, which needs no approval; the
+    // worktree still lists it.
+    edit_config(&c, "[heavy]\ncommands = [\"pnpm test\"]\n");
+    assert_eq!(
+        c.route("pnpm lint").await,
+        json!({ "route": false, "reason": "not_heavy" })
+    );
+    assert_eq!(c.route("pnpm test").await["route"], json!(true));
+}
+
+#[tokio::test]
+async fn an_unreadable_main_checkout_config_routes_nothing() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    edit_config(&c, "[heavy\n");
+    assert_eq!(
+        c.route("pnpm test").await,
+        json!({ "route": false, "reason": "invalid_config" })
+    );
 }
 
 /// The central host with tailnet access on, listening on 127.0.0.1 as its
@@ -860,21 +905,26 @@ async fn linked_as(worker_env: &[(&str, &str)]) -> (Central, Daemon) {
 }
 
 /// [`linked_as`] with `config` for the project, and the Mac approving its
-/// heavy commands only when `mac_approves`.
+/// heavy commands only when `mac_approves`. A Mac that does not approve is
+/// one from before X89: it keeps its own approval, not the account's.
 async fn linked_with(
     config: &str,
     worker_env: &[(&str, &str)],
     mac_approves: bool,
 ) -> (Central, Daemon) {
-    linked_in(config, worker_env, mac_approves, None).await
+    linked_in(config, worker_env, mac_approves, None, !mac_approves).await
 }
 
 /// [`linked_with`], the Mac letting paired devices in on `phones`'s port.
+/// A Mac `before_x89` shares no account's approvals: its `account.json`
+/// cannot be read, so it keeps only what it approved itself, as a worker
+/// from before X89 does.
 async fn linked_in(
     config: &str,
     worker_env: &[(&str, &str)],
     mac_approves: bool,
     phones: Option<u16>,
+    before_x89: bool,
 ) -> (Central, Daemon) {
     let tools = tempfile::tempdir().unwrap().keep();
     // A tool only the central host has, on its login shell's PATH.
@@ -905,6 +955,9 @@ async fn linked_in(
         &json!({ "central": null, "worker": { "id": MAC_ID, "name": "Alex's MacBook Pro", "enabled": true } })
             .to_string(),
     );
+    if before_x89 {
+        std::fs::create_dir_all(home.path().join("account.json")).unwrap();
+    }
     if let Some(port) = phones {
         write(
             &home.path().join("mobile.json"),
@@ -998,6 +1051,54 @@ async fn a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status
         "hi\n"
     );
     assert!(!c.worktree.join("package.json").exists());
+}
+
+/// A background Bash call's `moonlet exec` can be killed outright when
+/// Claude Code stops it (X90): its connection closes, and the run on the
+/// worker stops and still brings its changes back.
+#[tokio::test]
+async fn a_killed_moonlet_exec_stops_its_run_and_brings_its_changes_back() {
+    let (c, _mac) = linked().await;
+    let (mut client, _run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "echo x > before.txt; echo started; sleep 30; touch after.txt",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        let f = tokio::time::timeout(Duration::from_secs(20), client.next_frame())
+            .await
+            .expect("the run never started")
+            .unwrap()
+            .unwrap();
+        if matches!(&f, Frame::RunOutput { stream: 1, data, .. } if data.starts_with(b"started")) {
+            break;
+        }
+    }
+    drop(client);
+    let mut job = Value::Null;
+    for _ in 0..200 {
+        job = jobs(&c).await[0].clone();
+        if ["done", "stopped"].contains(&job["state"]["kind"].as_str().unwrap_or_default()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Well before the command's 30 s sleep would have ended.
+    assert!(
+        ["done", "stopped"].contains(&job["state"]["kind"].as_str().unwrap_or_default()),
+        "the run went on: {job}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("before.txt")).unwrap(),
+        "x\n"
+    );
+    assert!(!c.worktree.join("after.txt").exists());
 }
 
 #[tokio::test]
@@ -1195,6 +1296,29 @@ async fn outputs_bring_back_an_ignored_coverage_folder() {
 }
 
 #[tokio::test]
+async fn outputs_come_from_the_main_checkouts_list() {
+    let (c, _mac) = linked().await;
+    // The worktree's own list has no `outputs`; the main checkout's has
+    // `coverage`.
+    write(
+        &c.worktree.join(".moonlet/config.toml"),
+        "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\", \"shop-tool\"]\nenv = [\"CI\"]\n",
+    );
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "mkdir -p coverage && echo 87 > coverage/index.txt",
+        ])
+        .await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("coverage/index.txt")).unwrap(),
+        "87\n"
+    );
+}
+
+#[tokio::test]
 async fn a_symbolic_link_in_outputs_is_never_followed() {
     let (c, _mac) = linked().await;
     c.run(&[
@@ -1283,6 +1407,17 @@ async fn a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it() {
     );
 }
 
+/// X89: the central host's approval is the account's, so a member runs the
+/// project's commands without approving them itself.
+#[tokio::test]
+async fn a_worker_runs_what_the_account_approved_without_approving_itself() {
+    let (c, _mac) = linked_in(RUN_CONFIG, &[], false, None, false).await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_tool_sends_the_command_to_the_next_worker() {
     let (c, _mac) = linked().await;
@@ -1317,7 +1452,7 @@ async fn a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_do
     let port = std::net::TcpListener::bind("[::1]:0").unwrap().local_addr().unwrap().port();
     // The Mac listens on ::1: one on the central host's 127.0.0.1 takes
     // itself for its central host.
-    let (c, mac) = linked_in(&config, &[("MOONLET_MOBILE_ADDRS", "::1")], true, Some(port)).await;
+    let (c, mac) = linked_in(&config, &[("MOONLET_MOBILE_ADDRS", "::1")], true, Some(port), false).await;
     let addr = format!("[::1]:{port}");
     let mut listening = false;
     for _ in 0..100 {
@@ -1827,6 +1962,111 @@ async fn output_over_ten_mib_keeps_its_start_and_end() {
             .any(|l| l.starts_with("moonlet: ") && l.ends_with(" of output dropped here")),
         "{err}"
     );
+}
+
+/// The log file `exec.exited` names when run `run` ends (X90).
+async fn exited_log(mut c: Client, run: u32) -> PathBuf {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(20), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .expect("the daemon closed the connection");
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "exec.exited"
+            && data["run"] == json!(run)
+        {
+            return PathBuf::from(data["log"].as_str().expect("no log in exec.exited"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_jobs_whole_output_is_in_its_log_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "echo one; sleep 0.3; echo two >&2; sleep 0.3; printf '\\033[31mthree\\033[0m\\n'",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let log = exited_log(client, run).await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        log,
+        c.daemon
+            .home
+            .path()
+            .join("jobs")
+            .join(&c.session)
+            .join(format!("{id}.log"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "moonlet: running on studio-mini\none\ntwo\n\u{1b}[31mthree\u{1b}[0m\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[tokio::test]
+async fn a_log_over_ten_mib_keeps_its_start_and_end() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOB_OUTPUT_MAX", "1000")]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "i=0; while [ $i -lt 300 ]; do echo line$i; i=$((i+1)); done",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let log = std::fs::read_to_string(exited_log(client, run).await).unwrap();
+    assert!(
+        log.starts_with("moonlet: running on studio-mini\nline0\nline1\n"),
+        "{log}"
+    );
+    assert!(log.ends_with("line298\nline299\n"), "{log}");
+    assert!(log.len() < 1200, "{}", log.len());
+    assert!(
+        log.lines()
+            .any(|l| l.starts_with("moonlet: ") && l.ends_with(" of output dropped here")),
+        "{log}"
+    );
+}
+
+#[tokio::test]
+async fn a_jobs_log_goes_with_the_job() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOBS_KEPT", "1")]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(&["sh", "run.sh"], &c.worktree.clone(), json!({}))
+        .await;
+    let first = exited_log(client, run).await;
+    assert!(first.exists());
+    let (client, run) = c
+        .start(&["sh", "run.sh"], &c.worktree.clone(), json!({}))
+        .await;
+    let second = exited_log(client, run).await;
+    assert!(!first.exists(), "the dropped job's log stayed");
+    assert!(second.exists());
+    let _: Value = c
+        .daemon
+        .call("session.archive", json!({ "id": c.session, "force": true }))
+        .await;
+    assert!(!second.exists(), "the archived session's log stayed");
 }
 
 #[tokio::test]

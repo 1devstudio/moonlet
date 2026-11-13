@@ -244,6 +244,9 @@ pub const GH_PR_CONTEXT: &str = "gh.pr_context";
 /// `{path, mine}` → the repository's 100 most recently updated issues, open
 /// and closed, as `GhTask`s; `mine` keeps only those assigned to the user (X44).
 pub const GH_TASKS: &str = "gh.tasks";
+/// `{path, repo, query, limit}` → `GhTask[]`: Find a task (X93), a
+/// repository's issues, open or closed, that gh's search finds for the text.
+pub const GH_SEARCH: &str = "gh.search";
 /// `{owners}`: the open GitHub Projects of the signed-in user and of
 /// `owners` (X50 Add a board). Needs gh's `read:project` scope.
 pub const GH_PROJECTS: &str = "gh.projects";
@@ -285,6 +288,17 @@ pub const FS_READ: &str = "fs.read";
 pub const FS_WRITE: &str = "fs.write";
 /// Like `fs.write`, but the file stays inside a folder, never through a symlink (X38).
 pub const FS_WRITE_INSIDE: &str = "fs.write_inside";
+/// [`FsCreate`] → `true`: a new empty file or folder in the Files tab (X98).
+pub const FS_CREATE: &str = "fs.create";
+/// [`FsRename`] → `true`: renames or moves an entry, never over another (X98).
+pub const FS_RENAME: &str = "fs.rename";
+/// [`FsEntry`] → [`FsDuplicated`]: copies an entry next to it as `name copy.ext` (X98).
+pub const FS_DUPLICATE: &str = "fs.duplicate";
+/// [`FsEntry`] → [`FsDeleted`]: to the Trash on a Mac, for good elsewhere (X98).
+pub const FS_DELETE: &str = "fs.delete";
+/// `{}` → `true` when `fs.delete` moves to a Trash on this host (X98), so
+/// the app asks the right question before deleting.
+pub const FS_HAS_TRASH: &str = "fs.has_trash";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
@@ -320,6 +334,11 @@ pub const DESIGN_RENDER_DONE: &str = "design.render.done";
 pub const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
+/// [`DesignFile`] of a workspace's or a session's design's page, a
+/// snapshot's included → `{html, missing}`: the page as one file,
+/// everything it loads from the design's folder inlined, and the addresses
+/// it could not read (X99 Download).
+pub const DESIGN_STANDALONE: &str = "design.standalone";
 /// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.
 pub const DESIGN_DETECT: &str = "design.detect";
 /// [`DesignSettle`]: the user's choice for a card after a sync.
@@ -388,6 +407,10 @@ pub const DESIGN_FETCH: &str = "design.fetch";
 /// owner's latest snapshot, and with `busy` while the owner's agent works,
 /// unless `force`.
 pub const DESIGN_MOVE: &str = "design.move";
+/// Shares a workspace design with every workspace (X95): app only.
+pub const DESIGN_SHARE: &str = "design.share";
+/// Moves a shared design into one workspace (X95): app only.
+pub const DESIGN_UNSHARE: &str = "design.unshare";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -423,6 +446,32 @@ pub const WORKER_REGISTER: &str = "worker.register";
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
 pub const WORKER_PING: &str = "worker.ping";
+/// A routing call between two members, through their central host (X89):
+/// [`PeerCall`] → the other member's answer. A member sends `to`; the
+/// central host passes it on with `from`, the sender's worker id.
+pub const PEER_CALL: &str = "peer.call";
+/// The members a member may route a command to through its central host,
+/// with their load and slots (X89): [`WorkerStatus`]s.
+pub const WORKER_PEERS: &str = "worker.peers";
+/// A member's command found no free machine (X89): the central host starts
+/// a cloud machine of the project when its overflow is on. [`CloudOverflow`].
+pub const CLOUD_OVERFLOW: &str = "cloud.overflow";
+/// `{run}`, from the central host to a member: the member that ran run
+/// `run` for it through the central host went away (X89).
+pub const EV_EXEC_LOST: &str = "exec.lost";
+/// A member asks its central host whether it takes the member's heavy
+/// commands now (X89): [`WorkerStatus`].
+pub const WORKER_STATUS: &str = "worker.status";
+/// Every member's worker settings, as this member holds them (X89):
+/// [`WorkerSettingsEntry`]s.
+pub const WORKER_SETTINGS: &str = "worker.settings";
+/// Changes a member's worker settings (X89): [`WorkerSettingsSet`] →
+/// `true`. Only an app or a paired desktop.
+pub const WORKER_SETTINGS_SET: &str = "worker.settings.set";
+/// `{}`, when another member approved a project's heavy commands (X89).
+pub const EV_HEAVY_APPROVAL_CHANGED: &str = "heavy.approval_changed";
+/// [`WorkerSettingsEntry`]s, when any member's settings change (X89).
+pub const EV_WORKER_SETTINGS_CHANGED: &str = "worker.settings_changed";
 /// [`LinkInfo`], on every change of the link's settings or state.
 pub const EV_LINK_CHANGED: &str = "link.changed";
 /// [`WorkerInfo`]s, when a worker registers or goes away.
@@ -649,6 +698,10 @@ pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 /// A host's Git settings after a change: the whole `GitSettings` (X55).
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
+/// A project's base branch was fast-forwarded by `git.pull_base`, by any
+/// client: [`BasePulled`](crate::types::BasePulled) (X13). Another host's
+/// pull reaches this host's app only through it.
+pub const EV_GIT_BASE_PULLED: &str = "git.base_pulled";
 /// A workspace's board snapshot after a change: [`WorkspaceSnapshot`] (X76).
 pub const EV_TASKS_CHANGED: &str = "tasks.changed";
 /// A phone's request for the app to answer: [`TasksRequestEvent`] (X76).
@@ -1317,6 +1370,11 @@ pub struct SessionTake {
     /// from any other, it is an ordinary take.
     #[serde(default)]
     pub forced: bool,
+    /// The member brings back a session the central host took for its
+    /// sleep (X73): only while it is idle there and nobody typed into it
+    /// since; otherwise `busy` or `used`.
+    #[serde(default)]
+    pub returning: bool,
 }
 
 /// `session.take`'s reply: the new ownership number, the session's chats
@@ -2075,6 +2133,21 @@ pub struct GhTasks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhSearch {
+    /// Any directory inside a repository, for `gh`'s host and sign-in.
+    pub path: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub query: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: u32,
+}
+
+fn default_search_limit() -> u32 {
+    8
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhTaskGet {
     /// Any directory inside a repository, for `gh`'s host and sign-in.
     pub path: String,
@@ -2684,6 +2757,41 @@ pub struct FsWriteInside {
     pub content: String,
 }
 
+/// An entry inside `root`, a session's folder, that a file action (X98) must stay in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsEntry {
+    pub root: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsCreate {
+    pub root: String,
+    pub path: String,
+    /// A folder rather than a file.
+    #[serde(default)]
+    pub dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsRename {
+    pub root: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsDuplicated {
+    /// The copy's path.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsDeleted {
+    /// Moved to the Trash rather than deleted for good.
+    pub trashed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsPath {
     pub path: String,
@@ -2946,6 +3054,80 @@ pub struct LinkSet {
     pub worker: Option<LinkWorkerSet>,
 }
 
+/// `peer.call` (X89).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PeerCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// `worker.status` (X89): a central host as a candidate for a member's
+/// routed command.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct WorkerStatus {
+    pub id: String,
+    pub name: String,
+    /// It takes other hosts' heavy commands.
+    pub heavy: bool,
+    pub os: String,
+    pub cores: u32,
+    pub load: f64,
+    pub slots: u32,
+    /// Routed commands it runs now, for anyone.
+    pub used: u32,
+    /// The central host's round trip to it, for a member reached through
+    /// it (`worker.peers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u64>,
+    /// One of the project's cloud machines (X89, X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
+}
+
+/// `worker.peers` (X89): with the project's identity, its ready cloud
+/// machines are listed too.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct WorkerPeers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::types::ProjectIdentity>,
+}
+
+/// `cloud.overflow` (X89): a member found no free machine for a command
+/// of the project with this identity.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CloudOverflow {
+    pub identity: crate::types::ProjectIdentity,
+    /// The member's session asked for the cloud: a machine starts whether
+    /// the project's overflow is on or not, and the answer names it.
+    #[serde(default)]
+    pub asked: bool,
+}
+
+/// `worker.settings.set` (X89): a field left out stays as it is.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct WorkerSettingsSet {
+    pub worker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<u32>,
+}
+
+/// A member's worker settings (X89): whether it takes other hosts' heavy
+/// commands, and how many routed commands it runs at once.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct WorkerSettingsEntry {
+    pub worker: String,
+    pub name: String,
+    pub heavy: bool,
+    pub slots: u32,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LinkWorkerSet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3045,6 +3227,10 @@ pub struct WorkerRegister {
     /// A worker linked only for live copies does not (X62).
     #[serde(default)]
     pub heavy: bool,
+    /// It runs other members' commands, and routes its own, through its
+    /// central host (`peer.call`, X89). Absent from a member before X89.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub peer: bool,
 }
 
 /// A linked worker in `worker.list`.
@@ -3058,6 +3244,13 @@ pub struct WorkerInfo {
     /// The 1-minute load average from the last `worker.ping` answer (X62).
     #[serde(default)]
     pub load: Option<f64>,
+    /// Routed commands it runs now, for any host, from the last
+    /// `worker.ping` answer (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<u32>,
+    /// What it runs for other hosts, from the last `worker.ping` (X89).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<Serving>,
 }
 
 /// `sync.start` params: the session's id on the central host.
@@ -3228,6 +3421,22 @@ pub struct DesignMove {
     pub slug: String,
     #[serde(default)]
     pub force: bool,
+}
+
+/// `design.share`: the workspace design to share with every workspace (X95).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignShare {
+    pub workspace: String,
+    pub slug: String,
+}
+
+/// `design.unshare`: the shared design (`workspace` is `library`) and the
+/// workspace it moves into (X95).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignUnshare {
+    pub workspace: String,
+    pub slug: String,
+    pub into: String,
 }
 
 /// `design.fetch`: a tree, and the trees the member's copies hold already.
@@ -3426,6 +3635,10 @@ pub struct HeavyInfo {
     pub approved: Option<HeavyApproval>,
     /// Why `[heavy]` cannot be used as written; nothing is routed then.
     pub error: Option<String>,
+    /// The approval is kept in the account, so it holds on every member
+    /// (X89); false on a host that shares no account, or from before X89.
+    #[serde(default)]
+    pub account: bool,
 }
 
 /// `exec.route` params, from moonlet's `PreToolUse` hook.
@@ -3483,12 +3696,26 @@ pub struct ExecCancel {
 pub struct ExecExited {
     pub run: u32,
     pub status: i32,
+    /// The job's whole output as plain text, for an agent whose tool
+    /// result was cut short (X90). None from a daemon before X90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
 }
 
 /// `exec.prepare` params.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecPrepare {
     pub session: String,
+    /// The project's setup command, from the main checkout of the host
+    /// that routes the command (X90, X89): a routing copy made from git
+    /// may have no `.moonlet/config.toml` of its own. The runner still
+    /// asks the user before it runs a command it was not approved for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
+    /// The session's project, by identity (X89): a central host passes a
+    /// member's command on to a cloud machine of that project only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::types::ProjectIdentity>,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live
@@ -3533,6 +3760,19 @@ pub struct ExecStart {
     /// Ignored paths brought back after the run.
     #[serde(default)]
     pub outputs: Vec<String>,
+    /// The session's name, for the runner's list of what it runs (X89).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+}
+
+/// A command a host runs for another host (X89): the host whose session
+/// it is, the session's name, the command and when it started (ms).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Serving {
+    pub host: String,
+    pub session: String,
+    pub command: String,
+    pub started_at: u64,
 }
 
 /// `exec.done` params: `tree` and `head` are the copy's after the run.
@@ -3728,6 +3968,9 @@ pub struct ExecStatus {
     pub skips: Vec<ExecSkip>,
     /// Commands this machine runs for its central host.
     pub routed: u32,
+    /// Commands this machine runs for other hosts, for whom (X89).
+    #[serde(default)]
+    pub serving: Vec<Serving>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

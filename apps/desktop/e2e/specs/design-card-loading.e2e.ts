@@ -18,7 +18,7 @@ const name = (i: number) => `Card ${i}`;
 const names = Array.from({ length: N }, (_, i) => name(i + 1));
 const LOADED = "moonlet-e2e-loaded ";
 const head = '<!doctype html>\n<html><head><meta charset="utf-8"><link rel="stylesheet" href="../../../styles.css"></head>\n';
-const dir = () => join(w.home, "design", workspaceId(), "systems", SLUG);
+const dir = () => join(w.home, "design", "library", "systems", SLUG);
 const cardFile = (i: number) => join(dir(), "components", "custom", `card-${i}`, `card-${i}.html`);
 // It tells the window which card it is once it loaded.
 const card = (i: number) =>

@@ -13,6 +13,7 @@ import { cx } from "../../lib/cx";
 import { Button } from "../ui";
 import { Menu } from "../Menu";
 import { EditsMessage } from "./Editor";
+import { ScrollArea } from "../ScrollArea";
 
 /** A pin's number in its orange badge. */
 export function PinBadge({ n, className }: { n: number | null; className?: string }) {
@@ -192,7 +193,7 @@ export function CommentsTab({
           />
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <ScrollArea>
         {shown.shown.length === 0 && shown.orphaned.length === 0 && (
           <p className="px-4 py-6 text-center ui-text-12.5 text-faint">{tab === "open" ? "No open comments. In Comment mode (C), click an element to pin one." : "No resolved comments."}</p>
         )}
@@ -244,7 +245,7 @@ export function CommentsTab({
             ))}
           </section>
         )}
-      </div>
+      </ScrollArea>
       {tab === "open" && (
         <div className="flex h-12 shrink-0 items-center gap-2 border-t border-border px-3.5">
           <span className="min-w-0 flex-1 truncate ui-text-12 text-muted">{footerLabel(shown.unsent)}</span>

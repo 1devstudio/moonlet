@@ -421,8 +421,9 @@ export interface ProjectConfig {
   trackers?: string[];
   /** Commands that may run on another machine, `[heavy]` (X62). */
   heavy?: HeavyConfig;
-  /** Where session designs live in a worktree, `[design]` (X65). */
-  design?: { dir?: string | null };
+  /** Where session designs live in a worktree, `[design]` (X65), and
+   *  whether they are kept in ~/.moonlet/design instead, `store` (X101). */
+  design?: { dir?: string | null; store?: string | null };
 }
 
 /** Which workers may take a project's heavy commands (X62). */
@@ -450,6 +451,9 @@ export interface HeavyInfo {
   approved: HeavyApproval | null;
   /** Why the table cannot be used; nothing is routed then. */
   error: string | null;
+  /** The approval is kept in the account, for every member (X89); absent
+   * from a host before X89. */
+  account?: boolean;
 }
 
 /** A worker linked to the central host, from `worker.list` (X41, X62). */
@@ -466,6 +470,19 @@ export interface WorkerInfo {
   connected_since: number;
   rtt_ms?: number | null;
   load?: number | null;
+  /** What it runs for other hosts, from its last ping (X89). */
+  running?: Serving[];
+  /** Routed commands it runs now, for any host, from its last ping (X89). */
+  used?: number | null;
+}
+
+/** A member's worker settings (X89), from `worker.settings`: whether it
+ * takes other hosts' heavy commands, and its slots. */
+export interface WorkerSettingsEntry {
+  worker: string;
+  name: string;
+  heavy: boolean;
+  slots: number;
 }
 
 /** A routed command of a session (X62), from `job.list` and `job.changed`. */
@@ -634,6 +651,16 @@ export interface ExecStatus {
   skips: { worker: string; project: string; reason: string; detail?: string | null }[];
   /** Commands this machine runs for its central host. */
   routed: number;
+  /** Commands this machine runs for other hosts, for whom (X89). */
+  serving?: Serving[];
+}
+
+/** A command a host runs for another host (X89). */
+export interface Serving {
+  host: string;
+  session: string;
+  command: string;
+  started_at: number;
 }
 
 /** `.moonlet/config.toml` as the Project settings dialog edits it (X8). */
@@ -895,12 +922,29 @@ export interface BasePull {
   head: string;
 }
 
+/** The `git.base_pulled` event: a `git.pull_base` on that host, by any
+ *  client, moved this project's base branch (X13). */
+export interface BasePulled extends BasePull {
+  path: string;
+  branch: string;
+}
+
 export interface DirEntry {
   name: string;
   path: string;
   is_dir: boolean;
   size: number;
   ignored: boolean;
+}
+
+/** `fs.duplicate`'s result (X98): the copy's path. */
+export interface FsDuplicated {
+  path: string;
+}
+
+/** `fs.delete`'s result (X98): moved to the Trash, or deleted for good. */
+export interface FsDeleted {
+  trashed: boolean;
 }
 
 export interface FileContent {
@@ -1220,6 +1264,9 @@ export interface Design {
   built_in?: { session: string; project?: string };
   /** A session design whose design system was synced since it pinned it. */
   system_updated?: boolean;
+  /** Shared with every workspace (X95): the library's, addressed as
+   *  `{workspace: "library", slug}`. */
+  shared?: boolean;
 }
 
 /** `design.system.update`'s answer: the new anchor, and the cards that
@@ -1463,6 +1510,8 @@ export const M = {
   ghProjectMove: "gh.project_move",
   ghScopes: "gh.scopes",
   ghTask: "gh.task",
+  /** Find a task (X93): a repository's issues, open or closed, that gh's search finds. */
+  ghSearch: "gh.search",
   ghTaskUpdate: "gh.task_update",
   ghIssueComments: "gh.issue_comments",
   ghIssueComment: "gh.issue_comment",
@@ -1500,6 +1549,13 @@ export const M = {
   fsRead: "fs.read",
   fsWrite: "fs.write",
   fsWriteInside: "fs.write_inside",
+  /** File actions of the Files tab (X98), each inside `root`. */
+  fsCreate: "fs.create",
+  fsRename: "fs.rename",
+  fsDuplicate: "fs.duplicate",
+  fsDelete: "fs.delete",
+  /** Whether `fs.delete` moves to a Trash on the host (X98). */
+  fsHasTrash: "fs.has_trash",
   fsWatch: "fs.watch",
   fsUnwatch: "fs.unwatch",
   chatState: "chat.state",
@@ -1548,6 +1604,8 @@ export const M = {
   heavySet: "heavy.set",
   heavyApprove: "heavy.approve",
   workerList: "worker.list",
+  workerSettings: "worker.settings",
+  workerSettingsSet: "worker.settings.set",
   execStatus: "exec.status",
   execSetups: "exec.setups",
   cloudGet: "cloud.get",
@@ -1589,6 +1647,8 @@ export const M = {
   designSystemUpdate: "design.system.update",
   designCopy: "design.copy",
   designMove: "design.move",
+  designShare: "design.share",
+  designUnshare: "design.unshare",
 } as const;
 
 export const EV = {
@@ -1608,6 +1668,8 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
+  /** A project's base branch was pulled on that host, by any client (X13). */
+  gitBasePulled: "git.base_pulled",
   /** A workspace's board snapshot changed (X76). */
   tasksChanged: "tasks.changed",
   /** A phone asks the app to change tasks (X76). */
@@ -1630,6 +1692,8 @@ export const EV = {
   linkChanged: "link.changed",
   syncChanged: "sync.changed",
   workersChanged: "workers.changed",
+  workerSettingsChanged: "worker.settings_changed",
+  heavyApprovalChanged: "heavy.approval_changed",
   jobChanged: "job.changed",
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",

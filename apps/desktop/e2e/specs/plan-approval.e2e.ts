@@ -171,8 +171,8 @@ describe("plan approval", () => {
     // The last turn's call is the approved one.
     await $(`(${sel.button("1 tool call")})[last()]`).click();
     await $('(//button[.//span[normalize-space()="ExitPlanMode"]])[last()]').click();
-    // One heading in the Plan tab, one in the opened row.
-    await expect($$('//h1[normalize-space()="Add a dark theme"]')).toBeElementsArrayOfSize(2);
+    // One heading in the Plan tab, one in the opened row; the session's header, named after it too (X94), aside.
+    await expect($$('//h1[not(ancestor::header)][normalize-space()="Add a dark theme"]')).toBeElementsArrayOfSize(2);
     // The tool's result stays readable beside the plan.
     await expect($(`(${sel.text("User has approved your plan.")})[last()]`)).toBeDisplayed();
   });

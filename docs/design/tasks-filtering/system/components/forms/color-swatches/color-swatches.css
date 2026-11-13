@@ -1,0 +1,39 @@
+/* Color swatches: Swatches (settings/WorkspacePage.tsx, 22px, 10px gap) and
+   ColorPicker (WorkspaceDialogs.tsx, 24px, 8px gap, `--picker`). */
+.color-swatches {
+  display: flex;
+  gap: var(--space-2-5);
+}
+.color-swatches--picker {
+  gap: var(--space-2);
+}
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.color-swatches--picker .color-swatch {
+  width: var(--size-control-sm);
+  height: var(--size-control-sm);
+}
+.color-swatch--clay {
+  background: var(--color-workspace-clay);
+}
+.color-swatch--blue {
+  background: var(--color-workspace-blue);
+}
+.color-swatch--violet {
+  background: var(--color-workspace-violet);
+}
+.color-swatch--sand {
+  background: var(--color-workspace-sand);
+}
+.color-swatch--grey {
+  background: var(--color-workspace-grey);
+}
+.color-swatch--selected {
+  box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px var(--color-swatch-ring);
+}

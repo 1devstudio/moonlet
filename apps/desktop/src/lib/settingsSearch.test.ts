@@ -35,6 +35,12 @@ describe("searching settings (X43)", () => {
     }
   });
 
+  it("finds Restart the daemon by what a stuck daemon looks like (X97)", () => {
+    for (const q of ["restart", "stuck", "force restart", "not answering"]) {
+      expect(shown(q)).toEqual([["Restart the daemon", "App › General › Background daemon", ""]]);
+    }
+  });
+
   it("finds the session row style with the style chosen (X48)", () => {
     expect(shown("session rows")).toEqual([["Session rows", "App › Appearance", "A · Issue number column"]]);
     expect(searchSettings("session rows", { ...ctx, settings: { ...ctx.settings, sessionRows: "task" } })[0].value).toBe("B · Task as a sub-header");
@@ -142,6 +148,13 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("base branch", withConfig)[0].value).toBe("develop");
   });
 
+  it("finds where a project keeps its session designs (X101)", () => {
+    const project = (design?: { store?: string }) => ({ host: "local", id: "p1", name: "storefront", base_branch: "main", config: { agents: {}, design } });
+    const found = (c: SearchContext, q: string) => searchSettings(q, c).filter((r) => r.path === "Projects › storefront").map((r) => [r.before + r.hit + r.after, r.value]);
+    expect(found({ ...ctx, projects: [project()] }, "session designs")).toEqual([["Session designs", "In the project"]]);
+    expect(found({ ...ctx, projects: [project({ store: "moonlet" })] }, "design")).toEqual([["Session designs", "In ~/.moonlet/design"]]);
+  });
+
   it("finds nothing for a blank query", () => {
     expect(searchSettings("  ", ctx)).toEqual([]);
   });
@@ -200,9 +213,9 @@ describe("tailnet access in the search (X57)", () => {
 });
 
 describe("the worker link in the search (X41)", () => {
-  it("finds Use this Mac for heavy commands on Hosts, also as the central host", () => {
+  it("finds Takes heavy commands from other hosts on Hosts, also as the central host", () => {
     const found = (q: string) => searchSettings(q, ctx).map((r) => [r.path, r.route, r.setting]);
-    expect(found("use this mac for heavy")).toEqual([["Machines › Hosts", { page: "hosts" }, "heavy-commands"]]);
+    expect(found("takes heavy commands")).toEqual([["Machines › Hosts", { page: "hosts" }, "heavy-commands"]]);
     expect(found("central host")).toEqual([
       ["Machines › Hosts", { page: "hosts" }, "heavy-commands"],
       ["Machines › Workers", { page: "workers" }, undefined],
@@ -218,9 +231,14 @@ describe("heavy commands in the search (X62)", () => {
       ["Cloud workers", "Machines › Cloud workers", undefined],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
     ]);
-    expect(found("run at most")).toEqual([["Run at most", "Machines › Hosts", "heavy-slots"]]);
+    expect(found("run at most")).toEqual([
+      ["Run at most", "Machines › Hosts", "heavy-slots"],
+      ["Every host's switch and slots", "Machines › Workers", undefined],
+    ]);
+    // Every host's switch and slots, set from the Workers page (X89).
+    expect(found("every host")).toEqual([["Every host's switch and slots", "Machines › Workers", undefined]]);
     expect(found("heavy commands")).toEqual([
-      ["Use this Mac for heavy commands", "Machines › Hosts", "heavy-commands"],
+      ["Takes heavy commands from other hosts", "Machines › Hosts", "heavy-commands"],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
     ]);
   });

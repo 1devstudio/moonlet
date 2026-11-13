@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn the_first_sync_agent_reads_the_sources_and_may_only_run_design_commands() {
         let launch = sync_launch(
-            Path::new("/Users/alex/.moonlet/design/w1/systems/moonlet-desktop"),
+            Path::new("/Users/alex/.moonlet/design/library/systems/moonlet-desktop"),
             &config(),
             &["/Users/alex/Workspace/moonlet".to_string()],
             Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"),
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(
             launch,
             Launch {
-                cwd: "/Users/alex/.moonlet/design/w1/systems/moonlet-desktop".into(),
+                cwd: "/Users/alex/.moonlet/design/library/systems/moonlet-desktop".into(),
                 add_dirs: vec!["/Users/alex/Workspace/moonlet".into()],
                 settings: r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system progress:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check --render)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design snap:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system synced)"],"deny":["Edit(//Users/alex/Workspace/moonlet/**)"]}}"#.into(),
                 title: "Design · moonlet desktop".into(),
@@ -405,7 +405,7 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
         let launch = design_launch(
             Path::new("/Users/alex/.moonlet/design/w1/designs/settings-page"),
             &config,
-            Path::new("/Users/alex/.moonlet/design/w1/systems/moonlet-desktop"),
+            Path::new("/Users/alex/.moonlet/design/library/systems/moonlet-desktop"),
             "# moonlet desktop\n\nLink styles.css.\n",
             Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"),
         )
@@ -414,14 +414,14 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
             (launch.cwd.as_str(), launch.add_dirs.clone(), launch.title.as_str(), launch.mode.as_str()),
             (
                 "/Users/alex/.moonlet/design/w1/designs/settings-page",
-                vec!["/Users/alex/.moonlet/design/w1/systems/moonlet-desktop".to_string()],
+                vec!["/Users/alex/.moonlet/design/library/systems/moonlet-desktop".to_string()],
                 "Design · Settings page",
                 "acceptEdits"
             )
         );
         assert_eq!(
             launch.settings,
-            r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check --fix)"],"deny":["Edit(//Users/alex/.moonlet/design/w1/systems/moonlet-desktop/**)"]}}"#
+            r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check --fix)"],"deny":["Edit(//Users/alex/.moonlet/design/library/systems/moonlet-desktop/**)"]}}"#
         );
         // The brief first, then the design system's README and the rules.
         assert!(
@@ -429,7 +429,7 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
                 "A settings page with General and Git sections
 
 ---
-This is the design \"Settings page\" in this folder, on the design system \"moonlet-desktop\" at /Users/alex/.moonlet/design/w1/systems/moonlet-desktop (read only). Its README.md:
+This is the design \"Settings page\" in this folder, on the design system \"moonlet-desktop\" at /Users/alex/.moonlet/design/library/systems/moonlet-desktop (read only). Its README.md:
 
 # moonlet desktop
 

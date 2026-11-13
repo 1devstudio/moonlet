@@ -33,6 +33,7 @@ import { HostUpdateButton } from "./HostUpdate";
 import { sidebarNotice } from "../lib/hostUpdate";
 import { useHostUpdates } from "../lib/hostUpdateStore";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
+import { ScrollArea } from "./ScrollArea";
 
 // ------------------------------------------------------------------ helpers
 
@@ -316,9 +317,10 @@ function RowView({
     <div
       {...rest}
       className={cx(
+        // Filled with the pane's tone when shown (X94); taller with a bigger font.
         "group relative mx-2 flex cursor-default items-center gap-2.5 rounded-md pr-2 text-left transition-colors",
-        nested ? "h-[34px] pl-[calc(0.5rem+20px)]" : "h-[38px] pl-2",
-        selected ? "bg-selected shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-panel-2",
+        nested ? "h-ui-34 pl-[calc(0.5rem+20px)]" : "h-ui-38 pl-2",
+        selected ? "bg-bg" : "hover:bg-tab-hover",
       )}
     >
       <span className="flex w-[15px] shrink-0 justify-center">{glyph}</span>
@@ -501,11 +503,11 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
     <div
       title={a.done ? "Archived" : "Archiving…"}
       className="overflow-hidden"
-      style={{ height: a.folding ? 0 : 38, opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
+      style={{ height: a.folding ? 0 : "max(38px, calc(38px * var(--ui-scale, 1)))", opacity: a.folding ? 0 : 1, transition: `height ${ARCHIVE_FOLD_MS}ms ease, opacity 220ms ease` }}
     >
-      <div className="relative h-[38px] overflow-hidden bg-panel">
+      <div className="relative h-ui-38 overflow-hidden bg-window">
         <ArchiveLoader loader={a.loader} />
-        <div className="relative flex h-[38px] w-1/2 items-center gap-2 pl-4">
+        <div className="relative flex h-ui-38 w-1/2 items-center gap-2 pl-4">
           <span role="status" aria-label={a.done ? "Archived" : "Archiving"} className="flex w-[15px] shrink-0 justify-center text-muted">
             {a.done ? <StateGlyph state="done" size={15} /> : <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
           </span>
@@ -553,7 +555,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
     <div className="mb-1 rounded-md">
       {header && (
         <div
-          className="group flex h-[38px] items-center gap-2 pl-4 pr-3"
+          className="group flex h-ui-38 items-center gap-2 pl-4 pr-3"
           onContextMenu={(e) => {
             if (g.kind !== "project" || !g.projectId) return;
             e.preventDefault();
@@ -601,6 +603,8 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const allSessions = useStore((s) => s.sessions);
   const terminals = useStore((s) => s.terminals);
   const archiving = useStore((s) => s.archiving);
+  // An agent waiting for a terminal to be shared needs input (X31).
+  const reads = useStore((s) => s.reads);
   const projects = allProjects[host] ?? [];
   // Select the stored array and filter outside: a selector returning a new
   // array on every call makes zustand re-render forever.
@@ -619,9 +623,9 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
       archiving: (h, s) => !!archiving[sesKey(h, s.id)],
       taskOf: (_h, s) => lines[s.id] ?? null,
     });
-    // `terminals` changes agent states and activity times.
+    // `terminals` and `reads` change agent states, `terminals` activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, archiving, host, lines]);
+  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, connected, terminals, reads, archiving, host, lines]);
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
@@ -694,7 +698,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   ];
   return (
     <div className="mb-3">
-      <div className="group mx-2 flex h-[38px] items-center gap-1 rounded-lg bg-[#1e1e1e] pl-2.5 pr-1.5">
+      <div className="group mx-2 flex h-ui-38 items-center gap-1 rounded-lg bg-bg pl-2.5 pr-1.5">
         {renaming ? (
           <InlineInput
             initial={sec.name}
@@ -949,13 +953,18 @@ function NavRow({ icon, label, active, onClick, hint }: { icon: ReactNode; label
     <button
       onClick={onClick}
       className={cx(
-        "no-drag flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14 transition-colors",
-        active ? "bg-raised text-fg" : "text-muted hover:bg-panel-2 hover:text-fg",
+        "no-drag flex h-ui-34 w-full items-center gap-3 rounded-md px-3 text-left ui-text-14 transition-colors",
+        active ? "bg-bg text-fg" : "text-muted hover:bg-tab-hover hover:text-fg",
       )}
     >
       <span className="flex w-4 justify-center">{icon}</span>
-      <span className="flex-1">{label}</span>
-      {hint && <Kbd>{hint}</Kbd>}
+      {/* One line, cut short, whatever the font size (X94). */}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint && (
+        <span className="shrink-0">
+          <Kbd>{hint}</Kbd>
+        </span>
+      )}
     </button>
   );
 }
@@ -980,9 +989,9 @@ export function Sidebar() {
 
   return (
     <TaskLines.Provider value={taskLines}>
-    <aside className="flex h-full flex-col bg-panel">
+    <aside className="flex h-full flex-col bg-window">
       {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
-      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 pl-[86px] pr-2.5">
+      <div data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-[86px] pr-2.5">
         <WorkspaceSwitcher />
         <ModeSwitch />
       </div>
@@ -998,7 +1007,7 @@ export function Sidebar() {
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />
         <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory })} />
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <ScrollArea tone="window" className="pb-3">
         {showHistory ? (
           <HistoryList />
         ) : (
@@ -1018,7 +1027,7 @@ export function Sidebar() {
         {!showHistory && (
           <div className="mx-2">
             {creating ? (
-              <div className="flex h-[38px] items-center gap-2 rounded-lg bg-[#1e1e1e] px-2.5">
+              <div className="flex h-ui-38 items-center gap-2 rounded-lg bg-bg px-2.5">
                 <InlineInput
                   initial=""
                   placeholder="Section name"
@@ -1041,7 +1050,7 @@ export function Sidebar() {
             )}
           </div>
         )}
-      </div>
+      </ScrollArea>
       </>
       )}
       <ClaudeUpdateBanner />

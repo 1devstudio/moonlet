@@ -109,10 +109,13 @@ export const hostsApi = {
   sshHosts: () => invoke<string[]>("ssh_hosts"),
   install: (host: string) => invoke<{ triple: string; version: string }>("remote_install", { host }),
   openTargets: () => invoke<{ id: string; label: string }[]>("open_targets"),
-  openIn: (target: string, path: string, host?: string) => invoke("open_in", { target, path, host }),
+  /** `root`: the worktree Zed opens `path` in (`entryOpenIn`). */
+  openIn: (target: string, path: string, host?: string, root?: string) => invoke("open_in", { target, path, host, root }),
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<DaemonService>("daemon_service", { action }),
   openLoginItems: () => invoke("open_login_items"),
+  /** Restarts this Mac's moonletd (X97); rejects with `not_responding` when only `force` can. */
+  restartDaemon: (force: boolean) => invoke("restart_daemon", { force }),
   appInfo: () => invoke<{ version: string }>("app_info"),
   claudeLatest: () => invoke<string>("claude_latest_version"),
   /** Linear, Jira and ClickUp from the app (X44): sign in, sources, tasks, moves. */
@@ -122,6 +125,8 @@ export const hostsApi = {
   /** A connection's teams, projects or lists; a Linear team that uses cycles says so, a ClickUp list names its space and folder. */
   trackerSources: (id: string) => invoke<{ key: string; name: string; cycles?: boolean; group?: string }[]>("tracker_sources", { id }),
   trackerTask: (id: string, key: string) => invoke<import("./tasks").Task | null>("tracker_task", { id, key }),
+  /** Find a task (X93): a connection's issues that match `query`, in its Linear teams or Jira projects `scope`, best first. */
+  trackerSearch: (req: { id: string; query: string; scope: string[] }) => invoke<import("./tasks").Task[]>("tracker_search", { req }),
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; status?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
   /** An issue's comments, oldest first, at most 100 (X66); `task` is its id in the tracker. */
@@ -131,7 +136,7 @@ export const hostsApi = {
   trackerComment: (id: string, task: string, text: string) => invoke("tracker_comment", { id, task, text }),
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
-  trackerStates: (id: string, source: string) => invoke<{ name: string; column: import("./tasks").Column }[]>("tracker_states", { id, source }),
+  trackerStates: (id: string, source: string) => invoke<import("./tasks").TrackerState[]>("tracker_states", { id, source }),
   /** A Jira connection's boards (X50 Add a board). */
   trackerBoards: (id: string) => invoke<{ id: number; name: string; kind: string; project: string | null }[]>("tracker_boards", { id }),
   /** A GitHub Project's columns from its Status options (X50). */

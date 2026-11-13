@@ -28,6 +28,12 @@ const mode = (label: string) => $(`//div[@role="group"][@aria-label="Mode"]/butt
 const composer = '//div[@role="dialog"][@aria-label="New session"]';
 const attachment = (label: string) => $(`${composer}//div[@role="group"][@aria-label="${label}"]`);
 const tab = (name: string) => $(`//div[@role="tablist"]/button[@role="tab"][starts-with(normalize-space(), "${name}")]`);
+/** Shows a right panel view: from its tab, or from More when the panel is too narrow for it (X94). */
+async function showView(name: string) {
+  if (await tab(name).isExisting()) return tab(name).click();
+  await $('button[aria-label^="More views"]').click();
+  await $(`//div[@role="menu"][@aria-label="More views"]/button[starts-with(normalize-space(), "${name}")]`).click();
+}
 const panel = () => $('//*[@id="right-tabpanel"]');
 const group = (title: string) => $(`//section[@aria-label="Designs"]//section[@aria-label="${title}"]`);
 const git = (...args: string[]) => execFileSync("git", args, { cwd: w.repo, env: w.env, stdio: "pipe" }).toString();
@@ -72,7 +78,7 @@ describe("Build it and the Designs index", () => {
     const ws = workspaceId();
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
     rpc(w, "design.system.create", { workspace: ws, name: "Build kit", sources: [{ project: project.id }], agent: false });
-    writeFileSync(join(w.home, "design", ws, "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), "h1 { color: #d97757; }\n");
     rpc(w, "design.create", { workspace: ws, name: "Settings page", system: SYSTEM, brief: "A settings page" });
     for (const [name, title] of [["index", "Settings"], ["git-a", "Git as cards"], ["git-b", "Git, compact"]]) writeFileSync(join(designDir(), "pages", `${name}.html`), page(title));
     const toml = join(designDir(), "design.toml");
@@ -184,13 +190,13 @@ describe("Build it and the Designs index", () => {
   });
 
   it("shows Design and build in the PR's Review tab too, each page beside its built screenshot", async () => {
-    await tab("Review").click();
+    await showView("Review");
     const section = panel().$('.//section[@aria-label="Design and build · Settings page"]');
     await expect(section).toBeDisplayed({ wait: 20_000 });
     const shot = section.$('.//article[@aria-label="index design and build"]//img[@alt="index built"]');
     await browser.waitUntil(async () => (await shot.isExisting()) && (await shot.getProperty("naturalWidth")) === 1, { timeoutMsg: "the built screenshot never showed in the Review tab" });
     await expect(section.$('.//article[@aria-label="git-b design and build"]')).toHaveText(expect.stringContaining("Not built yet"));
-    await tab("Design").click();
+    await showView("Design");
   });
 
   it("offers Implement it and Back to the design once the session's agent wrote the spec from the design", async () => {
@@ -200,7 +206,7 @@ describe("Build it and the Designs index", () => {
     await browser.execute(() => document.querySelector<HTMLButtonElement>('main button[title="Send (↵)"]')?.click());
     const replies = $('//main//div[@role="group"][@aria-label="Suggested replies"]');
     await expect(replies).toBeDisplayed({ wait: 20_000 });
-    await tab("Files").click();
+    await showView("Files");
     await replies.$(sel.button("Back to the design").replace(/^\/\//, ".//")).click();
     await expect(tab("Design")).toHaveAttribute("aria-selected", "true");
     await replies.$(sel.button("Implement it").replace(/^\/\//, ".//")).click();

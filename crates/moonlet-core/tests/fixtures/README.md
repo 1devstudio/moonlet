@@ -25,3 +25,4 @@ Each file is the real output of gh (or of git, for the `git-*` files), captured 
 | `git-ls-remote-ssh-denied.txt` (X70) | The stderr of `git ls-remote --symref git@gitlab.com:acme/ledger.git HEAD` with no SSH key, `GIT_SSH_COMMAND` in batch mode | Captured 2026-10-27, unchanged; the first two lines come from the capture's own ssh options (a throwaway known-hosts file and no identity file) |
 | `git-ls-remote-ssh-unresolved.txt` (X70) | The stderr of `git ls-remote --symref ssh://git@git.example.com:2222/acme/shop.git HEAD` | Captured 2026-10-27, unchanged |
 | `git-ls-remote-https-no-credentials.txt` (X70) | The stderr of `git ls-remote --symref https://gitlab.com/<missing repository>.git HEAD` with `GIT_TERMINAL_PROMPT=0` | Captured 2026-10-27, unchanged |
+| `gh-issue-search.json` (X93) | `gh issue list --repo <r> --state all --limit 8 --search=<text> --json <GH_TASK_FIELDS>` on a sandbox repository | Captured 2026-11-08, sanitised: repo `acme/web` |

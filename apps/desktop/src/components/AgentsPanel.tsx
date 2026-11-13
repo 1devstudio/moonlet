@@ -5,8 +5,9 @@ import { M } from "../lib/protocol";
 import { errorToast, useStore } from "../lib/store";
 import { tokens } from "../lib/chat";
 import { AGENT_STATE, type AgentRow, agentKey, agentsHeader, isActive, modelLabel, retryMessage, stoppable } from "../lib/subagents";
-import { Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
+import { BriefCard, Markdown, PermissionCard, StatusMark, rel, toolIcon } from "./AgentView";
 import { Button, Empty, StateGlyph, cx } from "./ui";
+import { ScrollArea } from "./ScrollArea";
 
 const LINE = { fg: "text-fg", muted: "text-muted", error: "text-error" };
 
@@ -97,7 +98,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
   const meta = [a.model && modelLabel(a.model), row.elapsed, a.tokens ? `${tokens(a.tokens)} tokens` : null].filter(Boolean);
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <ScrollArea className="px-4 pb-4">
         <button className="-ml-1 mt-3 flex items-center gap-0.5 ui-text-12.5 text-muted hover:text-fg" onClick={() => useStore.setState({ agentDetail: null })}>
           <ChevronLeft size={14} />
           Agents
@@ -110,13 +111,13 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
           <span className={cx("inline-block first-letter:uppercase", look.text)}>{look.label}</span>
           {meta.map((m) => ` · ${m}`)}
         </div>
-        {a.prompt && (
+        {a.prompt.trim() && (
           <div className="mt-4">
             <button className="flex w-full min-w-0 items-center gap-1 text-left ui-text-12.5 text-muted hover:text-fg" onClick={() => setBrief(!brief)}>
               {brief ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
               <span className="truncate">Brief{brief ? "" : ` · ${a.prompt.split("\n")[0]}`}</span>
             </button>
-            {brief && <div className="selectable mt-1.5 whitespace-pre-wrap rounded-md bg-panel-2 px-3 py-2 ui-text-12.5 text-muted">{a.prompt}</div>}
+            {brief && <BriefCard text={a.prompt} className="mt-2" />}
           </div>
         )}
         {a.tools.length > 0 && (
@@ -153,7 +154,7 @@ function AgentDetail({ row, cwd, act }: { row: AgentRow; cwd: string; act: Retur
             <Markdown text={a.report} />
           </div>
         )}
-      </div>
+      </ScrollArea>
       {isActive(row.state) && (
         <div className="flex h-11 shrink-0 items-center justify-end border-t border-border px-4">
           <button className="ui-text-12.5 text-muted hover:text-fg" onClick={() => act.stop(row)}>

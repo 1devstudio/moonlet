@@ -30,6 +30,8 @@ pub struct Checked {
     pub os: moonlet_proto::types::HeavyOs,
     /// Ignored paths brought back after a run.
     pub outputs: Vec<String>,
+    /// The project's setup command, for a routing copy (X89).
+    pub setup: Option<String>,
 }
 
 pub struct Heavy {
@@ -52,10 +54,7 @@ impl Heavy {
     pub fn get(&self, project: &str) -> Result<HeavyInfo, RpcError> {
         let p = self.project(project)?;
         let config = project_config::load(Path::new(&p.path), p.base_branch.clone());
-        let approved = match key(&p.identity) {
-            Some(k) => self.read().map_err(internal)?.remove(&k),
-            None => None,
-        };
+        let approved = self.approval(&p.identity).map_err(internal)?;
         let error = config
             .error
             .clone()
@@ -64,6 +63,7 @@ impl Heavy {
             config: config.config.heavy,
             approved,
             error,
+            account: self.sessions.has_account(),
         })
     }
 
@@ -104,7 +104,12 @@ impl Heavy {
                 format!("{}'s heavy commands changed since they were shown", p.name),
             ));
         }
-        {
+        if self.sessions.has_account() {
+            // Once, for every member of the account (X89).
+            self.sessions
+                .set_heavy_approval(&p.identity, &sorted(&r.commands), &sorted(&r.env))
+                .map_err(internal)?;
+        } else {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut all = self.read().map_err(internal)?;
             all.insert(
@@ -158,15 +163,19 @@ impl Heavy {
             tool_use_id: None,
         };
         self.why_not(&ask)?;
-        let worktree = self
+        let s = self.sessions.session(session).map_err(|_| "no_session")?;
+        let worktree = std::fs::canonicalize(&s.path).map_err(|_| "no_session")?;
+        let project = self
             .sessions
-            .session(session)
-            .ok()
-            .and_then(|s| std::fs::canonicalize(s.path).ok())
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == s.project_id)
             .ok_or("no_session")?;
-        let config = project_config::load(&worktree, String::new());
+        // The main checkout's list, as `why_not` read it (X90).
+        let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         let os = config.config.heavy.os;
         let outputs = config.config.heavy.outputs.clone();
+        let setup = config.config.setup.clone().filter(|c| !c.trim().is_empty());
         let names = config.config.heavy.env;
         let passed = env
             .iter()
@@ -179,21 +188,15 @@ impl Heavy {
             .map_err(|_| "outside_worktree")?
             .display()
             .to_string();
-        let project = self
-            .sessions
-            .session(session)
-            .ok()
-            .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))
-            .map(|p| p.name)
-            .unwrap_or_default();
         Ok(Checked {
-            project,
+            project: project.name,
             worktree: worktree.clone(),
             cwd,
             cwd_rel,
             env: passed,
             os,
             outputs,
+            setup,
         })
     }
 
@@ -215,15 +218,18 @@ impl Heavy {
             .into_iter()
             .find(|p| p.id == session.project_id)
             .ok_or("no_session")?;
-        // The worktree's own config: an agent's edit there counts.
-        let config = project_config::load(&worktree, project.base_branch.clone());
+        // The main checkout's config, the list the user approved (X90): a
+        // worktree made from git may have no `.moonlet/` at all.
+        let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         if config.error.is_some() || heavy::check(&config.config.heavy).is_err() {
             return Err("invalid_config");
         }
         let heavy = config.config.heavy;
         let words = heavy::route(&r.command, &heavy.commands).ok_or("not_heavy")?;
-        let approved = key(&project.identity)
-            .and_then(|k| self.read().ok()?.remove(&k))
+        let approved = self
+            .approval(&project.identity)
+            .ok()
+            .flatten()
             .ok_or("not_approved")?;
         let entries: Vec<String> = heavy
             .commands
@@ -249,6 +255,33 @@ impl Heavy {
             return Err("claude_rule");
         }
         Ok(())
+    }
+
+    /// Project `identity`'s approval: the account's, kept once for every
+    /// member (X89), or `heavy.json`'s on a host that shares no account.
+    pub fn approval(&self, identity: &ProjectIdentity) -> anyhow::Result<Option<HeavyApproval>> {
+        if self.sessions.has_account() {
+            return Ok(self
+                .sessions
+                .heavy_approval(identity)
+                .map(|(commands, env)| HeavyApproval { commands, env }));
+        }
+        Ok(match key(identity) {
+            Some(k) => self.read()?.remove(&k),
+            None => None,
+        })
+    }
+
+    /// Approvals this host kept in `heavy.json` before X89 become the
+    /// account's, giving way to any approval made on a member.
+    pub fn seed_account(&self) {
+        let Ok(all) = self.read() else { return };
+        for (k, a) in all {
+            let Some(identity) = parse_key(&k) else { continue };
+            if let Err(e) = self.sessions.seed_heavy_approval(&identity, &a.commands, &a.env) {
+                tracing::warn!("cannot keep an approval of heavy commands in the account: {e:#}");
+            }
+        }
     }
 
     fn project(&self, id: &str) -> Result<Project, RpcError> {
@@ -298,6 +331,27 @@ pub(crate) fn key(id: &ProjectIdentity) -> Option<String> {
     Some(format!("{origin} {root}"))
 }
 
+/// The project identity a [`key`] names; none for text no key could be.
+pub(crate) fn parse_key(k: &str) -> Option<ProjectIdentity> {
+    let (origin, root) = k.rsplit_once(' ')?;
+    let identity = ProjectIdentity {
+        origin: (!origin.is_empty()).then(|| origin.to_string()),
+        root: Some(root.to_string()),
+    };
+    (key(&identity).as_deref() == Some(k)).then_some(identity)
+}
+
+/// Whether `argv`, with `env`'s names, is a command `approved` covers: the
+/// check a runner makes, and the central host for a cloud machine it
+/// passes a member's command on to (X89).
+pub fn runs_approved(argv: &[String], env: &BTreeMap<String, String>, approved: Option<&HeavyApproval>) -> bool {
+    let Some(approved) = approved else { return false };
+    let command = argv.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ");
+    !argv.is_empty()
+        && heavy::route(&command, &approved.commands).is_some()
+        && env.keys().all(|k| approved.env.contains(k))
+}
+
 /// `w` as one word for a POSIX shell: as it is when it holds nothing a
 /// shell reads, in single quotes otherwise.
 pub fn quote(w: &str) -> String {
@@ -316,4 +370,26 @@ pub fn sorted(v: &[String]) -> Vec<String> {
     v.sort();
     v.dedup();
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_heavy_json_key_reads_back_as_its_project() {
+        let root = "4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a";
+        for (k, origin) in [
+            (format!("github.com/acme/shop {root}"), Some("github.com/acme/shop")),
+            (format!(" {root}"), None),
+        ] {
+            let id = parse_key(&k).unwrap();
+            assert_eq!(id.origin.as_deref(), origin);
+            assert_eq!(id.root.as_deref(), Some(root));
+            assert_eq!(key(&id), Some(k));
+        }
+        for bad in ["shop", "github.com/acme/shop not-a-root", ""] {
+            assert_eq!(parse_key(bad), None, "{bad}");
+        }
+    }
 }

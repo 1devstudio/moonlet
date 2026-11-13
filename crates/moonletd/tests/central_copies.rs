@@ -1545,19 +1545,21 @@ async fn a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_cop
             .iter()
             .all(|s| s["id"] != made["id"] || s["owner"].is_null())
     );
-    // Its agent resumes the same conversation, with the chat so far.
+    // Its agent resumes the same conversation, with the chat so far, with
+    // its next message: until then none runs.
     let chat = continued["terminals"][0].clone();
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
+    assert!(!agent_log(&mini, "claude-args").contains("--resume"), "an agent started with no message");
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent resumed on studio-mini",
         || async { agent_log(&mini, "claude-args").contains(&format!("--resume {CONVERSATION}")) },
     )
     .await;
-    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
-    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
-    let _: Value = mini
-        .call("chat.send", json!({ "id": chat, "text": "Again" }))
-        .await;
     within(Duration::from_secs(30), "a turn on studio-mini", || async {
         agent_log(&mini, "claude-user").contains("Again")
     })
@@ -1678,6 +1680,9 @@ async fn a_continued_chat_never_takes_bypass_permissions_from_the_member() {
         .call("chat.state", json!({ "id": continued["terminals"][0] }))
         .await;
     assert_ne!(st["mode"], json!("bypassPermissions"));
+    let _: Value = mini
+        .call("chat.send", json!({ "id": continued["terminals"][0], "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent on studio-mini",
@@ -1727,6 +1732,9 @@ async fn a_continued_chat_keeps_its_folders_inside_the_worktree_in_the_copy() {
         .call("chat.state", json!({ "id": continued["terminals"][0] }))
         .await;
     assert_eq!(st["add_dirs"], json!([src]));
+    let _: Value = mini
+        .call("chat.send", json!({ "id": continued["terminals"][0], "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent on studio-mini",
@@ -1885,15 +1893,7 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
         .await;
 
     book.restart().await;
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
     // Its agent stopped, and what it did meanwhile is kept.
     let terminals: Vec<Value> = book.call("terminal.list", json!({})).await;
     assert!(terminals.iter().all(|t| t["id"] != agent));
@@ -1901,35 +1901,94 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
         .unwrap()
         .map(|e| e.unwrap().path())
         .collect();
-    // The changed file on its own, and the whole worktree beside it.
-    let files: Vec<&PathBuf> = kept
-        .iter()
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
-        .collect();
-    assert_eq!(files.len(), 1, "{kept:?}");
+    // Only the changed file: the worktree itself stays where it is.
+    assert_eq!(kept.len(), 1, "{kept:?}");
     assert_eq!(
-        std::fs::read_to_string(files[0].join("src/cart.ts")).unwrap(),
+        std::fs::read_to_string(kept[0].join("src/cart.ts")).unwrap(),
         "while away\n"
     );
-    let whole: Vec<&PathBuf> = kept
-        .iter()
-        .filter(|p| p.display().to_string().contains("-worktree-"))
-        .collect();
-    assert_eq!(whole.len(), 1, "{kept:?}");
-    assert_eq!(
-        std::fs::read_to_string(whole[0].join("src/cart.ts")).unwrap(),
-        "while away\n"
-    );
-    // It keeps a live copy of the session studio-mini runs now (X60).
+    // That worktree is its live copy of the session studio-mini runs now
+    // (X60): a git worktree still, with studio-mini's files.
+    let worktree = path_of(&made);
     within(
         Duration::from_secs(30),
-        "a live copy on the MacBook",
+        "the worktree in sync as the MacBook's live copy",
         || async {
             let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-            copies.iter().any(|c| c["session"] == made["id"])
+            copies.iter().any(|c| {
+                c["session"] == made["id"]
+                    && c["path"].as_str().map(PathBuf::from) == Some(worktree.clone())
+                    && c["state"]["kind"] == json!("in_sync")
+            })
         },
     )
     .await;
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(),
+        "b\n"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+}
+
+#[tokio::test]
+async fn a_lost_session_whose_worktree_is_on_another_branch_pauses_its_copy_and_leaves_its_files() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    lost_while_away(&mini, &mut book, &made, || {
+        git_in(&worktree, &["checkout", "-q", "-b", "elsewhere"]);
+        std::fs::write(worktree.join("src/cart.ts"), "on elsewhere\n").unwrap();
+    })
+    .await;
+    let reason = within_value(Duration::from_secs(30), "the copy paused", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        let c = copies.into_iter().find(|c| c["session"] == made["id"])?;
+        (c["state"]["kind"] == json!("paused")).then(|| c["state"]["reason"].as_str().unwrap_or("").to_string())
+    })
+    .await;
+    assert!(reason.contains("elsewhere"), "{reason}");
+    // Nothing of studio-mini's replaced what is there.
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "on elsewhere\n");
+}
+
+#[tokio::test]
+async fn a_lost_session_whose_worktree_has_commits_of_its_own_pauses_its_copy_and_keeps_them() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    lost_while_away(&mini, &mut book, &made, || {
+        std::fs::write(worktree.join("src/cart.ts"), "committed while away\n").unwrap();
+        git_in(&worktree, &["add", "-A"]);
+        git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
+    })
+    .await;
+    let reason = within_value(Duration::from_secs(30), "the copy paused", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        let c = copies.into_iter().find(|c| c["session"] == made["id"])?;
+        (c["state"]["kind"] == json!("paused")).then(|| c["state"]["reason"].as_str().unwrap_or("").to_string())
+    })
+    .await;
+    assert!(reason.contains("has commits"), "{reason}");
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "committed while away\n");
+    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&worktree).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "while away");
+}
+
+/// Runs git with `args` in `dir`, which must succeed.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// The session continued on `mini` while `book` was away, with `book`
@@ -1978,6 +2037,25 @@ async fn continued_and_back_with(
     )
     .await;
     (mini, book, made)
+}
+
+#[tokio::test]
+async fn a_message_typed_for_a_session_already_back_here_runs_here() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    // Back here already, as when it came back by itself while the message
+    // waited for studio-mini's turn to end (X73).
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"], "message": "Then the tests" }))
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    within(Duration::from_secs(30), "the message on the MacBook", || async {
+        agent_log(&book, "claude-user").contains("Then the tests")
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -2059,21 +2137,15 @@ async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
     assert_eq!(back["id"], made["id"]);
 }
 
-#[tokio::test]
-async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() {
-    let origin = Origin::new();
-    let (mini, book, made) = continued_and_back(&origin).await;
-    let own: Vec<Value> = mini.call("session.list", json!({})).await;
-    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
-    let chat = there["terminals"][0].clone();
-    // studio-mini's git waits, as the move renames the session's branch,
-    // until the test says go: a message comes in just then. The hook waits
-    // on the rename deleting the old name, the one step every git runs as
-    // a transaction; git before 2.46 writes the new name and HEAD outside one.
-    let worktree = PathBuf::from(there["path"].as_str().unwrap());
+/// Makes git on `worktree`'s repository wait, as a move renames `branch`
+/// away, until the test writes the returned `go`; the returned `started`
+/// appears once it waits. The hook waits on the rename deleting the old
+/// name, the one step every git runs as a transaction; git before 2.46
+/// writes the new name and HEAD outside one.
+fn gate_the_rename(worktree: &Path, branch: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let common = std::process::Command::new("git")
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .current_dir(&worktree)
+        .current_dir(worktree)
         .output()
         .unwrap();
     let hooks = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim()).join("hooks");
@@ -2084,7 +2156,7 @@ async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() 
     std::fs::write(
         &hook,
         format!(
-            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/{branch}$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
             s = started.display(),
             g = go.display()
         ),
@@ -2094,6 +2166,87 @@ async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() 
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    (gate, started, go)
+}
+
+#[tokio::test]
+async fn a_session_brought_back_has_the_central_hosts_last_files() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    // The move waits a moment on studio-mini, and its last file is written
+    // just then, as an agent's last edit lands while its turn ends.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let (_gate, started, go) = gate_the_rename(&there, "moonlet/fix-cart");
+    let (brought, ()) = tokio::join!(
+        book.try_call("session.bring", json!({ "session": made["id"] })),
+        async {
+            within(Duration::from_secs(30), "the move under way", || async {
+                started.exists()
+            })
+            .await;
+            std::fs::write(there.join("src/late.ts"), "late\n").unwrap();
+            // And one changed in the MacBook's copy meanwhile.
+            std::fs::write(here.join("src/mine.ts"), "mine\n").unwrap();
+            // For as long as studio-mini takes to send a change.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            std::fs::write(&go, "").unwrap();
+        }
+    );
+    let brought = brought.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path_of(&brought).join("src/late.ts")).ok().as_deref(),
+        Some("late\n"),
+        "the brought worktree lacks studio-mini's last file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path_of(&brought).join("src/mine.ts")).ok().as_deref(),
+        Some("mine\n"),
+        "the MacBook's own change in its copy is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_bring_refuses_while_each_side_has_commits_the_other_lacks() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let commit = |dir: &Path, file: &str, text: &str| {
+        std::fs::write(dir.join(file), text).unwrap();
+        git_in(dir, &["add", "-A"]);
+        git_in(dir, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", text.trim()]);
+    };
+    // Each side commits on its own, so neither holds the other's commit.
+    commit(&there, "src/mini.ts", "on studio-mini\n");
+    commit(&here, "src/book.ts", "on the MacBook\n");
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("diverged"), "{refused}");
+    // Nothing is lost: it still runs on studio-mini with its commit.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&there).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "on studio-mini");
+}
+
+#[tokio::test]
+async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
+    let chat = there["terminals"][0].clone();
+    // studio-mini's git waits, as the move renames the session's branch,
+    // until the test says go: a message comes in just then.
+    let worktree = PathBuf::from(there["path"].as_str().unwrap());
+    let (_gate, started, go) = gate_the_rename(&worktree, "moonlet/fix-cart");
 
     let (brought, ()) = tokio::join!(
         book.try_call("session.bring", json!({ "session": made["id"] })),
@@ -2159,20 +2312,11 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
         .await;
 
     book.restart().await;
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
     // The gap's folder names the file it deleted.
     let gap: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
         .collect();
     assert_eq!(gap.len(), 1, "{gap:?}");
     assert_eq!(
@@ -2391,6 +2535,10 @@ async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member
     within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
     let ours = project_folder(&book, &here);
     std::fs::create_dir_all(&ours).unwrap();
+    // The copy is the session's own worktree kept where it was (X73), so
+    // the conversation's folder from before may be there: the link
+    // replaces it.
+    let _ = std::fs::remove_dir_all(ours.join(CONVERSATION));
     let elsewhere = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), ours.join(CONVERSATION)).unwrap();
 
@@ -2465,11 +2613,141 @@ async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host()
         },
     )
     .await;
+    // The cut-off turn ends on studio-mini, and nobody types into it there.
+    within(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let Some(s) = theirs.iter().find(|s| s["id"] == made["id"]) else { return false };
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+
+    // Nothing comes back while the MacBook sleeps, for longer than a look
+    // or two takes.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back while the MacBook sleeps");
+
+    // The MacBook wakes: the session comes back to it, where it was.
     let _: Value = book
         .call("power.simulate", json!({ "event": "wake" }))
         .await;
+    within(Duration::from_secs(60), "fix-cart back on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().any(|s| s["id"] == made["id"] && s["path"] == made["path"])
+            && theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_someone_typed_into_on_the_central_host_while_the_mac_slept_stays_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    // On studio-mini, from the phone, the user asks for more.
+    let chat = within_value(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let s = theirs.iter().find(|s| s["id"] == made["id"])?;
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        (st["status"] == json!("done")).then(|| s["terminals"][0].clone())
+    })
+    .await;
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "And the tests" }))
+        .await;
+    within(Duration::from_secs(30), "that turn ended on studio-mini", || async {
+        let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+        st["status"] == json!("done") && agent_log(&mini, "claude-user").contains("And the tests")
+    })
+    .await;
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    // Longer than a look or two takes: it stays on studio-mini.
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back though used on studio-mini");
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
+async fn a_session_pinned_on_the_central_host_while_the_mac_slept_stays_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    start_turn(&book, &agent).await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    within(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let Some(s) = theirs.iter().find(|s| s["id"] == made["id"]) else { return false };
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+    // Kept on studio-mini with Run only on…, as the user chose.
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back though kept on studio-mini");
+}
+
+#[tokio::test]
+async fn the_first_start_of_this_version_brings_back_the_untouched_sessions_the_central_host_runs() {
+    let origin = Origin::new();
+    let (mini, mut book, made) = continued_and_back(&origin).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]));
+    // As an older version left it: it handed every session over at every
+    // sleep, and never looked back.
+    book.stop();
+    // The file as 0.1.42 left it: no sessions to bring back, no look back.
+    std::fs::write(
+        book.home.path().join("session-copies.json"),
+        r#"{ "sent": {}, "held": {}, "forced": {}, "files": {} }"#,
+    )
+    .unwrap();
+    book.restart().await;
+    within(Duration::from_secs(60), "fix-cart back on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().any(|s| s["id"] == made["id"]) && theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -2480,7 +2758,10 @@ async fn a_session_whose_last_copy_cannot_be_sent_stays_on_the_mac_at_sleep() {
     origin.add_to(&mini).await;
     let project = origin.add_to(&book).await;
     let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
     copy_of(&mini, &made).await;
+    // At work, so it would go, were its last copy sent.
+    start_turn(&book, &agent).await;
     // A file git cannot read: the session's last copy cannot be made.
     let locked = path_of(&made).join("locked.txt");
     std::fs::write(&locked, "new work").unwrap();
@@ -2516,6 +2797,50 @@ async fn a_session_not_handed_over_before_sleep_goes_on_here_after_waking() {
     let _: Value = book
         .call("power.simulate", json!({ "event": "wake" }))
         .await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "a turn after waking", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done") && agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_idle_session_stays_on_the_mac_through_sleep() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    // Its turn ended: nothing runs, waits or is queued.
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // A short idle sleep, the lid open.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().all(|s| s["id"] != made["id"]), "handed to studio-mini");
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    // Still the MacBook's, and its agent answers here.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "no longer the MacBook's own");
     let _: Value = book
         .call("chat.send", json!({ "id": agent, "text": "Again" }))
         .await;
@@ -2595,6 +2920,10 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
             .any(|s| s["id"] == made["id"] && s["pinned"] == json!(BOOK))
     })
     .await;
+    // At work through both sleeps, so only its pin keeps it.
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let agent = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    start_turn(&book, &agent).await;
 
     // Pinned here: going to sleep keeps it.
     let _: Value = book
@@ -2681,6 +3010,30 @@ fn agent_processes(d: &Daemon) -> Vec<(String, String)> {
             Some((f.next()?.to_string(), f.next()?.to_string()))
         })
         .collect()
+}
+
+#[tokio::test]
+async fn a_session_brought_here_is_listed_as_this_macs_own_before_the_account_says_so() {
+    let origin = Origin::new();
+    let (_mini, mut book, made) = continued_and_back(&origin).await;
+    // The MacBook hears no account news as it happens: the record naming
+    // it the owner comes later.
+    book.env.push((
+        "MOONLET_TEST_IGNORE_ACCOUNT_EVENTS".to_string(),
+        "1".to_string(),
+    ));
+    book.restart().await;
+    within(Duration::from_secs(30), "a live copy on the MacBook", || has_live_copy(&book, &made)).await;
+    within(Duration::from_secs(30), "the MacBook linked again", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "brought here, yet not listed as the MacBook's own");
 }
 
 #[tokio::test]
@@ -2972,12 +3325,28 @@ async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept
         },
     )
     .await;
-    // Kept on the MacBook now: going to sleep keeps it.
+    // Kept on the MacBook now: going to sleep keeps it, at work as it is,
+    // so only its pin keeps it.
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    start_turn(&book, &chat).await;
     let _: Value = book
         .call("power.simulate", json!({ "event": "sleep" }))
         .await;
     let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(mini_own.iter().all(|s| s["id"] != made["id"]));
+}
+
+/// Starts a turn on `d`'s chat `agent` that runs until stopped (`HOLD`).
+async fn start_turn(d: &Daemon, agent: &Value) {
+    let _: Value = d
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(Duration::from_secs(30), "the turn running", || async {
+        let st: Value = d.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("working")
+    })
+    .await;
 }
 
 const AIR: &str = "9e2b4d6f-1a3c-4e5f-8b7d-0c2e4a6b8d1f";
@@ -3852,22 +4221,63 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     book.restart().await;
     // For longer than the first few tries take.
     tokio::time::sleep(Duration::from_secs(45)).await;
+    assert!(!has_live_copy(&book, &made).await, "let go of before its gap was kept");
+    // Meanwhile it is listed once, as studio-mini's, never as the
+    // MacBook's own too (X73).
     let own: Vec<Value> = book.call("session.list", json!({})).await;
-    assert!(
-        own.iter().any(|s| s["id"] == made["id"]),
-        "let go of before its gap was kept"
-    );
-    // Once the worktree is free, the MacBook lets go by itself.
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "listed as the MacBook's own while studio-mini runs it");
+    let all: Vec<Value> = book.call("session.list", json!({ "copies": true })).await;
+    let listed: Vec<&Value> = all.iter().filter(|s| s["id"] == made["id"]).collect();
+    assert_eq!(listed.len(), 1, "listed {} times", listed.len());
+    assert_eq!(listed[0]["owner"]["worker"], json!(MINI));
+    // The app hears the same: the MacBook's sessions as they change leave
+    // it out.
+    let mut app = book.app().await;
+    let _: Value = book
+        .call("session.create", json!({ "project_id": project, "name": "probe", "agent": "none" }))
+        .await;
+    let heard = sessions_changed_with(&mut app, "probe").await;
+    assert!(heard.iter().all(|s| s["id"] != made["id"]), "sessions.changed lists it as the MacBook's own");
+    // Once the worktree is free, the MacBook lets go by itself, and follows
+    // studio-mini with a live copy.
     std::fs::remove_file(&lock).unwrap();
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    let_go_of(&book, &made).await;
+}
+
+/// The next `sessions.changed` that `app` hears listing a session named
+/// `name`: the sessions it lists.
+async fn sessions_changed_with(app: &mut moonlet_core::client::Client, name: &str) -> Vec<Value> {
+    use moonlet_proto::{Frame, Message};
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let frame = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .unwrap_or_else(|_| panic!("no sessions.changed listing {name}"))
+            .unwrap()
+            .expect("the daemon closed the connection");
+        if let Frame::Json(Message::Event { name: n, data }) = frame
+            && n == "sessions.changed"
+        {
+            let list: Vec<Value> = serde_json::from_value(data).unwrap();
+            if list.iter().any(|s| s["name"] == json!(name)) {
+                return list;
+            }
+        }
+    }
+}
+
+/// Whether `d` keeps a live copy of session `made` (X60).
+async fn has_live_copy(d: &Daemon, made: &Value) -> bool {
+    let copies: Vec<Value> = d.call("sync.list", json!({})).await;
+    copies.iter().any(|c| c["session"] == made["id"])
+}
+
+/// Waits until the MacBook `book` has let go of session `made`: it follows
+/// it with a live copy then, and no longer lists it as its own (X73).
+async fn let_go_of(book: &Daemon, made: &Value) {
+    within(Duration::from_secs(30), "the session let go of", || has_live_copy(book, made)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "still the MacBook's own");
 }
 
 /// Sets `dir` read-only (`0o555`), or writable again.
@@ -3924,21 +4334,10 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
     // Nothing can be written beside the transcript as the MacBook comes back.
     lost_while_away(&mini, &mut book, &made, || read_only(&folder, true)).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let copied = has_live_copy(&book, &made).await;
     read_only(&folder, false);
-    assert!(
-        own.iter().any(|s| s["id"] == made["id"]),
-        "let go of before its conversation was forked"
-    );
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
+    assert!(!copied, "let go of before its conversation was forked");
+    let_go_of(&book, &made).await;
     let forks = named(&folder, ".fork-");
     let jsonl: Vec<&PathBuf> = forks
         .iter()
@@ -3955,7 +4354,7 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
 }
 
 #[tokio::test]
-async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
+async fn a_lost_session_in_a_read_only_folder_is_let_go_of_where_it_is_keeping_its_gap_once() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
     origin.add_to(&mini).await;
@@ -3964,30 +4363,17 @@ async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
     let worktree = path_of(&made);
     let parent = worktree.parent().unwrap().to_path_buf();
     let folder = project_folder(&book, &worktree);
-    // Its worktree cannot move as the MacBook comes back.
+    // Its worktree's folder cannot change as the MacBook comes back: the
+    // worktree stays where it is all the same (X73).
     lost_while_away(&mini, &mut book, &made, || {
         std::fs::write(worktree.join("src/cart.ts"), "while away\n").unwrap();
         read_only(&parent, true);
     })
     .await;
-    tokio::time::sleep(Duration::from_secs(8)).await;
-    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let_go_of(&book, &made).await;
     read_only(&parent, false);
-    assert!(own.iter().any(|s| s["id"] == made["id"]));
-    within(
-        Duration::from_secs(30),
-        "fix-cart no longer the MacBook's own",
-        || async {
-            let own: Vec<Value> = book.call("session.list", json!({})).await;
-            own.iter().all(|s| s["id"] != made["id"])
-        },
-    )
-    .await;
     let leftovers = book.home.path().join("sync-leftovers");
-    let kept: Vec<PathBuf> = named(&leftovers, "")
-        .into_iter()
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
-        .collect();
+    let kept: Vec<PathBuf> = named(&leftovers, "");
     assert_eq!(kept.len(), 1, "{kept:?}");
     let forks = named(&folder, ".fork-");
     let jsonl: Vec<&PathBuf> = forks

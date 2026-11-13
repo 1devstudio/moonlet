@@ -1,28 +1,31 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type CardField, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns";
 import { create } from "zustand";
 import { DaemonError, hostsApi, rpc } from "./daemon";
 import { focusThrottle, latestPerKey } from "./prPoll";
-import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type Worktree } from "./protocol";
-import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask, M, type MobileStatus, type Project, type ProjectConfig, type PullRequest, type TaskRef, type Worktree } from "./protocol";
+import { errorMessage, errorToast, hostWorkspaces, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
 import { modeOf, setMode, toggleMode } from "./mode";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
-import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerOf } from "./tasks";
+import { type Column, DEFAULT_LINK, githubRepo, type LinkRules, sourceKey, type Task, type TaskStart, type TrackerState, taskFromGh, taskFromProjectItem, taskId, taskStart, trackerName, trackerOf } from "./tasks";
+import { type Found, PER_TRACKER as SEARCH_LIMIT, type SearchTarget, searchTargets } from "./boardSearch";
 import { parseTrackerLink } from "./trackerSources";
 import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewIssue, withCreated } from "./newIssue";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, tasksBoard } from "./tasksBoard";
+import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard, worktreesNotUsedElsewhere } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { parseWsKey, wsKey } from "./workspaces";
+import { DEFAULT_DISPLAY, filtersAtPick, type Display, readSavedFilters, saveFilters, type TaskFilter } from "./taskFilters";
+import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
+import { firstListings } from "./sessionsOnce";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
 export const GITHUB = "github:github.com";
@@ -42,6 +45,8 @@ export interface TasksData {
   error: string | null;
   /** Each synced board's tasks (`connection key`) and active sprint or cycle (X50). */
   boards?: Record<string, BoardData>;
+  /** Tasks the workspace's sessions are linked to by hand that no board reads, looked up by key (X46). */
+  linked?: Task[];
 }
 
 /** What a sync read for one board (X50). */
@@ -76,14 +81,22 @@ interface TasksState {
   filters: Omit<BoardFilters, "mine">;
   /** gh's token scopes on each host, as its last GitHub Project sync read them (X50 moves need `project`). */
   ghScopes: Record<string, string[]>;
+  /** A project's, team's or list's states, by `connection source`, for the State menu of a task on no board (X50). */
+  projectStates: Record<string, TrackerState[]>;
+  /** Each board's filters (X100), by board id, kept in the app; Assignee's Me is X50's pick, not among them. */
+  boardFilters: Record<string, TaskFilter[]>;
+  /** Display options for every board (X100): ordering, Show empty columns, Show sessions on cards. */
+  display: Display;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
   assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
   attention: Record<string, string>;
   /** What moonlet did about each task, by `connection key` (X45 Activity). */
   activity: Record<string, ActivityEntry[]>;
-  /** Find a task: the text the board is filtered by. */
-  query: string;
+  /** Find a task (X93), by `host/workspaceId`: the text typed and the task found on the board. */
+  search: Record<string, TaskSearch>;
+  /** What Find a task's search in the trackers found (X93), by `host/workspaceId`. */
+  trackerSearch: Record<string, TrackerSearch>;
   /** Tasks whose Keep in step switch is off, by `connection key` (X46 Task tab). */
   paused: Record<string, true>;
   /** The last action on a task that failed, with its error (X46), by `connection key`. */
@@ -160,10 +173,14 @@ export const useTasks = create<TasksState>(() => ({
   expanded: storedExpanded(),
   filters: storedFilters(),
   assignee: storedAssignee(),
+  boardFilters: readSavedFilters(storedJson("tasks.boardFilters", {})),
+  display: { ...DEFAULT_DISPLAY, ...storedJson("tasks.display", {}) },
   ghScopes: {},
+  projectStates: {},
   attention: {},
   activity: {},
-  query: "",
+  search: {},
+  trackerSearch: {},
   paused: storedPaused(),
   failures: {},
   moving: {},
@@ -190,6 +207,10 @@ export async function removeBoard(board: Pick<BoardConfig, "id" | "name">): Prom
   const sure = await askConfirm({ title: `Remove ${board.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
   if (!sure) return false;
   await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== board.id) }));
+  // Its filters go with it (X100).
+  const { [board.id]: _, ...boardFilters } = useTasks.getState().boardFilters;
+  useTasks.setState({ boardFilters });
+  writeStored("tasks.boardFilters", JSON.stringify(boardFilters));
   return true;
 }
 
@@ -211,9 +232,163 @@ export function openBoard(host: string, workspaceId: string, id: string) {
   showBoard(host, workspaceId, id);
 }
 
+/** Find a task in a workspace (X93): what is typed, and the task picked on the board, marked found. */
+export interface TaskSearch {
+  query: string;
+  found: string | null;
+}
+
+const NO_SEARCH: TaskSearch = { query: "", found: null };
+
+/** A workspace's Find a task. */
+export const searchOf = (t: Pick<TasksState, "search">, host: string, workspaceId: string): TaskSearch => t.search[wsKey(host, workspaceId)] ?? NO_SEARCH;
+
+function setSearch(host: string, workspaceId: string, change: (s: TaskSearch) => TaskSearch) {
+  useTasks.setState((t) => ({ search: { ...t.search, [wsKey(host, workspaceId)]: change(searchOf(t, host, workspaceId)) } }));
+}
+
+/** Types into Find a task; clearing it drops the found mark. */
+export function setTaskQuery(host: string, workspaceId: string, query: string) {
+  setSearch(host, workspaceId, (s) => ({ query, found: query.trim() ? s.found : null }));
+}
+
+/** Marks task `id` (`connection key`) found on the board, or none. */
+export function findTask(host: string, workspaceId: string, id: string | null) {
+  setSearch(host, workspaceId, (s) => ({ ...s, found: id }));
+}
+
+/** Find a task's search in a workspace's trackers (X93): for `query`, what each found, those still searching and those that failed. */
+export interface TrackerSearch {
+  query: string;
+  found: Found[];
+  /** The trackers searched, by name. */
+  trackers: string[];
+  searching: string[];
+  failed: { tracker: string; error: string }[];
+}
+
+const NO_TRACKER_SEARCH: TrackerSearch = { query: "", found: [], trackers: [], searching: [], failed: [] };
+
+/** A workspace's tracker search. */
+export const trackerSearchOf = (t: Pick<TasksState, "trackerSearch">, host: string, workspaceId: string): TrackerSearch => t.trackerSearch[wsKey(host, workspaceId)] ?? NO_TRACKER_SEARCH;
+
+/** The latest tracker search of each workspace; an older one's answers are dropped. */
+const searchSeq = new Map<string, number>();
+
+/** The tasks a sync read for board `id`. */
+function boardTasks(data: TasksData | undefined, id: string): Task[] {
+  const keys = new Set(data?.boards?.[id]?.keys ?? []);
+  return (data?.tasks ?? []).filter((t) => keys.has(taskId(t)));
+}
+
+/** One connection's search: Linear and Jira through the app, each GitHub repository through `gh` on `host`. */
+async function searchIn(host: string, workspaceId: string, target: SearchTarget, query: string): Promise<Task[]> {
+  if (target.tracker !== "github") return hostsApi.trackerSearch({ id: target.connection, query, scope: target.scope });
+  const lists = await Promise.all(
+    target.scope.map(async (repo) => {
+      // Any project's directory gives gh its host and sign-in; --repo names the repository.
+      const path = repoPath(host, workspaceId, repo) ?? anyProjectPath(host);
+      if (!path) return [];
+      const found = await rpc<GhTask[]>(host, M.ghSearch, { path, repo, query, limit: SEARCH_LIMIT });
+      return found.map((gh) => ({ ...taskFromGh(gh, target.connection), mine: undefined }));
+    }),
+  );
+  return lists.flat();
+}
+
+/**
+ * Find a task's search in the trackers (X93): after a pause of `delayMs`,
+ * once at least 2 characters are typed, each connection of the workspace's
+ * boards is searched, and a typed key or URL is looked up in its tracker.
+ * A newer query drops what an older one finds.
+ */
+export async function searchTrackers(host: string, workspaceId: string, query: string, delayMs = 250): Promise<void> {
+  const key = wsKey(host, workspaceId);
+  const seq = (searchSeq.get(key) ?? 0) + 1;
+  searchSeq.set(key, seq);
+  const live = () => searchSeq.get(key) === seq;
+  const set = (s: TrackerSearch) => {
+    if (live()) useTasks.setState((t) => ({ trackerSearch: { ...t.trackerSearch, [key]: s } }));
+  };
+  const q = query.trim();
+  if (q.length < 2) return set({ ...NO_TRACKER_SEARCH, query: q });
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  if (!live()) return;
+  const t = useTasks.getState();
+  const data = t.data[key];
+  const boards = (trackersConfig(t).boards ?? []).filter((b) => b.workspace === key).map((board) => ({ board, tasks: boardTasks(data, board.id) }));
+  const targets = searchTargets(boards, t.attention);
+  // A typed key or URL is also looked up in its tracker, ClickUp too.
+  const pasted = await hostsApi.parsePasted(q).catch(() => null);
+  if (!live()) return;
+  const path = anyProjectPath(host);
+  // The typed key's lookup counts as a search of its tracker: the board's connection of that kind, else the tracker alone.
+  const typedConn = pasted && path ? (pasted.kind ? (targets.find((x) => x.tracker === pasted.kind)?.connection ?? `${pasted.kind}:`) : (targets[0]?.connection ?? null)) : null;
+  const labels = searchLabels([...new Set([...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])])]);
+  const label = (connection: string) => labels.get(connection) ?? trackerName(connection);
+  const results: (Found | null)[] = targets.map(() => null);
+  let typed: Task | null = null;
+  // Searches under way, by connection; one connection may have two (its search and the typed key's).
+  const pending = [...targets.map((x) => x.connection), ...(typedConn ? [typedConn] : [])];
+  const settle = (connection: string) => pending.splice(pending.indexOf(connection), 1);
+  const failed: TrackerSearch["failed"] = [];
+  const show = () =>
+    set({
+      query: q,
+      found: [...(typed ? [{ connection: typed.connection, tasks: [typed] }] : []), ...results.filter((r): r is Found => !!r)],
+      trackers: [...new Set(labels.values())],
+      searching: [...new Set(pending.map(label))],
+      failed: [...failed],
+    });
+  show();
+  const lookUpTyped = async () => {
+    if (!pasted || !path || !typedConn) return;
+    try {
+      typed = await lookUpPasted(host, path, pasted, null).catch(() => null);
+    } finally {
+      settle(typedConn);
+      show();
+    }
+  };
+  await Promise.all([
+    lookUpTyped(),
+    ...targets.map(async (target, i) => {
+      try {
+        results[i] = { connection: target.connection, tasks: await searchIn(host, workspaceId, target, q) };
+      } catch (e) {
+        failed.push({ tracker: label(target.connection), error: errorMessage(e) });
+      } finally {
+        settle(target.connection);
+        show();
+      }
+    }),
+  ]);
+}
+
+/** Any of `host`'s projects' folders: where gh learns its host and sign-in. */
+const anyProjectPath = (host: string): string | undefined => useStore.getState().projects[host]?.[0]?.path;
+
+/**
+ * How Find a task names each connection it searches (X93): by its tracker,
+ * and by tracker and site when two of one tracker are searched. A bare
+ * `<kind>:` stands for a tracker known only from a typed key.
+ */
+function searchLabels(connections: string[]): Map<string, string> {
+  const kinds = connections.map((c) => trackerOf(c));
+  return new Map(
+    connections.map((c, i) => {
+      const site = c.slice(c.indexOf(":") + 1);
+      const twice = kinds.filter((k) => k === kinds[i]).length > 1;
+      return [c, twice && site ? `${trackerName(c)} (${site})` : trackerName(c)];
+    }),
+  );
+}
+
 /** Shows board `id` in workspace `workspaceId` of `host` (X50), and syncs it if it is not pinned. */
 export function showBoard(host: string, workspaceId: string, id: string) {
   const shownBoard = { ...useTasks.getState().shownBoard, [wsKey(host, workspaceId)]: id };
+  // A task found on the board shown before is not on this one (X93).
+  findTask(host, workspaceId, null);
   useTasks.setState({ shownBoard });
   writeStored("tasks.board", JSON.stringify(shownBoard));
   void refreshTasks(host, workspaceId);
@@ -258,6 +433,55 @@ export function setAssignee(board: Pick<BoardConfig, "id" | "assignee" | "worksp
   writeStored("tasks.assignee", JSON.stringify(assignee));
   const { host, id } = parseWsKey(board.workspace);
   void refreshTasks(host, id);
+}
+
+function storedJson<T>(name: string, fallback: T): T {
+  try {
+    return JSON.parse(readStored(name) ?? "null") ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A board's filters as its row of chips shows them (X100): Assignee is Me first while the board is at me. */
+export const filtersOf = (t: Pick<TasksState, "boardFilters" | "assignee">, board: Pick<BoardConfig, "id" | "assignee">): TaskFilter[] =>
+  filtersAtPick(t.boardFilters[board.id] ?? [], assigneeOf(board, t.assignee));
+
+/** Sets a board's filters (X100), kept in the app; a change of Assignee's Me sets X50's pick, which fetches again. Removed boards' filters are forgotten. */
+export function setBoardFilters(board: Pick<BoardConfig, "id" | "assignee" | "workspace">, filters: TaskFilter[]) {
+  const { saved, pick } = saveFilters(filters);
+  const ids = new Set([...(trackersConfig(useTasks.getState()).boards ?? []).map((b) => b.id), board.id]);
+  const kept = Object.fromEntries(Object.entries(useTasks.getState().boardFilters).filter(([id]) => ids.has(id) && id !== board.id));
+  const boardFilters = saved.length ? { ...kept, [board.id]: saved } : kept;
+  useTasks.setState({ boardFilters });
+  writeStored("tasks.boardFilters", JSON.stringify(boardFilters));
+  if (pick !== assigneeOf(board, useTasks.getState().assignee)) setAssignee(board, pick);
+}
+
+/** Display options (X100), for every board, kept across restarts. */
+export function setDisplay(display: Display) {
+  useTasks.setState({ display });
+  writeStored("tasks.display", JSON.stringify(display));
+}
+
+/** A board's card properties (X100 Display options, X50 Cards show); null goes back to its tracker's. */
+export function setBoardCards(boardId: string, cards: CardField[] | null) {
+  void saveTrackersConfig((c) => ({
+    ...c,
+    boards: c.boards?.map((b) => {
+      if (b.id !== boardId) return b;
+      const { cards: _, ...rest } = b;
+      return cards ? { ...rest, cards } : rest;
+    }),
+  })).catch((e) => errorToast(e));
+}
+
+/** Display options' Reset to default (X100): Board, the board's order, the switches at their defaults, the tracker's card fields. */
+export function resetDisplay(boardId: string) {
+  setLayout("board");
+  setDisplay(DEFAULT_DISPLAY);
+  setFilters({ hideEmptyDone: false });
+  setBoardCards(boardId, null);
 }
 
 function storedExpanded(): Record<string, boolean> {
@@ -391,9 +615,20 @@ export function leaveTasksMode() {
 
 /** The projects in a workspace's sections. */
 export function workspaceProjects(s: StoreState, host: string, workspaceId: string): Project[] {
-  const ws = s.workspaces[host]?.find((w) => w.id === workspaceId);
-  const ids = new Set((s.sections[host] ?? []).filter((sec) => ws?.section_ids.includes(sec.id)).flatMap((sec) => sec.project_ids));
-  return (s.projects[host] ?? []).filter((p) => ids.has(p.id));
+  return projectsOfWorkspace(s.workspaces[host] ?? [], s.sections[host] ?? [], s.projects[host] ?? [], workspaceId);
+}
+
+/** The projects in workspace `workspaceId`'s sections, from a host's
+ *  workspaces, sections and projects. */
+export function projectsOfWorkspace(
+  workspaces: { id: string; section_ids: string[] }[],
+  sections: { id: string; project_ids: string[] }[],
+  projects: Project[],
+  workspaceId: string,
+): Project[] {
+  const ws = workspaces.find((w) => w.id === workspaceId);
+  const ids = new Set(sections.filter((sec) => ws?.section_ids.includes(sec.id)).flatMap((sec) => sec.project_ids));
+  return projects.filter((p) => ids.has(p.id));
 }
 
 const syncs = latestPerKey();
@@ -457,6 +692,14 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     for (const t of placed) readNow.add(taskId(t));
     boardData[b.id] = { keys: placed.map(taskId), sprint: r.sprint, ...(r.kind && { kind: r.kind }), ...(r.project && { project: r.project }) };
   }
+  // Tasks sessions are linked to by hand that no board draws: an Epic, someone else's issue (X46).
+  const fallback = per[0]?.path ?? null;
+  const looked = await lookUpLinked(host, linkedRefs(host, workspaceId, tasks, fallback), prev?.linked ?? []);
+  if (!isLatest()) return;
+  // Links the dialog made while the lookups ran stay, as long as their sessions keep them.
+  const still = new Set(linkedRefs(host, workspaceId, tasks, fallback).map((l) => taskId(l.ref)));
+  const lookedIds = new Set(looked.map(taskId));
+  const linked = [...looked, ...(useTasks.getState().data[key]?.linked ?? []).filter((t) => still.has(taskId(t)) && !lookedIds.has(taskId(t)))];
   // A board whose columns changed in its tracker keeps them, matched to the
   // board as it is when the write runs, so a change made meanwhile stays.
   if (Object.keys(fresh).length && !useTasks.getState().configError)
@@ -483,6 +726,7 @@ export async function refreshTasks(host: string, workspaceId: string, now = Date
     syncedAt: error ? (prev?.syncedAt ?? null) : now,
     error,
     boards: merged.boards ?? boardData,
+    ...(linked.length && { linked }),
   };
   useTasks.setState((st) => ({ data: { ...st.data, [key]: next }, moving: withoutMoves(st.moving, settled.filter(([id]) => readNow.has(id))) }));
   // Compared as the board shows them: with its columns as saved now.
@@ -835,9 +1079,14 @@ function keptPr(n: number | null | undefined): PullRequest | null {
  */
 export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "projects" | "terminals" | "reads">, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
   const repoOf = (h: string, projectId: string) => originRepoOf(s, host, data, h, projectId);
-  const sessions: BoardSession[] = members.flatMap((h) =>
-    (s.sessions[h] ?? [])
-      .filter((x) => x.workspace_id === workspaceId)
+  // A session two members list while it moves between them (X73) is the
+  // first one's only.
+  const listed = firstListings(
+    members.map((h) => (s.sessions[h] ?? []).filter((x) => x.workspace_id === workspaceId)),
+    (x) => x.id,
+  );
+  const sessions: BoardSession[] = members.flatMap((h, i) =>
+    listed[i]
       .map((x) => ({
         id: x.id,
         ...(h !== host && { host: h }),
@@ -863,7 +1112,7 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
     // The board's columns as saved now, so a change shows without a sync (X44, X50).
     tasks: placedTasks({ ...data, tasks: shownMoved(data.tasks) }, config),
     sessions,
-    worktrees: data.worktrees,
+    worktrees: worktreesNotUsedElsewhere(data.worktrees, s.sessions[host] ?? [], workspaceId),
     sessionStartRule: (t) => rulesFor(config, t).session_starts,
     link: config.link ?? DEFAULT_LINK,
   };
@@ -875,12 +1124,37 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
  * category, and that column's name; no status when the task is on no board
  * with columns.
  */
-function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">, category: Category, status?: string): { status?: string; name: string } {
+function boardTarget(host: string, workspaceId: string, task: Pick<Task, "connection" | "key" | "github">, category: Category, status?: string): { status?: string; name: string; onBoard: boolean } {
   const columns = taskColumns(host, workspaceId, task);
   const to = status ?? statusFor(columns, category) ?? undefined;
   // Named as the tracker names the column (X50).
-  return { status: to, name: columns.find((c) => to !== undefined && c.statuses.includes(to))?.name ?? COLUMN_LABEL[category] };
+  // On no board, the status is the state's own name (X50).
+  const named = columns.length ? columns.find((c) => to !== undefined && c.statuses.includes(to))?.name : to;
+  return { status: to, name: named ?? COLUMN_LABEL[category], onBoard: columns.length > 0 };
 }
+
+/** The states of tracker `source` (a Jira project, Linear team or ClickUp list) as last read, or null before; from `t` in a selector. */
+export const projectStatesOf = (connection: string, source: string, t: Pick<TasksState, "projectStates"> = useTasks.getState()): TrackerState[] | null => t.projectStates[sourceKey(connection, source)] ?? null;
+
+/**
+ * Reads the states of `source` from its tracker once a session, for the
+ * State menu of a task on no board of the workspace (X50). A tracker that
+ * refuses leaves none, and the menu its four categories.
+ */
+export async function loadProjectStates(connection: string, source: string) {
+  const key = sourceKey(connection, source);
+  if (projectStatesOf(connection, source) || statesLoading.has(key)) return;
+  statesLoading.add(key);
+  try {
+    const states = await hostsApi.trackerStates(connection, source);
+    useTasks.setState((t) => ({ projectStates: { ...t.projectStates, [key]: states } }));
+  } catch {
+    // The four categories still move it.
+  } finally {
+    statesLoading.delete(key);
+  }
+}
+const statesLoading = new Set<string>();
 
 /** Sets a GitHub Project item's Status to `status` (X50), through gh on `host`. */
 async function moveProjectItem(host: string, workspaceId: string, task: Task, status: string) {
@@ -1218,10 +1492,69 @@ export function ensureTasks(host: string, workspaceId: string, now = Date.now())
 const ensuring = new Set<string>();
 const ensuredAt = new Map<string, number>();
 
-/** Links a session to a task, or unlinks it with null (X46). */
-export async function linkTask(host: string, sessionId: string, task: Task | null) {
+/** Keeps `task` among workspace `ws`'s linked tasks unless a board draws
+ *  it. One a board holds in a hidden column is looked up for its tracker's. */
+async function keepLinked(ws: WorkspaceRef, task: Task) {
+  const key = wsKey(ws.host, ws.id);
+  const same = (t: Task) => taskId(t) === taskId(task);
+  const d = useTasks.getState().data[key];
+  if (!d || drawn(placedTasks(d).find(same))) return;
+  const found = drawn(task) ? task : ((await lookUpLinked(ws.host, [{ ref: task, path: null, once: false }], [])).at(0) ?? task);
+  useTasks.setState((st) => {
+    const now = st.data[key];
+    return now ? { data: { ...st.data, [key]: { ...now, linked: [...(now.linked ?? []).filter((t) => !same(t)), found] } } } : {};
+  });
+}
+
+/** A stored link to look up, with the checkout on the syncing host that gh runs in for a GitHub issue. */
+interface LinkToLookUp {
+  ref: TaskRef;
+  path: string | null;
+  /** Only archived sessions link it (X86): asked of its tracker once, then kept. */
+  once: boolean;
+}
+
+/** The stored links of the workspace's sessions, live and archived, on every
+ *  member (X68), to tasks no board draws: not in `loaded`, or in a hidden
+ *  column. A GitHub issue is asked of gh in its session's worktree on `host`,
+ *  else in `fallback`. */
+function linkedRefs(host: string, workspaceId: string, loaded: Map<string, Task>, fallback: string | null): LinkToLookUp[] {
+  const st = useStore.getState();
+  const hosts = hostWorkspaces(st);
+  const members = workspaceMembers({ host, id: workspaceId, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) }, hosts);
+  const links = new Map<string, LinkToLookUp>();
+  for (const h of members)
+    for (const s of st.sessions[h] ?? []) {
+      if (s.workspace_id !== workspaceId || !s.task || drawn(loaded.get(taskId(s.task)))) continue;
+      const seen = links.get(taskId(s.task));
+      const path = h === host && !s.archived ? s.path : (seen?.path ?? (h === host ? s.path : fallback));
+      links.set(taskId(s.task), { ref: s.task, path, once: s.archived && (seen?.once ?? true) });
+    }
+  return [...links.values()];
+}
+
+/** The tasks `links` name, looked up in their trackers by key, whatever their
+ *  board, type or assignee (X46). One the tracker does not answer for keeps
+ *  its answer in `last`, as does one only archived sessions link. */
+async function lookUpLinked(host: string, links: LinkToLookUp[], last: Task[]): Promise<Task[]> {
+  const found = await Promise.all(
+    links.map(async ({ ref, path, once }) => {
+      const kept = last.find((x) => taskId(x) === taskId(ref));
+      if (once && kept) return kept;
+      const t = ref.connection === GITHUB ? path && (await lookUpPasted(host, path, { kind: "github", key: ref.key, site: null }, null)) : await hostsApi.trackerTask(ref.connection, ref.key).catch(() => null);
+      return t || kept || null;
+    }),
+  );
+  return found.filter((t): t is Task => t !== null);
+}
+
+/** Links a session to a task, or unlinks it with null (X46). A task that no
+ *  board of `ws`, the workspace whose boards the session reads, draws shows
+ *  on the session at once, rather than after the next sync. */
+export async function linkTask(host: string, sessionId: string, task: Task | null, ws?: WorkspaceRef) {
   try {
     await rpc(host, M.sessionUpdate, { id: sessionId, task: task ? { connection: task.connection, key: task.key, url: task.url } : null });
+    if (task && ws) await keepLinked(ws, task);
     toast(task ? `Linked to ${task.key}` : "Unlinked the task");
   } catch (e) {
     errorToast(e);
@@ -1292,8 +1625,9 @@ export async function moveTask(host: string, workspaceId: string, task: Task, co
       recordActivity(task, close ? "moonlet closed it" : "moonlet reopened it", now);
     } else if (task.tracker && column) {
       movedByMoonlet.set(id, column);
-      const { status, name } = boardTarget(host, workspaceId, task, column, toStatus);
-      move = start(status, name);
+      const { status, name, onBoard } = boardTarget(host, workspaceId, task, column, toStatus);
+      // Shown under way on its board only: no sync of a task on none would clear it (X53).
+      move = onBoard ? start(status, name) : null;
       await hostsApi.trackerUpdate({ id: task.connection, task: task.tracker.id, source: task.tracker.source, column, ...(status && { status }) });
       recordActivity(task, `moonlet moved it to ${name}`, now);
     } else return;

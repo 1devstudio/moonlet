@@ -243,6 +243,12 @@ export interface TaskStart {
   user?: string;
 }
 
+/** A state of a tracker's project, team or list, and the column it lands in (`tracker_states`, X44 and X50). */
+export interface TrackerState {
+  name: string;
+  column: Column;
+}
+
 /** How a tracker project is named in the links of the projects that start from it (X44): `connection key`. */
 export const sourceKey = (connection: string, key: string) => `${connection} ${key}`;
 

@@ -14,13 +14,13 @@ import { Button, Dialog, inputCls, selectCls } from "../ui";
 
 type Options = Awaited<ReturnType<typeof createOptions>>;
 
-export function NewIssue({ host, workspaceId, board, column, onClose }: { host: string; workspaceId: string; board: BoardConfig; column: BoardColumn; onClose: () => void }) {
+export function NewIssue({ host, workspaceId, board, column, title = "", onClose }: { host: string; workspaceId: string; board: BoardConfig; column: BoardColumn; title?: string; onClose: () => void }) {
   // A GitHub Project's issue goes in a repository: the workspace's first, then those of the Project's items.
   const data = useTasks((t) => t.data[wsKey(host, workspaceId)]);
   // A GitHub Project's repository, or a Jira board's project.
   const keys = data?.boards?.[board.id]?.keys ?? [];
   const places = !needsPlace(board) ? [] : board.origin.kind === "github_project" ? projectRepos(data?.repos, data?.tasks ?? [], keys) : jiraProjects(data?.tasks ?? [], keys);
-  const [chosen, setDraft] = useState<Draft>(() => newIssueDraft(board));
+  const [chosen, setDraft] = useState<Draft>(() => newIssueDraft(board, title));
   // The repository picked, else the first, which can arrive after the form opens.
   const draft = { ...chosen, ...(!chosen.place && places[0] && { place: places[0] }) };
   // Until the tracker's lists arrive, the user's own choices: assigned to them, the board's labels.

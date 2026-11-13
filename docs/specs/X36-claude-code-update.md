@@ -17,7 +17,7 @@ moonlet runs the `claude` found on the user's PATH. Claude Code updates itself i
 4. When `claude update` reports success, the banner reads "Claude Code updated to 2.1.296" and "New agents start on 2.1.296." with a close button.
 5. When it fails, or Claude is managed by Homebrew or another package manager, the banner shows what `claude update` said (for example "To update, run: brew upgrade claude-code") with **Retry** and a close button.
 6. A result stays until the user closes it. Closing does not hide the release: a failed one comes back at the next check.
-7. **Settings › General › Updates** (X43) shows the installed Claude Code version under moonlet's with a status (Checking…, Updating…, "2.1.296 is available", Up to date, or "Not found on the PATH"), an **Update to 2.1.296** button even for a release the user said Later to, and **Check now** checks both.
+7. **Settings › General › Updates** (X43) shows the installed Claude Code version under moonlet's with a status (Checking…, Updating…, "2.1.296 is available", Up to date, "Not found on the PATH", or "Could not ask moonlet's daemon" when the daemon did not answer), an **Update to 2.1.296** button even for a release the user said Later to, and **Check now** checks both.
 
 ## Behaviour and acceptance criteria
 
@@ -33,6 +33,8 @@ moonlet runs the `claude` found on the user's PATH. Claude Code updates itself i
 - [x] "Claude Code is up to date (X)" finishes with "Claude Code X is up to date" and hides the banner for the release that was announced (the user's channel may be behind `latest`).
 - [x] Anything else is a failure. The banner shows the output after the "Checking for updates" line, without blank lines, or "claude update failed" when there is none.
 - [ ] Once finished, the installed version shown in Settings is the new one.
+- [x] A check the daemon does not answer (it is restarting) shows "Could not ask moonlet's daemon" in grey, not "Not found on the PATH", also when npm cannot be reached.
+- [x] When this Mac's daemon connects again (after an upgrade or a restart), the version is asked again. A check asked for while another one runs runs after it, so the last answer is the reconnected daemon's.
 
 ## UI
 
@@ -98,7 +100,9 @@ Settings › Updates gains a row under moonlet's:
 
 ## Test plan
 
-- Unit (`lib/claudeUpdate.test.ts`): version comparison, when the banner shows (newer, same, older, unknown, dismissed, an update already running, a result not yet closed), the steps for `claude update` output (up to date captured from a real run; updated, Homebrew and another process running written from the lines in Claude Code 2.1.296's update command, since they need an older or Homebrew install to capture), the failure text, the banner's text and buttons per state, Later versus close, and the Settings status and offer.
+- Unit (`lib/claudeUpdate.test.ts`): version comparison, when the banner shows (newer, same, older, unknown, dismissed, an update already running, a result not yet closed), the steps for `claude update` output (up to date captured from a real run; updated, Homebrew and another process running written from the lines in Claude Code 2.1.296's update command, since they need an older or Homebrew install to capture), the failure text, the banner's text and buttons per state, Later versus close, the Settings status and offer, the status when the daemon did not answer, and which host status changes ask again.
+- Unit (`lib/settingsPage.test.ts`): the Settings line's tone when the daemon did not answer.
+- Unit (`lib/claudeVersionStore.test.ts`): what Settings shows after a check the restarting daemon did not answer, after it came back during a check, and after an update made that check stale.
 - Unit (Rust, app crate): the app waits 660 s for `claude.update`.
 - Unit (Rust, `moonlet-core`): `claude --version` parsing, and the dist-tags parsing in the app crate, both with captured output.
 - Integration (`crates/moonletd/tests/daemon.rs`): with a fake `claude` on the login PATH, `claude.version` returns its version and whether an update runs, and `claude.update` streams its lines as events, refuses a second update while one runs, returns its output and sends it as `claude.update_done`.

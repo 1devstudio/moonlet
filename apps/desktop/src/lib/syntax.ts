@@ -6,6 +6,7 @@
 
 import { bundledLanguagesInfo, createHighlighter, type BundledLanguage, type BundledTheme } from "shiki";
 import { EncodedTokenMetadata, INITIAL, type StateStack } from "shiki/textmate";
+import { PANE } from "./terminalTheme";
 
 export { resolveEditorTheme } from "./editorThemes";
 
@@ -40,8 +41,8 @@ export function editorLanguage(name: string): string {
 
 /** moonlet's own editor background and diff colours, whatever the theme. */
 const OVERRIDES: Record<string, string> = {
-  "editor.background": "#121212",
-  "editorGutter.background": "#121212",
+  "editor.background": PANE,
+  "editorGutter.background": PANE,
   "editor.lineHighlightBackground": "#1a1a1a",
   "diffEditor.insertedTextBackground": "#6fcf8a1f",
   "diffEditor.removedTextBackground": "#ef6b7324",

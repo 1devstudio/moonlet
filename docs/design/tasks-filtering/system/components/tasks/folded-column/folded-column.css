@@ -1,0 +1,114 @@
+/* A board column and FoldedColumn (components/tasks/TasksMode.tsx, X50): the
+   column's header (name, count, + and options), its category line with the
+   2px rule under it, and the strip a folded column becomes. Cards inside are
+   `.task-card`. */
+.board-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 228px;
+  flex-shrink: 0;
+  border-radius: var(--radius-card);
+}
+.board-column__header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 var(--space-1);
+}
+.board-column__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 22px;
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+  font-weight: var(--font-weight-semibold);
+}
+.board-column__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-column__count {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  font-weight: var(--font-weight-normal);
+}
+.board-column__options {
+  margin-left: auto;
+}
+.board-column__category {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-faint);
+  font-size: var(--ui-text-11);
+}
+/* A column at its work-in-progress limit. */
+.board-column__wip--full {
+  color: var(--color-blocked);
+}
+.board-column__rule {
+  flex-shrink: 0;
+  height: 2px;
+  border-radius: var(--radius-px);
+  background: var(--color-border-strong);
+}
+.board-column__rule--in-progress {
+  background: var(--color-idle);
+}
+.board-column__rule--in-review {
+  background: var(--color-muted);
+}
+.board-column__rule--done {
+  background: var(--color-merged);
+}
+.board-column__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+/* The folded strip: its name written down, its count, its clean-ups. */
+.folded-column {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  align-self: stretch;
+  gap: var(--space-2-5);
+  width: 40px;
+  padding: var(--space-2-5) 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-muted);
+  font: inherit;
+}
+.folded-column:hover {
+  color: var(--color-fg);
+}
+.folded-column__name {
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}
+.folded-column__count {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+/* Tasks that need clean-up (a merged branch to remove). */
+.folded-column__cleanup {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-error) 20%, transparent);
+  color: var(--color-error);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-10-5);
+}

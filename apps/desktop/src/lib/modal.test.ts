@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { fromOtherDialog, tabWrap } from "./modal";
+import { confirmFocus, fromOtherDialog, tabWrap } from "./modal";
 
 // Settings open, with the confirm modal on top of it.
 function screen() {
@@ -71,5 +71,13 @@ describe("tabWrap", () => {
     const { $, panel } = confirm();
     expect(tabWrap(panel, $("box"), false)).toBeNull();
     expect(tabWrap(panel, $("cancel"), true)).toBeNull();
+  });
+});
+
+describe("confirmFocus", () => {
+  it("focuses the action, a usable alt instead, and Cancel next to a disabled alt (X23, X55)", () => {
+    expect(confirmFocus()).toBe("action");
+    expect(confirmFocus({ label: "Push, then archive" })).toBe("alt");
+    expect(confirmFocus({ label: "Push, then archive", disabled: "Commit the changes first" })).toBe("cancel");
   });
 });

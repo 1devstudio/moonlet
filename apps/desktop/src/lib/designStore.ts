@@ -22,6 +22,7 @@ import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 import { cardsReloaded } from "./designView";
+import { changedWorkspaces, LIBRARY } from "./designLibrary";
 import { changePlace, designRef, isSession, placeOfDesign, type DesignPlace } from "./designPlace";
 
 interface DesignState {
@@ -61,6 +62,9 @@ interface DesignState {
   unseen: string[];
   /** The design shown as the design screen in each workspace, by slug; else its design system. */
   designShown: Record<string, string | null>;
+  /** Whether the design shown in each workspace is a shared one, the
+   *  library's (X95). */
+  sharedShown: Record<string, boolean>;
   /** How many times each design page (`wsKey/slug/page`) changed, so its frame loads again. */
   pageRevs: Record<string, number>;
   /** The pages the latest change of each design (`wsKey/slug`) wrote. */
@@ -84,7 +88,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, cardRevs: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, cardRevs: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, sharedShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -332,10 +336,33 @@ export function unseenOf(s: DesignState, host: string, workspace: string): numbe
   return s.unseen.filter((k) => placeKeyOfItem(k) === place && (!listed || listed.some((d) => itemKey(host, workspace, d.slug) === k))).length;
 }
 
-/** The design shown as the design screen in a workspace, or null. */
+/** The design shown as the design screen in a workspace, or null: the
+ *  workspace's own, or a shared one (X95). */
 export function shownDesign(s: DesignState, host: string, workspace: string): Design | null {
   const slug = s.designShown[wsKey(host, workspace)];
-  return (slug && designsOf(s, host, workspace)?.find((d) => d.slug === slug)) || null;
+  return (slug && designsOf(s, host, shownDesignPlace(s, host, workspace))?.find((d) => d.slug === slug)) || null;
+}
+
+/** Where the design shown in a workspace is: the library for a shared
+ *  one (X95), else the workspace. Its calls and frames name this. */
+export function shownDesignPlace(s: DesignState, host: string, workspace: string): string {
+  return s.sharedShown[wsKey(host, workspace)] ? LIBRARY : workspace;
+}
+
+/** **Share with every workspace** (X95): moves workspace `workspace`'s
+ *  design into the library, and shows it there. */
+export async function shareDesign(host: string, workspace: string, slug: string): Promise<void> {
+  const shared = await rpc<string>(host, M.designShare, { workspace, slug });
+  await Promise.all([loadDesigns(host, workspace, true), loadDesigns(host, LIBRARY, true)]);
+  showDesign(host, workspace, shared, true);
+}
+
+/** **Stop sharing** (X95): moves the shared design into `workspace`, the
+ *  one it is viewed from, and shows it there. */
+export async function unshareDesign(host: string, workspace: string, slug: string): Promise<void> {
+  const moved = await rpc<string>(host, M.designUnshare, { workspace: LIBRARY, slug, into: workspace });
+  await Promise.all([loadDesigns(host, workspace, true), loadDesigns(host, LIBRARY, true)]);
+  showDesign(host, workspace, moved);
 }
 
 /** The visual editor's say over a page changed on disk: true when it
@@ -501,20 +528,31 @@ export async function resolveComment(host: string, place: DesignPlace, slug: str
   mergePins(host, place, slug, [await rpc<DesignComment>(host, M.designCommentResolve, { ...designRef(place, slug), n })]);
 }
 
-/** Shows a design as the design screen (X65), and its agent as seen. */
-export function showDesign(host: string, workspace: string, slug: string) {
+/** Shows a design as the design screen (X65), and its agent as seen;
+ *  `shared`: one of the library's, shown in `workspace` (X95). */
+export function showDesign(host: string, workspace: string, slug: string, shared = false) {
   const key = wsKey(host, workspace);
-  const item = itemKey(host, workspace, slug);
-  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, indexShown: { ...s.indexShown, [key]: false }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
-  const agent = designsOf(useDesign.getState(), host, workspace)?.find((d) => d.slug === slug)?.agent;
+  const place = shared ? LIBRARY : workspace;
+  const item = itemKey(host, place, slug);
+  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, sharedShown: { ...s.sharedShown, [key]: shared }, indexShown: { ...s.indexShown, [key]: false }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
+  const agent = designsOf(useDesign.getState(), host, place)?.find((d) => d.slug === slug)?.agent;
   if (agent !== undefined && agent !== null) agentSeen(host, agent);
-  void checkDesign(host, workspace, slug);
+  void checkDesign(host, place, slug);
 }
 
-/** Switches the app to a design: its workspace, Design mode and its screen. */
+/** Switches the app to a design: its workspace, Design mode and its screen.
+ *  A shared design (X95), the library's, opens in the workspace shown. */
 export async function openDesign(host: string, workspace: string, slug: string) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
+  if (workspace === LIBRARY) {
+    if (!ws) return;
+    setMode("design");
+    const at = designHostOf(useStore.getState()) ?? host;
+    await loadDesigns(at, LIBRARY, true).catch(() => {});
+    showDesign(at, ws.id, slug, true);
+    return;
+  }
   if (!isShown(ws, host, workspace, s.accounts[host]?.account)) switchWorkspace({ host, id: workspace, account: s.accounts[host]?.account });
   setMode("design");
   // Shown where Design mode reads the workspace's designs: this Mac's copy
@@ -866,6 +904,30 @@ function onChatState(host: string, id: number, state: ChatState) {
   }
 }
 
+/** A Design mode change, one workspace's: its systems and designs are
+ *  listed again, and a system's cards load again, when shown. */
+function onDesignModeChange(host: string, d: DesignChanged) {
+  if (systemListing.wanted.has(wsKey(host, d.workspace))) reload(host, d.workspace);
+  if (!d.system) return;
+  const key = itemKey(host, d.workspace, d.system);
+  // Its cards load again only for what they show (X64).
+  const toLoad = cardsReloaded(d);
+  useDesign.setState((s) => {
+    const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
+    const cards = { ...revs.cards };
+    for (const path of toLoad.cards) cards[path] = (cards[path] ?? 0) + 1;
+    return {
+      changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
+      cardRevs: toLoad.all || toLoad.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (toLoad.all ? 1 : 0), cards } } : s.cardRevs,
+    };
+  });
+  // Its cards are listed again when asked for (a newer request always
+  // lands last).
+  if (cardListing.wanted.has(key)) void loadCards(host, d.workspace, d.system).catch(() => {});
+  // A session design on it may now be pinned to an older sync (X65).
+  if (designListing.wanted.has(wsKey(host, d.workspace))) reloadDesigns(host, d.workspace);
+}
+
 let started = false;
 
 export async function startDesign() {
@@ -875,27 +937,13 @@ export async function startDesign() {
     if (e.name === EV.designOpen) onDesignOpen(e.host, e.data as DesignOpen);
     else if (e.name === EV.designChanged && !isDesignModeChange(e.data as DesignChanged)) onDesignChange(e.host, e.data as DesignChanged);
     else if (e.name === EV.designChanged) {
-      const d = e.data as DesignChanged;
-      onDesignChange(e.host, d);
-      if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
-      if (d.system) {
-        const key = itemKey(e.host, d.workspace, d.system);
-        // Its cards load again only for what they show (X64).
-        const toLoad = cardsReloaded(d);
-        useDesign.setState((s) => {
-          const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
-          const cards = { ...revs.cards };
-          for (const path of toLoad.cards) cards[path] = (cards[path] ?? 0) + 1;
-          return {
-            changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
-            cardRevs: toLoad.all || toLoad.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (toLoad.all ? 1 : 0), cards } } : s.cardRevs,
-          };
-        });
-        // Its cards are listed again when asked for (a newer request always
-        // lands last).
-        if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
-        // A session design on it may now be pinned to an older sync (X65).
-        if (designListing.wanted.has(wsKey(e.host, d.workspace))) reloadDesigns(e.host, d.workspace);
+      const change = e.data as DesignChanged;
+      // A library design system's change is every workspace's (X95).
+      const workspaces = (useStore.getState().workspaces[e.host] ?? []).map((w) => w.id);
+      for (const workspace of changedWorkspaces(change, workspaces)) {
+        const d = { ...change, workspace };
+        onDesignChange(e.host, d);
+        onDesignModeChange(e.host, d);
       }
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };

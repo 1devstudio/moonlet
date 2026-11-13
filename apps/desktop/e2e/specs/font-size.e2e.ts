@@ -1,11 +1,10 @@
 // Appearance › Font size scales the whole app's text, not only the terminals: the
-// Plan, Files, Changes and Review tabs here.
+// right panel's views here, and More when they no longer fit (X94).
 
 import { $, browser, expect } from "@wdio/globals";
 import { SESSION, closeSettings, fill, openSettings, sel } from "../fixtures";
 
 const sizeField = sel.settingsField("Font size");
-const tabs = ["Plan", "Files", "Changes", "Review"];
 
 async function setFontSize(size: string) {
   await openSettings("Appearance");
@@ -13,15 +12,13 @@ async function setFontSize(size: string) {
   await closeSettings();
 }
 
+/** The font size of every view in the right panel's row, and of More when the views overflow into it (X94). */
 const tabFontSizes = () =>
-  browser.execute(
-    (labels: string[]) =>
-      labels.map((label) => {
-        const tab = document.evaluate(`//button[@role="tab"][normalize-space()="${label}"]`, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-        return tab instanceof HTMLElement ? getComputedStyle(tab).fontSize : null;
-      }),
-    tabs,
+  browser.execute(() =>
+    [...document.querySelectorAll<HTMLElement>('button[role="tab"][id^="right-tab-"], button[aria-label^="More views"]')].map((t) => getComputedStyle(t).fontSize),
   );
+
+const allAre = (sizes: string[], size: string) => sizes.length > 0 && sizes.every((s) => s === size);
 
 describe("font size", () => {
   before(async () => {
@@ -35,10 +32,9 @@ describe("font size", () => {
 
   it("scales the right panel's text with the terminal font size", async () => {
     // 13px tabs (X24) at the default size.
-    expect(await tabFontSizes()).toEqual(["13px", "13px", "13px", "13px"]);
+    expect(allAre(await tabFontSizes(), "13px")).toBe(true);
 
     await setFontSize("19.5");
-    await browser.waitUntil(async () => (await tabFontSizes())[0] === "19.5px", { timeoutMsg: "the Plan tab never grew to 19.5px" });
-    expect(await tabFontSizes()).toEqual(["19.5px", "19.5px", "19.5px", "19.5px"]);
+    await browser.waitUntil(async () => allAre(await tabFontSizes(), "19.5px"), { timeoutMsg: "the views never grew to 19.5px" });
   });
 });

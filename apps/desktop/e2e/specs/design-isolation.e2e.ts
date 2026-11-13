@@ -38,7 +38,7 @@ describe("A design card that never stops running", () => {
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Looping kit", sources: [{ project: projectId(w) }], agent: false });
-    const dir = join(w.home, "design", ws, "systems", SLUG);
+    const dir = join(w.home, "design", "library", "systems", SLUG);
     for (const [path, text] of FILES) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), text);
@@ -104,6 +104,90 @@ describe("A design card that never stops running", () => {
   });
 });
 
+// A card whose page scrolls inside itself (a chat log, a long list) gives
+// WebKit's scrolling tree nodes from the card's own process: layers clipped
+// by the scroller, and layers that stay put while it scrolls. On macOS
+// 27.0.1, a card's frame let go with such nodes in it crashed the whole app
+// (WebKit bugs 321051 and 325098, ADR 0013).
+describe("A design card that scrolls inside itself", () => {
+  const SCROLLS = "scrolling-kit";
+  const SCROLLED = "moonlet-e2e-scrolled";
+  // Modelled on WebKit's own test of that crash: html and body scroll, and a
+  // composited layer is clipped inside them; another scroller holds a
+  // composited layer whose containing block is outside it.
+  const card = `<!-- @dsCard group="Custom" name="Scroller" -->
+${head}<body><style>
+html, body { margin: 0; height: 100%; overflow: hidden auto; }
+body { position: relative; }
+.clipper { position: relative; overflow: hidden; width: 200px; height: 100px; border-radius: 8px; }
+.banner { position: absolute; top: 10px; width: 150px; height: 50px; background: green; will-change: transform; }
+.outer { position: relative; }
+.inner { overflow: auto; height: 80px; }
+.pinned { position: absolute; top: 0; width: 40px; height: 20px; background: red; will-change: transform; }
+</style><section data-snippet="custom/scroller/default">
+<div class="clipper"><div class="banner"></div></div><div class="clipper"><div class="banner"></div></div>
+<div class="outer"><div class="inner"><div class="pinned"></div><div style="height: 400px"></div></div></div>
+<div style="height: 3000px"></div></section>
+<script>addEventListener("load", () => { document.body.scrollTop = 400; requestAnimationFrame(() => requestAnimationFrame(() => parent.postMessage("${SCROLLED}", "*"))); });</script></body></html>
+`;
+
+  before(async () => {
+    if (await mode("Sessions").isExisting()) await mode("Sessions").click();
+    rpc(w, "design.system.create", { workspace: workspaceId(), name: "Scrolling kit", sources: [{ project: projectId(w) }], agent: false });
+    const dir = join(w.home, "design", "library", "systems", SCROLLS);
+    mkdirSync(join(dir, "components", "custom", "scroller"), { recursive: true });
+    writeFileSync(join(dir, "styles.css"), "");
+    writeFileSync(join(dir, "components", "custom", "scroller", "scroller.html"), card);
+  });
+
+  after(async () => {
+    rpc(w, "design.system.remove", { workspace: workspaceId(), slug: SCROLLS });
+    await within(5_000, (async () => {
+      if (await mode("Sessions").isExisting()) await mode("Sessions").click();
+    })());
+  });
+
+  it("leaves the app running once its frame is let go, again and again, when the window shows", async function () {
+    // A hidden window draws nothing: the card never scrolls on screen, and
+    // WebKit has no layers of it to get wrong.
+    if ((await browser.execute(() => document.visibilityState)) !== "visible") return this.skip();
+    await browser.execute(() => {
+      const win = window as unknown as Heard;
+      win.heard = [];
+      window.addEventListener("message", (e) => {
+        if (typeof e.data === "string" && e.data.startsWith("moonlet-e2e-")) win.heard?.push(e.data);
+      });
+    });
+    for (let round = 1; round <= 5; round++) {
+      await browser.execute(() => {
+        (window as unknown as Heard).heard = [];
+      });
+      await mode("Design").click();
+      await $('//nav[@aria-label="Design systems"]//button[.//span[normalize-space()="Scrolling kit"]]').click();
+      await browser.waitUntil(() => browser.execute((m: string) => ((window as unknown as Heard).heard ?? []).includes(m), SCROLLED), {
+        timeout: 10_000,
+        timeoutMsg: `round ${round}: the card did not scroll`,
+      });
+      // Its file written again: the card loads in a frame of its own, and the
+      // old frame is let go.
+      await browser.execute(() => {
+        (window as unknown as Heard).heard = [];
+      });
+      writeFileSync(join(w.home, "design", "library", "systems", SCROLLS, "components", "custom", "scroller", "scroller.html"), card + `<!-- round ${round} -->\n`);
+      await browser.waitUntil(() => browser.execute((m: string) => ((window as unknown as Heard).heard ?? []).includes(m), SCROLLED), {
+        timeout: 10_000,
+        timeoutMsg: `round ${round}: the card written again did not scroll`,
+      });
+      // Let the scrolled card's layers reach the window, then let its frame go.
+      await browser.pause(300);
+      await mode("Sessions").click();
+      await browser.pause(500);
+      // A crashed app answers nothing at all.
+      expect(await within(5_000, browser.execute(() => document.title.length >= 0))).toBe(true);
+    }
+  });
+});
+
 // Each card's own process costs memory, so only the cards on screen or near
 // it have a frame: a system of many cards starts a few processes, not one each.
 describe("A design system with more cards than a screen shows", () => {
@@ -117,7 +201,7 @@ describe("A design system with more cards than a screen shows", () => {
     if (await mode("Sessions").isExisting()) await mode("Sessions").click();
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Many kit", sources: [{ project: projectId(w) }], agent: false });
-    const dir = join(w.home, "design", ws, "systems", MANY);
+    const dir = join(w.home, "design", "library", "systems", MANY);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "styles.css"), ".c { color: #e6e6e6; }\n");
     for (let i = 1; i <= N; i++) {

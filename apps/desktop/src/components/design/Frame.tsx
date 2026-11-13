@@ -3,7 +3,7 @@
 
 import { Loader2, Minus, Plus } from "lucide-react";
 import type { Ref } from "react";
-import { zoomStep } from "../../lib/designView";
+import { frameKey, zoomStep } from "../../lib/designView";
 import { useFrameTurn } from "../../lib/useFrameTurn";
 import { cx } from "../../lib/cx";
 import { IconButton } from "../ui";
@@ -47,11 +47,10 @@ export function CardFrame({
     <div className="relative overflow-hidden" style={{ width: w * scale, height: Math.min(h * scale, maxHeight) }}>
       {live && turn.src !== null && (
         <iframe
-          // With the loader, each address gets a frame of its own: WebKit
-          // suspends a hidden window's card processes, and a frame sent
-          // to a new address in one may not load until the window shows.
-          key={loader ? turn.src : undefined}
+          key={frameKey(turn.src, loader)}
           ref={frameRef}
+          // A design frame, held until its page cleared when removed.
+          data-moonlet-frame=""
           title={title}
           src={turn.src}
           sandbox="allow-scripts"

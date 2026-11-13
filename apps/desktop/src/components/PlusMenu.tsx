@@ -6,7 +6,7 @@ import { type PlusEntry, mcpSummary, plusEntries } from "../lib/plusMenu";
 import { type McpActions, McpPanels } from "./McpPanels";
 import { cx } from "./ui";
 
-const panel = "rounded-xl border border-border-strong bg-[#1a1a1a] p-1.5 shadow-[0_12px_32px_rgba(0,0,0,.5)]";
+const panel = "rounded-xl border border-border-strong bg-panel-2 p-1.5 shadow-[0_12px_32px_rgba(0,0,0,.5)]";
 
 function Keys({ keys }: { keys: string[] }) {
   return (

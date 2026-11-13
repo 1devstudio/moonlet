@@ -26,6 +26,7 @@ import { chatKey, useChat, useChatOnScreen } from "../../lib/chat";
 import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
 import { useShallow } from "zustand/react/shallow";
+import { ScrollArea } from "../ScrollArea";
 
 /** The colour of a design system's status label (sidebar row and header). */
 export const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
@@ -119,7 +120,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
           <CardPage host={host} workspace={workspace} sys={sys} rev={cardRev(revs, card.path)} card={card} agent={agent} inset={inset} />
         ) : (
           <>
-            <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-panel pr-3" style={{ paddingLeft: inset + 20 }}>
+            <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 20 }}>
               <div className="min-w-0 flex-1">
                 <h1 className="truncate ui-text-14 font-semibold text-fg">{sys.name}</h1>
                 <p className="truncate ui-text-12 text-muted">
@@ -162,6 +163,8 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                 />
               )}
             </header>
+            {/* The system's pane (X94). */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-bg">
             <CopyBar host={host} workspace={workspace} kind="system" item={sys} />
             {steps && !sys.error ? (
               <StepBar cells={steps} />
@@ -196,7 +199,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                     </button>
                   ))}
                 </nav>
-                <div {...{ [NEAR_ROOT]: "" }} className="min-w-0 flex-1 overflow-y-auto p-6">
+                <ScrollArea {...{ [NEAR_ROOT]: "" }} frame="min-w-0" className="p-6">
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
                   {!syncing && !copy && cards && (
                     <>
@@ -219,14 +222,15 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                         </div>
                       </section>
                     ))}
-                </div>
+                </ScrollArea>
               </div>
             )}
+            </div>
           </>
         )}
       </div>
       {agent !== null && showAgent && (
-        <section aria-label={`Design · ${sys.name}`} className="flex w-[440px] shrink-0 flex-col border-l border-border">
+        <section aria-label={`Design · ${sys.name}`} className="ml-[6px] mt-ui-44 flex w-[440px] shrink-0 flex-col overflow-hidden rounded-[10px] bg-bg">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12.5">
             <AgentIcon agent="claude" size={13} />
             <span className="min-w-0 flex-1 truncate text-muted">Writes only in systems/{sys.slug}</span>
@@ -268,7 +272,7 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
   const label = "mb-2 ui-text-11.5 uppercase tracking-[0.08em] text-faint";
   return (
     <>
-      <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-panel pr-3" style={{ paddingLeft: inset + 12 }}>
+      <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 12 }}>
         <button aria-label="Back to the design system" className="no-drag rounded p-1 text-muted hover:bg-panel-2 hover:text-fg" onClick={() => openCard(host, workspace, sys.slug, null)}>
           <ChevronLeft size={15} />
         </button>
@@ -280,6 +284,8 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
           <span className="truncate text-fg">{card.name}</span>
         </nav>
       </header>
+      {/* The card's pane (X94). */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-bg">
       <CopyBar host={host} workspace={workspace} kind="system" item={sys} />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
@@ -350,6 +356,7 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
             ))}
           </section>
         </aside>
+      </div>
       </div>
     </>
   );

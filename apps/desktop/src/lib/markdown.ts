@@ -357,6 +357,11 @@ chatMd.renderer.rules.image = (tokens, idx, options, env, self) => {
   return `<a href="${escapeHtml(String(tokens[idx].attrGet("src") ?? ""))}">${escapeHtml(alt ? `Image: ${alt}` : "Image")}</a>`;
 };
 
+// The user's own messages (X92): a single newline they typed stays a line break.
+const defaultSoftbreak = chatMd.renderer.rules.softbreak!;
+chatMd.renderer.rules.softbreak = (tokens, idx, options, env, self) =>
+  (env as { user?: boolean } | undefined)?.user ? "<br>\n" : defaultSoftbreak(tokens, idx, options, env, self);
+
 const chatSanitize = (html: string) =>
   DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -386,6 +391,23 @@ export function renderTaskMarkdown(source: string): string {
 /** Agent message HTML; only paths `exists` accepts become file links (X30), none without it. */
 export function renderChatMarkdown(source: string, exists?: FileCheck): string {
   return chatSanitize(chatMd.render(source, { exists }));
+}
+
+/** A message the user sent as chat Markdown (X92), with every newline they typed kept. */
+export function renderUserMarkdown(source: string): string {
+  return chatSanitize(chatMd.render(source, { user: true }));
+}
+
+/** What a piece of chat Markdown is: an agent's reply, a task's description
+ *  (X46), a message the user sent (X92) or a subagent's brief (X42). */
+export type ChatMarkdownKind = "chat" | "task" | "user" | "brief";
+
+/** Chat Markdown HTML for `kind`. A brief is written like a user message, so
+ *  it keeps every newline too; only agent replies get file links (X30). */
+export function renderChatMarkdownAs(source: string, kind: ChatMarkdownKind, exists?: FileCheck): string {
+  if (kind === "task") return renderTaskMarkdown(source);
+  if (kind === "user" || kind === "brief") return renderUserMarkdown(source);
+  return renderChatMarkdown(source, exists);
 }
 
 /** Whether a file shows as rendered Markdown in a Preview (X26, X77). */

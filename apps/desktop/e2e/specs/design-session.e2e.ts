@@ -29,7 +29,7 @@ const SLUG = "settings-page";
 // makes the chat narrow.
 const EDITOR = '//main//section[@aria-label="Chat input"]//textarea';
 const workspaceId = () => rpc<{ id: string }[]>(w, "workspace.list", {})[0].id;
-const systemDir = () => join(w.home, "design", workspaceId(), "systems", SYSTEM);
+const systemDir = () => join(w.home, "design", "library", "systems", SYSTEM);
 const PAGE = [
   "<!doctype html>",
   '<html><head><meta charset="utf-8"><link rel="stylesheet" href="../system/styles.css"></head>',
@@ -42,6 +42,12 @@ const PAGE = [
   "",
 ].join("\n");
 const tab = (name: string) => $(`//div[@role="tablist"]/button[@role="tab"][starts-with(normalize-space(), "${name}")]`);
+/** Shows a right panel view: from its tab, or from More when the panel is too narrow for it (X94). */
+async function showView(name: string) {
+  if (await tab(name).isExisting()) return tab(name).click();
+  await $('button[aria-label^="More views"]').click();
+  await $(`//div[@role="menu"][@aria-label="More views"]/button[starts-with(normalize-space(), "${name}")]`).click();
+}
 const panel = () => $('//*[@id="right-tabpanel"]');
 const rail = () => panel().$('.//aside[@aria-label="Right rail"]');
 const layer = (name: string) => rail().$(`.//button[@role="treeitem"][@aria-label="${name}"]`);
@@ -121,8 +127,8 @@ describe("A session's Design tab", () => {
 
   it("shows the pen icon on the session's row, and the Design tab with the page in the canvas under its worktree path", async () => {
     await expect($(`${sel.sessionRow(SESSION)}//span[@aria-label="Design: Settings page"]`)).toBeExisting();
+    await showView("Design");
     await expect(tab("Design")).toHaveText(expect.stringContaining("1"));
-    await tab("Design").click();
     const frame = panel().$('.//iframe[@title="index.html"]');
     await expect(frame).toBeExisting();
     expect(await frame.getAttribute("src")).toMatch(new RegExp(`^moonlet-design://[0-9a-f]{16}\\.s-${sessionId}/${SLUG}/pages/index\\.html\\?(v=\\d+&)?moonlet-bridge=1$`));
@@ -200,7 +206,7 @@ describe("A session's Design tab", () => {
   });
 
   it("shows Design system updated once the design system syncs, and Update tells the session's agent the cards that changed", async () => {
-    await tab("Design").click();
+    await showView("Design");
     writeFileSync(join(systemDir(), "_ds_sync.json"), '{"synced_at": 1}\n');
     await expect(bar("grey")).toHaveText(expect.stringContaining("Design system updated."), { wait: 20_000 });
     await bar("grey").$('.//button[normalize-space()="Update"]').click();

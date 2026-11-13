@@ -76,6 +76,10 @@ function makeWorld(root: string): World {
       MOONLET_TRACKER_BASE: `http://127.0.0.1:${trackerPort(root)}`,
       // Cloud machines (X63) are scratch daemons made by the fake provider, steered by files there.
       MOONLET_CLOUD_FAKE: join(root, "cloud-fake"),
+      // Delete in the Files tab (X98) moves here, not to the user's own Trash.
+      MOONLET_TRASH_DIR: join(root, "trash"),
+      // Download as HTML (X99) saves here, with no save dialog.
+      MOONLET_DOWNLOAD_DIR: join(root, "downloads"),
     },
   };
 }
@@ -97,6 +101,8 @@ export function setUp(): World {
 function seed(w: World) {
   mkdirSync(w.home, { recursive: true });
   mkdirSync(w.env.HOME, { recursive: true });
+  mkdirSync(w.env.MOONLET_TRASH_DIR, { recursive: true });
+  mkdirSync(w.env.MOONLET_DOWNLOAD_DIR, { recursive: true });
   // If anything ever resolves a real agent, it gets this instead.
   const fakeBin = join(w.root, "bin");
   mkdirSync(fakeBin);
@@ -239,6 +245,16 @@ export const configPath = (w: World) => join(w.repo, ".moonlet", "config.toml");
  *  loading would be replaced when it finishes. `:disabled` does account for
  *  the fieldset. Typing works like the driver's: the native value setter
  *  plus an `input` event, which React listens for. */
+/** Right-clicks the element at `xpath`: the embedded driver has no right
+ * click, so it gets a `contextmenu` event near its top left. */
+export async function rightClick(xpath: string) {
+  await browser.execute((xp: string) => {
+    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
+  }, xpath);
+}
+
 export async function fill(xpath: string, text: string) {
   await browser.waitUntil(
     () =>

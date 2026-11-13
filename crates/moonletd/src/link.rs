@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use moonlet_core::paths::now_ms;
-use moonlet_core::session::SessionManager;
+use moonlet_core::account::RecordKind;
+use moonlet_core::session::{SessionManager, WorkerSettings};
 use moonlet_link::tailnet::TailnetConnector;
 use moonlet_link::{BoxFuture, Events, Host, HostInfo, HostOptions, HostStatus, Requests};
 use moonlet_proto::methods::{
@@ -362,6 +363,9 @@ pub struct WorkerLink {
     runs: std::sync::OnceLock<Weak<crate::exec::Runs>>,
     /// Takes the central host's requests for this member's sessions (X72).
     forwarder: std::sync::OnceLock<Forwarder>,
+    /// Answers a cloud machine's `session.files_fetch` for a session of
+    /// this member's it runs a command of (X89, X74).
+    files: std::sync::OnceLock<FilesFetcher>,
     /// Takes the central host's terminal relays (X72).
     relayer: std::sync::OnceLock<Relayer>,
     /// Shows a URL the central host found the user here for (X75).
@@ -392,6 +396,7 @@ impl WorkerLink {
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
+            files: std::sync::OnceLock::new(),
             relayer: std::sync::OnceLock::new(),
             shower: std::sync::OnceLock::new(),
             tunneler: std::sync::OnceLock::new(),
@@ -472,7 +477,22 @@ impl WorkerLink {
             .worker
             .as_ref()
             .is_some_and(|w| w.name.is_some() || w.slots.is_some() || w.enabled.is_some());
+        let settings = req.worker.as_ref().map(|w| WorkerSettings {
+            heavy: w.enabled,
+            slots: w.slots,
+        });
         self.store.lock().unwrap().set_at(req, own, revision)?;
+        // The account keeps every member's worker settings, so any app
+        // shows and changes them (X89). Without an account, link.json
+        // alone keeps them.
+        if let Some(settings) = settings.filter(|s| s.heavy.is_some() || s.slots.is_some())
+            && self.sessions.has_account()
+            && let Err(e) = self
+                .sessions
+                .set_worker_settings(&self.info().worker.id, settings)
+        {
+            tracing::warn!("cannot keep this host's worker settings in the account: {e:#}");
+        }
         // Routing copies go with heavy commands, and with the central host
         // they were made for (X62).
         if let Some(sync) = self.sync() {
@@ -509,6 +529,35 @@ impl WorkerLink {
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
+    }
+
+    /// Takes this host's worker settings from the account, when another
+    /// member changed them (X89): as `link.set` would, so routing copies
+    /// go when heavy commands are turned off, and the central host learns
+    /// the new values.
+    pub fn follow_settings(self: &Arc<Self>) {
+        let info = self.info();
+        let Some(s) = self.sessions.worker_settings().remove(&info.worker.id) else {
+            return;
+        };
+        let enabled = s.heavy.filter(|h| *h != info.worker.enabled);
+        let slots = s
+            .slots
+            .filter(|n| *n != info.worker.slots && (1..=64).contains(n));
+        if enabled.is_none() && slots.is_none() {
+            return;
+        }
+        let req = LinkSet {
+            central: None,
+            worker: Some(m::LinkWorkerSet {
+                enabled,
+                slots,
+                name: None,
+            }),
+        };
+        if let Err(e) = self.set(req, &[]) {
+            tracing::warn!("cannot take this host's worker settings from the account: {e}");
+        }
     }
 
     /// Tells the central host this worker's details again, now, when the
@@ -622,6 +671,11 @@ impl WorkerLink {
         let _ = self.forwarder.set(f);
     }
 
+    /// What answers a cloud machine's `session.files_fetch` (X89).
+    pub fn set_files_fetcher(&self, f: FilesFetcher) {
+        let _ = self.files.set(f);
+    }
+
     /// What takes input for the terminals the central host relays, and
     /// what forgets an earlier link's relays, each time a link is made
     /// (X72). Set before the link starts.
@@ -710,6 +764,14 @@ impl WorkerLink {
                     tokio::runtime::Handle::current(),
                 );
                 h.set_requests(Arc::new(WorkerRequests(Arc::downgrade(self))));
+                // Output of commands the central host runs for this member
+                // goes to their `moonlet exec` (X89).
+                let me = Arc::downgrade(self);
+                h.set_run_output(Arc::new(move |run, stream, data| {
+                    if let Some(runs) = me.upgrade().and_then(|l| l.runs()) {
+                        runs.forward(crate::peer::LINK_PEER, run, stream, data);
+                    }
+                }));
                 // Before the link can carry a relay (X72): what an earlier
                 // link relayed has no client any more, and input for the
                 // new link's relays has somewhere to go from its first frame.
@@ -765,6 +827,9 @@ impl WorkerLink {
             projects,
             slots: worker.slots,
             heavy: worker.enabled,
+            // A member routes and runs other members' commands through its
+            // central host (X89); a cloud machine runs its central host's.
+            peer: !worker.cloud,
         };
         let params = serde_json::to_value(reg).unwrap();
         match host.request(m::WORKER_REGISTER, params).await {
@@ -976,6 +1041,14 @@ impl Events for LinkEvents {
             }
             return;
         }
+        // The member that ran one of this member's commands went away
+        // (X89): the command runs again here.
+        if name == m::EV_EXEC_LOST {
+            if let (Some(runs), Some(run)) = (link.runs(), data["run"].as_u64()) {
+                runs.lost(run as u32);
+            }
+            return;
+        }
         // New sessions, for the projects that keep them in sync (X60).
         let Some(sync) = link.sync() else {
             return;
@@ -994,6 +1067,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// Handles a request the central host passes on for one of this member's
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
+
+/// Answers `session.files_fetch` for a cloud machine (X89).
+pub type FilesFetcher = Arc<dyn Fn(m::SessionFilesFetch) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
 /// Shows this Mac's app a URL from another member (X75); false when it was
 /// kept for the app, which is not connected.
@@ -1018,7 +1094,12 @@ impl Requests for WorkerRequests {
         let link = self.0.upgrade();
         Box::pin(async move {
             match method.as_str() {
-                m::WORKER_PING => Ok(serde_json::json!({ "load": load() })),
+                m::WORKER_PING => {
+                    let runs = link.as_ref().and_then(|l| l.runs());
+                    let used = runs.as_ref().map(|r| r.used_here());
+                    let running = runs.map(|r| r.serving_now()).unwrap_or_default();
+                    Ok(serde_json::json!({ "load": load(), "used": used, "running": running }))
+                }
                 // The machine is being removed (X63): it leaves the tailnet.
                 // Only a cloud machine: a Mac or host paired as a worker stays.
                 m::WORKER_RETIRE => {
@@ -1057,7 +1138,7 @@ impl Requests for WorkerRequests {
                         return Err(RpcError::new("not_approved", "heavy commands are off here"));
                     }
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
-                    Ok(serde_json::to_value(sync.prepare_run(req.session).await?).unwrap())
+                    Ok(serde_json::to_value(sync.prepare_run(req.session, None, req.setup).await?).unwrap())
                 }
                 m::EXEC_START => {
                     let req: m::ExecStart = serde_json::from_value(params)
@@ -1070,14 +1151,57 @@ impl Requests for WorkerRequests {
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
                     let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
-                    Ok(serde_json::json!(runs.start_here(req, sync, host, info.worker.slots, info.worker.cloud).await?))
+                    let peer = crate::peer::Peer::Link(host);
+                    Ok(serde_json::json!(runs.start_here(req, sync, peer, info.worker.slots, info.worker.cloud).await?))
                 }
                 m::EXEC_CANCEL => {
                     let req: m::ExecCancel = serde_json::from_value(params)
                         .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                     let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
-                    Ok(serde_json::json!(runs.cancel_here(req.run)))
+                    Ok(serde_json::json!(runs.cancel_here(crate::peer::LINK_PEER, req.run)))
+                }
+                // Another member, through the central host (X89): it runs a
+                // command of this member's, or has this member run one of
+                // its own.
+                m::PEER_CALL => {
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let call: m::PeerCall = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let from = call.from.clone().ok_or_else(|| RpcError::new("invalid_params", "from whom"))?;
+                    relayed(link, from, call.method, call.params).await
+                }
+                // The central host makes and ends its routing copy of this
+                // member's session, which it runs a command of (X89).
+                m::SYNC_OPEN | m::SYNC_FETCH | m::SYNC_CLOSE | m::EXEC_DONE => {
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let peer = crate::peer::Peer::Link(host);
+                    let bad = |e: serde_json::Error| RpcError::new("invalid_params", e.to_string());
+                    match method.as_str() {
+                        m::SYNC_OPEN => {
+                            let req: m::SyncOpen = serde_json::from_value(params).map_err(bad)?;
+                            if req.kind != m::CopyKind::Run {
+                                return Err(RpcError::new("forbidden", "the central host keeps no live copy of a member's session"));
+                            }
+                            Ok(serde_json::to_value(sync.open(&peer, req).await?).unwrap())
+                        }
+                        m::SYNC_FETCH => {
+                            let req: m::SyncFetch = serde_json::from_value(params).map_err(bad)?;
+                            Ok(serde_json::to_value(sync.fetch(&peer, req).await?).unwrap())
+                        }
+                        m::SYNC_CLOSE => {
+                            let req: m::CopyRef = serde_json::from_value(params).map_err(bad)?;
+                            Ok(serde_json::json!(sync.close(&peer, &req.copy).await?))
+                        }
+                        _ => {
+                            let req: m::ExecDone = serde_json::from_value(params).map_err(bad)?;
+                            let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
+                            let name = link.info().worker.name;
+                            Ok(serde_json::to_value(runs.take_done(&sync, &peer, req, &name).await?).unwrap())
+                        }
+                    }
                 }
                 m::SESSION_RELAY => {
                     let req: m::SessionRelay = serde_json::from_value(params)
@@ -1157,6 +1281,35 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         return;
     }
     daemon.sessions.name_member(&worker.name);
+    // Worker settings kept in link.json before X89 become the account's,
+    // giving way to any change another member made meanwhile; then this
+    // host follows the account's (X89).
+    let seed = WorkerSettings {
+        heavy: Some(worker.enabled),
+        slots: Some(worker.slots),
+    };
+    if let Err(e) = daemon.sessions.seed_worker_settings(&worker.id, seed) {
+        tracing::warn!("cannot keep this host's worker settings in the account: {e:#}");
+    }
+    daemon.link.follow_settings();
+    daemon.heavy.seed_account();
+    let d = Arc::downgrade(daemon);
+    let me = worker.id.clone();
+    daemon.sessions.on_account_applied(move |changes| {
+        let Some(d) = d.upgrade() else { return };
+        // Another member approved a project's heavy commands (X89): the
+        // project pages show it.
+        if changes.iter().any(|c| c.kind == RecordKind::HeavyApproval.as_str()) {
+            d.terminals.emit(Message::event(m::EV_HEAVY_APPROVAL_CHANGED, serde_json::json!({})));
+        }
+        let worker = RecordKind::Worker.as_str();
+        if changes.iter().any(|c| c.kind == worker) {
+            if changes.iter().any(|c| c.kind == worker && c.id == me) {
+                d.link.follow_settings();
+            }
+            d.worker_settings_changed();
+        }
+    });
     let workers = Arc::downgrade(&daemon.workers);
     let link = Arc::downgrade(&daemon.link);
     daemon.sessions.on_account_change(move |changes| {
@@ -1167,6 +1320,101 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
             link.push_account(changes);
         }
     });
+}
+
+/// A routing call from member `from`, passed on by the central host (X89):
+/// as a runner of `from`'s command, or as the router of one `from` runs.
+async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Value) -> Result<Value, RpcError> {
+    let bad = |e: serde_json::Error| RpcError::new("invalid_params", e.to_string());
+    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+    let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
+    let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+    let peer = crate::peer::Peer::Relay(host.clone(), from.clone());
+    let me = link.info().worker;
+    // Only a member of this account, and for a runner's work, only while
+    // this host takes other hosts' commands.
+    // A cloud machine has no account: it runs what its central host passes
+    // on, as it runs the central host's own commands (X63).
+    let runner_side = crate::relay::TO_RUNNER.contains(&method.as_str());
+    // A cloud machine the central host offered calls back only as the
+    // runner of this member's command.
+    let name = if me.cloud || (!runner_side && sync.was_offered(&from)) {
+        from.clone()
+    } else {
+        link.sessions
+            .member_names()
+            .remove(&from)
+            .ok_or_else(|| RpcError::new("forbidden", "not a member of this account"))?
+    };
+    if runner_side && !matches!(method.as_str(), m::SYNC_CLOSING | m::EXEC_CANCEL) && !me.enabled {
+        return Err(RpcError::new("not_approved", "heavy commands are off here"));
+    }
+    let own_copy = |copy: &str| {
+        if sync.copy_member(copy).as_deref() == Some(from.as_str()) {
+            Ok(())
+        } else {
+            Err(RpcError::new("not_found", "no such routing copy"))
+        }
+    };
+    match method.as_str() {
+        m::EXEC_PREPARE => {
+            let req: m::ExecPrepare = serde_json::from_value(params).map_err(bad)?;
+            Ok(serde_json::to_value(sync.prepare_run(req.session, Some((from, name)), req.setup).await?).unwrap())
+        }
+        m::EXEC_START => {
+            let req: m::ExecStart = serde_json::from_value(params).map_err(bad)?;
+            own_copy(&req.copy)?;
+            Ok(serde_json::json!(runs.start_here(req, sync, peer, me.slots, me.cloud).await?))
+        }
+        m::EXEC_CANCEL => {
+            let req: m::ExecCancel = serde_json::from_value(params).map_err(bad)?;
+            Ok(serde_json::json!(runs.cancel_here(crate::peer::LINK_PEER, req.run)))
+        }
+        m::SYNC_UPDATE => {
+            let req: m::SyncUpdate = serde_json::from_value(params).map_err(bad)?;
+            own_copy(&req.copy)?;
+            let pack = match req.pack {
+                Some(t) => Some(host.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
+                None => None,
+            };
+            Ok(serde_json::to_value(sync.update(req, pack).await?).unwrap())
+        }
+        m::SYNC_CLOSING => {
+            let req: m::SyncClosing = serde_json::from_value(params).map_err(bad)?;
+            own_copy(&req.copy)?;
+            Ok(serde_json::to_value(sync.closing(req).await?).unwrap())
+        }
+        m::SYNC_OPEN => {
+            let req: m::SyncOpen = serde_json::from_value(params).map_err(bad)?;
+            if req.kind != m::CopyKind::Run {
+                return Err(RpcError::new("forbidden", "a member keeps no live copy of another's session"));
+            }
+            Ok(serde_json::to_value(sync.open(&peer, req).await?).unwrap())
+        }
+        m::SYNC_FETCH => {
+            let req: m::SyncFetch = serde_json::from_value(params).map_err(bad)?;
+            Ok(serde_json::to_value(sync.fetch(&peer, req).await?).unwrap())
+        }
+        m::SYNC_CLOSE => {
+            let req: m::CopyRef = serde_json::from_value(params).map_err(bad)?;
+            Ok(serde_json::json!(sync.close(&peer, &req.copy).await?))
+        }
+        m::EXEC_DONE => {
+            let req: m::ExecDone = serde_json::from_value(params).map_err(bad)?;
+            Ok(serde_json::to_value(runs.take_done(&sync, &peer, req, &me.name).await?).unwrap())
+        }
+        // A cloud machine running a command of this member's session asks
+        // for the files X74 copies to cloud machines.
+        m::SESSION_FILES_FETCH => {
+            let req: m::SessionFilesFetch = serde_json::from_value(params).map_err(bad)?;
+            if !sync.was_offered(&from) || !sync.was_asked(&from, &req.session) {
+                return Err(RpcError::new("forbidden", "this host asked no command of that session there"));
+            }
+            let f = link.files.get().cloned().ok_or_else(|| RpcError::new("gone", "nothing answers"))?;
+            f(req).await
+        }
+        other => Err(RpcError::new("forbidden", format!("{other} does not go between members"))),
+    }
 }
 
 /// Opens the link when the settings say so, and closes it when the daemon

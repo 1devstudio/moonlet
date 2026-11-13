@@ -16,6 +16,7 @@ Every PTY is owned by `moonletd`, a background process separate from the app. If
 - [x] `moonletd start` and `moonletd proxy` start the daemon detached in its own session (`setsid`) when it is not running.
 - [x] Closing a client connection detaches it from its sessions and never kills them.
 - [x] The daemon captures the user's login-shell environment once at startup, so PTYs and git use the same `PATH` as a normal terminal. The login shell runs from a clean environment with only an allowlist (HOME, USER, LOGNAME, SHELL, TMPDIR, LANG, LC_*, SSH_AUTH_SOCK, DISPLAY, XDG_RUNTIME_DIR), so tokens and session markers of whatever process started the daemon (e.g. an agent's `CLAUDE_CODE_*`) never reach terminals. Environments handed over in a live upgrade are scrubbed of agent markers.
+- [x] When the login shell does not print its environment within 5 s, or cannot run, terminals and agents get the `PATH` the daemon inherited (after a live upgrade, the one the old daemon captured), followed by any of `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`, `~/.local/bin` and `/opt/homebrew/bin` it lacks, and the daemon logs that `PATH`.
 - [x] Each PTY gets `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=moonlet`, `MOONLET_SESSION_ID`, `MOONLET_SOCK`, and `MOONLET_WORKSPACE_ID` when it belongs to a workspace.
 - [x] Process exit is reported with its code or signal (`session.exited`); the record stays until it is removed.
 - [x] Clients with a different protocol version get a `protocol_mismatch` error, not undefined behaviour.
@@ -37,3 +38,5 @@ Socket permissions plus a peer-uid check. There is no TCP listener. The PTY envi
 
 - `crates/moonlet-core/src/session.rs` tests: spawn, exit codes, attention events.
 - `crates/moonletd/tests/daemon.rs`: socket permissions, protocol mismatch, survive disconnect.
+- `crates/moonletd/src/launch.rs` tests: `fallback_path_keeps_the_inherited_path_after_an_upgrade`, `fallback_path_adds_the_usual_install_folders_to_launchds_path`, `fallback_path_without_an_inherited_path_or_home`.
+- `crates/moonletd/tests/daemon.rs`: `a_slow_login_shell_leaves_the_inherited_path`.

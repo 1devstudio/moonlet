@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { approvalTargets } from "./heavyApproval";
-import type { HostInfo, LinkInfo } from "./protocol";
+import { approvalBanner, approvedToast } from "./heavyCommands";
+import { approvalTargets, approvalScope, workerRowApproval } from "./heavyApproval";
+import type { HeavyInfo, HostInfo, LinkInfo } from "./protocol";
 
 const host = (id: string, label: string, status = "connected"): HostInfo => ({ id, label, remote: true, kind: "tailnet", status }) as unknown as HostInfo;
 const link = (central: string | null, enabled = true, name = "w"): LinkInfo =>
@@ -24,5 +25,42 @@ describe("who an approval covers (X62)", () => {
       { id: "local", label: "this Mac" },
       { id: "devbox", label: "devbox" },
     ]);
+  });
+});
+
+describe("an approval kept in the account (X89)", () => {
+  const heavy = (account: boolean): HeavyInfo => ({ config: { commands: ["pnpm check"], os: "any", env: [], outputs: [] }, approved: null, error: null, account });
+  const targets = [
+    { id: "studio-mini", label: "studio-mini" },
+    { id: "local", label: "this Mac" },
+  ];
+
+  it("the approval toast names the account", () => {
+    const scope = approvalScope(heavy(true), targets);
+    // The account carries it; workers from before X89 still get their own.
+    expect(scope.approveOn).toEqual(targets);
+    expect(approvalBanner(heavy(true), scope.banner)?.text).toBe(
+      "Approving the list lets agents run it without asking, on every host of your account that takes heavy commands. Approved commands can run code from the project, including code the agent wrote, on each of those hosts.",
+    );
+    expect(approvedToast("shop", ["pnpm check"], scope.toast!, [])).toBe("Approved pnpm check for shop on every host of your account");
+    expect(approvedToast("shop", ["pnpm check"], scope.toast!, ["devbox"])).toBe(
+      "Approved for shop on every host of your account. devbox was not reachable; approve it from Workers.",
+    );
+  });
+
+  it("each machine, on a host from before X89", () => {
+    const scope = approvalScope(heavy(false), targets);
+    expect(scope).toEqual({ approveOn: targets, banner: ["studio-mini", "this Mac"], toast: null });
+  });
+});
+
+describe("Approve on a worker's row (X89)", () => {
+  const heavy = (account?: boolean): HeavyInfo => ({ config: { commands: ["pnpm check"], os: "any", env: [], outputs: [] }, approved: null, error: null, account });
+  it("approves the project on the central host when the approval is the account's", () => {
+    expect(workerRowApproval(heavy(true))).toBe("project");
+  });
+  it("approves on the worker itself from a central host before X89", () => {
+    expect(workerRowApproval(heavy(false))).toBe("worker");
+    expect(workerRowApproval(heavy(undefined))).toBe("worker");
   });
 });
