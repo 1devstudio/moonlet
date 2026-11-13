@@ -1,0 +1,235 @@
+/* A design system's sync in its view (components/design/SyncParts.tsx): the
+   step bar while it runs, the summary bar after it, and the Needs you and
+   Changed by this sync sections. */
+
+/* StepBar: Inventory > Tokens > Cards > Layouts, each with its result. */
+.step-bar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--ui-text-12-5);
+  list-style: none;
+}
+.step-bar__item {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+.step-bar__sep {
+  color: var(--color-faint);
+}
+.step-bar__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2-5);
+  border-radius: var(--radius-full);
+  color: var(--color-faint);
+}
+.step-bar__step--done {
+  color: var(--color-fg);
+}
+.step-bar__step--current {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-fg);
+}
+.step-bar__step--needs {
+  background: color-mix(in srgb, var(--color-blocked) 15%, transparent);
+  color: var(--color-fg);
+}
+.step-bar__icon--done {
+  color: var(--color-done);
+}
+.step-bar__icon--current {
+  color: var(--color-accent);
+}
+.step-bar__icon--needs {
+  color: var(--color-blocked);
+}
+.step-bar__icon--pending,
+.step-bar__icon--stopped {
+  color: var(--color-faint);
+}
+.step-bar__summary {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step-bar__step--needs .step-bar__summary {
+  color: var(--color-blocked);
+}
+
+/* AfterSyncBar: "Sync finished · …", dismissed until the next sync. */
+.after-sync-bar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-done) 7%, transparent);
+  font-size: var(--ui-text-12-5);
+}
+.after-sync-bar__icon {
+  color: var(--color-done);
+}
+.after-sync-bar__title {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-medium);
+}
+.after-sync-bar__line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.after-sync-bar__dismiss {
+  display: flex;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+}
+.after-sync-bar__dismiss:hover {
+  background: var(--color-panel-2);
+  color: var(--color-fg);
+}
+
+/* NeedsYouSection and ChangedSection share a section label. */
+.sync-section {
+  margin-bottom: var(--space-8);
+}
+.sync-section__label {
+  margin: 0 0 var(--space-3);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+  font-weight: var(--font-weight-normal);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.sync-section__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* A card edited by hand, beside the sync's version. */
+.needs-you {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel);
+}
+.needs-you__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2-5) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+.needs-you__text {
+  flex: 1;
+  min-width: 0;
+}
+.needs-you__name {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+}
+.needs-you__name span {
+  color: var(--color-faint);
+}
+.needs-you__note {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.needs-you__compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.needs-you__side {
+  min-width: 0;
+  padding: var(--space-3);
+}
+.needs-you__side + .needs-you__side {
+  border-left: 1px solid var(--color-border);
+}
+.needs-you__file {
+  margin: 0 0 var(--space-2);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.needs-you__file--synced {
+  color: var(--color-accent);
+}
+/* A card whose sources are gone. */
+.needs-you--orphaned {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+}
+
+/* ChangedSection: each card the sync rewrote, added or removed. */
+.changed-by-sync {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel);
+}
+.changed-by-sync__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 44px;
+  padding: 0 var(--space-4);
+}
+.changed-by-sync__row + .changed-by-sync__row {
+  border-top: 1px solid var(--color-border);
+}
+.changed-by-sync__tag {
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--ui-text-11-5);
+}
+.changed-by-sync__tag--rewritten {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+}
+.changed-by-sync__tag--new {
+  background: color-mix(in srgb, var(--color-done) 15%, transparent);
+  color: var(--color-done);
+}
+.changed-by-sync__tag--removed {
+  background: color-mix(in srgb, var(--color-error) 15%, transparent);
+  color: var(--color-error);
+}
+.changed-by-sync__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changed-by-sync__sources {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}

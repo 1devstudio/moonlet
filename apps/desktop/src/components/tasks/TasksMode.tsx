@@ -1,6 +1,6 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Settings, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, GitBranch, MoreHorizontal, PenTool, Plus, RotateCw, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore, designHostOf } from "../../lib/store";
@@ -30,9 +30,7 @@ import {
   searchOf,
   setColumnShow,
   setExpanded,
-  setAssignee,
-  setFilters,
-  setLayout,
+  setBoardFilters,
   GITHUB,
   openAddBoard,
   showBoard,
@@ -48,6 +46,8 @@ import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
 import { removeWorktreeAsk } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
+import { applyFilters, arrange, filtersAtPick, countLine, filterFields, panelKey, type TaskFilter } from "../../lib/taskFilters";
+import { FilterBar, HeaderTools, type Panel } from "./BoardFilters";
 import { modeOf, setMode } from "../../lib/mode";
 import { useNow } from "../../lib/useNow";
 import { TaskComments } from "./TaskComments";
@@ -56,7 +56,7 @@ import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { revealFound } from "../../lib/boardSearch";
 import { FindTask } from "./BoardSearch";
-import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateMenu, statesSource } from "../../lib/boardScreen";
+import { boardHeader, boardProblem, boardStats, footerLine, cardFace, dropTarget, mapCards, sidebarBoards, stateMenu, statesSource } from "../../lib/boardScreen";
 import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, Pane, StateGlyph } from "../ui";
@@ -68,15 +68,6 @@ import { NewIssue } from "./NewIssue";
 import { unseenOf, useDesign } from "../../lib/designStore";
 import { ScrollArea } from "../ScrollArea";
 
-
-/** The Columns button's glyph: four upright lines, as the design draws it. */
-function ColumnsGlyph() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-      <path d="M4 4v16M10 4v16M16 4v16M22 4v16" />
-    </svg>
-  );
-}
 
 /** The 2px rule under a column's header, by its category (the design's board). */
 const COLUMN_RULE: Record<Category, string> = { todo: "bg-border-strong", in_progress: "bg-idle", in_review: "bg-muted", done: "bg-merged" };
@@ -222,7 +213,7 @@ export function startSession(host: string, workspaceId: string, card: Card, work
   });
 }
 
-function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, onDrag }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; selected: boolean; found: boolean; onDrag: (card: Card | null) => void }) {
+function TaskCard({ host, workspaceId, card, fields, estimate, sessions, selected, found, onDrag }: { host: string; workspaceId: string; card: Card; fields: CardField[]; estimate: string | null; sessions: boolean; selected: boolean; found: boolean; onDrag: (card: Card | null) => void }) {
   const pick = () => useTasks.setState({ selected: `${card.task.connection} ${card.task.key}` });
   const face = cardFace(card.task, fields, estimate);
   // A Project's item moves only with gh's project scope, as its State menu (X50, X53).
@@ -268,7 +259,10 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, 
         {card.task.title}
       </button>
       {face.line && <div className="truncate ui-text-12 text-faint">{face.line}</div>}
-      {card.rows.length > 0 ? (
+      {/* Display options' Show sessions on cards off (X100): no rows and no Start, the note kept. */}
+      {!sessions ? (
+        card.note && <div className="ui-text-12 text-faint">{card.note}</div>
+      ) : card.rows.length > 0 ? (
         <div className="flex flex-col gap-2">
           <div className="-mx-1.5 flex flex-col gap-px">
             {card.rows.map((r) => (
@@ -291,7 +285,7 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, found, 
           </button>
         </div>
       )}
-      <ArchivedSessions sessions={card.archived} host={host} onOpen={openSession} className="-mx-1.5 -mt-1 px-1.5" />
+      {sessions && <ArchivedSessions sessions={card.archived} host={host} onOpen={openSession} className="-mx-1.5 -mt-1 px-1.5" />}
       {card.drift && (
         <div className="flex items-center gap-2 rounded-md bg-accent/[0.08] px-2 py-1 ui-text-12 text-accent">
           <span className="min-w-0 flex-1 truncate">{card.drift.text}</span>
@@ -460,10 +454,31 @@ export function TasksMode() {
   const connections = useTasks((t) => t.config?.connections);
   const layout = useTasks((t) => t.layout);
   const filters = useTasks((t) => t.filters);
+  const display = useTasks((t) => t.display);
+  // A board's filters as its chips show them; selected in parts, so the selector keeps its answer from render to render.
+  const savedFilters = useTasks((t) => (shown ? t.boardFilters[shown.board.id] : undefined));
+  const pick = useTasks((t) => (shown ? assigneeOf(shown.board, t.assignee) : null));
+  const shownFilters = useMemo(() => (pick ? filtersAtPick(savedFilters ?? [], pick) : []), [savedFilters, pick]);
   const boards = useTasks((t) => trackersConfig(t).boards);
+  // The Filter menu or Display options, opened by its icon, F or V, or the filter row's + (X100).
+  const [panel, setPanel] = useState<Panel>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+      const { dialog, confirm, settingsPage } = useStore.getState();
+      const open = panelKey(e, typing, !!(dialog || confirm || settingsPage) || !!document.querySelector('[role="dialog"][aria-modal="true"], [data-menu-panel]'));
+      if (!open) return;
+      e.preventDefault();
+      setPanel(open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // A panel opened for one board closes when another is shown.
+  useEffect(() => setPanel(null), [shown?.board.id]);
   // The task Find a task found on the board (X93).
   const found = useTasks((t) => (ws ? searchOf(t, ws.host, ws.id).found : null));
-  const assignee = useTasks((t) => t.assignee);
   const selected = useTasks((t) => t.selected);
   const attention = useTasks((t) => t.attention);
   const hosts = useStore((s) => s.hosts);
@@ -535,9 +550,12 @@ export function TasksMode() {
       </Framed>
     );
   }
-  // The header's filters (X45), column by column; Find a task filters nothing (X93).
-  // Assignee is the shown board's own (X50).
-  const views = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: assigneeOf(shown.board, assignee) === "me" }) ? c : null));
+  // Hide empty Done (X45), then the board's filters (X100), Assignee's Me among them (X50); Find a task filters nothing (X93).
+  const unfiltered = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: false }) ? c : null));
+  const filtered = applyFilters(unfiltered, shownFilters);
+  const views = arrange(filtered, display);
+  const fieldChoices = filterFields(unfiltered);
+  const changeFilters = (f: TaskFilter[]) => setBoardFilters(shown.board, f);
   // The found card's folded column, open for the moment (X93).
   const drawn = revealFound(views, found);
   // The workspace's other boards, for Find a task's Not on this board.
@@ -591,7 +609,7 @@ export function TasksMode() {
   return (
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* A narrow header (a small window, or the detail open) shows Expand all, Board and List by their icons, so the board's title keeps its room. */}
+        {/* The board switcher, Find a task, then the Filter and Display options icons (X100). */}
         <header data-tauri-drag-region className="drag @container flex min-h-ui-44 shrink-0 items-center gap-2.5 px-4 py-1.5">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
           <FindTask
@@ -619,10 +637,9 @@ export function TasksMode() {
               );
             }}
           />
-          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {layout === "list" && <ExpandAll cards={listCards} />}
-            <Filters board={shown.board} columns={syncedColumns(shown.board, null)} />
-            <LayoutSwitch />
+            <HeaderTools board={shown.board} columns={savedColumns} estimate={estimate} fields={fieldChoices} filters={shownFilters} onChange={changeFilters} open={panel} onOpen={setPanel} />
             <IconButton
               title="Refresh tasks"
               onClick={() => {
@@ -635,6 +652,7 @@ export function TasksMode() {
           </div>
         </header>
         <Pane className="flex flex-col">
+        <FilterBar fields={fieldChoices} filters={shownFilters} onChange={changeFilters} count={countLine(unfiltered, filtered)} onAdd={() => setPanel("filter")} />
         {problem && (
           // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
           <div role="alert" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">
@@ -706,7 +724,7 @@ export function TasksMode() {
                   <div aria-hidden="true" className={cx("h-[2px] shrink-0 rounded-[1px]", COLUMN_RULE[v.category])} />
                   <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
                     {v.cards.map((c) => (
-                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} selected={taskId(c.task) === selected} found={taskId(c.task) === found} onDrag={drag} />
+                      <TaskCard key={taskId(c.task)} host={ws.host} workspaceId={ws.id} card={c} fields={fields} estimate={estimate} sessions={display.sessions} selected={taskId(c.task) === selected} found={taskId(c.task) === found} onDrag={drag} />
                     ))}
                   </div>
                 </section>
@@ -855,89 +873,14 @@ export function ModeSwitch() {
   );
 }
 
-/** Assignee: me, the Columns menu and Hide empty Done in the header (X45, X50). */
-function Filters({ board, columns }: { board: BoardConfig; columns: BoardColumn[] }) {
-  const filters = useTasks((t) => t.filters);
-  const who = useTasks((t) => assigneeOf(board, t.assignee));
-  const chip = "no-drag flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-border-strong px-2.5 ui-text-12";
-  const counts = columnCounts(columns);
-  const show = (c: { show?: "fold" | "hide" }) => c.show ?? "show";
-  return (
-    <div role="group" aria-label="Filters" className="flex items-center gap-2.5">
-      <Menu
-        width={200}
-        items={(["me", "anyone"] as const).map((v) => ({ label: v === "me" ? "Me" : "Anyone", description: v === "me" ? "Issues assigned to you" : "Others' issues dimmed", checked: who === v, onSelect: () => setAssignee(board, v) }))}
-        trigger={(open) => (
-          <button aria-label={`Assignee: ${who}`} onClick={open} className={cx(chip, "text-muted hover:text-fg")}>
-            <Filter size={12} />
-            <span>
-              Assignee: <span className="text-fg">{who}</span>
-            </span>
-          </button>
-        )}
-      />
-      <Menu
-        align="right"
-        width={220}
-        items={columns.map((c) => ({
-          kind: "submenu" as const,
-          label: c.name,
-          items: (["show", "fold", "hide"] as const).map((v) => ({ label: v === "show" ? "Show" : v === "fold" ? "Fold" : "Hide", checked: show(c) === v, onSelect: () => setColumnShow(board.id, c.name, v) })),
-        }))}
-        trigger={(open) => (
-          <button onClick={open} className={cx(chip, "text-muted hover:text-fg")}>
-            <ColumnsGlyph />
-            <span>
-              Columns <span className="text-fg">{counts.shown}</span>
-              {counts.folded > 0 && ` · ${counts.folded} folded`}
-            </span>
-          </button>
-        )}
-      />
-      <button
-        aria-pressed={filters.hideEmptyDone}
-        onClick={() => setFilters({ ...filters, hideEmptyDone: !filters.hideEmptyDone })}
-        className={cx(chip, filters.hideEmptyDone ? "bg-raised text-fg" : "text-muted hover:text-fg")}
-      >
-        Hide empty Done
-      </button>
-    </div>
-  );
-}
-
-/** Expand all or Collapse all, in the header of the List (X45, X50). */
+/** Expand all or Collapse all, in the header of the List (X45, X50), as an icon beside Filter and Display options (X100). */
 function ExpandAll({ cards }: { cards: Card[] }) {
   const expanded = useTasks((t) => t.expanded);
   const allOpen = cards.length > 0 && cards.every((c) => expanded[taskId(c.task)]);
   return (
-    <button aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-border-strong px-2.5 ui-text-12 text-muted hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
-      {allOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-      <span className="@max-[900px]:hidden">{allOpen ? "Collapse all" : "Expand all"}</span>
+    <button aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"} className="no-drag flex h-[28px] w-[28px] items-center justify-center rounded-md border border-border-strong text-muted hover:bg-raised hover:text-fg" onClick={() => setExpanded(allOpen ? {} : Object.fromEntries(cards.map((c) => [taskId(c.task), true])))}>
+      {allOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
     </button>
-  );
-}
-
-/** Board | List in the header (X45). */
-function LayoutSwitch() {
-  const layout = useTasks((t) => t.layout);
-  const item = (id: "board" | "list", label: string, icon: React.ReactNode) => (
-    <button
-      aria-label={label}
-      title={label}
-      aria-pressed={layout === id}
-      onClick={() => setLayout(id)}
-      className={cx("no-drag flex h-[22px] items-center whitespace-nowrap rounded-[5px] px-[9px] ui-text-12", layout === id ? "bg-raised text-fg" : "text-muted hover:text-fg")}
-    >
-      {/* Its name, or its icon in a narrow header. */}
-      <span className="hidden @max-[900px]:block">{icon}</span>
-      <span className="@max-[900px]:hidden">{label}</span>
-    </button>
-  );
-  return (
-    <div role="group" aria-label="Layout" className="flex gap-0.5 rounded-[7px] border border-border bg-bg p-0.5">
-      {item("board", "Board", <LayoutGrid size={12} />)}
-      {item("list", "List", <List size={12} />)}
-    </div>
   );
 }
 
@@ -1109,7 +1052,7 @@ function StatePill({ column, label, children, title, locked = false }: { column:
 }
 
 /** Priority as 0–3 bars (X44). */
-function PriorityBars({ n }: { n: number }) {
+export function PriorityBars({ n }: { n: number }) {
   return (
     <span title={PRIORITY[n] ?? "No priority"} className="inline-flex items-end gap-[2px]">
       {[0, 1, 2].map((j) => (

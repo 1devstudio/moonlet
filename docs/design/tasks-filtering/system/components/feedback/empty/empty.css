@@ -1,0 +1,25 @@
+/* Empty (components/ui.tsx): fills its container (`h-full`), centres an
+   optional 20px icon, a 13px medium title and a 12px muted line. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 100%;
+  padding: var(--space-6);
+  color: var(--color-muted);
+  text-align: center;
+}
+.empty__icon--faint {
+  color: var(--color-faint);
+}
+.empty__title {
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+}
+.empty__text {
+  max-width: 24rem;
+  font-size: var(--ui-text-12);
+}

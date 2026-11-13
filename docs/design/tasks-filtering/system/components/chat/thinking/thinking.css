@@ -1,0 +1,84 @@
+/* Thinking (components/AgentView.tsx): the agent's thought. Open shows it in full,
+   folded it is one line; while it streams it is the shimmering "Thinking…". */
+.thinking__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-13);
+  text-align: left;
+  cursor: pointer;
+}
+.thinking__header:hover {
+  background: var(--color-hover);
+}
+.thinking__icon {
+  color: var(--color-muted);
+}
+.thinking__label {
+  flex-shrink: 0;
+  font-weight: var(--font-weight-medium);
+}
+.thinking__preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thinking__end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-left: auto;
+}
+.thinking__chevron {
+  color: var(--color-faint);
+}
+/* Open rows show the chevron on hover only. */
+.thinking__chevron--idle {
+  opacity: 0;
+}
+.thinking:hover .thinking__chevron--idle {
+  opacity: 1;
+}
+.thinking__body {
+  margin: var(--space-1) 0 var(--space-2) var(--space-6);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: var(--ui-text-13);
+  font-style: italic;
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  user-select: text;
+}
+.thinking__running {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--ui-text-13);
+}
+
+/* The running state (kept name from moonlet.css). */
+.chat-shimmer {
+  background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-shimmer-peak) 50%, var(--color-muted) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-shimmer 1.6s linear infinite;
+}
+@keyframes chat-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}

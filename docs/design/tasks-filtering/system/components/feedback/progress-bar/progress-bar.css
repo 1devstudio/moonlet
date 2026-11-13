@@ -1,0 +1,27 @@
+/* A progress bar without a percentage: a segment sweeping across (X36).
+   moonlet.css `.moonlet-indeterminate`, name kept. Used by the Claude update
+   banner while `claude update` runs. */
+.moonlet-indeterminate {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-switch);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.moonlet-indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: var(--radius-switch);
+  background: var(--color-accent);
+  animation: moonlet-indeterminate 1.3s ease-in-out infinite;
+}
+@keyframes moonlet-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}

@@ -1,0 +1,165 @@
+/* Checks panel (components/ChecksPanel.tsx; X2): branch state, the pull
+   request with its review and CI checks, and the commits on the branch. The
+   tab body sits on --color-bg. */
+.checks-panel {
+  padding: var(--space-3);
+  font-size: var(--ui-text-13);
+}
+.checks-panel__section {
+  margin-bottom: var(--space-4);
+}
+.checks-panel__section:last-child {
+  margin-bottom: 0;
+}
+.checks-panel__heading {
+  margin: 0 0 var(--space-2);
+  color: var(--color-faint);
+  font-size: var(--ui-text-11);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+.checks-panel__lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-muted);
+}
+.checks-panel__mono {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+.checks-panel__mono--muted {
+  color: var(--color-muted);
+}
+.checks-panel__error {
+  color: var(--color-error);
+}
+.checks-panel__faint {
+  color: var(--color-faint);
+}
+.checks-panel__none {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-muted);
+}
+
+/* The PR card. */
+.checks-panel__pr {
+  padding: var(--space-2-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+}
+.checks-panel__pr-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.checks-panel__pr-title:hover {
+  color: var(--color-accent);
+}
+.checks-panel__pr-icon--open {
+  color: var(--color-done);
+}
+.checks-panel__pr-icon--merged {
+  color: var(--color-merged);
+}
+.checks-panel__pr-icon--closed {
+  color: var(--color-error);
+}
+.checks-panel__pr-name {
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.checks-panel__pr-link {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-faint);
+}
+.checks-panel__pr-state {
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.checks-panel__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+.checks-panel__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.checks-panel__check:hover {
+  color: var(--color-fg);
+}
+.checks-panel__check-name {
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* CheckIcon: 13px, by status and conclusion. */
+.check-icon {
+  flex-shrink: 0;
+}
+.check-icon--pass {
+  color: var(--color-done);
+}
+.check-icon--fail {
+  color: var(--color-error);
+}
+.check-icon--pending {
+  color: var(--color-working);
+}
+.check-icon--idle {
+  color: var(--color-faint);
+}
+
+/* Commits on this branch. */
+.checks-panel__commits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.checks-panel__commit {
+  display: flex;
+  gap: var(--space-2);
+}
+.checks-panel__sha {
+  flex-shrink: 0;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.checks-panel__subject {
+  overflow: hidden;
+  color: var(--color-check-subject);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

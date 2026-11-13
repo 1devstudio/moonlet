@@ -1,0 +1,139 @@
+/* Section header (components/Sidebar.tsx SectionBlock, GroupBlock, ProjectMark;
+   X32). The section's own bar is a rounded card; the group headers inside it
+   are plain rows: a project (mark and name), or a label (status, task). */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--size-sidebar-card);
+  margin: 0 var(--space-2);
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-sidebar-card);
+}
+.section-header__toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: default;
+}
+.section-header__name {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--ui-text-14);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-header:hover .section-header__name {
+  color: var(--color-fg);
+}
+/* The remote host, when more than one host is connected. */
+.section-header__host {
+  overflow: hidden;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-header__chevron {
+  color: var(--color-faint);
+}
+/* Expanded: the down chevron only shows while the header is hovered. */
+.section-header__chevron--down {
+  opacity: 0;
+}
+.section-header:hover .section-header__chevron--down {
+  opacity: 1;
+}
+.section-header .icon-button,
+.group-header .icon-button {
+  width: var(--size-control-md);
+  height: var(--size-control-md);
+}
+
+/* A group inside a section: a project (heading "project"), or a label
+   (heading "label": a status or a task). */
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--size-sidebar-card);
+  padding: 0 var(--space-3) 0 var(--space-4);
+}
+.group-header__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: default;
+}
+/* A label group has no chip or buttons, so its toggle takes the whole row. */
+.group-header__toggle--wide {
+  flex: 1;
+}
+.group-header__name {
+  overflow: hidden;
+  color: var(--color-heading-text);
+  font-size: var(--ui-text-14);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The task number column's prefix (style A), such as "MOON-". */
+.group-header__prefix {
+  flex-shrink: 0;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.group-header__label {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--ui-text-11-5);
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Status groups (Working, Needs input...) are set in capitals. */
+.group-header__label--status {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.group-header__chevron {
+  flex-shrink: 0;
+  color: var(--color-faint);
+}
+/* What is left of the row still collapses the project. */
+.group-header__spacer {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+/* Project settings: only while the row is hovered. */
+.group-header__settings {
+  opacity: 0;
+}
+.group-header:hover .group-header__settings {
+  opacity: 1;
+}
+
+/* ProjectMark's fallback: the dotted glyph, in the worktree green-blue. */
+.group-header__mark {
+  flex-shrink: 0;
+  fill: currentColor;
+  color: var(--color-worktree-icon);
+}

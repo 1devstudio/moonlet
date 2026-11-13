@@ -1,7 +1,7 @@
 // Tasks mode's data: each workspace's tasks and worktrees, and the switch
 // between Sessions and Tasks (X44, X45).
 
-import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
+import { NO_STATUS, type Assignee, type ProjectMeta, projectMove, assigneeOf, type AssigneePick, EVERY_BOARD, pickAssignee, type BoardColumn, type BoardConfig, type CardField, type Category, type ColumnShow, GITHUB_REPO_COLUMNS, migrateSources, syncedColumns, taskFromBoardIssue, withColumnShow, workspaceBoards } from "./boards";
 import { categorize, placeOnBoards, statusFor, withStatus } from "./boardColumns";
 import { create } from "zustand";
 import { DaemonError, hostsApi, rpc } from "./daemon";
@@ -21,6 +21,7 @@ import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewI
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard, worktreesNotUsedElsewhere } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
+import { DEFAULT_DISPLAY, filtersAtPick, type Display, readSavedFilters, saveFilters, type TaskFilter } from "./taskFilters";
 import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
@@ -81,6 +82,10 @@ interface TasksState {
   ghScopes: Record<string, string[]>;
   /** A project's, team's or list's states, by `connection source`, for the State menu of a task on no board (X50). */
   projectStates: Record<string, TrackerState[]>;
+  /** Each board's filters (X100), by board id, kept in the app; Assignee's Me is X50's pick, not among them. */
+  boardFilters: Record<string, TaskFilter[]>;
+  /** Display options for every board (X100): ordering, Show empty columns, Show sessions on cards. */
+  display: Display;
   /** Assignee picked in the header, by board id, kept in the app across restarts, not written to the board (X50). */
   assignee: Record<string, AssigneePick>;
   /** Connections whose token stopped working, with what to do (X44). */
@@ -167,6 +172,8 @@ export const useTasks = create<TasksState>(() => ({
   expanded: storedExpanded(),
   filters: storedFilters(),
   assignee: storedAssignee(),
+  boardFilters: readSavedFilters(storedJson("tasks.boardFilters", {})),
+  display: { ...DEFAULT_DISPLAY, ...storedJson("tasks.display", {}) },
   ghScopes: {},
   projectStates: {},
   attention: {},
@@ -199,6 +206,10 @@ export async function removeBoard(board: Pick<BoardConfig, "id" | "name">): Prom
   const sure = await askConfirm({ title: `Remove ${board.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
   if (!sure) return false;
   await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== board.id) }));
+  // Its filters go with it (X100).
+  const { [board.id]: _, ...boardFilters } = useTasks.getState().boardFilters;
+  useTasks.setState({ boardFilters });
+  writeStored("tasks.boardFilters", JSON.stringify(boardFilters));
   return true;
 }
 
@@ -421,6 +432,55 @@ export function setAssignee(board: Pick<BoardConfig, "id" | "assignee" | "worksp
   writeStored("tasks.assignee", JSON.stringify(assignee));
   const { host, id } = parseWsKey(board.workspace);
   void refreshTasks(host, id);
+}
+
+function storedJson<T>(name: string, fallback: T): T {
+  try {
+    return JSON.parse(readStored(name) ?? "null") ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A board's filters as its row of chips shows them (X100): Assignee is Me first while the board is at me. */
+export const filtersOf = (t: Pick<TasksState, "boardFilters" | "assignee">, board: Pick<BoardConfig, "id" | "assignee">): TaskFilter[] =>
+  filtersAtPick(t.boardFilters[board.id] ?? [], assigneeOf(board, t.assignee));
+
+/** Sets a board's filters (X100), kept in the app; a change of Assignee's Me sets X50's pick, which fetches again. Removed boards' filters are forgotten. */
+export function setBoardFilters(board: Pick<BoardConfig, "id" | "assignee" | "workspace">, filters: TaskFilter[]) {
+  const { saved, pick } = saveFilters(filters);
+  const ids = new Set([...(trackersConfig(useTasks.getState()).boards ?? []).map((b) => b.id), board.id]);
+  const kept = Object.fromEntries(Object.entries(useTasks.getState().boardFilters).filter(([id]) => ids.has(id) && id !== board.id));
+  const boardFilters = saved.length ? { ...kept, [board.id]: saved } : kept;
+  useTasks.setState({ boardFilters });
+  writeStored("tasks.boardFilters", JSON.stringify(boardFilters));
+  if (pick !== assigneeOf(board, useTasks.getState().assignee)) setAssignee(board, pick);
+}
+
+/** Display options (X100), for every board, kept across restarts. */
+export function setDisplay(display: Display) {
+  useTasks.setState({ display });
+  writeStored("tasks.display", JSON.stringify(display));
+}
+
+/** A board's card properties (X100 Display options, X50 Cards show); null goes back to its tracker's. */
+export function setBoardCards(boardId: string, cards: CardField[] | null) {
+  void saveTrackersConfig((c) => ({
+    ...c,
+    boards: c.boards?.map((b) => {
+      if (b.id !== boardId) return b;
+      const { cards: _, ...rest } = b;
+      return cards ? { ...rest, cards } : rest;
+    }),
+  })).catch((e) => errorToast(e));
+}
+
+/** Display options' Reset to default (X100): Board, the board's order, the switches at their defaults, the tracker's card fields. */
+export function resetDisplay(boardId: string) {
+  setLayout("board");
+  setDisplay(DEFAULT_DISPLAY);
+  setFilters({ hideEmptyDone: false });
+  setBoardCards(boardId, null);
 }
 
 function storedExpanded(): Record<string, boolean> {

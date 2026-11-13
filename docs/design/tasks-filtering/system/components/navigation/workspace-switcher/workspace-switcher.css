@@ -1,0 +1,187 @@
+/* Workspace switcher (components/WorkspaceSwitcher.tsx, X32): the title-bar
+   trigger (colour mark, name, chevrons) and its 256px menu. The WorkspaceMark
+   is drawn here with .workspace-switcher__mark; size and colour are modifiers. */
+.workspace-switcher {
+  position: relative;
+  min-width: 0;
+}
+.workspace-switcher__trigger {
+  display: flex;
+  height: var(--size-row);
+  max-width: 180px;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 0 7px 0 5px;
+  border: 0;
+  border-radius: var(--radius-tile);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+}
+.workspace-switcher__trigger:hover,
+.workspace-switcher__trigger--open {
+  background: var(--color-switcher-hover);
+}
+.workspace-switcher__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.workspace-switcher__chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+.workspace-switcher__dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-blocked);
+}
+/* The colour square with the workspace's initial. */
+.workspace-switcher__mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-on-swatch);
+}
+.workspace-switcher__mark--18 {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-chip);
+  font-size: var(--ui-text-11);
+}
+.workspace-switcher__mark--26 {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-tile);
+  font-size: var(--ui-text-16);
+}
+.workspace-switcher__mark--clay {
+  background: var(--color-workspace-clay);
+}
+.workspace-switcher__mark--blue {
+  background: var(--color-workspace-blue);
+}
+.workspace-switcher__mark--violet {
+  background: var(--color-workspace-violet);
+}
+.workspace-switcher__mark--sand {
+  background: var(--color-workspace-sand);
+}
+.workspace-switcher__mark--grey {
+  background: var(--color-workspace-grey);
+}
+.workspace-switcher__menu {
+  display: flex;
+  width: 256px;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-popover-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.workspace-switcher__title {
+  padding: var(--space-1-5) var(--space-2) var(--space-1);
+  font-size: var(--ui-text-11-5);
+  color: var(--color-faint);
+}
+.workspace-switcher__host {
+  padding: var(--space-1-5) var(--space-2) var(--space-0-5);
+  font-size: var(--ui-text-11);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+.workspace-switcher__row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 7px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  text-align: left;
+}
+.workspace-switcher__row:hover,
+.workspace-switcher__row--current {
+  background: var(--color-switcher-hover);
+}
+.workspace-switcher__body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-px);
+}
+.workspace-switcher__row-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-fg);
+}
+.workspace-switcher__summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ui-text-11-5);
+  color: var(--color-muted);
+}
+.workspace-switcher__check {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.workspace-switcher__kbd {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-10-5);
+  color: var(--color-faint);
+}
+.workspace-switcher__rule {
+  height: 1px;
+  margin: var(--space-1) var(--space-0-5);
+  background: var(--color-border);
+}
+.workspace-switcher__action {
+  display: flex;
+  width: 100%;
+  height: var(--size-field);
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  text-align: left;
+}
+.workspace-switcher__action:hover {
+  background: var(--color-switcher-hover);
+}
+.workspace-switcher__action .icon {
+  color: var(--color-muted);
+}
+.workspace-switcher__hint {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-1-5) var(--space-2) var(--space-1);
+  font-size: var(--ui-text-11);
+  color: var(--color-faint);
+}
+.workspace-switcher__hint span:last-child {
+  font-family: var(--font-mono);
+}

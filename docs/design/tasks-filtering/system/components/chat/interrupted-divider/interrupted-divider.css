@@ -1,0 +1,11 @@
+/* InterruptedDivider (components/AgentView.tsx, X49): a centred faint line
+   between a stopped turn and what follows. The command is mono. */
+.interrupted-divider {
+  padding: var(--space-1-5) 0;
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  text-align: center;
+}
+.interrupted-divider__command {
+  font-family: var(--font-mono);
+}

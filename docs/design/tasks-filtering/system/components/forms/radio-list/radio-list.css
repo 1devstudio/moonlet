@@ -1,0 +1,65 @@
+/* RadioList (components/settings/controls.tsx): one row per option in a
+   bordered card, label and description. */
+.radio-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+}
+.radio-list__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.radio-list__option:first-child {
+  border-top: 0;
+}
+.radio-list__option:hover {
+  background: var(--color-panel-2);
+}
+.radio-list__option--selected,
+.radio-list__option--selected:hover {
+  background: var(--color-selected);
+}
+.radio-list__dot {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  border: 1.5px solid var(--color-radio-off);
+  border-radius: var(--radius-full);
+}
+.radio-list__option--selected .radio-list__dot {
+  border-color: var(--color-accent);
+}
+.radio-list__dot::after {
+  content: "";
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+}
+.radio-list__option--selected .radio-list__dot::after {
+  background: var(--color-accent);
+}
+.radio-list__label {
+  flex-shrink: 0;
+  width: 110px;
+  font-size: var(--ui-text-13);
+}
+.radio-list__description {
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+}

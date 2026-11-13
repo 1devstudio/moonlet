@@ -1,0 +1,23 @@
+/* ZoomBar (components/design/Frame.tsx): an icon button for out, the zoom
+   in mono text (a button that fits again), an icon button for in. The icon
+   buttons are `.icon-button`. */
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.zoom-bar__value {
+  width: var(--space-12);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.zoom-bar__value:hover {
+  color: var(--color-fg);
+}

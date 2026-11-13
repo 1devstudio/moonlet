@@ -133,7 +133,7 @@ export function FindTask({ host, workspaceId, views, leftOut, others, shownLabel
   const optionId = (i: number) => `${list}-${i}`;
 
   return (
-    <div ref={box} className="no-drag relative min-w-[130px] max-w-[440px] flex-[1_1_220px]">
+    <div ref={box} className="no-drag relative mx-auto min-w-[130px] max-w-[520px] flex-[1_1_220px]">
       <label className={cx("flex h-8 items-center gap-2 rounded-lg border bg-raised pl-2.5 pr-1.5", shown ? "border-accent" : "border-border-strong")}>
         <Search size={14} className="shrink-0 text-muted" />
         <input
