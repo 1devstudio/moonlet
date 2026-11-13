@@ -1342,29 +1342,9 @@ impl LiveCopies {
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
             if local.tree != from {
-                let read = |t: String| {
-                    let repo = repo.clone();
-                    async move { git_sync::read_files(&repo, &t).await }
-                };
-                let (Ok(from_f), Ok(central_f), Ok(local_f)) = (
-                    read(from).await,
-                    read(fetched.tree.clone()).await,
-                    read(local.tree).await,
-                ) else {
-                    return Err(Stop::Paused("cannot read the copy's files".into()));
-                };
-                let r = resume(&from_f, &central_f, &local_f);
-                let write = |f: Files| {
-                    let repo = repo.clone();
-                    async move { git_sync::write_files(&repo, &f).await }
-                };
-                target = write(r.worker)
+                (target, base, differs) = reconciled(&repo, from, fetched.tree.clone(), local.tree)
                     .await
-                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
-                base = write(r.base)
-                    .await
-                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
-                differs = r.differs;
+                    .map_err(Stop::Paused)?;
             }
         }
         apply_tries(&self.sessions, &path, &target, &host_name).await?;
@@ -2029,6 +2009,70 @@ impl LiveCopies {
         // Stopped while this waited for it.
         self.kept(&id).filter(live).ok_or_else(none)?;
         Ok(Holding { id, _one: one })
+    }
+
+    /// Brings held copy `h` to the central host's files and commit as they
+    /// are now (X73), once it gave the session up and before the copy
+    /// becomes the session's worktree here: what it sent while the copy
+    /// was held never landed. A file this Mac changed in the copy since
+    /// keeps its version, as when a copy resumes.
+    pub async fn catch_up(&self, h: &Holding) -> Result<(), RpcError> {
+        let k = self
+            .kept(&h.id)
+            .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
+        let host = self
+            .host_for(&k)
+            .ok_or_else(|| RpcError::new("disconnected", "the central host is not connected"))?;
+        let (repo, path) = (PathBuf::from(&k.repo), PathBuf::from(&k.path));
+        let fetch = SyncFetch {
+            copy: k.id.clone(),
+            have: git_sync::have(&repo).await,
+            again: false,
+        };
+        let fetched: SyncFetched = serde_json::from_value(
+            host.request(m::SYNC_FETCH, serde_json::to_value(fetch).unwrap(), LINK_WAIT)
+                .await?,
+        )
+        .map_err(internal)?;
+        object_ids(&[&fetched.tree, &fetched.head])?;
+        if let Some(t) = fetched.pack {
+            let pack = host
+                .take_pack(t)
+                .ok_or_else(|| RpcError::new("failed", "the session's files did not arrive"))?;
+            self.unpack_from_central(&k, &repo, &pack).await?;
+        }
+        self.check_paths(&k, &repo, &fetched.tree).await?;
+        let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
+            .await
+            .map_err(internal)?;
+        let from = k.base.clone().or(k.tree.clone()).unwrap_or_else(|| local.tree.clone());
+        let (target, base, differs) = if local.tree == from {
+            (fetched.tree.clone(), fetched.tree.clone(), Vec::new())
+        } else {
+            reconciled(&repo, from, fetched.tree.clone(), local.tree)
+                .await
+                .map_err(internal)?
+        };
+        apply_tries(&self.sessions, &path, &target, &k.host)
+            .await
+            .map_err(|e| match e {
+                Stop::Offline => RpcError::new("disconnected", "the central host is not connected"),
+                Stop::Gone => RpcError::new("not_found", "the session is gone"),
+                Stop::Paused(reason) => RpcError::new("paused", reason),
+            })?;
+        git_sync::set_base_ref(&repo, &k.id, &base)
+            .await
+            .map_err(internal)?;
+        self.update_kept(&k.id, |kept| {
+            kept.base = Some(base.clone());
+            kept.sent_base = Some(fetched.tree.clone());
+            kept.base_head = Some(fetched.head.clone());
+            kept.tree = Some(fetched.tree.clone());
+            kept.too_big = fetched.too_big.clone();
+            kept.differs = differs.clone();
+        });
+        self.follow_head(&k.id, &path, &fetched.head).await?;
+        Ok(())
     }
 
     /// Lets go of held copy `h` and keeps its worktree: this Mac now owns
@@ -3548,6 +3592,21 @@ fn outside(host: &str) -> String {
 }
 
 /// Why a copy pauses over a pack from `host` that git refused.
+/// The files a copy edited here since `from` takes when the central host
+/// has `central` and the copy `local` (all tree ids in `repo`): the files
+/// to apply, the base they count from, and the paths both sides changed,
+/// which keep this Mac's version.
+async fn reconciled(repo: &Path, from: String, central: String, local: String) -> Result<(String, String, Vec<String>), String> {
+    let read = |t: String| async move { git_sync::read_files(repo, &t).await };
+    let (Ok(from_f), Ok(central_f), Ok(local_f)) = (read(from).await, read(central).await, read(local).await) else {
+        return Err("cannot read the copy's files".into());
+    };
+    let r = resume(&from_f, &central_f, &local_f);
+    let target = git_sync::write_files(repo, &r.worker).await.map_err(|e| format!("{e:#}"))?;
+    let base = git_sync::write_files(repo, &r.base).await.map_err(|e| format!("{e:#}"))?;
+    Ok((target, base, r.differs))
+}
+
 fn refused(host: &str, e: &UnpackError) -> String {
     match e {
         UnpackError::Unsafe(_) => outside(host),

@@ -70,7 +70,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 ### Continuing on a member
 
 - [ ] The member taking a session over:
-  1. brings its copy's files to the latest it holds;
+  1. brings its copy's files and commit to the ones the session had where it ran, as that member gave it up; a file it changed in the copy meanwhile keeps its version (`a_session_brought_back_has_the_central_hosts_last_files`);
   2. runs the project's setup there, when it has not run yet and its command is approved for this member (X60);
   3. puts the transcript up to the last checkpoint in its profile's `projects/` folder for the copy's path (X72);
   4. resumes the agent with `claude --resume <agent session id>` for a structured chat, with the chat's next message (the cut-off note, or the message typed), so a session that moves idle starts no agent (`a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message`); or `claude --continue` in a new terminal tab for a PTY agent tab;

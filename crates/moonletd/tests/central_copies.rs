@@ -2118,6 +2118,66 @@ async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
     assert_eq!(back["id"], made["id"]);
 }
 
+/// Makes git on `worktree`'s repository wait, as a move renames branch
+/// `moonlet/fix-cart` away, until the test writes the returned `go`; the
+/// returned `started` appears once it waits.
+fn gate_the_rename(worktree: &Path) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(worktree)
+        .output()
+        .unwrap();
+    let hooks = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim()).join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let gate = tempfile::tempdir().unwrap();
+    let (started, go) = (gate.path().join("started"), gate.path().join("go"));
+    let hook = hooks.join("reference-transaction");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            s = started.display(),
+            g = go.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    (gate, started, go)
+}
+
+#[tokio::test]
+async fn a_session_brought_back_has_the_central_hosts_last_files() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    // The move waits a moment on studio-mini, and its last file is written
+    // just then, as an agent's last edit lands while its turn ends.
+    let (_gate, started, go) = gate_the_rename(&there);
+    let (brought, ()) = tokio::join!(
+        book.try_call("session.bring", json!({ "session": made["id"] })),
+        async {
+            within(Duration::from_secs(30), "the move under way", || async {
+                started.exists()
+            })
+            .await;
+            std::fs::write(there.join("src/late.ts"), "late\n").unwrap();
+            // For as long as studio-mini takes to send a change.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            std::fs::write(&go, "").unwrap();
+        }
+    );
+    let brought = brought.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path_of(&brought).join("src/late.ts")).ok().as_deref(),
+        Some("late\n"),
+        "the brought worktree lacks studio-mini's last file"
+    );
+}
+
 #[tokio::test]
 async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() {
     let origin = Origin::new();

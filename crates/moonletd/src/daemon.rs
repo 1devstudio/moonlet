@@ -4078,6 +4078,11 @@ impl Daemon {
             }
             Err::<moonlet_proto::types::Session, _>(e)
         };
+        // The central host's last files first: what it sent while the copy
+        // was held never landed.
+        if let Err(e) = self.sync.catch_up(&held).await {
+            return give_back(e).await;
+        }
         let released = match self.sync.let_go(held) {
             Ok(released) => released,
             Err(e) => return give_back(e).await,
