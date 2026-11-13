@@ -2,7 +2,7 @@
 // manual check M10.
 
 import { $, browser, expect } from "@wdio/globals";
-import { CONFIG, PROJECT, SESSION, closeSettings, fill, readConfig, resetConfig, sel, world, writeConfig } from "../fixtures";
+import { CONFIG, PROJECT, SESSION, choose, closeSettings, fill, readConfig, resetConfig, sel, world, writeConfig } from "../fixtures";
 
 const w = world();
 const page = () => $(sel.settings);
@@ -61,6 +61,21 @@ describe("Project settings", () => {
     await closeSettings();
     // No session switch: the projects.changed event refreshes the button.
     await expect(runButton()).toHaveAttribute("title", "Run: echo e2e-run (⌘R)");
+  });
+
+  it("keeps the project's session designs in ~/.moonlet/design once chosen (X101)", async () => {
+    await start();
+    await openFromMoreMenu();
+    await loaded();
+    await expect($(sel.text("Designs made in a session go to docs/design and are committed with its branch."))).toBeDisplayed();
+    await choose(sel.settingsField("Session designs"), "moonlet");
+    await expect($(sel.text("Designs made in a session stay out of the repository, in ~/.moonlet/design. When the session is archived they become workspace designs."))).toBeDisplayed();
+    await button("Save").click();
+    await expect($(sel.text("Unsaved changes"))).not.toBeExisting();
+    const text = readConfig(w);
+    expect(text).toContain('[design]\nstore = "moonlet"');
+    expect(text).toContain("# storefront scripts");
+    await closeSettings();
   });
 
   it("flags a built-in agent name and an unknown default agent, and blocks Save", async () => {

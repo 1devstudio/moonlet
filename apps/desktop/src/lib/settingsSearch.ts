@@ -11,6 +11,7 @@ import { soundFor } from "./sounds";
 import { bannerOn } from "./alerts";
 import { originText } from "./addBoard";
 import { trackerName } from "./tasks";
+import { DESIGN_STORES } from "./projectSettings";
 import { ROW_STYLES, rowStyle } from "./sessionRows";
 import type { Settings } from "./store";
 import { WORKSPACE_COLORS } from "./workspaces";
@@ -194,6 +195,7 @@ function index(c: SearchContext): Entry[] {
         { label: "Custom agents", path, route, setting: "project-agents", value: cfg ? (agents ? n(agents, "agent") : "None") : "" },
         { label: "Base branch", path, route, setting: "project-base", value: cfg?.base_branch?.trim() || p.base_branch },
         { label: "Branch prefix", path, route, setting: "project-branch-prefix", value: cfg?.branch_prefix?.trim() ?? "", also: "git" },
+        { label: "Session designs", path, route, setting: "project-design-store", value: cfg ? DESIGN_STORES[cfg.design?.store === "moonlet" ? 1 : 0].label : "", also: "design folder" },
         { label: "Heavy commands", path, route, setting: "project-heavy", value: cfg ? n(cfg.heavy?.commands.length ?? 0, "command") : "", also: "routed workers approve" },
       ];
     }),

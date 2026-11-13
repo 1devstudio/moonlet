@@ -148,6 +148,13 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("base branch", withConfig)[0].value).toBe("develop");
   });
 
+  it("finds where a project keeps its session designs (X101)", () => {
+    const project = (design?: { store?: string }) => ({ host: "local", id: "p1", name: "storefront", base_branch: "main", config: { agents: {}, design } });
+    const found = (c: SearchContext, q: string) => searchSettings(q, c).filter((r) => r.path === "Projects › storefront").map((r) => [r.before + r.hit + r.after, r.value]);
+    expect(found({ ...ctx, projects: [project()] }, "session designs")).toEqual([["Session designs", "In the project"]]);
+    expect(found({ ...ctx, projects: [project({ store: "moonlet" })] }, "design")).toEqual([["Session designs", "In ~/.moonlet/design"]]);
+  });
+
   it("finds nothing for a blank query", () => {
     expect(searchSettings("  ", ctx)).toEqual([]);
   });

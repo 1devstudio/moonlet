@@ -8,7 +8,7 @@ import { Copy, FileWarning, Folder, FolderOpen, Plus, RotateCw, Server, X } from
 import { rpc } from "../../lib/daemon";
 import { M, type ProjectConfigFile } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
-import { agentOptions, configName, fromForm, isDirty, loadFailure, newRowId, saveBarStatus, toForm, validate, type AgentRow, type Form, type SaveError } from "../../lib/projectSettings";
+import { agentOptions, configName, DESIGN_STORES, designStoreHint, fromForm, isDirty, loadFailure, newRowId, saveBarStatus, toForm, validate, type AgentRow, type DesignStore, type Form, type SaveError } from "../../lib/projectSettings";
 import { tildePath } from "../../lib/profiles";
 import { loadTrackersConfig, useTasks } from "../../lib/tasksStore";
 import { projectTrackers } from "../../lib/trackerSources";
@@ -21,7 +21,7 @@ import { HeavySection, useHeavy } from "./HeavySection";
 import { CloudSection, useProjectCloud } from "./CloudSection";
 import { CopiedFilesSection } from "./CopiedFilesSection";
 
-const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
+const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [], design_store: "project" };
 
 const input = (error?: string, width = "w-[300px]") => cx(fieldCls, "font-mono ui-text-12.5", width, !!error && "border-error focus:border-error");
 
@@ -305,6 +305,20 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             </Row>
             <Row setting="project-archive" label="Archive" htmlFor="settings-p-archive" hint="Runs before a session is archived.">
               <input id="settings-p-archive" className={input()} spellCheck={false} value={form.archive} onChange={(e) => set({ archive: e.target.value })} placeholder="docker compose down" />
+            </Row>
+          </Card>
+        </Section>
+
+        <Section title="Design">
+          <Card>
+            <Row setting="project-design-store" label="Session designs" htmlFor="settings-p-design-store" hint={designStoreHint(form.design_store, file?.config.design?.dir)}>
+              <select id="settings-p-design-store" className={cx(fieldCls, "w-[240px]")} value={form.design_store} onChange={(e) => set({ design_store: e.target.value as DesignStore })}>
+                {DESIGN_STORES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </Row>
           </Card>
         </Section>
