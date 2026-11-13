@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { agentOptions, closeRequest, configName, fromForm, hasRunCommand, isDirty, loadFailure, saveBarStatus, toForm, validate, type Form } from "./projectSettings";
+import { agentOptions, closeRequest, configName, designStoreHint, fromForm, hasRunCommand, isDirty, loadFailure, saveBarStatus, toForm, validate, type Form } from "./projectSettings";
 
-const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [], ...patch });
+const form = (patch: Partial<Form> = {}): Form => ({ setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [], design_store: "project", ...patch });
 
 describe("toForm and fromForm", () => {
   it("round-trips a config", () => {
-    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, branch_prefix: "team/", agents: { yolo: "claude --x" }, trackers: ["jira:acme.atlassian.net/ABC"] };
+    const c = { setup: "pnpm i", run: "pnpm dev", archive: null, default_agent: "yolo", base_branch: null, branch_prefix: "team/", agents: { yolo: "claude --x" }, trackers: ["jira:acme.atlassian.net/ABC"], design: { store: "moonlet" } };
     expect(fromForm(toForm(c))).toEqual(c);
+  });
+
+  it("reads and writes the session designs store, keeps the design folder (X101)", () => {
+    expect(toForm({ agents: {} }).design_store).toBe("project");
+    expect(toForm({ agents: {}, design: { dir: "design/prototypes" } }).design_store).toBe("project");
+    expect(toForm({ agents: {}, design: { store: "elsewhere" } }).design_store).toBe("project");
+    expect(toForm({ agents: {}, design: { dir: "design/prototypes", store: "moonlet" } }).design_store).toBe("moonlet");
+    // The daemon writes only `store`; `[design] dir` stays as it is in the file.
+    expect(fromForm(form()).design).toEqual({ store: "project" });
+    expect(fromForm(form({ design_store: "moonlet" })).design).toEqual({ store: "moonlet" });
+    expect(isDirty(form({ design_store: "moonlet" }), form())).toBe(true);
+  });
+
+  it("says where each choice keeps a session's designs (X101)", () => {
+    expect(designStoreHint("project", null)).toBe("Designs made in a session go to docs/design and are committed with its branch.");
+    expect(designStoreHint("project", "design/prototypes")).toBe("Designs made in a session go to design/prototypes and are committed with its branch.");
+    expect(designStoreHint("moonlet", "design/prototypes")).toBe(
+      "Designs made in a session stay out of the repository, in ~/.moonlet/design. When the session is archived they become workspace designs.",
+    );
   });
 
   it("reads a config without tracker projects as none (X44)", () => {

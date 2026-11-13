@@ -278,6 +278,7 @@ fn apply(doc: &mut DocumentMut, c: &ProjectConfig) {
         }
     }
     set_trackers(doc, &c.trackers);
+    set_design_store(doc, c.design.store.as_deref());
     let has_table = doc
         .get("agents")
         .is_some_and(|i| i.as_table_like().is_some());
@@ -373,6 +374,30 @@ fn set(table: &mut dyn TableLike, key: &str, v: Option<&str>) {
         None => {
             table.insert(key, toml_edit::value(v));
         }
+    }
+}
+
+/// Writes where the project keeps its session designs, `[design] store`
+/// (X101): `moonlet` sets it, any other value removes it, with the table
+/// when nothing else is left in it, and none leaves it as written, so a
+/// client that does not know it never erases it. `[design] dir` is never
+/// touched.
+fn set_design_store(doc: &mut DocumentMut, store: Option<&str>) {
+    let Some(store) = store else { return };
+    let has_table = doc.get("design").is_some_and(|i| i.as_table_like().is_some());
+    if store == "moonlet" {
+        if !has_table {
+            doc.insert("design", Item::Table(Table::new()));
+        }
+        if let Some(t) = doc.get_mut("design").and_then(|i| i.as_table_like_mut()) {
+            set(t, "store", Some(store));
+        }
+        return;
+    }
+    let Some(t) = doc.get_mut("design").and_then(|i| i.as_table_like_mut()) else { return };
+    t.remove("store");
+    if t.is_empty() {
+        doc.remove("design");
     }
 }
 
@@ -485,6 +510,39 @@ mod tests {
                 .unwrap()
                 .starts_with("run = \"pnpm serve\"\n")
         );
+    }
+
+    /// X101: Project settings writes where the project keeps its session
+    /// designs, `[design] store`, leaving `[design] dir` and the rest as they
+    /// are; `project`, the default, removes the key, and a save that does not
+    /// say leaves it as it is.
+    #[test]
+    fn saving_writes_the_session_designs_store_and_keeps_the_design_folder() {
+        let text = "run = \"pnpm dev\"\n\n[design]\ndir = \"design/prototypes\"\n";
+        let dir = repo_with(Some(text));
+        let save_store = |store: Option<&str>| {
+            let file = load(dir.path(), "main".into());
+            let mut config = file.config.clone();
+            config.design.store = store.map(String::from);
+            save(dir.path(), &file.version, &config).unwrap();
+            read(&dir)
+        };
+        let moonlet = "run = \"pnpm dev\"\n\n[design]\ndir = \"design/prototypes\"\nstore = \"moonlet\"\n";
+        assert_eq!(save_store(Some("moonlet")), moonlet);
+        assert_eq!(save_store(None), moonlet);
+        assert_eq!(save_store(Some("project")), text);
+        // No `[design]` table is added for the default.
+        let plain = repo_with(Some("run = \"pnpm dev\"\n"));
+        let file = load(plain.path(), "main".into());
+        let mut config = file.config.clone();
+        config.design.store = Some("project".into());
+        save(plain.path(), &file.version, &config).unwrap();
+        assert_eq!(read(&plain), "run = \"pnpm dev\"\n");
+        let file = load(plain.path(), "main".into());
+        let mut config = file.config.clone();
+        config.design.store = Some("moonlet".into());
+        save(plain.path(), &file.version, &config).unwrap();
+        assert_eq!(read(&plain), "run = \"pnpm dev\"\n\n[design]\nstore = \"moonlet\"\n");
     }
 
     fn repo_with(text: Option<&str>) -> tempfile::TempDir {

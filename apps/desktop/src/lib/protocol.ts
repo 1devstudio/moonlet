@@ -421,8 +421,9 @@ export interface ProjectConfig {
   trackers?: string[];
   /** Commands that may run on another machine, `[heavy]` (X62). */
   heavy?: HeavyConfig;
-  /** Where session designs live in a worktree, `[design]` (X65). */
-  design?: { dir?: string | null };
+  /** Where session designs live in a worktree, `[design]` (X65), and
+   *  whether they are kept in ~/.moonlet/design instead, `store` (X101). */
+  design?: { dir?: string | null; store?: string | null };
 }
 
 /** Which workers may take a project's heavy commands (X62). */
