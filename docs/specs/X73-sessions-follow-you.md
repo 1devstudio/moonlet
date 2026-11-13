@@ -70,7 +70,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 ### Continuing on a member
 
 - [ ] The member taking a session over:
-  1. brings its copy's files to the latest it holds;
+  1. brings its copy's files and commit to the ones the session had where it ran, as that member gave it up; a file it changed in the copy meanwhile keeps its version (`a_session_brought_back_has_the_central_hosts_last_files`). While each side has commits the other lacks, nothing moves: the bring answers `diverged`, and the session goes on where it ran (`a_bring_refuses_while_each_side_has_commits_the_other_lacks`);
   2. runs the project's setup there, when it has not run yet and its command is approved for this member (X60);
   3. puts the transcript up to the last checkpoint in its profile's `projects/` folder for the copy's path (X72);
   4. resumes the agent with `claude --resume <agent session id>` for a structured chat, with the chat's next message (the cut-off note, or the message typed), so a session that moves idle starts no agent (`a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message`); or `claude --continue` in a new terminal tab for a PTY agent tab;
@@ -253,7 +253,7 @@ What works as specified:
   - Its worktree stays where it is and becomes its X60 live copy, with the new owner's files; only the gap goes to leftovers. (Until 2026-11-13 the whole worktree moved into leftovers, git forgot it, and a fresh copy was made beside it; a copy whose branch here had commits the new owner's lacked then paused.)
   - It then follows the new owner with an X60 live copy, as the user chose. (`a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner`)
 - **Sleep.** The member freezes its chat agents, sends what is new, and hands its unpinned busy sessions over with `session.yield`, holding sleep for at most 25 s. An idle session stays (2026-11-13: a 90 s idle sleep with the lid open had handed over 64 idle sessions; `an_idle_session_stays_on_the_mac_through_sleep`). On wake, an agent goes on only while its session is still its own. (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_not_handed_over_before_sleep_goes_on_here_after_waking`)
-- **Typing brings a session back.** It waits for the end of the turn, or moves at once with Move now. (`typing_on_the_member_brings_the_session_back_from_the_central_host`, `a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now`)
+- **Typing brings a session back.** It waits for the end of the turn, or moves at once with Move now. (`typing_on_the_member_brings_the_session_back_from_the_central_host`, `a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now`; in the app, listed once before and after: `session-moves.e2e.ts` › "moves the session here when you type into it, and the message runs here". A message typed for a session already back here, as when it came back by itself while the message waited, runs here: `a_message_typed_for_a_session_already_back_here_runs_here`)
 - **Run only on… pins, and Unpin.** (`a_session_moved_to_the_central_host_stays_there`, `a_session_moved_to_this_mac_stays_through_sleep_until_unpinned`)
 - **Take over anyway.** (`a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back`)
 - **Readiness.** (`the_central_host_says_whether_it_could_continue_each_copy`)
@@ -262,7 +262,7 @@ What works as specified:
 Where it differs from the draft above:
 - **Moves.** A session moves between a member and the central host. Bringing back a session that a third member runs, or moving one to it, answers `elsewhere` or `unsupported`.
 - **Take over anyway** starts a new conversation on the member: the transcript stayed on the central host. When the central host is back, it keeps its own work from the gap, files and conversation, before the member's work replaces it.
-- **The waiting message** is a toast with Move now, not a line above the composer. It waits up to ten minutes; then, or when the session cannot be brought, it goes where the session runs. More typed into the same chat meanwhile goes with it. Run only on… during a turn waits the same way. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
+- **The waiting message** is a toast with Move now, not a line above the composer. It waits until the turn there ends, however long, and then the session moves here with it (`followStore.test.ts` › "brings it here once a long turn there ends, however long, and the message runs here"; the line with Move now shows for as long as it waits, and a moment the link is down does not end it: `follow.test.ts` › "waits on through a moment the link is down (X73)"); only when the session cannot be brought does it go where the session runs. More typed into the same chat meanwhile goes with it. Run only on… during a turn waits up to ten minutes. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
 - **Only structured chats** are frozen and moved. A PTY agent tab is not.
 - **Setup** does not run when a session continues on the central host.
 - **Waking:** the member waits up to 5 s for its link, and half a second for the account's news, before it lets agents go on.

@@ -4042,6 +4042,14 @@ impl Daemon {
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         if text("owner").as_deref() == Some(me.as_str()) {
+            // Back here already, as when it came back by itself while the
+            // message waited for the turn there to end (X73): it runs here.
+            if let (Some(message), Ok(s)) = (r.message.as_deref(), self.sessions.session(&r.session))
+                && let Some(chat) = s.terminals.iter().copied().find(|t| self.chats.is_chat(*t))
+            {
+                self.chats.send(chat, message, &r.images).map_err(internal)?;
+                return Ok(s);
+            }
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
         // A move (`pin`) keeps it here instead.
@@ -4078,6 +4086,11 @@ impl Daemon {
             }
             Err::<moonlet_proto::types::Session, _>(e)
         };
+        // The central host's last files first: what it sent while the copy
+        // was held never landed.
+        if let Err(e) = self.sync.catch_up(&held).await {
+            return give_back(e).await;
+        }
         let released = match self.sync.let_go(held) {
             Ok(released) => released,
             Err(e) => return give_back(e).await,

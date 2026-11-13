@@ -192,6 +192,20 @@ describe("waiting for the turn there to end (X73)", () => {
     ).toBe("done");
   });
 
+  it("waits on through a moment the link is down (X73)", async () => {
+    class Down extends Error {
+      code = "disconnected";
+    }
+    let tries = 0;
+    expect(
+      await run(async () => {
+        tries += 1;
+        if (tries === 1) throw new Busy("a turn is running");
+        if (tries === 2) throw new Down("studio-mini is not connected");
+      }),
+    ).toBe("done");
+  });
+
   it("stops at an error that is not the turn", async () => {
     await expect(
       run(async () => {

@@ -10,7 +10,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, rpc, restoreAccount, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, restoreAccount, rightClick, rpc, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "sync-central-home");
@@ -45,15 +45,6 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 /** The app's only copy, from this Mac's daemon. */
 const theCopy = () => rpc<{ id: string; path: string; differs: string[] }[]>(w, "sync.list", {})[0];
-
-/** Right-clicks a session row: the embedded driver has no right click. */
-async function rightClick(xpath: string) {
-  await browser.execute((xp: string) => {
-    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
-    const r = el.getBoundingClientRect();
-    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
-  }, xpath);
-}
 
 describe("keep in sync", () => {
   let pairing: ChildProcess | undefined;
