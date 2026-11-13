@@ -496,6 +496,26 @@ describe("Tasks mode", () => {
     await expect($(menu)).not.toBeExisting();
     await expect(chip("State is Closed")).toBeDisplayed();
     await expect(card("acme/storefront#12", "Open")).not.toBeExisting();
+    // The List draws the same filtered tasks.
+    await pickLayout("List");
+    await expect($('//section[@aria-label="Closed"]')).toBeDisplayed({ wait: 10_000 });
+    await expect($('//section[@aria-label="Open"]//span[normalize-space()="0"]')).toBeDisplayed();
+    await expect($('//div[@role="row"][starts-with(@aria-label, "acme/storefront#12")]')).not.toBeExisting();
+    await pickLayout("Board");
+    // Find a task still finds a task the filters leave out, and says so (X93).
+    const field = '//header//input[@role="combobox"][@aria-label="Find a task"]';
+    const found = '//section[@role="listbox"][@aria-label="Tasks found"]';
+    await fill(field, "Fix checkout");
+    await expect($(`${found}//span[normalize-space()="Not on this board · 1"]`)).toBeDisplayed({ wait: 10_000 });
+    await expect($(`${found}//button[@role="option"][.//span[normalize-space()="acme/storefront#12"]]`)).toBeDisplayed();
+    await browser.keys("Enter");
+    const preview = '//section[@role="dialog"][.//h2[normalize-space()="Fix checkout button"]]';
+    await expect($(`${preview}//span[normalize-space()="This task is on acme/storefront, but the header’s filters leave it out."]`)).toBeDisplayed({ wait: 10_000 });
+    await browser.keys("Escape");
+    await expect($(preview)).not.toBeExisting();
+    await fill(field, "");
+    await browser.keys("Escape");
+    await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
     // Its op flips it: every task but the Closed ones.
     await chip("State is Closed").$('.//button[normalize-space()="is"]').click();
     await expect(chip("State is not Closed")).toBeDisplayed();
