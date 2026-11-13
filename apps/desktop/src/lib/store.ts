@@ -743,7 +743,7 @@ export function selectSession(host: string, id: string, keepMode = false) {
   doneBursts.seen(sesKey(host, id));
   updateBadge();
   void refreshGit(host, id);
-  // Another member's session, through its copy here (X86).
+  // Another member's session, through its copy here (X88).
   if (parseCopyHost(host)) void loadCopy(host);
 }
 
@@ -765,7 +765,7 @@ export async function loadAccount(host: string) {
 }
 
 /** Lists the sessions other members run, from this Mac's daemon while it
- * is a central host (X86), each under its copy host, sharing this Mac's
+ * is a central host (X88), each under its copy host, sharing this Mac's
  * account so opening one keeps its workspace shown. */
 let copiesRun = 0;
 export async function loadCopies() {
@@ -800,7 +800,7 @@ export async function loadCopies() {
   if (open && entries[open]) void loadCopy(open);
 }
 
-/** Continue on <this Mac> (X86, X73): takes copy `s` over here, then opens
+/** Continue on <this Mac> (X88, X73): takes copy `s` over here, then opens
  * it as this Mac's own; says why it could not, naming this Mac `here`. */
 export async function continueHere(s: Session, here: string) {
   try {
@@ -812,7 +812,7 @@ export async function continueHere(s: Session, here: string) {
   selectSession("local", s.id);
 }
 
-/** Loads what copy host `host` shows (X86): its member's terminals and the
+/** Loads what copy host `host` shows (X88): its member's terminals and the
  * chats in them, through this Mac's daemon. */
 export async function loadCopy(host: string) {
   const [terminals, chats] = await Promise.all([
@@ -1369,12 +1369,12 @@ function handleEvent(e: DaemonEvent) {
       // An agent opened a session (X22): say so, and leave the user where they are.
       for (const n of notices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of list) if (!w.archived) syncLayout(host, w);
-      // Another member's sessions changed with it, or their records came (X86).
+      // Another member's sessions changed with it, or their records came (X88).
       if (host === "local") void loadCopies();
       break;
     }
     case EV.workersChanged:
-      // A member came or went: its copies say whether it is reachable (X86).
+      // A member came or went: its copies say whether it is reachable (X88).
       if (host === "local") void loadCopies();
       break;
     case EV.terminalReadRequest:

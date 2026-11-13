@@ -27,7 +27,7 @@ describe("each session once across the hosts the app lists (X73)", () => {
     expect(listed.map((e) => `${e.host} ${e.session.id}`)).toEqual(["local s1", "local s9", "studio-mini s2"]);
   });
 
-  it("leaves out the central host's copy of a session another host lists as its own (X86)", () => {
+  it("leaves out the central host's copy of a session another host lists as its own (X88)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: true };
     const listed = sessionsOnce({
       local: [s("s1")],

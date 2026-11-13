@@ -12,7 +12,7 @@ export function ownerLine(s: Session): string | null {
   return s.owner.reachable ? `on ${s.owner.name}` : `${s.owner.name} is asleep`;
 }
 
-// The read-only line and Continue on <central> are the desktop's too (X86).
+// The read-only line and Continue on <central> are the desktop's too (X88).
 export { continueFailed, continueOffer, continueWait, readOnlyLine } from "@desktop/lib/centralCopies";
 
 /** What the phone shows of copy host session `id`: the central host's

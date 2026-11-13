@@ -180,7 +180,7 @@ describe("shownSections (X68)", () => {
     ]);
   });
 
-  it("lists the sessions other members run with the central host's own, each under its copy host, once (X86)", () => {
+  it("lists the sessions other members run with the central host's own, each under its copy host, once (X88)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: true };
     const parts = sectionParts(["local"], named("a", "1devstudio"), {
       sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
@@ -221,7 +221,7 @@ describe("shownSections (X68)", () => {
     expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2"]]]);
   });
 
-  it("still lists a copy another host listed before it went away (X86)", () => {
+  it("still lists a copy another host listed before it went away (X88)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: false };
     const of = {
       sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
@@ -365,7 +365,7 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
     expect(sessionMenu({ linked: false, sources: false })).toEqual(["open", "archive"]);
   });
 
-  it("offers only Open for a session another member runs, and Archive while that member is reachable (X86)", () => {
+  it("offers only Open for a session another member runs, and Archive while that member is reachable (X88)", () => {
     expect(sessionMenu({ linked: false, sources: true, sync: true, copy: { reachable: true } })).toEqual(["open", "archive"]);
     expect(sessionMenu({ linked: false, sources: true, sync: true, copy: { reachable: false } })).toEqual(["open"]);
   });

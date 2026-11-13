@@ -24,7 +24,7 @@ export function firstListings<T>(lists: T[][], id: (item: T) => string): T[][] {
 
 /** Every live session the app lists, by host in order, each once (X73):
  * from the first host that lists it, and never from a central host's copy
- * of one a host lists as its own (X86). */
+ * of one a host lists as its own (X88). */
 export function sessionsOnce(sessions: Record<string, Session[]>): { host: string; session: Session }[] {
   const own = new Set(
     Object.entries(sessions)

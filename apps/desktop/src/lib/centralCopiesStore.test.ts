@@ -66,7 +66,7 @@ beforeEach(() => {
   answers["local session.list"] = () => [session("own"), session("fix-cart", { owner: book })];
 });
 
-describe("the central host's app and the sessions other members run (X86)", () => {
+describe("the central host's app and the sessions other members run (X88)", () => {
   it("lists them once its daemon says it is the central host", async () => {
     answers["local account.get"] = () => ({ account: "mini-id", central: null });
     await loadAccount("local");

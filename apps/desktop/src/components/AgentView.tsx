@@ -964,7 +964,7 @@ function ChatEditor({
    *  is known (X65). */
   designSlash?: { footer: string | null } | null;
   /** Why nothing can be sent now, said instead of sending, keeping the
-   *  text: a copy whose member is away (X86). */
+   *  text: a copy whose member is away (X88). */
   refuse?: string | null;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
@@ -1414,7 +1414,7 @@ export function AgentView({
   onReply?: (reply: Exclude<SuggestedReply, { kind: "send" }>) => void;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
-  // A copy whose member is away is read only (X86).
+  // A copy whose member is away is read only (X88).
   const copyRefusal = useCopyReadOnly(host).line;
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const toolCalls = useStore((s) => s.settings.toolCalls);
@@ -1502,7 +1502,7 @@ export function AgentView({
   // Another member's session comes here first (X73).
   const sendUser = userSend(sendText, (text, images) => sendOrBring(host, wsId, id, text, images, (t, i) => call(M.chatSend, { text: t, images: i })));
   const send = (text: string, images: ChatImage[]) => {
-    // Suggested replies and the agents strip send here too (X86).
+    // Suggested replies and the agents strip send here too (X88).
     if (copyRefusal) {
       toast(copyRefusal);
       return;
