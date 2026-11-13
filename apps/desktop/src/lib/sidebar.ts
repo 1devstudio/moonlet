@@ -4,6 +4,7 @@
 import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace } from "./protocol";
 import { agentCount } from "./subagents";
 import { parseCopyHost } from "./copyHost";
+import { firstListings } from "./sessionsOnce";
 
 /**
  * The sidebar's width, from 260px, where the workspace switcher's square,
@@ -204,7 +205,12 @@ export function arrangeShared(
   const activeAt = (e: HostSession) => o.activeAt(e.host, e.session);
   const stateOf = (e: HostSession) => o.stateOf(e.host, e.session);
   const compare = bySort(view.sort_by, (e: HostSession) => e.session, activeAt, stateOf);
-  for (const g of out) g.sessions.sort(compare);
+  for (const g of out) {
+    // A session two parts bring, as while it moves between two members
+    // (X73), is the first one's: one row, with one key.
+    g.sessions = firstListings([g.sessions], (e) => e.session.id)[0];
+    g.sessions.sort(compare);
+  }
   if (view.group_by === "status") {
     const order = STATUS_ORDER.map((x) => x.label);
     out.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
@@ -273,18 +279,19 @@ export function sectionParts(
       .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
       .flatMap(([, list]) => list.map((x) => x.id)),
   );
-  const listed = new Set<string>();
+  const unclaimed = firstListings(
+    holding.map((h) => of.sessions[h] ?? []),
+    (x) => x.id,
+  );
   return holding.map((h, i) => {
     const copies = Object.entries(of.sessions).flatMap(([key, list]) =>
       parseCopyHost(key)?.host === h ? list.filter((x) => !own.has(x.id)).map((x) => ({ key, session: x })) : [],
     );
-    const mine = (of.sessions[h] ?? []).filter((x) => !listed.has(x.id));
-    for (const x of mine) listed.add(x.id);
     return {
       host: h,
       sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
       projects: of.projects[h] ?? [],
-      sessions: [...mine, ...copies.map((c) => c.session)],
+      sessions: [...unclaimed[i], ...copies.map((c) => c.session)],
       ...(copies.length && { hostOf: Object.fromEntries(copies.map((c) => [c.session.id, c.key])) }),
     };
   });

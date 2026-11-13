@@ -25,6 +25,7 @@ import { DEFAULT_DISPLAY, filtersAtPick, type Display, readSavedFilters, saveFil
 import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
+import { firstListings } from "./sessionsOnce";
 
 /** GitHub Issues through `gh` on the project's host (X44). */
 export const GITHUB = "github:github.com";
@@ -1080,14 +1081,12 @@ export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "pro
   const repoOf = (h: string, projectId: string) => originRepoOf(s, host, data, h, projectId);
   // A session two members list while it moves between them (X73) is the
   // first one's only.
-  const listed = new Set<string>();
-  const sessions: BoardSession[] = members.flatMap((h) =>
-    (s.sessions[h] ?? [])
-      .filter((x) => {
-        if (x.workspace_id !== workspaceId || listed.has(x.id)) return false;
-        listed.add(x.id);
-        return true;
-      })
+  const listed = firstListings(
+    members.map((h) => (s.sessions[h] ?? []).filter((x) => x.workspace_id === workspaceId)),
+    (x) => x.id,
+  );
+  const sessions: BoardSession[] = members.flatMap((h, i) =>
+    listed[i]
       .map((x) => ({
         id: x.id,
         ...(h !== host && { host: h }),

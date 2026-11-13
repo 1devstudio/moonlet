@@ -6,6 +6,7 @@ import { goToAgent, selectSession, toast, updateSettings, useStore } from "../li
 import { agentPlace } from "../lib/alerts";
 import { Button, Kbd, StateGlyph, cx } from "./ui";
 import type { AgentState } from "../lib/protocol";
+import { sessionsOnce } from "../lib/sessionsOnce";
 
 /** A blocked agent or a session, listed under the actions. */
 interface Extra {
@@ -55,12 +56,10 @@ export function CommandPalette() {
         });
       }
     }
-    for (const [host, wss] of Object.entries(sessions)) {
-      for (const w of wss) {
-        if (w.archived) continue;
-        const repo = projects[host]?.find((r) => r.id === w.project_id);
-        out.push({ id: `ws-${host}-${w.id}`, label: `Go to ${w.name}`, hint: `${repo?.name ?? ""} · ${w.branch}${host !== "local" ? ` · ${host}` : ""}`, run: () => selectSession(host, w.id) });
-      }
+    // Each session once, also while it moves between two Macs (X73).
+    for (const { host, session: w } of sessionsOnce(sessions)) {
+      const repo = projects[host]?.find((r) => r.id === w.project_id);
+      out.push({ id: `ws-${host}-${w.id}`, label: `Go to ${w.name}`, hint: `${repo?.name ?? ""} · ${w.branch}${host !== "local" ? ` · ${host}` : ""}`, run: () => selectSession(host, w.id) });
     }
     return out;
   }, [terminals, sessions, projects]);
