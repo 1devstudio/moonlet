@@ -48,12 +48,7 @@ pub fn to_thaw(
 /// subagent running. An idle session stays, so a short idle sleep with the
 /// lid open moves nothing.
 pub fn hand_over_at_sleep(states: &[moonlet_proto::types::ChatState]) -> bool {
-    states.iter().any(|st| {
-        matches!(st.status.as_str(), "working" | "blocked")
-            || !st.pending.is_empty()
-            || !st.queued.is_empty()
-            || st.subagents.iter().any(|a| a.status == "running")
-    })
+    states.iter().any(moonlet_core::chat::at_work)
 }
 
 /// Listens for the Mac's sleep and wake, for the daemon's life.

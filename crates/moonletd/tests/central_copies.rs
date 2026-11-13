@@ -2467,14 +2467,7 @@ async fn a_session_whose_last_copy_cannot_be_sent_stays_on_the_mac_at_sleep() {
     let agent = made["terminals"][0].clone();
     copy_of(&mini, &made).await;
     // At work, so it would go, were its last copy sent.
-    let _: Value = book
-        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
-        .await;
-    within(Duration::from_secs(30), "the turn running", || async {
-        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
-        st["status"] == json!("working")
-    })
-    .await;
+    start_turn(&book, &agent).await;
     // A file git cannot read: the session's last copy cannot be made.
     let locked = path_of(&made).join("locked.txt");
     std::fs::write(&locked, "new work").unwrap();
@@ -2636,14 +2629,7 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
     // At work through both sleeps, so only its pin keeps it.
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     let agent = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
-    let _: Value = book
-        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
-        .await;
-    within(Duration::from_secs(30), "the turn running", || async {
-        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
-        st["status"] == json!("working")
-    })
-    .await;
+    start_turn(&book, &agent).await;
 
     // Pinned here: going to sleep keeps it.
     let _: Value = book
@@ -3045,12 +3031,28 @@ async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept
         },
     )
     .await;
-    // Kept on the MacBook now: going to sleep keeps it.
+    // Kept on the MacBook now: going to sleep keeps it, at work as it is,
+    // so only its pin keeps it.
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    start_turn(&book, &chat).await;
     let _: Value = book
         .call("power.simulate", json!({ "event": "sleep" }))
         .await;
     let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(mini_own.iter().all(|s| s["id"] != made["id"]));
+}
+
+/// Starts a turn on `d`'s chat `agent` that runs until stopped (`HOLD`).
+async fn start_turn(d: &Daemon, agent: &Value) {
+    let _: Value = d
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(Duration::from_secs(30), "the turn running", || async {
+        let st: Value = d.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("working")
+    })
+    .await;
 }
 
 const AIR: &str = "9e2b4d6f-1a3c-4e5f-8b7d-0c2e4a6b8d1f";
