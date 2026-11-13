@@ -9,8 +9,12 @@ import { M } from "./protocol";
 import { errorToast, selectSession, toast, useStore } from "./store";
 import { useSync } from "./syncStore";
 
-/** How long a typed message waits for the turn there to end. */
+/** How long Run only on… waits for the turn there to end. */
 const WAIT_MS = 10 * 60_000;
+
+/** How long a typed message waits for the turn there to end: until it
+ * does, however long (X73). The session then moves here with it. */
+const TYPED_WAIT_MS = Number.POSITIVE_INFINITY;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -21,9 +25,9 @@ const waiting = new Map<string, WaitingMessage>();
  * `sessionId` listed from `host`: brought here first when it runs on
  * another member of this Mac's account, with the message going to that
  * chat once here; else sent as `send` does. While a turn runs there, it
- * waits, with Move now; more typed into that chat meanwhile goes with it.
- * When it cannot be brought, or the turn still runs after ten minutes,
- * the message goes where the session runs, by `send`. */
+ * waits until the turn ends, however long, with Move now; more typed into
+ * that chat meanwhile goes with it. When it cannot be brought, the message
+ * goes where the session runs, by `send`. */
 export async function sendOrBring(
   host: string,
   sessionId: string | undefined,
@@ -54,7 +58,7 @@ export async function sendOrBring(
       waiting: (moveNow) => toast(waitingLine(owner), "info", { label: "Move now", run: moveNow }),
       sleep,
       clock: Date.now,
-      waitMs: WAIT_MS,
+      waitMs: TYPED_WAIT_MS,
       everyMs: 3000,
     });
     if (got === "done") {
