@@ -527,10 +527,9 @@ async fn an_edit_made_in_the_copy_is_put_back_and_kept_in_leftovers() {
     std::fs::write(copy.join("src/cart.ts"), "by hand\n").unwrap();
     std::fs::write(path_of(&made).join("notes.md"), "next\n").unwrap();
     reads(&copy.join("notes.md"), "next\n").await;
-    assert_eq!(
-        std::fs::read_to_string(copy.join("src/cart.ts")).unwrap(),
-        "a\n"
-    );
+    // git puts the files back one by one, in path order: src/cart.ts comes
+    // a moment after notes.md.
+    reads(&copy.join("src/cart.ts"), "a\n").await;
     let kept: Vec<PathBuf> = std::fs::read_dir(mini.home.path().join("sync-leftovers"))
         .unwrap()
         .map(|e| e.unwrap().path().join("src/cart.ts"))
