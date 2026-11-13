@@ -1280,27 +1280,16 @@ impl SessionManager {
     /// worktree stays where it is, a git worktree still, and becomes this
     /// member's live copy of the session (X60). Its record is the new
     /// owner's, so it is not touched. Gives the session as it was here.
-    pub async fn let_go_session(&self, id: &str) -> Result<Session> {
+    pub async fn let_go_session(&self, id: &str) -> Result<()> {
         // Never while it is archived, nor while its terminals start (X65):
         // an archive under way ends first, and then it is not let go of.
         let lifecycle = self.lifecycle(id);
         let _letting_go = lifecycle.lock().await;
-        let s = self.session(id)?;
-        if s.archived {
+        if self.session(id)?.archived {
             bail!("the session was archived meanwhile");
         }
-        for t in &s.terminals {
-            let _ = self.terminals.kill(*t, true);
-            if let Some(chats) = self.chats.get() {
-                chats.stop(*t, true);
-            }
-        }
-        self.mutate(|st| {
-            st.sessions.retain(|o| o.id != id);
-            Ok(())
-        })?;
-        self.emit_sessions();
-        Ok(s)
+        self.give_up_session(id)?;
+        Ok(())
     }
 
     /// Gives session `id` up to another member that takes it (X73): it

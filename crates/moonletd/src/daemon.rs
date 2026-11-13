@@ -4556,9 +4556,9 @@ impl Daemon {
     /// Lets go of this member's sessions that the central host gave
     /// another member (X73). What this member did meanwhile that the
     /// central host never got is kept: files in a leftovers folder, the
-    /// conversation as a fork. The session's agent and terminals end, its
-    /// worktree goes, and a live copy of it is kept in sync from the
-    /// central host in its place (X60), so typing here can bring it back.
+    /// conversation as a fork. The session's agent and terminals end, and
+    /// its worktree stays where it is as the live copy kept in sync from
+    /// the central host (X60), so typing here can bring it back.
     async fn let_go_of_lost(self: &Arc<Self>) {
         if !self.let_go_once(false).await {
             return;
@@ -4640,9 +4640,13 @@ impl Daemon {
             self.session_copies.forget_sent(&s.id);
             tracing::info!(session = %s.id, %owner, "another member runs this session now; its worktree stays, as a copy of it");
             // Its worktree, where it is, becomes the live copy (X60): the
-            // new owner's files replace the ones there, whose gap was kept.
-            let repo = self.sessions.project(&s.project_id).map(|p| PathBuf::from(p.path)).ok();
-            if let Err(e) = self.sync.start_in_place(s.id.clone(), PathBuf::from(&s.path), repo) {
+            // new owner's files replace the ones there, whose gap was kept;
+            // one changed there from now on keeps its version.
+            let made_from = crate::copied_files::snapshot(&self.sessions, Path::new(&s.path), moonlet_core::sync::MAX_FILE)
+                .await
+                .ok()
+                .map(|t| t.tree);
+            if let Err(e) = self.sync.start_in_place(&s, made_from) {
                 tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);
             }
         }

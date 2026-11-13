@@ -1927,6 +1927,62 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
     assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
 }
 
+#[tokio::test]
+async fn a_lost_session_whose_worktree_is_on_another_branch_pauses_its_copy_and_leaves_its_files() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    lost_while_away(&mini, &mut book, &made, || {
+        git_in(&worktree, &["checkout", "-q", "-b", "elsewhere"]);
+        std::fs::write(worktree.join("src/cart.ts"), "on elsewhere\n").unwrap();
+    })
+    .await;
+    let reason = within_value(Duration::from_secs(30), "the copy paused", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        let c = copies.into_iter().find(|c| c["session"] == made["id"])?;
+        (c["state"]["kind"] == json!("paused")).then(|| c["state"]["reason"].as_str().unwrap_or("").to_string())
+    })
+    .await;
+    assert!(reason.contains("elsewhere"), "{reason}");
+    // Nothing of studio-mini's replaced what is there.
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "on elsewhere\n");
+}
+
+#[tokio::test]
+async fn a_lost_session_whose_worktree_has_commits_of_its_own_pauses_its_copy_and_keeps_them() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    lost_while_away(&mini, &mut book, &made, || {
+        std::fs::write(worktree.join("src/cart.ts"), "committed while away\n").unwrap();
+        git_in(&worktree, &["add", "-A"]);
+        git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
+    })
+    .await;
+    let reason = within_value(Duration::from_secs(30), "the copy paused", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        let c = copies.into_iter().find(|c| c["session"] == made["id"])?;
+        (c["state"]["kind"] == json!("paused")).then(|| c["state"]["reason"].as_str().unwrap_or("").to_string())
+    })
+    .await;
+    assert!(reason.contains("has commits"), "{reason}");
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "committed while away\n");
+    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&worktree).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "while away");
+}
+
+/// Runs git with `args` in `dir`, which must succeed.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
 /// The session continued on `mini` while `book` was away, with `book`
 /// back and keeping a live copy of it.
 async fn continued_and_back(origin: &Origin) -> (Daemon, Daemon, Value) {
