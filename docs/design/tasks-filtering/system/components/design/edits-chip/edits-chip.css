@@ -1,0 +1,124 @@
+/* The visual editor's chat parts (components/design/Editor.tsx): the edits by
+   hand chip over the canvas, the chat message that carries them, and the
+   Layers tab's rows with the selection's blue (`SELECTED`). */
+
+/* EditsChip: "3 edits by hand · go with your next message". */
+.edits-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-full);
+  background: var(--color-design-edits-bg);
+  color: var(--color-design-edits-text);
+  font-size: var(--ui-text-12);
+}
+.edits-chip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* EditsMessage: the user's message with its edits by hand as a block. */
+.edits-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1-5);
+  padding: var(--space-1) 0;
+}
+.edits-message__bubble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 88%;
+  padding: var(--space-2-5) var(--space-3);
+  border-radius: var(--radius-xl);
+  background: var(--color-raised);
+}
+.edits-message__edits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-2);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  line-height: var(--leading-normal);
+}
+.edits-message__header {
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+}
+.edits-message__line {
+  overflow-wrap: break-word;
+  user-select: text;
+}
+.edits-message__text {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  user-select: text;
+}
+
+/* LayersTab: the page's element tree. A row's indent is 6px plus 14px per
+   depth (`padding-left` inline). */
+.layers-tab {
+  min-height: 0;
+  flex: 1;
+  padding: var(--space-2) var(--space-1-5);
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.layers-tab__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: 100%;
+  height: 26px;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.layers-tab__row:hover {
+  background: var(--color-panel-2);
+}
+.layers-tab__row--selected,
+.layers-tab__row--selected:hover {
+  background: var(--color-design-select-bg);
+  color: var(--color-design-select-text);
+}
+.layers-tab__arrow {
+  flex-shrink: 0;
+  width: var(--space-2-5);
+  color: var(--color-faint);
+}
+.layers-tab__tag {
+  flex-shrink: 0;
+}
+.layers-tab__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layers-tab__mid {
+  flex-shrink: 0;
+  color: var(--color-faint);
+  font-size: var(--ui-text-11);
+}

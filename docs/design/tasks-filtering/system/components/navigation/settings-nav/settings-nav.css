@@ -1,0 +1,175 @@
+/* Settings nav (Nav and EntryIcon in components/settings/SettingsPage.tsx):
+   the 248px sidebar of the settings page: back button, search, groups of
+   entries, and the version line. The selected entry uses the selected fill. */
+.settings-nav {
+  display: flex;
+  width: 248px;
+  height: 100%;
+  flex-shrink: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+.settings-nav__drag {
+  height: var(--size-topbar);
+  flex-shrink: 0;
+}
+.settings-nav__top {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-2-5) var(--space-2-5);
+}
+.settings-nav__back {
+  display: flex;
+  height: var(--size-control-md);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-12-5);
+}
+.settings-nav__back:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.settings-nav__back span {
+  flex: 1;
+  text-align: left;
+}
+.settings-nav__search {
+  display: flex;
+  height: var(--size-row);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+  color: var(--color-faint);
+}
+.settings-nav__search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-12-5);
+  outline: none;
+}
+.settings-nav__search input::placeholder {
+  color: var(--color-faint);
+}
+.settings-nav__groups {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3-5);
+  overflow: auto;
+  padding: var(--space-1) var(--space-2-5) var(--space-3);
+}
+.settings-nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-px);
+}
+.settings-nav__title {
+  display: flex;
+  height: var(--size-control-sm);
+  align-items: center;
+  padding: 0 var(--space-2);
+  font-size: var(--ui-text-11);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+.settings-nav__entry {
+  display: flex;
+  height: var(--size-row);
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  text-align: left;
+}
+.settings-nav__entry:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.settings-nav__entry--active,
+.settings-nav__entry--active:hover {
+  background: var(--color-selected);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-fg);
+}
+.settings-nav__label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-nav__meta {
+  font-size: var(--ui-text-11-5);
+  color: var(--color-faint);
+}
+.settings-nav__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-blocked);
+}
+/* A workspace's colour square at 14px (WorkspaceMark size 14). */
+.settings-nav__mark {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: var(--ui-text-8-5);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-on-swatch);
+}
+.settings-nav__mark--clay {
+  background: var(--color-workspace-clay);
+}
+.settings-nav__mark--blue {
+  background: var(--color-workspace-blue);
+}
+.settings-nav__mark--violet {
+  background: var(--color-workspace-violet);
+}
+.settings-nav__mark--sand {
+  background: var(--color-workspace-sand);
+}
+.settings-nav__mark--grey {
+  background: var(--color-workspace-grey);
+}
+.settings-nav__footer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-2-5) 18px var(--space-3);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--ui-text-11-5);
+  color: var(--color-faint);
+}
+.settings-nav__footer span:first-child {
+  font-family: var(--font-mono);
+}

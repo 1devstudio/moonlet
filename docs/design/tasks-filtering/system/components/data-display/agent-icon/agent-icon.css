@@ -1,0 +1,17 @@
+/* AgentIcon (components/ui.tsx): brand marks of the agents, sized by the
+   svg's width and height attributes (default 14). */
+.agent-icon {
+  flex-shrink: 0;
+  color: var(--color-fg);
+}
+.agent-icon--claude {
+  color: var(--color-accent);
+}
+.agent-icon--terminal {
+  color: var(--color-muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

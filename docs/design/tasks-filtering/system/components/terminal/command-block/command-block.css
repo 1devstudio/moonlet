@@ -1,0 +1,262 @@
+/* Command blocks (T7, T8; apps/desktop/src/styles/moonlet.css `.moonlet-block-*`,
+   drawn by lib/terminals.ts over xterm). A block is a separator in the gap
+   row above it, a header row, the command in bold and its output. The
+   `.moonlet-block-*` rules are the source's; `.command-block*` only stands in
+   for the xterm grid so the pieces can sit in a static card. */
+
+/* The terminal pane: `.moonlet-term` insets the grid 20px 12px 6px 28px. */
+.command-block-pane {
+  position: relative;
+  padding: var(--space-5) var(--space-3) var(--space-1-5) 28px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-13);
+}
+.command-block__screen {
+  position: relative;
+}
+/* One terminal row: 13px mono at 1.3 line height in Blocks mode. */
+.command-block__row {
+  height: calc(var(--ui-text-13) * 1.3);
+  line-height: 1.3;
+  white-space: pre;
+}
+/* The gap row above a block, with the separator through its middle. */
+.command-block__gap {
+  position: relative;
+  height: calc(var(--ui-text-13) * 1.3);
+}
+.command-block__gap .moonlet-block-sep {
+  position: absolute;
+  inset: 0 -12px 0 -28px;
+}
+.command-block__body {
+  position: relative;
+}
+.command-block__body > .moonlet-block-backdrop > .moonlet-block-bg {
+  top: 0;
+  bottom: 0;
+}
+/* The header row reaches into the pane padding, like the xterm decoration. */
+.command-block__body > .moonlet-block-head {
+  height: calc(var(--ui-text-13) * 1.3);
+  margin: 0 -12px 0 -28px;
+}
+.command-block__screen > .moonlet-block-head.sticky {
+  height: calc(var(--ui-text-13) * 1.3);
+}
+/* A command row that carries its block's header at the end of the line, and
+   its separator at the top of the row: the shell left no row of its own. */
+.command-block__row--shared {
+  position: relative;
+}
+.command-block__row--shared > .moonlet-block-sep {
+  position: absolute;
+  inset: 0 -12px 0 -28px;
+}
+.command-block__row--shared > .moonlet-block-head.inline {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+}
+/* Classic mode's gutter mark, at the left of a prompt row. */
+.command-block__row > .moonlet-block-mark {
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+}
+/* The command is drawn bold by the shell in Blocks mode; output is not. */
+.command-block__command {
+  font-weight: var(--font-weight-bold);
+}
+/* Output colours, from the terminal palette. */
+.command-block__ok {
+  color: var(--color-done);
+}
+.command-block__err {
+  color: var(--color-error);
+}
+.command-block__warn {
+  color: var(--color-blocked);
+}
+.command-block__dim {
+  color: var(--color-muted);
+}
+
+.moonlet-block-mark {
+  width: 3px;
+  margin-left: -8px;
+  background: var(--color-block-mark);
+  border-radius: var(--radius-xs);
+}
+.moonlet-block-mark.failed {
+  background: var(--color-error);
+}
+.moonlet-block-sep {
+  pointer-events: none;
+}
+.moonlet-block-sep::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--color-border-strong);
+}
+.moonlet-block-sep.shared::after {
+  top: 0;
+}
+.moonlet-block-head {
+  box-sizing: border-box;
+  padding: 0 18px 0 28px;
+  color: var(--color-muted);
+  font: calc(var(--ui-text-13) * 0.85) var(--font-mono);
+  white-space: pre;
+  pointer-events: none;
+}
+/* The header of the block at the top of the viewport, pinned while its
+   output scrolls under it, with the separator under it (T8). */
+.moonlet-block-head.sticky {
+  position: absolute;
+  top: 0;
+  left: -28px;
+  right: -12px;
+  z-index: 7;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border-strong);
+}
+.moonlet-block-head.sticky.selected {
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg));
+  box-shadow: var(--shadow-selected-bar);
+}
+/* No row of its own: at the end of the command line, over the terminal. */
+.moonlet-block-head.inline {
+  padding: 0 6px 0 12px;
+  background: var(--color-bg);
+}
+.moonlet-block-head.inline .row {
+  justify-content: flex-end;
+}
+.moonlet-block-head .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+.moonlet-block-head .row > :not(.place) {
+  flex-shrink: 0;
+}
+/* Chips like the input editor's (T8), quieter: no fill, a faint border. */
+.moonlet-block-head .chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  line-height: 1.35;
+}
+.moonlet-block-head .chip svg {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+}
+.moonlet-block-head .chip .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The directory is cut from the left, so the end of the path stays. */
+.moonlet-block-head .chip.place .label {
+  direction: rtl;
+}
+.moonlet-block-head .chip.branch {
+  max-width: 40%;
+  color: var(--color-done);
+}
+/* Hover actions (T8): Copy to agent, Copy, Re-run, at the end of the
+   header while the block is under the mouse or selected. */
+.moonlet-block-head .actions {
+  display: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: 6px;
+  pointer-events: auto;
+}
+.moonlet-block-head.hover .actions,
+.moonlet-block-head.selected .actions {
+  display: flex;
+}
+.moonlet-block-head .action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: calc(18px * var(--ui-scale, 1));
+  padding: 0 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-raised);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-11);
+  cursor: pointer;
+}
+.moonlet-block-head .action:hover {
+  color: var(--color-fg);
+  border-color: var(--color-accent);
+}
+.moonlet-block-head .action svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.moonlet-block-head .add {
+  color: var(--color-done);
+}
+.moonlet-block-head .del {
+  color: var(--color-error);
+}
+.moonlet-block-head .exit {
+  color: var(--color-error);
+}
+.moonlet-block-head .running {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-0-5);
+  border: 1.5px solid var(--color-accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: moonlet-spin 0.9s linear infinite;
+}
+.moonlet-block-backdrop {
+  position: absolute;
+  inset: 0 -12px 0 -28px;
+  pointer-events: none;
+  z-index: 5;
+}
+.moonlet-block-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.moonlet-block-bg.failed {
+  background: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+/* The selected block (T8), like the selected sidebar row (X4). */
+.moonlet-block-bg.selected {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  box-shadow: var(--shadow-selected-bar);
+}

@@ -1,0 +1,163 @@
+/* BoardSwitcher and ColumnsGlyph (components/tasks/TasksMode.tsx, X50): the
+   Tasks header's title (a tracker tile, the board's name, a chevron and its
+   subtitle in one button) and the menu it opens: boards grouped by workspace
+   with a bar per column, and a New board / Manage footer. The menu itself is
+   `.menu` (Menu); the tile, bars and Columns chip are drawn here. */
+.board-switcher {
+  min-width: 0;
+}
+.board-switcher__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  text-align: left;
+}
+.board-switcher__trigger:hover {
+  background: var(--color-hover);
+}
+.board-switcher__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-px);
+  min-width: 0;
+}
+.board-switcher__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--ui-text-14);
+  font-weight: var(--font-weight-semibold);
+}
+.board-switcher__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-switcher__chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+.board-switcher__subtitle {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--ui-text-11-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tracker's mark on its tinted tile: 26px in the header, 16px in the list. */
+.board-switcher__tile {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--color-raised);
+}
+.board-switcher__tile--26 {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-tile);
+}
+.board-switcher__tile--linear {
+  background: var(--color-tile-linear);
+}
+.board-switcher__tile--jira {
+  background: var(--color-tile-jira);
+}
+.board-switcher__tile--clickup {
+  background: var(--color-tile-clickup);
+}
+.board-switcher__mark {
+  flex-shrink: 0;
+}
+.board-switcher__mark--linear {
+  fill: var(--color-linear);
+}
+.board-switcher__mark--jira {
+  fill: var(--color-jira);
+}
+.board-switcher__mark--clickup {
+  fill: var(--color-clickup);
+}
+/* GitHub's tile says GH. */
+.board-switcher__gh {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-7);
+  font-weight: var(--font-weight-bold);
+}
+.board-switcher__tile--26 .board-switcher__gh {
+  font-size: var(--ui-text-10);
+}
+
+/* A row in the open menu. */
+.board-switcher__menu .menu__item {
+  font-size: var(--ui-text-14);
+}
+.board-switcher__session {
+  display: inline-block;
+  vertical-align: -1px;
+}
+.board-switcher__session .state-glyph {
+  width: 10px;
+  height: 10px;
+}
+/* One bar per shown or folded column, by category. */
+.board-switcher__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+}
+.board-switcher__bar {
+  width: 3px;
+  height: 10px;
+  border-radius: var(--radius-px);
+}
+.board-switcher__bar--todo {
+  background: var(--color-radio-off);
+}
+.board-switcher__bar--in-progress {
+  background: var(--color-faint);
+}
+.board-switcher__bar--in-review {
+  background: var(--color-category-review);
+}
+.board-switcher__bar--done {
+  background: var(--color-merged);
+}
+
+/* The header's Columns chip, with ColumnsGlyph. */
+.board-switcher__chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 26px;
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--ui-text-12);
+  white-space: nowrap;
+}
+.board-switcher__chip:hover {
+  color: var(--color-fg);
+}
+.board-switcher__glyph {
+  flex-shrink: 0;
+}
+.board-switcher__chip-count {
+  color: var(--color-fg);
+}

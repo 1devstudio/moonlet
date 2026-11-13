@@ -1,0 +1,32 @@
+/* Segmented (components/settings/controls.tsx): a radiogroup of text options,
+   the chosen one raised. */
+.segmented {
+  /* flex in the source, always inside a flex row; inline so it never stretches alone */
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-tile);
+  background: var(--color-panel-2);
+}
+.segmented__option {
+  height: var(--size-control-sm);
+  padding: 0 var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  cursor: pointer;
+}
+.segmented__option:hover {
+  color: var(--color-fg);
+}
+.segmented__option--selected,
+.segmented__option--selected:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+  box-shadow: var(--shadow-ring-strong);
+}

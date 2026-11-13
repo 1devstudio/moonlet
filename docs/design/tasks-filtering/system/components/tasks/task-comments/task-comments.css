@@ -1,0 +1,123 @@
+/* TaskComments and Activity (components/tasks/TaskComments.tsx, X66; Activity in
+   TasksMode.tsx, X45): a task's comments with the box to write one, and what
+   moonlet did about it. They sit in the Task detail and the right panel's Task
+   tab. Comment bodies are Markdown (`.chat-md.task-md`). */
+.task-comments {
+  color: var(--color-fg);
+}
+.task-comments__heading {
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+  font-weight: var(--font-weight-medium);
+}
+.task-comments__status {
+  margin: var(--space-1) 0 0;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+}
+.task-comments__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-1-5);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-error) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-error) 6%, transparent);
+  color: var(--color-error);
+  font-size: var(--ui-text-12-5);
+}
+.task-comments__error-text {
+  flex: 1;
+  min-width: 0;
+}
+.task-comments__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-1-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.task-comments__comment {
+  min-width: 0;
+}
+.task-comments__meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  font-size: var(--ui-text-12);
+}
+.task-comments__author {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-medium);
+}
+.task-comments__ago {
+  color: var(--color-faint);
+}
+.task-comments__body {
+  margin-top: var(--space-0-5);
+  font-size: var(--ui-text-12-5);
+}
+.task-comments__plain {
+  margin: 0;
+  color: var(--color-fg);
+  white-space: pre-wrap;
+}
+.task-comments__more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+  text-decoration: none;
+}
+.task-comments__more:hover {
+  color: var(--color-fg);
+}
+.task-comments__input {
+  margin-top: var(--space-3);
+  resize: vertical;
+}
+.task-comments__post-error {
+  margin: var(--space-1) 0 0;
+  color: var(--color-error);
+  font-size: var(--ui-text-12);
+}
+.task-comments__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-1-5);
+}
+
+/* Activity: what moonlet did about the task. */
+.task-activity {
+  margin-top: var(--space-4);
+}
+.task-activity__heading {
+  color: var(--color-faint);
+  font-size: var(--ui-text-11-5);
+  font-weight: var(--font-weight-medium);
+}
+.task-activity__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.task-activity__entry {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--ui-text-12);
+}
+.task-activity__ago {
+  flex-shrink: 0;
+  width: 70px;
+  color: var(--color-faint);
+}
+.task-activity__text {
+  color: var(--color-muted);
+}

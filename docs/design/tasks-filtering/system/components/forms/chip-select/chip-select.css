@@ -1,0 +1,67 @@
+/* .chip-select (styles/moonlet.css + TasksMode.tsx CHIP_SELECT): the task
+   bar's state menu as a pill in a row of text. The chevron stroke stays
+   #8c8c8c, as in the source's data: URL. */
+.chip-select {
+  appearance: none;
+  flex-shrink: 0;
+  height: calc(22px * var(--ui-scale));
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 7px center;
+  background-repeat: no-repeat;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-11-5);
+  outline: none;
+}
+.chip-select:hover {
+  color: var(--color-fg);
+}
+.chip-select:focus {
+  border-color: var(--color-accent);
+}
+/* The :focus rule as a class, for a static cell. */
+.chip-select--focus {
+  border-color: var(--color-accent);
+}
+
+/* The row it sits in: the task bar (SessionTask.tsx TaskBar). */
+.chip-select-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-height: 40px;
+  padding: var(--space-1-5) var(--space-3) var(--space-1-5) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-fg);
+  font-size: var(--ui-text-12-5);
+}
+.chip-select-row__key {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  white-space: nowrap;
+}
+.chip-select-row__title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-select-row__spacer {
+  flex: 1;
+}
+.chip-select-row__link {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-accent-2);
+  font-size: var(--ui-text-12);
+}

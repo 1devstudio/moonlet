@@ -1,0 +1,24 @@
+/* PriorityBars (components/tasks/TasksMode.tsx): priority as 0-3 bars. The
+   bars are 4, 7 and 10px tall (4 + 3 * index). */
+.priority-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+}
+.priority-bars__bar {
+  width: 3px;
+  border-radius: var(--radius-px);
+  background: var(--color-border-strong);
+}
+.priority-bars__bar:nth-child(1) {
+  height: 4px;
+}
+.priority-bars__bar:nth-child(2) {
+  height: 7px;
+}
+.priority-bars__bar:nth-child(3) {
+  height: 10px;
+}
+.priority-bars__bar--on {
+  background: var(--color-muted);
+}

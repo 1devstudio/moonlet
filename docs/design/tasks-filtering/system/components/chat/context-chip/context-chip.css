@@ -1,0 +1,76 @@
+/* ContextChips and ContextChip (components/AgentView.tsx, X38): in an empty chat,
+   the session's other chats and plans as chips; one click writes its file and
+   mentions it in the input. Four chips, then "+N more". */
+.context-chips-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-2) 0;
+  color: var(--color-muted);
+}
+.context-chips-block__intro {
+  font-size: var(--ui-text-13);
+}
+.context-chips-block__path {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}
+.context-chips__label {
+  margin-top: var(--space-2);
+  font-size: var(--ui-text-13);
+}
+.context-chips__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.context-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 240px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  cursor: pointer;
+  transition: background-color var(--duration-fast);
+}
+.context-chip:hover {
+  background: var(--color-hover);
+}
+.context-chip__icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+/* AgentIcon: Claude's mark is accent, Codex's is the text colour. */
+.context-chip__icon--claude {
+  color: var(--color-accent);
+}
+.context-chip__icon--codex {
+  color: var(--color-fg);
+}
+.context-chip__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-chips__more {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: var(--ui-text-12-5);
+  cursor: pointer;
+}
+.context-chips__more:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}

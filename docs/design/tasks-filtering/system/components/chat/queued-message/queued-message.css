@@ -1,0 +1,115 @@
+/* QueuedArea and AsideCard (components/AgentView.tsx, X49): messages Claude has
+   not read yet, after the transcript (dashed bubbles right-aligned, a status line
+   above, Send now and Ask aside under the last), and the aside card that answers
+   a side question without touching the running turn. */
+.queued-area {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1-5);
+  padding: var(--space-2-5) 0 var(--space-0-5);
+}
+.queued-area__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+}
+.queued-area__status--warn {
+  color: var(--color-blocked);
+}
+.queued-area__status--sending {
+  color: var(--color-muted);
+}
+.queued-area__status .spin {
+  color: var(--color-accent);
+}
+.queued-area__command {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+.queued-area__bubble {
+  max-width: 85%;
+  padding: 7px 13px;
+  border: 1px dashed var(--color-input-focus-border);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-bubble-tail) var(--radius-2xl);
+  color: var(--color-queued-text);
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-relaxed);
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+.queued-area__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.aside-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-5);
+  margin-top: var(--space-3);
+  padding: var(--space-2-5) var(--space-2-5) var(--space-2-5) var(--space-3-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-panel-2);
+}
+.aside-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--size-control-sm);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12);
+}
+.aside-card__head > .icon {
+  color: var(--color-accent);
+}
+.aside-card__name {
+  color: var(--color-fg);
+  font-weight: var(--font-weight-medium);
+}
+.aside-card__spacer {
+  flex: 1;
+}
+.aside-card__question {
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-normal);
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.aside-card__answer {
+  font-size: var(--ui-text-13-5);
+  line-height: 1.55;
+}
+.aside-card__error {
+  color: var(--color-danger-text);
+  font-size: var(--ui-text-13);
+  white-space: pre-wrap;
+  user-select: text;
+}
+.aside-card__pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--ui-text-13);
+}
+.aside-card__pending .spin {
+  color: var(--color-accent);
+}
+.aside-card__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-0-5);
+}
+.aside-card__cost {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+}
+
+/* .chat-shimmer is defined in components/chat/thinking/thinking.css. */

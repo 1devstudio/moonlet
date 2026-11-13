@@ -1,0 +1,133 @@
+/* Menu and MenuItems (components/Menu.tsx): the click-to-open dropdown, its
+   items, label rows, dividers, hover submenus, search box and footer. The app
+   portals it and positions it with `position: fixed`; the card places it static. */
+.menu {
+  position: relative;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+  color: var(--color-fg);
+  font-size: var(--ui-text-14);
+}
+.menu__search {
+  display: block;
+  width: 100%;
+  margin: 0 0 var(--space-1);
+  padding: var(--space-1-5) var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-panel-2);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--ui-text-13);
+  outline: none;
+}
+.menu__search::placeholder {
+  color: var(--color-faint);
+}
+.menu__list--scroll {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.menu__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 7px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--ui-text-14);
+  text-align: left;
+}
+.menu__item:hover,
+.menu__item--active {
+  background: var(--color-hover);
+}
+.menu__item--danger {
+  color: var(--color-error);
+}
+.menu__text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu__stack {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.menu__stack > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu__description {
+  font-size: var(--ui-text-12-5);
+  color: var(--color-muted);
+}
+.menu__hint {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  color: var(--color-faint);
+}
+.menu__check {
+  color: var(--color-fg);
+}
+.menu__chevron {
+  color: var(--color-muted);
+}
+.menu__label {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--ui-text-11);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+.menu__divider {
+  margin: var(--space-1) 0;
+  border-top: 1px solid var(--color-border);
+}
+.menu__footer {
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--color-border);
+}
+/* A submenu row; the open one is highlighted and its panel sits to the right. */
+.menu__submenu {
+  position: relative;
+}
+.menu__submenu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: 7px var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--ui-text-14);
+  cursor: default;
+}
+.menu__submenu-row--open {
+  background: var(--color-hover);
+}
+.menu__submenu-panel {
+  position: absolute;
+  top: -5px;
+  left: 100%;
+  z-index: 50;
+  min-width: 200px;
+  margin-left: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+}

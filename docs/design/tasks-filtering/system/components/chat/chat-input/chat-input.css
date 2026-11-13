@@ -1,0 +1,306 @@
+/* The chat input (components/AgentView.tsx: ChatEditor, StatusLine, and the
+   footer under them; X29, X34, X49, X51): the turn's status line, the 14px-radius
+   input card (an optional agents strip on top, the text, a send arrow), and a
+   footer row with + and cost on the left, model, mode and more on the right. */
+.chat-input {
+  width: 100%;
+  padding: 0 var(--space-6) var(--space-3);
+}
+.chat-input__editor {
+  position: relative;
+}
+
+/* StatusLine: the turn's status above the input, lined up with its text, Stop at its end. */
+.chat-input__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--size-control-md);
+  margin-bottom: var(--space-1-5);
+  padding-left: var(--space-4);
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+  white-space: nowrap;
+}
+.chat-input__status--blocked {
+  color: var(--color-fg);
+}
+.chat-input__status > .icon {
+  color: var(--color-accent);
+}
+.chat-input__status--blocked > .icon {
+  color: var(--color-blocked);
+}
+.chat-input__status-faint {
+  color: var(--color-faint);
+}
+.chat-input__status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-input__spacer {
+  flex: 1;
+}
+
+/* Attached images, above the card. */
+.chat-input__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-1-5);
+}
+.chat-input__image {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+}
+.chat-input__image button {
+  display: flex;
+  padding: var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+}
+.chat-input__image button:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+
+/* The card. */
+.chat-input__card {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-input);
+  background: var(--color-panel);
+}
+.chat-input__card:focus-within,
+.chat-input__card--focus {
+  border-color: var(--color-input-focus-border);
+}
+.chat-input__row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-5);
+  padding: var(--space-3-5) var(--space-3) var(--space-3-5) var(--space-4);
+}
+.chat-input__field {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+  font-size: var(--ui-text-14);
+  line-height: var(--leading-normal);
+}
+.chat-input__textarea {
+  display: block;
+  width: 100%;
+  min-height: 3em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg);
+  caret-color: var(--color-accent);
+  font: inherit;
+  outline: none;
+  resize: none;
+}
+.chat-input__textarea::placeholder {
+  color: var(--color-faint);
+}
+.chat-input__aside-hint {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1-5);
+  align-self: flex-end;
+  padding-bottom: var(--space-1);
+  color: var(--color-faint);
+  font-size: var(--ui-text-12);
+  white-space: nowrap;
+}
+.chat-input__send {
+  display: flex;
+  flex-shrink: 0;
+  align-self: flex-end;
+  padding: 0 0 var(--space-0-5);
+  border: 0;
+  background: none;
+  color: var(--color-faint);
+  cursor: pointer;
+}
+.chat-input__send:hover {
+  color: var(--color-fg);
+}
+
+/* The @ and / completion popup above the card; the card places it in flow. */
+.chat-input__completion {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 30;
+  width: 100%;
+  max-width: 520px;
+  margin-bottom: var(--space-2);
+  padding: var(--space-1);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-menu-bg);
+  box-shadow: var(--shadow-2xl);
+}
+.chat-input__completion--inline {
+  position: static;
+}
+.chat-input__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+  text-align: left;
+  white-space: nowrap;
+}
+.chat-input__option--active {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+.chat-input__option .icon {
+  color: var(--color-faint);
+}
+.chat-input__option-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-input__option-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-sans);
+  text-overflow: ellipsis;
+}
+.chat-input__option-value--hinted {
+  width: 170px;
+  flex-shrink: 0;
+}
+
+/* Under the input: + (.plus-menu__trigger), context ring and cost on the left, settings on the right. */
+.chat-input__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  height: 34px;
+  margin-top: var(--space-1-5);
+  color: var(--color-muted);
+  font-size: var(--ui-text-12-5);
+  white-space: nowrap;
+}
+.chat-input__left,
+.chat-input__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.chat-input__left {
+  min-width: 0;
+}
+.chat-input__right {
+  flex-shrink: 0;
+  font-size: var(--ui-text-13);
+}
+.chat-input__meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 26px;
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+  font-family: inherit;
+}
+.chat-input__meter:hover {
+  background: var(--color-hover);
+}
+.chat-input__ring {
+  display: grid;
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  place-items: center;
+  border-radius: var(--radius-full);
+  /* The background is a conic-gradient set inline from the context percentage. */
+}
+.chat-input__ring::after {
+  content: "";
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+}
+.chat-input__percent {
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12-5);
+}
+.chat-input__rule {
+  width: 1px;
+  height: var(--space-3-5);
+  margin: 0 var(--space-1);
+  background: var(--color-border-strong);
+}
+.chat-input__cost {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-input__chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--size-control-md);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+}
+.chat-input__chip:hover {
+  background: var(--color-hover);
+}
+.chat-input__chip-faint {
+  color: var(--color-muted);
+}
+.chat-input__chip--bypass {
+  color: var(--color-blocked);
+}
+.chat-input__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-control-md);
+  height: var(--size-control-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-muted);
+}
+.chat-input__more:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}

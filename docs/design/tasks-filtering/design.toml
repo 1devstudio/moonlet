@@ -1,0 +1,18 @@
+name = "Tasks Filtering"
+system = "moonlet"
+anchor = "e60d0d0421c9eae02411673aa3f4c22d73d4f1adcadc61e3680281c19151d1e4"
+brief = "This is how our task management top bar looks like /Users/cotampanie/Downloads/Screenshot 2026-11-12 at 21.37.23.png. It is a bit crowd. I would like to design something more similar to what Linear is using where filters are behind icon /Users/cotampanie/Downloads/Screenshot 2026-11-12 at 21.35.02.png and boards view setting too /Users/cotampanie/Downloads/Screenshot 2026-11-12 at 21.37.45.png. Selected filters appear as a row /Users/cotampanie/Downloads/Screenshot 2026-11-12 at 21.35.30.png. And By default we show search input"
+viewport = "1440x900"
+created_at = 1794517298404
+
+[pages.display]
+label = "display options open"
+
+[pages.filter-menu]
+label = "filter menu open"
+
+[pages.index]
+label = "filters applied"
+
+[pages.no-filters]
+label = "no filters"

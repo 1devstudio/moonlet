@@ -1,0 +1,239 @@
+/* moonlet's tokens. The theme colours and fonts are the @theme block of
+   apps/desktop/src/styles/moonlet.css, unchanged in name and value (Tailwind
+   turns them into --color-* custom properties; here they are plain :root
+   properties). The scales are Tailwind v4's defaults the components use, and the
+   role colours are hex values the components use without a name (see NOTES.md). */
+:root {
+  color-scheme: dark;
+
+  /* Theme: apps/desktop/src/styles/moonlet.css @theme */
+  --color-bg: #121212;
+  --color-panel: #161616;
+  --color-panel-2: #1a1a1a;
+  --color-raised: #1f1f1f;
+  --color-hover: #222222;
+  --color-selected: #2a1f1a;
+  --color-border: #242424;
+  --color-border-strong: #2e2e2e;
+  --color-fg: #e6e6e6;
+  --color-muted: #8c8c8c;
+  --color-faint: #7d7d7d;
+  --color-accent: #d97757;
+  --color-accent-2: #e8956f;
+  --color-working: #d97757;
+  --color-blocked: #f2c94c;
+  --color-done: #3ecf6e;
+  --color-error: #ef5f5f;
+  --color-idle: #5e5e5e;
+  --color-add: #3ecf6e;
+  --color-del: #ef5f5f;
+  --color-merged: #a371f7;
+  --color-preview: #5b8def;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Monaco, monospace;
+
+  /* Plain colours Tailwind names: bg-white, bg-black/50 */
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-backdrop: rgb(0 0 0 / 0.5);
+  --color-palette-backdrop: rgb(0 0 0 / 0.4); /* CommandPalette scrim (bg-black/40) */
+
+  /* Role colours: values the components use without a name */
+  --color-menu-bg: #232323;            /* Menu, popovers, completion popup (Menu.tsx, Composer, SyncPopover) */
+  --color-popover-bg: #1a1a1a;         /* Workspace switcher, Plus menu, MCP panel, inset boxes */
+  --color-switcher-hover: #222222;     /* WorkspaceSwitcher rows */
+  --color-option-hover: #2a2a2a;       /* Composer source picker rows */
+  --color-option-checked: #2c2c2c;     /* Composer model picker checked option */
+  --color-modal-bg: #1f1f1f;           /* Composer's model / prompt modals */
+  --color-toast-bg: #171717;           /* SessionView completion card */
+  --color-toast-text: #dcdcdc;         /* completion card message */
+  --color-sidebar-card: #1e1e1e;       /* Sidebar update banner, archiving row */
+  --color-row-text: #cfcfcf;           /* Sidebar row names when not selected */
+  --color-heading-text: #d6d6d6;       /* Sidebar section label, brand */
+  --color-strong-text: #f2f2f2;        /* .chat-md strong */
+  --color-check-subject: #c5c9d1;      /* ChecksPanel commit subject */
+  --color-code-bg: #161616;            /* tool output, diff and read blocks (AgentView) */
+  --color-code-block-bg: #181818;      /* .chat-md pre */
+  --color-inset-bg: #141414;           /* permission / question card insets */
+  --color-input-focus-border: #3a3a3a; /* chat input focus, queued bubble dashes */
+  --color-shimmer-peak: #d8d8d8;       /* .chat-shimmer gradient peak */
+  --color-queued-text: #b8b8b8;        /* queued message bubble text (QueuedArea) */
+  --color-scrollbar: #2a2a2a;
+  --color-block-mark: #333333;         /* .moonlet-block-mark */
+  --color-on-accent: #1a1208;          /* text on an accent fill (AddBoard steps) */
+  --color-on-swatch: #121212;          /* WorkspaceMark letter on its colour */
+  --color-comment-glyph-text: #0b0c0e; /* .moonlet-comment-glyph */
+  --color-swatch-ring: #e6e6e6;        /* selected colour swatch ring */
+  --color-worktree-icon: #4fd1c5;      /* Sidebar BranchIcon for a worktree */
+  --color-context-mcp: #b48ead;        /* ContextMeter "MCP tools" category (lib/chat.ts CONTEXT_COLORS) */
+  --color-context-blue: #6ea8fe;       /* ContextMeter other categories, in turn (OTHER_COLORS) */
+  --color-context-teal: #56c2d6;
+  --color-context-pink: #e58fb5;
+
+  /* Danger / error surfaces */
+  --color-danger-border: #5a2a2e;
+  --color-danger-bg: #2a1416;
+  --color-danger-hover: #3a1b1e;
+  --color-danger-text: #f2a7a7;
+  --color-danger-panel: #1c1213;       /* error rows in settings */
+  --color-danger-card-border: #3a2224; /* settings Card danger */
+  --color-alert-border: #5a2a2a;       /* AddProject alerts */
+  --color-alert-bg: #2a1616;
+
+  /* Warning / needs-you surfaces */
+  --color-warn-border: #4a3b17;
+  --color-warn-bg: #2a2210;
+  --color-ask-border: #5c4a1e;         /* Permission / Plan / Question cards */
+  --color-ask-bg: #1d1a12;
+  --color-warn-strip: #221d12;         /* SessionView blocked strip */
+  --color-job-warn-border: #5a4a1e;
+  --color-job-warn-bg: #1f1a0d;
+  --color-heavy-border: #6b5a1e;
+  --color-heavy-bg: #2a2410;
+  --color-heavy-panel: #211a14;
+  --color-clone-border: #4a3326;
+  --color-auth-box-bg: rgb(242 201 76 / 0.05); /* MCP card "Authentication required" box */
+  --color-category-review: #b5b5b5;    /* CATEGORY_BAR in review (board switcher bars) */
+
+  /* Diff lines (AgentView DiffLines) */
+  --color-diff-add-bg: #14301d;
+  --color-diff-add-text: #9fe0b0;
+  --color-diff-del-bg: #3a1719;
+  --color-diff-del-text: #f2a7a7;
+
+  /* Settings controls (controls.tsx) */
+  --color-switch-off: #3a3a3a;
+  --color-switch-knob-off: #bdbdbd;
+  --color-switch-knob-on: #ffffff;
+  --color-radio-off: #4a4a4a;
+
+  /* Workspace colours (lib/workspaces.ts WORKSPACE_COLORS) */
+  --color-workspace-clay: #d97757;
+  --color-workspace-blue: #6f9fe8;
+  --color-workspace-violet: #a98be8;
+  --color-workspace-sand: #d9b779;
+  --color-workspace-grey: #8c8c8c;
+
+  /* Syntax (.code-hl, .chat-md, InputEditor) */
+  --color-syntax-keyword: #c49bff;
+  --color-syntax-string: #8fd18e;
+  --color-syntax-number: #f5a97f;
+  --color-syntax-comment: #6b717d;
+  --color-syntax-title: #7aa7ff;
+  --color-syntax-type: #e8c46b;
+  --color-syntax-variable: #ef8a91;
+  --color-syntax-meta: #9ba1ad;
+
+  /* Trackers (ui.tsx TRACKER_MARKS, TILE) */
+  --color-linear: #5e6ad2;
+  --color-jira: #2684ff;
+  --color-clickup: #7b68ee;
+  --color-tile-linear: #2b2a3d;
+  --color-tile-jira: #1d2a3d;
+  --color-tile-clickup: #2b2a3d;
+
+  /* Design mode (design/Editor.tsx, Inspector.tsx) */
+  --color-design-select-bg: rgb(91 156 255 / 0.16);
+  --color-design-select-text: #cfe0ff;
+  --color-design-edits-bg: rgb(91 156 255 / 0.12);
+  --color-design-edits-text: #8db8ff;
+  --color-off-system: #e8a24f;
+  --color-pin-yellow-bg: rgb(242 201 76 / 0.1);
+  --color-owner-mine-bg: #1b2333;      /* AddProject owner tile, own account */
+  --color-owner-mine-text: #7ea6f0;
+
+  /* Text: the `ui-text-*` utility, N px times --ui-scale */
+  --ui-scale: 1;
+  --ui-text-7: calc(7px * var(--ui-scale));
+  --ui-text-8-5: calc(8.5px * var(--ui-scale));
+  --ui-text-9: calc(9px * var(--ui-scale));
+  --ui-text-10: calc(10px * var(--ui-scale));
+  --ui-text-10-5: calc(10.5px * var(--ui-scale));
+  --ui-text-11: calc(11px * var(--ui-scale));
+  --ui-text-11-5: calc(11.5px * var(--ui-scale));
+  --ui-text-12: calc(12px * var(--ui-scale));
+  --ui-text-12-5: calc(12.5px * var(--ui-scale));
+  --ui-text-13: calc(13px * var(--ui-scale));
+  --ui-text-13-5: calc(13.5px * var(--ui-scale));
+  --ui-text-14: calc(14px * var(--ui-scale));
+  --ui-text-15: calc(15px * var(--ui-scale));
+  --ui-text-16: calc(16px * var(--ui-scale));
+  --ui-text-18: calc(18px * var(--ui-scale));
+  --ui-text-20: calc(20px * var(--ui-scale));
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --leading-none: 1;
+  --leading-tight: 1.25;
+  --leading-snug: 1.375;
+  --leading-normal: 1.5;
+  --leading-code: 1.55;
+  --leading-relaxed: 1.625;
+  --leading-chat: 1.6;
+  --tracking-label: 0.08em;
+  --tracking-section-label: 0.12em;    /* Comments tab "Orphaned" heading */
+  --tracking-wider: 0.05em;
+
+  /* Spacing: Tailwind's 4px step */
+  --space-px: 1px;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Sizes */
+  --size-control-sm: 24px;  /* h-6: Button sm, IconButton */
+  --size-control-md: 28px;  /* h-7: Button md */
+  --size-field: calc(32px * var(--ui-scale)); /* .field-height */
+  --size-row: 30px;         /* sidebar rows, workspace switcher */
+  --size-sidebar-card: 38px;
+  --size-topbar: 52px;      /* sidebar, right panel and home top bars */
+  --size-tabstrip: 46px;
+  --size-sidebar: 280px;
+  --size-right-panel: 380px;
+
+  /* Radius */
+  --radius-px: 1px;
+  --radius-xs: 2px;
+  --radius-check: 3px;
+  --radius-sm: 4px;         /* rounded */
+  --radius-chip: 5px;
+  --radius-md: 6px;         /* rounded-md */
+  --radius-tile: 7px;
+  --radius-lg: 8px;         /* rounded-lg */
+  --radius-switch: 9px;
+  --radius-card: 10px;      /* settings Card */
+  --radius-xl: 12px;        /* rounded-xl: dialogs, menus */
+  --radius-input: 14px;     /* chat input */
+  --radius-2xl: 16px;       /* rounded-2xl: composer modals, bubbles */
+  --radius-bubble-tail: 6px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --shadow-dialog: 0 25px 50px -12px rgb(0 0 0 / 0.5);   /* ConfirmDialog */
+  --shadow-popover: 0 12px 32px rgb(0 0 0 / 0.5);        /* PlusMenu, MCP panel */
+  --shadow-selected-bar: inset 2px 0 var(--color-accent); /* selected sidebar row, block */
+  --shadow-tab-active: inset 0 -2px 0 var(--color-accent);
+  --shadow-ring-strong: 0 0 0 1px var(--color-border-strong);
+  --shadow-rule-bottom: 0 1px 0 0 var(--color-border-strong);
+
+  /* Motion */
+  --duration-fast: 150ms;
+  --duration-card-in: 180ms;
+  --duration-strip: 480ms;
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

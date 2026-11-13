@@ -1,0 +1,91 @@
+/* CardTile and TONES (components/design/SystemView.tsx): a design system's
+   card as a tile (its name, variants and state over a framed preview), and the
+   colour of a system's status label. The preview is a `.card-frame`. */
+.card-tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel);
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.card-tile:hover {
+  border-color: var(--color-border-strong);
+}
+.card-tile--rewriting,
+.card-tile--rewriting:hover {
+  border-color: var(--color-accent);
+}
+.card-tile--problems,
+.card-tile--problems:hover {
+  border-color: color-mix(in srgb, var(--color-blocked) 60%, transparent);
+}
+.card-tile__head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--space-10);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.card-tile__name {
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--ui-text-13);
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-tile__variants {
+  overflow: hidden;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-11-5);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-tile__rewriting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  color: var(--color-accent);
+  font-size: var(--ui-text-11-5);
+}
+.card-tile__problems {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-blocked) 15%, transparent);
+  color: var(--color-blocked);
+  font-size: var(--ui-text-11-5);
+}
+.card-tile__preview {
+  width: 100%;
+  max-height: 320px;
+  overflow: hidden;
+}
+/* TONES: the colour of a design system's status label. */
+.card-tile__tone--attention {
+  color: var(--color-blocked);
+}
+.card-tile__tone--changed {
+  color: var(--color-accent);
+}
+.card-tile__tone--error {
+  color: var(--color-error);
+}
+.card-tile__tone--muted {
+  color: var(--color-faint);
+}

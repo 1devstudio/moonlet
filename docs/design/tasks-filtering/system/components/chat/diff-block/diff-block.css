@@ -1,0 +1,69 @@
+/* DiffBlock and DiffLines (components/AgentView.tsx): a unified diff with
+   tinted add / delete rows, highlighted by highlight.js (.code-hl). */
+.diff-block {
+  max-height: 340px;
+  margin: 0;
+  padding: var(--space-1-5) 0;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-code-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--ui-text-12);
+  line-height: var(--leading-code);
+  user-select: text;
+}
+.diff-block__line {
+  padding: 0 var(--space-3);
+  color: var(--color-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-block__line--add {
+  background: var(--color-diff-add-bg);
+  color: var(--color-diff-add-text);
+}
+.diff-block__line--del {
+  background: var(--color-diff-del-bg);
+  color: var(--color-diff-del-text);
+}
+.diff-block__line--hunk {
+  color: var(--color-faint);
+}
+
+/* Syntax colours for code fences and tool files (moonlet.css .code-hl). */
+.code-hl .hljs-keyword,
+.code-hl .hljs-selector-tag,
+.code-hl .hljs-built_in {
+  color: var(--color-syntax-keyword);
+}
+.code-hl .hljs-string,
+.code-hl .hljs-attr {
+  color: var(--color-syntax-string);
+}
+.code-hl .hljs-number,
+.code-hl .hljs-literal,
+.code-hl .hljs-bullet {
+  color: var(--color-syntax-number);
+}
+.code-hl .hljs-comment {
+  color: var(--color-syntax-comment);
+  font-style: italic;
+}
+.code-hl .hljs-title,
+.code-hl .hljs-function,
+.code-hl .hljs-section {
+  color: var(--color-syntax-title);
+}
+.code-hl .hljs-type,
+.code-hl .hljs-class {
+  color: var(--color-syntax-type);
+}
+.code-hl .hljs-variable,
+.code-hl .hljs-template-variable {
+  color: var(--color-syntax-variable);
+}
+.code-hl .hljs-meta {
+  color: var(--color-syntax-meta);
+}
