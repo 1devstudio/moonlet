@@ -395,6 +395,28 @@ pub fn cut_off_note(from: &str, to: &str, why: &str, old_path: &str, new_path: &
     note
 }
 
+/// Whether `text` is moonlet's own [`cut_off_note`], not something a user
+/// typed.
+pub fn is_cut_off_note(text: &str) -> bool {
+    text.starts_with("This session moved from ") && text.contains(", and your last turn was cut off.")
+}
+
+/// Whether a session whose chats on the central host are in `states` may
+/// come back to the member that made it (X73): only while nothing there
+/// is at work or waiting on something (`busy`), and nobody typed into it
+/// since it moved there at `moved_at` (ms), moonlet's cut-off note aside
+/// (`used`).
+pub fn may_return(states: &[moonlet_proto::types::ChatState], moved_at: u64) -> Result<(), &'static str> {
+    if crate::power::hand_over_at_sleep(states) {
+        return Err("busy");
+    }
+    let typed = states
+        .iter()
+        .flat_map(|st| &st.items)
+        .any(|i| i.kind == "user" && i.ts > moved_at && !is_cut_off_note(&i.text));
+    if typed { Err("used") } else { Ok(()) }
+}
+
 /// `YYYYMMDD-HHMMSS` now, in UTC, for a fork's name.
 fn chrono_stamp() -> String {
     let secs = std::time::SystemTime::now()
@@ -521,6 +543,15 @@ struct Data {
     /// session (X74), by path and SHA-256.
     #[serde(default)]
     files: BTreeMap<String, BTreeMap<String, String>>,
+    /// On a member: sessions the central host took for its sleep (X73),
+    /// which come back once idle there and untouched.
+    #[serde(default)]
+    returning: std::collections::BTreeSet<String>,
+    /// On a member: whether the sessions the central host ran when this
+    /// version first linked were looked at once to come back (X73): those
+    /// an older version handed over for every sleep.
+    #[serde(default)]
+    looked_back: bool,
 }
 
 pub struct SessionCopies {
@@ -2269,6 +2300,38 @@ impl SessionCopies {
         self.sessions.keep_listed(session, base.is_some());
     }
 
+    /// The sessions to bring back once idle and untouched on the central
+    /// host (X73): those it took for this member's sleep, and, the first
+    /// time, every session this member made that the central host runs.
+    pub fn returning(&self) -> (std::collections::BTreeSet<String>, bool) {
+        let data = self.data.lock().unwrap();
+        (data.returning.clone(), !data.looked_back)
+    }
+
+    /// Notes sessions the central host took for this member's sleep (X73).
+    pub fn add_returning(&self, sessions: &[String]) {
+        let mut data = self.data.lock().unwrap();
+        data.returning.extend(sessions.iter().cloned());
+        self.save(&data);
+    }
+
+    /// Stops trying to bring session `id` back (X73).
+    pub fn drop_returning(&self, id: &str) {
+        let mut data = self.data.lock().unwrap();
+        if data.returning.remove(id) {
+            self.save(&data);
+        }
+    }
+
+    /// Notes that the first look back is done (X73).
+    pub fn looked_back(&self) {
+        let mut data = self.data.lock().unwrap();
+        if !data.looked_back {
+            data.looked_back = true;
+            self.save(&data);
+        }
+    }
+
     /// Forgets what was sent of session `id`, once it is let go of (X73).
     pub fn forget_sent(&self, id: &str) {
         let mut data = self.data.lock().unwrap();
@@ -2791,6 +2854,41 @@ mod tests {
             ),
             "This session moved from MacBook to studio-mini because MacBook could not be reached, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again. The worktree is now at /Users/moonlet/.moonlet/copies/MacBook/shop/fix-cart. Earlier messages name /Users/alex/w/fix-cart."
         );
+    }
+
+    #[test]
+    fn a_session_comes_back_only_while_idle_and_untouched_since_it_moved() {
+        let state = |v: serde_json::Value| -> moonlet_proto::types::ChatState { serde_json::from_value(v).unwrap() };
+        let item = |kind: &str, text: &str, ts: u64| serde_json::json!({ "id": format!("i{ts}"), "kind": kind, "text": text, "ts": ts });
+        // It moved to studio-mini at 1794576052629.
+        let moved = 1_794_576_052_629;
+        let before = item("user", "Fix the cart", moved - 60_000);
+        let note = item(
+            "user",
+            "This session moved from MacBook to studio-mini because MacBook went to sleep, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again.",
+            moved + 900,
+        );
+        let answer = item("assistant", "Done: the cart is fixed.", moved + 40_000);
+        let typed = item("user", "And the tests", moved + 60_000);
+        let cases = [
+            (vec![state(serde_json::json!({ "status": "done", "items": [before.clone()] }))], Ok(())),
+            // The cut-off turn went on there and ended: nobody typed.
+            (vec![state(serde_json::json!({ "status": "done", "items": [before.clone(), note.clone(), answer.clone()] }))], Ok(())),
+            (vec![state(serde_json::json!({ "status": "done", "items": [before.clone(), note.clone(), answer.clone(), typed.clone()] }))], Err("used")),
+            (vec![state(serde_json::json!({ "status": "working", "items": [before.clone(), note.clone()] }))], Err("busy")),
+            (vec![state(serde_json::json!({ "status": "idle", "queued": [{ "id": "q1", "text": "and the docs" }] }))], Err("busy")),
+            // Another chat of the session was used there.
+            (
+                vec![
+                    state(serde_json::json!({ "status": "done", "items": [before.clone()] })),
+                    state(serde_json::json!({ "status": "done", "items": [typed.clone()] })),
+                ],
+                Err("used"),
+            ),
+        ];
+        for (states, expected) in cases {
+            assert_eq!(may_return(&states, moved), expected, "{states:?}");
+        }
     }
 
     #[test]

@@ -1545,19 +1545,21 @@ async fn a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_cop
             .iter()
             .all(|s| s["id"] != made["id"] || s["owner"].is_null())
     );
-    // Its agent resumes the same conversation, with the chat so far.
+    // Its agent resumes the same conversation, with the chat so far, with
+    // its next message: until then none runs.
     let chat = continued["terminals"][0].clone();
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
+    assert!(!agent_log(&mini, "claude-args").contains("--resume"), "an agent started with no message");
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent resumed on studio-mini",
         || async { agent_log(&mini, "claude-args").contains(&format!("--resume {CONVERSATION}")) },
     )
     .await;
-    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
-    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
-    let _: Value = mini
-        .call("chat.send", json!({ "id": chat, "text": "Again" }))
-        .await;
     within(Duration::from_secs(30), "a turn on studio-mini", || async {
         agent_log(&mini, "claude-user").contains("Again")
     })
@@ -1678,6 +1680,9 @@ async fn a_continued_chat_never_takes_bypass_permissions_from_the_member() {
         .call("chat.state", json!({ "id": continued["terminals"][0] }))
         .await;
     assert_ne!(st["mode"], json!("bypassPermissions"));
+    let _: Value = mini
+        .call("chat.send", json!({ "id": continued["terminals"][0], "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent on studio-mini",
@@ -1727,6 +1732,9 @@ async fn a_continued_chat_keeps_its_folders_inside_the_worktree_in_the_copy() {
         .call("chat.state", json!({ "id": continued["terminals"][0] }))
         .await;
     assert_eq!(st["add_dirs"], json!([src]));
+    let _: Value = mini
+        .call("chat.send", json!({ "id": continued["terminals"][0], "text": "Again" }))
+        .await;
     within(
         Duration::from_secs(30),
         "the agent on studio-mini",
@@ -2511,11 +2519,101 @@ async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host()
         },
     )
     .await;
+    // The cut-off turn ends on studio-mini, and nobody types into it there.
+    within(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let Some(s) = theirs.iter().find(|s| s["id"] == made["id"]) else { return false };
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+
+    // The MacBook wakes: the session comes back to it, where it was.
     let _: Value = book
         .call("power.simulate", json!({ "event": "wake" }))
         .await;
+    within(Duration::from_secs(60), "fix-cart back on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().any(|s| s["id"] == made["id"] && s["path"] == made["path"])
+            && theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_someone_typed_into_on_the_central_host_while_the_mac_slept_stays_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    // On studio-mini, from the phone, the user asks for more.
+    let chat = within_value(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let s = theirs.iter().find(|s| s["id"] == made["id"])?;
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        (st["status"] == json!("done")).then(|| s["terminals"][0].clone())
+    })
+    .await;
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "And the tests" }))
+        .await;
+    within(Duration::from_secs(30), "that turn ended on studio-mini", || async {
+        let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+        st["status"] == json!("done") && agent_log(&mini, "claude-user").contains("And the tests")
+    })
+    .await;
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    // Longer than a look or two takes: it stays on studio-mini.
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back though used on studio-mini");
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
+async fn the_first_start_of_this_version_brings_back_the_untouched_sessions_the_central_host_runs() {
+    let origin = Origin::new();
+    let (mini, mut book, made) = continued_and_back(&origin).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]));
+    // As an older version left it: it handed every session over at every
+    // sleep, and never looked back.
+    book.stop();
+    let file = book.home.path().join("session-copies.json");
+    let mut data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    data.as_object_mut().unwrap().remove("looked_back");
+    std::fs::write(&file, serde_json::to_vec(&data).unwrap()).unwrap();
+    book.restart().await;
+    within(Duration::from_secs(60), "fix-cart back on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().any(|s| s["id"] == made["id"]) && theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
 }
 
 #[tokio::test]

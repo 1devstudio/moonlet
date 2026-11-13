@@ -233,7 +233,8 @@ impl ChatManager {
 
     /// A chat that goes on from `history`, another member's chat of the same
     /// session (X73): its items stay, and its agent resumes the same
-    /// conversation. What it had running or asking is over: it starts idle.
+    /// conversation with the chat's next message. What it had running or
+    /// asking is over: it starts idle.
     pub fn create_continuing(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
         self.create_from(req, Some(history))
     }
@@ -305,15 +306,17 @@ impl ChatManager {
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
-        // Start right away so the agent is warm when the first message comes.
         {
             let mut inner = chat.inner.lock().unwrap();
-            // A continued conversation was put in this host's profile for
-            // the session (X73): it is resumed there, not started anew.
             if continuing {
+                // A continued conversation was put in this host's profile
+                // for the session (X73): its next message resumes it there,
+                // not anew, as after a daemon start. Until then no agent
+                // runs, so many sessions moving at once start none.
                 inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
-            }
-            if let Err(e) = self.spawn(&chat, &mut inner) {
+            } else if let Err(e) = self.spawn(&chat, &mut inner) {
+                // A new chat starts right away, so the agent is warm when
+                // the first message comes.
                 self.fail(&chat, &mut inner, &format!("{e:#}"));
             }
             self.save(&chat, &mut inner);

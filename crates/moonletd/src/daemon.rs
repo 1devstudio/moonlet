@@ -38,6 +38,8 @@ struct Asleep {
     /// How many sleeps began: a wake that a newer sleep overtook leaves
     /// what it holds to that sleep's wake.
     sleeps: u64,
+    /// Between a sleep and its wake: no session comes back meanwhile.
+    sleeping: bool,
 }
 
 /// What looks for sessions another member now owns keep between them (X73).
@@ -62,6 +64,8 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
+    /// One look at a time for sessions to bring back (X73).
+    bringing_back: tokio::sync::Mutex<()>,
     /// The copied files of this member's checkouts (X74).
     checkouts: crate::copied_files::Checkouts,
     /// Where the user was last active (X75).
@@ -669,6 +673,7 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
+            bringing_back: Default::default(),
             checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             presence: Mutex::new(Presence::default()),
             waiting_shows: Default::default(),
@@ -3928,6 +3933,16 @@ impl Daemon {
         if running && !r.now && !forced {
             return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
         }
+        // Coming back to the member whose sleep it was taken for (X73):
+        // only while nothing here is at work, and nobody typed into it here.
+        if r.returning {
+            let states: Vec<_> = chats.iter().filter_map(|t| self.chats.state(*t).ok()).collect();
+            let moved_at = self.sessions.session_moved_at(&r.session).unwrap_or(0);
+            if let Err(code) = crate::session_copies::may_return(&states, moved_at) {
+                let why = if code == "busy" { "it is at work here" } else { "someone used it here since it moved" };
+                return Err(RpcError::new(code, why));
+            }
+        }
         // Taken while this host was offline: what it did meanwhile is kept
         // before the member's work replaces it.
         if forced {
@@ -3988,11 +4003,12 @@ impl Daemon {
     /// resuming its conversation. `busy` while a turn runs there, unless
     /// `now`.
     async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
-        self.bring_as(r, false).await
+        self.bring_as(r, false, false).await
     }
 
-    /// [`Self::bring`]; with `pin`, the session is kept here after.
-    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
+    /// [`Self::bring`]; with `pin`, the session is kept here after. With
+    /// `returning`, it comes back only while idle and untouched there (X73).
+    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool, returning: bool) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -4021,6 +4037,7 @@ impl Daemon {
                     now: r.now,
                     pin,
                     forced: false,
+                    returning,
                 })
                 .map_err(internal)?,
             )
@@ -4177,6 +4194,7 @@ impl Daemon {
                 {
                     let mut asleep = self.asleep.lock().unwrap();
                     asleep.sleeps += 1;
+                    asleep.sleeping = true;
                     // An agent that starts from now on starts stopped too.
                     self.chats.hold();
                 }
@@ -4219,6 +4237,8 @@ impl Daemon {
                     Ok(taken) => {
                         let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
                         tracing::info!("handed {taken:?} to the central host before sleep");
+                        // Each comes back once idle there and untouched.
+                        self.session_copies.add_returning(&taken);
                         self.asleep.lock().unwrap().taken.extend(taken);
                     }
                     Err(e) => tracing::warn!("cannot hand sessions over before sleep: {}", e.message),
@@ -4243,9 +4263,14 @@ impl Daemon {
                     if asleep.sleeps != sleeps {
                         return;
                     }
+                    asleep.sleeping = false;
                     asleep.frozen.extend(self.chats.release());
                     (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
                 };
+                // What the central host took for this sleep comes back once
+                // idle there and untouched.
+                let d = self.clone();
+                tokio::spawn(async move { d.bring_back().await });
                 if frozen.is_empty() {
                     return;
                 }
@@ -4297,7 +4322,7 @@ impl Daemon {
                 return self.sessions.session(&r.session).map_err(internal);
             }
             return self
-                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true)
+                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true, false)
                 .await;
         }
         if r.to == central && owner == me {
@@ -4428,7 +4453,7 @@ impl Daemon {
             let asked = host
                 .request(
                     m::SESSION_TAKE,
-                    serde_json::to_value(m::SessionTake { session: session.clone(), epoch: base, now: true, pin: false, forced: true })
+                    serde_json::to_value(m::SessionTake { session: session.clone(), epoch: base, now: true, pin: false, forced: true, returning: false })
                         .unwrap_or_default(),
                 )
                 .await;
@@ -4668,6 +4693,75 @@ impl Daemon {
         }
     }
 
+    /// Brings back the sessions the central host took for this Mac's sleep
+    /// (X73), each once it is idle there and nobody typed into it: the
+    /// central host decides, and refuses one at work (`busy`, tried again
+    /// later) or used there (`used`, left there). The first time, every
+    /// session this Mac made that the central host runs is looked at too:
+    /// an older version handed them all over at every sleep. Never while
+    /// this Mac sleeps.
+    async fn bring_back(self: &Arc<Self>) {
+        let info = self.link.info();
+        if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() || self.asleep.lock().unwrap().sleeping {
+            return;
+        }
+        if !matches!(info.state, m::LinkState::Connected { .. }) {
+            return;
+        }
+        let _one = self.bringing_back.lock().await;
+        let me = info.worker.id;
+        let (waiting, first) = self.session_copies.returning();
+        let mut ids = waiting.clone();
+        if first {
+            ids.extend(self.sessions.sessions_made_here());
+        }
+        let records = self.sessions.session_records();
+        let here: std::collections::HashSet<String> = self.sessions.list_sessions().into_iter().map(|s| s.id).collect();
+        for id in ids {
+            let Some(r) = records.get(&id) else {
+                self.session_copies.drop_returning(&id);
+                continue;
+            };
+            let owner = r.get("owner").and_then(Value::as_str);
+            let archived = r.get("archived").and_then(Value::as_bool).unwrap_or(false);
+            let pinned = r.get("pinned").and_then(Value::as_str).is_some();
+            // Back here already, or kept where it is: nothing to bring.
+            // One the account still names this Mac's but that is not here
+            // waits for the news of its move.
+            if owner == Some(me.as_str()) {
+                if here.contains(&id) {
+                    self.session_copies.drop_returning(&id);
+                }
+                continue;
+            }
+            if owner.is_none() || archived || pinned {
+                self.session_copies.drop_returning(&id);
+                continue;
+            }
+            let bring = m::SessionBring { session: id.clone(), now: false, message: None, terminal: None, images: Vec::new() };
+            match self.bring_as(bring, false, true).await {
+                Ok(_) => {
+                    tracing::info!(session = %id, "brought back the session the central host ran while this Mac slept");
+                    self.session_copies.drop_returning(&id);
+                }
+                // At work there, or this Mac's copy not made yet: later.
+                Err(e) if e.code == "busy" || (e.code == "no_copy" && waiting.contains(&id)) => {
+                    if e.code == "busy" && !waiting.contains(&id) {
+                        self.session_copies.add_returning(std::slice::from_ref(&id));
+                    }
+                }
+                Err(e) if e.code == "disconnected" || e.code == "unreachable" => return,
+                Err(e) => {
+                    tracing::info!(session = %id, "leaves the session where it runs: {}", e.message);
+                    self.session_copies.drop_returning(&id);
+                }
+            }
+        }
+        if first {
+            self.session_copies.looked_back();
+        }
+    }
+
     /// Sends this member's sessions to the central host, and keeps the
     /// central host's copies to the sessions that are still live (X72).
     pub fn keep_session_copies(self: &Arc<Self>) {
@@ -4692,6 +4786,26 @@ impl Daemon {
         });
         let d = self.clone();
         tokio::spawn(async move { d.let_go_of_lost().await });
+        // Sessions the central host took for this Mac's sleep come back
+        // (X73): looked at each time the link comes up, and again while one
+        // still waits for its turn there to end.
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut looked: Option<u64> = None;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let Some(d) = d.upgrade() else { return };
+                let since = match d.link.info().state {
+                    m::LinkState::Connected { since } => Some(since),
+                    _ => None,
+                };
+                let waiting = !d.session_copies.returning().0.is_empty();
+                if since.is_some() && (since != looked || waiting) {
+                    d.bring_back().await;
+                }
+                looked = since;
+            }
+        });
         // Takeovers made while the central host was offline, once it is back.
         let d = Arc::downgrade(self);
         tokio::spawn(async move {

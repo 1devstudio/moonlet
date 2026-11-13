@@ -1312,7 +1312,8 @@ impl SessionManager {
     }
 
     /// A chat in session `ws` that goes on from `history`, another member's
-    /// chat of it (X73), resuming the same conversation.
+    /// chat of it (X73), resuming the same conversation with its next
+    /// message: no agent runs until then.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
         // Another member's word: a conversation id that is not one starts
@@ -3044,7 +3045,7 @@ mod tests {
     /// X73: another member's chat goes on here in the profile of this
     /// host's workspace, where its conversation was put: it is resumed.
     #[tokio::test]
-    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile() {
+    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message() {
         let (repo, home, mgr, chats) = structured().await;
         let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
         let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
@@ -3057,6 +3058,11 @@ mod tests {
         };
 
         let chat = mgr.continue_chat(&s, history).unwrap();
+        // Idle, it starts no agent until a message comes (X73): many
+        // sessions coming back at once start none.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(lines_of(&Path::new(&s.path).join("claude-args")).is_empty(), "an agent started with no message");
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(args.contains("--resume 0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d"), "{args}");
         assert_eq!(nth_line(&Path::new(&s.path).join("claude-env"), 1).await, folder(&home, "claude-work"));
@@ -3105,6 +3111,8 @@ mod tests {
 
         let chat = mgr.continue_chat(&s, history).unwrap();
         assert_eq!(chats.state(chat.id).unwrap().mode, None);
+        // Its agent starts with its next message.
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(!args.contains("--permission-mode"), "{args}");
     }
@@ -3130,6 +3138,8 @@ mod tests {
 
         let chat = mgr.continue_chat(&s, history).unwrap();
         assert_eq!(chats.state(chat.id).unwrap().add_dirs, vec![web.clone()]);
+        // Its agent starts with its next message.
+        chats.send(chat.id, "go on", &[]).unwrap();
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(args.contains(&format!("--add-dir {web}")), "{args}");
         assert!(!args.contains("shared-lib"), "{args}");

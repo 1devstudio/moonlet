@@ -1370,6 +1370,11 @@ pub struct SessionTake {
     /// from any other, it is an ordinary take.
     #[serde(default)]
     pub forced: bool,
+    /// The member brings back a session the central host took for its
+    /// sleep (X73): only while it is idle there and nobody typed into it
+    /// since; otherwise `busy` or `used`.
+    #[serde(default)]
+    pub returning: bool,
 }
 
 /// `session.take`'s reply: the new ownership number, the session's chats
