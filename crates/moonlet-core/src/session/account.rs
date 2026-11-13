@@ -711,6 +711,37 @@ impl SessionManager {
             .collect()
     }
 
+    /// The sessions this member made (X73), whoever runs them now: those
+    /// it named itself the owner of, as their maker does. The central host,
+    /// the referee, has none by this measure.
+    pub fn sessions_made_here(&self) -> BTreeSet<String> {
+        self.with_log(|log| {
+            let Some(me) = log_owner(log.member()) else {
+                return BTreeSet::new();
+            };
+            let referee = log.account().unwrap_or(me);
+            session_claims(log, Some(referee))
+                .into_iter()
+                .filter(|(_, claims)| claims.contains(me))
+                .map(|(id, _)| id.to_string())
+                .collect()
+        })
+    }
+
+    /// When the central host, the referee, last named session `id`'s owner
+    /// (ms): when it last moved (X73). None for a session it never named.
+    pub fn session_moved_at(&self, id: &str) -> Option<u64> {
+        self.with_log(|log| {
+            let me = log_owner(log.member())?;
+            let referee = log.account().unwrap_or(me);
+            log.changes_of(SESSION)
+                .filter(|c| c.id == id && log_owner(&c.stamp.member) == Some(referee))
+                .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
+                .map(|c| c.stamp.ms)
+                .max()
+        })
+    }
+
     /// The sessions [`Self::keep_listed`] keeps listed now.
     pub fn kept_listed(&self) -> BTreeSet<String> {
         self.kept_listed.lock().unwrap().clone()
@@ -3074,6 +3105,42 @@ mod tests {
         assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
         book.keep_listed(&moved.id, false);
         assert_eq!(names(&book), ["Docs pass"]);
+    }
+
+    #[tokio::test]
+    async fn the_account_says_which_sessions_a_member_made_and_when_each_last_moved() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        book.set_central_account(Some("mini".into()));
+        assert_eq!(book.sessions_made_here(), std::collections::BTreeSet::from([session.id.clone()]));
+        assert!(mini.sessions_made_here().is_empty(), "studio-mini made none");
+
+        let before = now_ms();
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        sync(&book, &mini);
+        let moved = book.session_moved_at(&session.id).expect("moved");
+        assert!(moved >= before && moved <= now_ms(), "{moved} not in {before}..");
+        assert_eq!(mini.session_moved_at(&session.id), Some(moved));
+        // Still the MacBook's making, whoever runs it now.
+        assert_eq!(book.sessions_made_here(), std::collections::BTreeSet::from([session.id.clone()]));
+        assert_eq!(book.session_moved_at("no-such-session"), None);
     }
 
     /// The MacBook's session "Fix cart", made on `book` and known to `mini`.
