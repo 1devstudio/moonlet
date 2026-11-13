@@ -575,6 +575,10 @@ impl SessionCopies {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        // Takeovers the central host has not answered yet: still this Mac's.
+        for session in data.forced.keys() {
+            sessions.keep_listed(session, true);
+        }
         Arc::new_cyclic(|me: &Weak<SessionCopies>| {
             let me = me.clone();
             let watchers = Watchers::new(Arc::new(move |msg| {
@@ -1048,9 +1052,11 @@ impl SessionCopies {
             return failed;
         }
         let _one = self.round.lock().await;
+        // Not one the account gives another member now (X73): the central
+        // host refuses it, and letting go of it waits for this round.
         let live: Vec<_> = self
             .sessions
-            .list_sessions()
+            .listed_sessions()
             .into_iter()
             .filter(|s| s.owner.is_none() && !s.archived && Path::new(&s.path).is_dir())
             .collect();
@@ -2258,6 +2264,9 @@ impl SessionCopies {
             }
         }
         self.save(&data);
+        drop(data);
+        // This Mac runs it before the account says so: listed as its own.
+        self.sessions.keep_listed(session, base.is_some());
     }
 
     /// Forgets what was sent of session `id`, once it is let go of (X73).
