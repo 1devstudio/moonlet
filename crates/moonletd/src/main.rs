@@ -354,6 +354,8 @@ fn run_daemon(
         power::spawn(daemon.clone());
         // The session designs saved before a restart, watched again at once.
         daemon.watch_saved_session_designs();
+        // Designs of sessions archived meanwhile become workspace designs (X101).
+        daemon.adopt_session_designs().await;
         // Cloud machines: the sweep and the startup deadlines (X63).
         daemon.machines.start();
         // Live copies, before the link they may open (X60).

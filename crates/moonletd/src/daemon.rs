@@ -116,7 +116,7 @@ pub struct Daemon {
     mine_since: Mutex<HashMap<String, u64>>,
     /// The watches of the sessions' worktrees that hold session designs,
     /// by session, which announce their changes as `design.changed` (X65).
-    session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
+    session_watches: Mutex<HashMap<(String, PathBuf), moonlet_core::design::watch::Watching>>,
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
@@ -563,6 +563,8 @@ impl Daemon {
         );
         let chats = ChatManager::new(terminals.clone(), chats_dir(&moonlet_core::paths::home()));
         sessions.set_chats(chats.clone());
+        // A session's agent gets its design folder there (X101).
+        sessions.set_design_store(moonlet_core::design::store::Store::new(&moonlet_core::paths::home()));
         // Profiles' skills too (X33), under the same rule as the default's.
         if !own_home {
             for p in sessions.list_profiles() {
@@ -2620,10 +2622,10 @@ impl Daemon {
                     // folder swapped for a link after a path was given
                     // would lead the reader out of it.
                     (None, Some(session)) => {
-                        let (s, folder) = self.design_session(&session)?;
+                        let (s, shelves) = self.design_session(&session)?;
                         self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
                         let rel = r.path.clone();
-                        let bytes = blocking(move || moonlet_core::design::session::session_file(Path::new(&s.path), &folder, &rel))
+                        let bytes = blocking(move || moonlet_core::design::session::session_file_on(&shelves, &rel))
                             .await
                             .map_err(|_| RpcError::new("invalid_params", format!("{} is no file of a session design", r.path)))?;
                         use base64::Engine;
@@ -2647,9 +2649,9 @@ impl Daemon {
                         Box::new(move |path: &str| store.resolve(&workspace, path).ok().and_then(|real| std::fs::read(real).ok()))
                     }
                     (None, Some(session), None) => {
-                        let (s, folder) = self.design_session(&session)?;
+                        let (s, shelves) = self.design_session(&session)?;
                         self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
-                        Box::new(move |path: &str| moonlet_core::design::session::session_file(Path::new(&s.path), &folder, path).ok())
+                        Box::new(move |path: &str| moonlet_core::design::session::session_file_on(&shelves, path).ok())
                     }
                     _ => return Err(RpcError::new("invalid_params", "name a design's page by its workspace or by its session")),
                 };
@@ -2711,13 +2713,14 @@ impl Daemon {
                 }
                 // A session design: the session's agent writes it (X65).
                 if let Some(session) = r.session.clone() {
-                    let (s, folder) = self.design_session(&session)?;
+                    let (s, _) = self.design_session(&session)?;
                     if s.workspace_id.as_deref() != Some(r.workspace.as_str()) {
                         return Err(RpcError::new("invalid_params", format!("session \"{session}\" is not in workspace \"{}\"", r.workspace)));
                     }
+                    let shelf = self.new_design_shelf(&s)?;
                     let (made, r, watched) = (store.clone(), r.clone(), session.clone());
                     let at = blocking(move || {
-                        made.create_session_design(&r.workspace, &r.system, &session, Path::new(&s.path), &folder, &r.name, &r.brief, now_ms())
+                        made.create_session_design(&r.workspace, &r.system, &session, &shelf.root, &shelf.folder, &r.name, &r.brief, now_ms())
                     })
                     .await?;
                     // Its folders are there now: watch them.
@@ -3150,9 +3153,9 @@ impl Daemon {
                 blocking(move || store.workspace_design(&workspace, &slug)).await
             }
             m::DesignRef::Session { session, slug } => {
-                let (s, folder) = self.design_session(&session)?;
+                let (s, shelves) = self.design_session(&session)?;
                 self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
-                blocking(move || moonlet_core::design::session::session_design(&session, Path::new(&s.path), &folder, &slug)).await
+                blocking(move || moonlet_core::design::session::session_design_on(&session, &shelves, &slug)).await
             }
         }
     }
@@ -3207,35 +3210,68 @@ impl Daemon {
         }
     }
 
-    /// A session that may hold session designs (X65), and the folder of
-    /// its project's session designs, from the worktree's own config.
-    fn design_session(&self, id: &str) -> Result<(moonlet_proto::types::Session, String), RpcError> {
+    /// A session that may hold session designs (X65), and where they are:
+    /// its own folder under `~/.moonlet/design/.sessions/` when it has one
+    /// (X101), then its worktree's design folder, from the worktree's own
+    /// config. Each is watched.
+    fn design_session(&self, id: &str) -> Result<(moonlet_proto::types::Session, Vec<moonlet_core::design::session::Shelf>), RpcError> {
         let s = self.sessions.session(id).map_err(|_| RpcError::new("invalid_params", format!("no session \"{id}\"")))?;
         let config = moonlet_core::session::read_config(Path::new(&s.path));
         let folder = moonlet_core::design::session::design_folder(&config).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
-        self.watch_session_designs(&s, &folder);
-        Ok((s, folder))
+        let shelves = self.design.session_shelves(&s.id, Path::new(&s.path), &folder);
+        for shelf in &shelves {
+            self.watch_session_designs(&s, shelf);
+        }
+        Ok((s, shelves))
     }
 
-    /// Watches an open session's worktree for its session designs'
-    /// changes, and announces them as `design.changed` with the design, its
-    /// session and its workspace (X65). A design folder not there yet is
-    /// watched for from the nearest folder above it, so a design another
-    /// tool makes there later is announced too. Every design call that reaches a session's designs, and their
-    /// listing, starts it, so once the session is unarchived it starts
-    /// again as the app lists the designs; after a restart the daemon starts
-    /// it (see `watch_saved_session_designs`). An archived
-    /// session's designs are not watched (see `prune_session_watches`).
-    fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
-        let worktree = Path::new(&s.path);
+    /// Where a new session design of `s` is made (X101): its own folder
+    /// when its project keeps its session designs in moonlet, else its
+    /// worktree's design folder. A session whose agent was not given its
+    /// folder as it started gets it from its next message, and is told so.
+    fn new_design_shelf(&self, s: &moonlet_proto::types::Session) -> Result<moonlet_core::design::session::Shelf, RpcError> {
+        let project = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id);
+        let in_moonlet = project
+            .is_some_and(|p| moonlet_core::design::session::keeps_in_moonlet(&moonlet_core::session::read_config(Path::new(&p.path))));
+        let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))
+            .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+        match self.design.new_design_shelf(&s.id, Path::new(&s.path), &folder, in_moonlet) {
+            Ok(shelf) => Ok(shelf),
+            Err(e) if e.is::<moonlet_core::design::session::NoSessionDir>() => {
+                let dir = self.design.make_session_dir(&s.id, s.workspace_id.as_deref().unwrap_or_default()).map_err(internal)?;
+                for t in self.terminals.list() {
+                    if t.session_id.as_deref() == Some(s.id.as_str()) && t.chat && t.agent.as_deref() == Some("claude") {
+                        let _ = self.chats.add_dir(t.id, &dir.display().to_string());
+                    }
+                }
+                Err(RpcError::new("invalid_params", e.to_string()))
+            }
+            Err(e) => Err(RpcError::new("invalid_params", format!("{e:#}"))),
+        }
+    }
+
+    /// Watches where an open session keeps its session designs, a shelf of
+    /// its worktree or its own folder (X101), for their changes, and
+    /// announces them as `design.changed` with the design, its session and
+    /// its workspace (X65). A design folder not there yet is watched for
+    /// from the nearest folder above it, so a design another tool makes
+    /// there later is announced too. Every design call that reaches a
+    /// session's designs, and their listing, starts it, so once the session
+    /// is unarchived it starts again as the app lists the designs; after a
+    /// restart the daemon starts it (see `watch_saved_session_designs`). An
+    /// archived session's designs are not watched (see
+    /// `prune_session_watches`).
+    fn watch_session_designs(&self, s: &moonlet_proto::types::Session, shelf: &moonlet_core::design::session::Shelf) {
+        let (worktree, folder) = (shelf.root.as_path(), shelf.folder.as_str());
         let roots = [worktree.join(folder), worktree.join(moonlet_core::design::session::SIDE_DIR)];
         let mut watches = self.session_watches.lock().unwrap();
+        let key = (s.id.clone(), shelf.root.clone());
         // A watch started while a folder was not there arms it only once
         // the watch hears it made; a design call coming once both are there
         // while it has not armed them yet starts the watch again, armed on
         // them before it returns.
         let there = roots.iter().all(|r| r.is_dir());
-        if s.archived || watches.get(&s.id).is_some_and(|w| !there || roots.iter().all(|r| w.watches_whole(r))) {
+        if s.archived || watches.get(&key).is_some_and(|w| !there || roots.iter().all(|r| w.watches_whole(r))) {
             return;
         }
         let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
@@ -3247,7 +3283,7 @@ impl Daemon {
         });
         match watching {
             Ok(watching) => {
-                watches.insert(s.id.clone(), watching);
+                watches.insert(key, watching);
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
         }
@@ -3259,10 +3295,33 @@ impl Daemon {
     pub fn watch_saved_session_designs(&self) {
         for s in self.sessions.list_sessions() {
             if !s.archived
-                && Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir()
+                && (Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir()
+                    || self.design.session_dir(&s.id).is_ok_and(|d| d.is_dir()))
                 && let Err(e) = self.design_session(&s.id)
             {
                 tracing::warn!("cannot watch the designs of session {}: {}", s.id, e.message);
+            }
+        }
+    }
+
+    /// Turns the designs kept in moonlet by sessions that are archived or
+    /// gone into workspace designs (X101); one that cannot be moved yet is
+    /// logged and tried again at the next archive or start.
+    pub async fn adopt_session_designs(&self) {
+        let store = self.design.clone();
+        let Ok(dirs) = blocking(move || store.session_dirs()).await else { return };
+        for id in dirs {
+            if self.sessions.session(&id).is_ok_and(|s| !s.archived) {
+                continue;
+            }
+            let (store, session) = (self.design.clone(), id.clone());
+            match blocking(move || store.adopt_session_designs(&session, now_ms())).await {
+                Ok(done) => {
+                    for (slug, error) in &done.left {
+                        tracing::warn!("cannot move design {slug} of session {id} into its workspace: {error}");
+                    }
+                }
+                Err(e) => tracing::warn!("cannot move the designs of session {id}: {}", e.message),
             }
         }
     }
@@ -3272,7 +3331,7 @@ impl Daemon {
     fn prune_session_watches(&self) {
         let open: std::collections::HashSet<String> =
             self.sessions.list_sessions().into_iter().filter(|s| !s.archived).map(|s| s.id).collect();
-        self.session_watches.lock().unwrap().retain(|id, _| open.contains(id));
+        self.session_watches.lock().unwrap().retain(|(id, _), _| open.contains(id));
     }
 
     /// A session design as `design.list` gives it: with its session and
@@ -3296,11 +3355,11 @@ impl Daemon {
             if s.archived || s.workspace_id.as_deref() != Some(workspace) {
                 continue;
             }
-            let Ok((_, folder)) = self.design_session(&s.id) else { continue };
+            let Ok((_, shelves)) = self.design_session(&s.id) else { continue };
             let id = s.id.clone();
             let (store, ws) = (self.design.clone(), workspace.to_string());
             let listed = blocking(move || {
-                let mut out = store.session_designs(&s.id, Path::new(&s.path), &folder, &ws)?;
+                let mut out = store.session_designs_on(&s.id, &shelves, &ws)?;
                 for d in &mut out {
                     d.project = Some(s.project_id.clone());
                 }
@@ -5591,9 +5650,9 @@ impl Daemon {
     /// The session designs in a session's worktree (X65), found as the
     /// resolver finds them; none when they cannot be listed.
     async fn session_designs_at(&self, session: &str) -> Vec<DesignAt> {
-        let Ok((s, folder)) = self.design_session(session) else { return Vec::new() };
+        let Ok((_, shelves)) = self.design_session(session) else { return Vec::new() };
         let (store, id) = (self.design.clone(), session.to_string());
-        blocking(move || store.session_design_ats(&id, Path::new(&s.path), &folder)).await.unwrap_or_default()
+        blocking(move || store.session_design_ats_on(&id, &shelves)).await.unwrap_or_default()
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
@@ -5915,6 +5974,7 @@ impl Daemon {
                 w.remove_project(&r.id).map_err(internal)?;
                 // Its sessions are gone: so are their designs' watches.
                 self.prune_session_watches();
+                self.adopt_session_designs().await;
                 ok(true)
             }
             m::PROJECT_CONFIG => {
@@ -5986,9 +6046,25 @@ impl Daemon {
                 blocking(move || store.has_pages(&checked, &pages)).await?;
                 // …then copied into the worktree before its agent starts…
                 let (store, copied) = (self.design.clone(), from.clone());
+                // Into the session's own folder when its project keeps its
+                // session designs in moonlet (X101), made before its agent
+                // starts, which is given it.
+                let in_moonlet = self
+                    .sessions
+                    .list_projects()
+                    .into_iter()
+                    .find(|p| p.id == req.project_id)
+                    .is_some_and(|p| moonlet_core::design::session::keeps_in_moonlet(&moonlet_core::session::read_config(Path::new(&p.path))));
                 let prepare = move |s: moonlet_proto::types::Session| async move {
                     let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))?;
-                    blocking(move || store.copy_to_session(&copied, &pick.pages, &s.id, Path::new(&s.path), &folder, now_ms())).await?;
+                    blocking(move || {
+                        if in_moonlet {
+                            store.make_session_dir(&s.id, s.workspace_id.as_deref().unwrap_or_default())?;
+                        }
+                        let shelf = store.new_design_shelf(&s.id, Path::new(&s.path), &folder, in_moonlet)?;
+                        store.copy_to_session(&copied, &pick.pages, &s.id, &shelf.root, &shelf.folder, now_ms())
+                    })
+                    .await?;
                     Ok(())
                 };
                 // …and recorded as built there once the session is saved,
@@ -6039,6 +6115,8 @@ impl Daemon {
                 self.reads.clear_grant(&id);
                 // Its designs are watched again once it is unarchived.
                 self.prune_session_watches();
+                // Those it kept in moonlet become workspace designs (X101).
+                self.adopt_session_designs().await;
                 ok(done)
             }
             m::SESSION_UNARCHIVE => {
