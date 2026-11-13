@@ -197,6 +197,19 @@ describe("shownSections (X68)", () => {
     expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local#copy:s7 s7", "local s1"]]]);
   });
 
+  it("lists a session two members both list, as while it moves between them, once (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const parts = sectionParts(["local", "studio-mini"], { ...named("a", "1devstudio"), project_ids: ["a"] }, {
+      sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }], "studio-mini": [{ ...named("a", "1devstudio"), project_ids: ["x"] }] },
+      projects: { local: [shopA], "studio-mini": [shopX] },
+      // s9 moved to studio-mini; this Mac still lists it until it lets go.
+      sessions: { local: [s("s1", "a"), s("s9", "a")], "studio-mini": [s("s9", "x"), s("s2", "x")] },
+    });
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2", "local s1"]]]);
+  });
+
   it("still lists a copy another host listed before it went away (X86)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: false };
     const of = {
@@ -228,6 +241,12 @@ describe("shownSections (X68)", () => {
       collapsed: {} as Record<string, boolean>,
     };
     expect(sharedSessionOrder(base)).toEqual([
+      { host: "studio-mini", id: "s2" },
+      { host: "local", id: "s1" },
+    ]);
+    // A session both members list while it moves is one shortcut.
+    const moving = { ...base, sessions: { local: [s("s1", "a", { workspace_id: "W" })], "studio-mini": [s("s2", "x", { workspace_id: "W" }), s("s1", "x", { workspace_id: "W" })] } };
+    expect(sharedSessionOrder(moving)).toEqual([
       { host: "studio-mini", id: "s2" },
       { host: "local", id: "s1" },
     ]);

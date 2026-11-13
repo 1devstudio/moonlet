@@ -260,7 +260,9 @@ export const connectedHosts = (hosts: Record<string, { id: string; status: strin
  * first holder's is `sec` itself. A holder's side also has the sessions
  * other members run that it holds copies of (X86), each under its copy
  * host, except one a host the app is connected to (`connected`, every host
- * when not given) lists as its own: a copy keeps its session's id (X72). */
+ * when not given) lists as its own: a copy keeps its session's id (X72).
+ * A session two holders list, as while it moves between them (X73), is
+ * the first one's only. */
 export function sectionParts(
   holding: string[],
   sec: Section,
@@ -271,15 +273,18 @@ export function sectionParts(
       .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
       .flatMap(([, list]) => list.map((x) => x.id)),
   );
+  const listed = new Set<string>();
   return holding.map((h, i) => {
     const copies = Object.entries(of.sessions).flatMap(([key, list]) =>
       parseCopyHost(key)?.host === h ? list.filter((x) => !own.has(x.id)).map((x) => ({ key, session: x })) : [],
     );
+    const mine = (of.sessions[h] ?? []).filter((x) => !listed.has(x.id));
+    for (const x of mine) listed.add(x.id);
     return {
       host: h,
       sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
       projects: of.projects[h] ?? [],
-      sessions: [...(of.sessions[h] ?? []), ...copies.map((c) => c.session)],
+      sessions: [...mine, ...copies.map((c) => c.session)],
       ...(copies.length && { hostOf: Object.fromEntries(copies.map((c) => [c.session.id, c.key])) }),
     };
   });

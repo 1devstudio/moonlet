@@ -83,7 +83,13 @@ export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
     const account = accountOf(h);
     list.forEach((ws, i) => {
       const listing = hosts.filter((x) => accountOf(x) === account && x.workspaces.some((w) => w.id === ws.id));
-      const live = listing.flatMap((x) => x.sessions).filter((s) => !s.archived && s.workspace_id === ws.id).length;
+      // A session two members list while it moves between them is one (X73).
+      const live = new Set(
+        listing
+          .flatMap((x) => x.sessions)
+          .filter((s) => !s.archived && s.workspace_id === ws.id)
+          .map((s) => s.id),
+      ).size;
       const n = rows.length;
       rows.push({
         host: h.host,

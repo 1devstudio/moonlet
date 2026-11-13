@@ -1078,9 +1078,16 @@ function keptPr(n: number | null | undefined): PullRequest | null {
  */
 export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "projects" | "terminals" | "reads">, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
   const repoOf = (h: string, projectId: string) => originRepoOf(s, host, data, h, projectId);
+  // A session two members list while it moves between them (X73) is the
+  // first one's only.
+  const listed = new Set<string>();
   const sessions: BoardSession[] = members.flatMap((h) =>
     (s.sessions[h] ?? [])
-      .filter((x) => x.workspace_id === workspaceId)
+      .filter((x) => {
+        if (x.workspace_id !== workspaceId || listed.has(x.id)) return false;
+        listed.add(x.id);
+        return true;
+      })
       .map((x) => ({
         id: x.id,
         ...(h !== host && { host: h }),

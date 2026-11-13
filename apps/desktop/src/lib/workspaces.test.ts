@@ -81,6 +81,11 @@ describe("workspaces of an account (X68)", () => {
     expect(rows.map((r) => r.from)).toEqual(["Alex's MacBook Pro", "studio-mini", null]);
   });
 
+  it("counts a session both members list, as while it moves between them, once (X73)", () => {
+    const moving = [members[0], { ...members[1], sessions: [s("2", "b1"), s("1", "b1"), s("3", "m1")] }];
+    expect(switcherRows(moving).map((r) => r.summary)).toEqual(["1 section · 2 sessions · Default", "1 section · 1 session · Default"]);
+  });
+
   it("shows a shared workspace on every member of its account, never on a host outside it", () => {
     const shown = { host: "local", id: "b1", account: "acct-mini" };
     expect(isShown(shown, "studio-mini", "b1", "acct-mini")).toBe(true);
