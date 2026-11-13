@@ -42,6 +42,20 @@ pub fn to_thaw(
         .collect()
 }
 
+/// Whether a session whose chats are in `states` goes to the central host
+/// as the Mac goes to sleep (X73): only while one of them is at work or
+/// waits on something, a turn running, an ask open, a message queued or a
+/// subagent running. An idle session stays, so a short idle sleep with the
+/// lid open moves nothing.
+pub fn hand_over_at_sleep(states: &[moonlet_proto::types::ChatState]) -> bool {
+    states.iter().any(|st| {
+        matches!(st.status.as_str(), "working" | "blocked")
+            || !st.pending.is_empty()
+            || !st.queued.is_empty()
+            || st.subagents.iter().any(|a| a.status == "running")
+    })
+}
+
 /// Listens for the Mac's sleep and wake, for the daemon's life.
 pub fn spawn(daemon: Arc<Daemon>) {
     #[cfg(target_os = "macos")]
@@ -191,5 +205,43 @@ mod tests {
         ];
         let taken = ["big-refactor".to_string()].into_iter().collect();
         assert_eq!(to_thaw(&frozen, &taken, "macbook"), vec![1, 4]);
+    }
+
+    #[test]
+    fn only_a_session_at_work_or_waiting_on_something_goes_to_the_central_host_at_sleep() {
+        let state = |v: serde_json::Value| -> moonlet_proto::types::ChatState { serde_json::from_value(v).unwrap() };
+        let idle = state(serde_json::json!({ "status": "idle" }));
+        let done = state(serde_json::json!({ "status": "done" }));
+        let working = state(serde_json::json!({ "status": "working" }));
+        let blocked = state(serde_json::json!({ "status": "blocked" }));
+        let asking = state(serde_json::json!({
+            "status": "idle",
+            "pending": [{ "id": "a1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }]
+        }));
+        let queued = state(serde_json::json!({ "status": "done", "queued": [{ "id": "q1", "text": "and the tests" }] }));
+        let subagent = state(serde_json::json!({
+            "status": "done",
+            "subagents": [{ "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "running", "started_at": 1794576000000_u64 }]
+        }));
+        let subagent_done = state(serde_json::json!({
+            "status": "done",
+            "subagents": [{ "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "done", "started_at": 1794576000000_u64 }]
+        }));
+        let cases: [(&[moonlet_proto::types::ChatState], bool); 10] = [
+            (&[], false),
+            (std::slice::from_ref(&idle), false),
+            (std::slice::from_ref(&done), false),
+            (std::slice::from_ref(&subagent_done), false),
+            (std::slice::from_ref(&working), true),
+            (std::slice::from_ref(&blocked), true),
+            (std::slice::from_ref(&asking), true),
+            (std::slice::from_ref(&queued), true),
+            (std::slice::from_ref(&subagent), true),
+            // One chat at work is enough.
+            (&[done.clone(), working.clone()], true),
+        ];
+        for (states, goes) in cases {
+            assert_eq!(hand_over_at_sleep(states), goes, "{states:?}");
+        }
     }
 }
