@@ -245,6 +245,16 @@ export const configPath = (w: World) => join(w.repo, ".moonlet", "config.toml");
  *  loading would be replaced when it finishes. `:disabled` does account for
  *  the fieldset. Typing works like the driver's: the native value setter
  *  plus an `input` event, which React listens for. */
+/** Right-clicks the element at `xpath`: the embedded driver has no right
+ * click, so it gets a `contextmenu` event near its top left. */
+export async function rightClick(xpath: string) {
+  await browser.execute((xp: string) => {
+    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
+  }, xpath);
+}
+
 export async function fill(xpath: string, text: string) {
   await browser.waitUntil(
     () =>

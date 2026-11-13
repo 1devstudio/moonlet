@@ -54,8 +54,8 @@ export function bringsHere(host: string, accounts: Record<string, { account?: st
 export const waitingLine = (owner: string) => `Moves here when ${owner}'s turn ends`;
 
 /** Asks `attempt` until the turn running where the session is has ended
- * (X73): an attempt that answers `busy` is asked again every `everyMs`,
- * for up to `waitMs`. `waiting` gets Move now, which asks once with `now`.
+ * (X73): an attempt that answers `busy`, or finds the link down for a
+ * moment, is asked again every `everyMs`, for up to `waitMs`. `waiting` gets Move now, which asks once with `now`.
  * "done" once an attempt went through, "timeout" when the turn still runs
  * after the wait; any other error is thrown. */
 export async function untilTurnEnds(o: {
@@ -67,6 +67,7 @@ export async function untilTurnEnds(o: {
   everyMs: number;
 }): Promise<"done" | "timeout"> {
   const busy = (e: unknown) => !!e && typeof e === "object" && "code" in e && e.code === "busy";
+  const later = (e: unknown) => busy(e) || (!!e && typeof e === "object" && "code" in e && (e.code === "disconnected" || e.code === "unreachable"));
   try {
     await o.attempt(false);
     return "done";
@@ -89,7 +90,7 @@ export async function untilTurnEnds(o: {
       void pressed()?.catch(() => {});
       return "done";
     } catch (e) {
-      if (!busy(e)) throw e;
+      if (!later(e)) throw e;
     }
   }
   const moving = pressed();

@@ -1665,7 +1665,9 @@ export function AgentView({
       const page = new Promise<string>((resolve, reject) => copyOnly.current.set(name, { resolve, reject }));
       const copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": page.then((u) => new Blob([u], { type: "text/plain" })) })]);
       void mcpCall("auth", name);
-      return Promise.all([copied, page]).then(() => toast("Copied sign-in link"));
+      return Promise.all([copied, page]).then(() => {
+        toast("Copied sign-in link");
+      });
     },
   };
   const addDir = async () => {

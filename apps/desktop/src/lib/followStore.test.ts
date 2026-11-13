@@ -48,6 +48,7 @@ describe("typing into a session another Mac runs (X73)", () => {
     vi.useFakeTimers();
     for (const k of Object.keys(answers)) delete answers[k];
     useStore.setState({
+      toasts: [],
       accounts: { local: { account: "mini-id", central: "studio-mini" }, "studio-mini": { account: "mini-id", central: null } } as never,
       sessions: { "studio-mini": [session("fix-cart")] },
       hosts: { "studio-mini": { id: "studio-mini", label: "studio-mini", status: "connected", remote: true } } as never,
@@ -67,8 +68,14 @@ describe("typing into a session another Mac runs (X73)", () => {
     const sentThere = vi.fn(() => Promise.resolve());
 
     const done = sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
-    await vi.advanceTimersByTimeAsync(26 * 60_000);
+    // Twenty minutes in, the line with Move now still shows.
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    const shown = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null]);
+    expect(shown()).toContainEqual(["Moves here when studio-mini's turn ends", "Move now"]);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
     await done;
+    // Gone once it moved.
+    expect(shown()).not.toContainEqual(["Moves here when studio-mini's turn ends", "Move now"]);
 
     expect(sentThere).not.toHaveBeenCalled();
     expect(brought).toEqual([{ session: "fix-cart", now: false, terminal: 3, message: "And the tests", images: [] }]);

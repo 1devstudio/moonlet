@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, fill, rpc, sel, world } from "../fixtures";
+import { fill, PROJECT, rightClick, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const NAME = "Tidy the files";
@@ -18,14 +18,6 @@ const row = (name: string) => `//div[@role="treeitem"][.//span[normalize-space()
 const item = (label: string) => `//div[@role="menu"][@aria-label="File actions"]//button[normalize-space()=${JSON.stringify(label)}]`;
 /** An editor tab of the main window, by the file's path. */
 const fileTab = (path: string) => `//div[@title=${JSON.stringify(path)}][.//button[@title="Close tab"]]`;
-
-/** Right-clicks a row, by an XPath. */
-const rightClick = (xpath: string) =>
-  browser.execute((x: string) => {
-    const r = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
-    const box = r.getBoundingClientRect();
-    r.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 20, clientY: box.top + 10 }));
-  }, xpath);
 
 /** Picks `label` in a row's right-click menu. */
 async function act(name: string, label: string) {

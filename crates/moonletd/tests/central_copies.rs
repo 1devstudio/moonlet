@@ -2040,6 +2040,25 @@ async fn continued_and_back_with(
 }
 
 #[tokio::test]
+async fn a_message_typed_for_a_session_already_back_here_runs_here() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    // Back here already, as when it came back by itself while the message
+    // waited for studio-mini's turn to end (X73).
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"], "message": "Then the tests" }))
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    within(Duration::from_secs(30), "the message on the MacBook", || async {
+        agent_log(&book, "claude-user").contains("Then the tests")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn typing_on_the_member_brings_the_session_back_from_the_central_host() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;
@@ -2118,10 +2137,12 @@ async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
     assert_eq!(back["id"], made["id"]);
 }
 
-/// Makes git on `worktree`'s repository wait, as a move renames branch
-/// `moonlet/fix-cart` away, until the test writes the returned `go`; the
-/// returned `started` appears once it waits.
-fn gate_the_rename(worktree: &Path) -> (tempfile::TempDir, PathBuf, PathBuf) {
+/// Makes git on `worktree`'s repository wait, as a move renames `branch`
+/// away, until the test writes the returned `go`; the returned `started`
+/// appears once it waits. The hook waits on the rename deleting the old
+/// name, the one step every git runs as a transaction; git before 2.46
+/// writes the new name and HEAD outside one.
+fn gate_the_rename(worktree: &Path, branch: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let common = std::process::Command::new("git")
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .current_dir(worktree)
@@ -2135,7 +2156,7 @@ fn gate_the_rename(worktree: &Path) -> (tempfile::TempDir, PathBuf, PathBuf) {
     std::fs::write(
         &hook,
         format!(
-            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/{branch}$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
             s = started.display(),
             g = go.display()
         ),
@@ -2156,7 +2177,9 @@ async fn a_session_brought_back_has_the_central_hosts_last_files() {
     let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
     // The move waits a moment on studio-mini, and its last file is written
     // just then, as an agent's last edit lands while its turn ends.
-    let (_gate, started, go) = gate_the_rename(&there);
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let (_gate, started, go) = gate_the_rename(&there, "moonlet/fix-cart");
     let (brought, ()) = tokio::join!(
         book.try_call("session.bring", json!({ "session": made["id"] })),
         async {
@@ -2165,6 +2188,8 @@ async fn a_session_brought_back_has_the_central_hosts_last_files() {
             })
             .await;
             std::fs::write(there.join("src/late.ts"), "late\n").unwrap();
+            // And one changed in the MacBook's copy meanwhile.
+            std::fs::write(here.join("src/mine.ts"), "mine\n").unwrap();
             // For as long as studio-mini takes to send a change.
             tokio::time::sleep(Duration::from_secs(3)).await;
             std::fs::write(&go, "").unwrap();
@@ -2176,6 +2201,39 @@ async fn a_session_brought_back_has_the_central_hosts_last_files() {
         Some("late\n"),
         "the brought worktree lacks studio-mini's last file"
     );
+    assert_eq!(
+        std::fs::read_to_string(path_of(&brought).join("src/mine.ts")).ok().as_deref(),
+        Some("mine\n"),
+        "the MacBook's own change in its copy is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_bring_refuses_while_each_side_has_commits_the_other_lacks() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    let commit = |dir: &Path, file: &str, text: &str| {
+        std::fs::write(dir.join(file), text).unwrap();
+        git_in(dir, &["add", "-A"]);
+        git_in(dir, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", text.trim()]);
+    };
+    // Each side commits on its own, so neither holds the other's commit.
+    commit(&there, "src/mini.ts", "on studio-mini\n");
+    commit(&here, "src/book.ts", "on the MacBook\n");
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("diverged"), "{refused}");
+    // Nothing is lost: it still runs on studio-mini with its commit.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&there).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "on studio-mini");
 }
 
 #[tokio::test]
@@ -2186,33 +2244,9 @@ async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() 
     let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
     let chat = there["terminals"][0].clone();
     // studio-mini's git waits, as the move renames the session's branch,
-    // until the test says go: a message comes in just then. The hook waits
-    // on the rename deleting the old name, the one step every git runs as
-    // a transaction; git before 2.46 writes the new name and HEAD outside one.
+    // until the test says go: a message comes in just then.
     let worktree = PathBuf::from(there["path"].as_str().unwrap());
-    let common = std::process::Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .current_dir(&worktree)
-        .output()
-        .unwrap();
-    let hooks = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim()).join("hooks");
-    std::fs::create_dir_all(&hooks).unwrap();
-    let gate = tempfile::tempdir().unwrap();
-    let (started, go) = (gate.path().join("started"), gate.path().join("go"));
-    let hook = hooks.join("reference-transaction");
-    std::fs::write(
-        &hook,
-        format!(
-            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
-            s = started.display(),
-            g = go.display()
-        ),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let (_gate, started, go) = gate_the_rename(&worktree, "moonlet/fix-cart");
 
     let (brought, ()) = tokio::join!(
         book.try_call("session.bring", json!({ "session": made["id"] })),

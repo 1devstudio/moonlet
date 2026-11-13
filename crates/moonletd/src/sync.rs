@@ -2042,6 +2042,18 @@ impl LiveCopies {
             self.unpack_from_central(&k, &repo, &pack).await?;
         }
         self.check_paths(&k, &repo, &fetched.tree).await?;
+        // Each side with commits the other lacks: nothing moves, so neither
+        // side's commits are lost.
+        let own = git_sync::head(&path).await.map_err(internal)?;
+        if own != fetched.head
+            && !git_sync::is_ancestor(&path, &own, &fetched.head).await.map_err(internal)?
+            && !git_sync::is_ancestor(&path, &fetched.head, &own).await.map_err(internal)?
+        {
+            return Err(RpcError::new(
+                "diverged",
+                format!("{} here and {}'s each have commits the other lacks.", k.branch, k.host),
+            ));
+        }
         let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
             .await
             .map_err(internal)?;
@@ -3591,7 +3603,6 @@ fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
 }
 
-/// Why a copy pauses over a pack from `host` that git refused.
 /// The files a copy edited here since `from` takes when the central host
 /// has `central` and the copy `local` (all tree ids in `repo`): the files
 /// to apply, the base they count from, and the paths both sides changed,
@@ -3607,6 +3618,7 @@ async fn reconciled(repo: &Path, from: String, central: String, local: String) -
     Ok((target, base, r.differs))
 }
 
+/// Why a copy pauses over a pack from `host` that git refused.
 fn refused(host: &str, e: &UnpackError) -> String {
     match e {
         UnpackError::Unsafe(_) => outside(host),

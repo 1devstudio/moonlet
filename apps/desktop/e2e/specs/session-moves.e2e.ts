@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, rpc, restoreAccount, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, restoreAccount, rightClick, rpc, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -36,7 +36,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d","model":"e2e-model","slash_commands":[]}' ;;
     *'"type":"user"'*)
-      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Added the empty cart test."}]}}'
+      out '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"${ANSWER}"}]}}'
       out '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
   esac
 done
@@ -48,15 +48,6 @@ const centralRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock
 const centralApp = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params, readFileSync(join(home, "run", "app-token"), "utf8").trim());
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env: w.env, stdio: "pipe" });
-
-/** Right-clicks a session row: the embedded driver has no right click. */
-async function rightClick(xpath: string) {
-  await browser.execute((xp: string) => {
-    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
-    const r = el.getBoundingClientRect();
-    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 10 }));
-  }, xpath);
-}
 
 /** The rows the sidebar shows for `Fix cart`. */
 const rows = () => $$(sel.sessionRow(SESSION));
