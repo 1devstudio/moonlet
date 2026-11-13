@@ -10,7 +10,7 @@ import { answerTaskRequest, createIssue, findTask, linkTask, pairedPhones, searc
 import type { Task } from "./tasks";
 import { cardOfSession, tasksBoard } from "./tasksBoard";
 import { workspaceBoard } from "./workspaceBoard";
-import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadProjectStates, loadTrackersConfig, lookUpPasted, moveTask, projectStatesOf, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadProjectStates, loadTrackersConfig, lookUpPasted, moveTask, projectStatesOf, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, filtersOf, setBoardFilters, setDisplay, setBoardCards, resetDisplay, setLayout, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -1338,6 +1338,55 @@ describe("each board's Assignee decides whose issues it fetches (X45, X50)", () 
     // Upgraded with Assignee: me turned off: every board at me shows anyone's.
     expect(await restart({ "tasks.filters": JSON.stringify({ mine: false, hideEmptyDone: false }) })).toEqual({ "acme/web#12": true, "acme/web#13": false });
     localStorage.clear();
+  });
+});
+
+describe("a board's filters and Display options (X100)", () => {
+  const WEB = "github:github.com/acme/web@local/personal";
+  const web = { id: WEB, workspace: "local/personal" };
+  const done = { field: "state" as const, values: ["Closed"], not: true };
+  const shown = () => Object.fromEntries(useTasks.getState().data["local/personal"].tasks.map((t) => [t.key, t.mine]));
+
+  it("shows a board at Assignee: me as the chip Assignee is Me; removing it fetches everyone's issues, picking Me alone fetches the user's again", async () => {
+    const theirs: GhTask = { ...issue, number: 13, title: "Tidy the footer", url: "https://github.com/acme/web/issues/13", assignees: ["kim"] };
+    answers["git.origin_url"] = ({ path }) => (path === "/r/web" ? "https://github.com/acme/web.git" : null);
+    answers["project.worktrees"] = () => [];
+    answers["gh.tasks"] = (p) => ((p as { mine?: boolean }).mine ? [issue] : [issue, theirs]);
+    useTasks.setState({ assignee: {}, boardFilters: {} });
+    await refreshTasks("local", "personal", 1_000);
+    expect(filtersOf(useTasks.getState(), web)).toEqual([{ field: "assignee", values: [":me"], not: false }]);
+    setBoardFilters(web, [done]);
+    await vi.waitFor(() => expect(shown()).toEqual({ "acme/web#12": true, "acme/web#13": false }));
+    expect(filtersOf(useTasks.getState(), web)).toEqual([done]);
+    setBoardFilters(web, [done, { field: "assignee", values: [":me"], not: false }]);
+    await vi.waitFor(() => expect(shown()).toEqual({ "acme/web#12": true }));
+    expect(filtersOf(useTasks.getState(), web)).toEqual([{ field: "assignee", values: [":me"], not: false }, done]);
+  });
+
+  it("keeps each board's filters and the Display options across restarts, forgetting a removed board's filters", async () => {
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [{ id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" }, assignee: "anyone" }] }, assignee: {}, boardFilters: { gone: [done] } });
+    setBoardFilters({ id: "moon", workspace: "local/personal", assignee: "anyone" }, [done]);
+    setDisplay({ ordering: "priority", showEmpty: false, sessions: false });
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.useTasks.getState().boardFilters).toEqual({ moon: [done] });
+    expect(restarted.useTasks.getState().display).toEqual({ ordering: "priority", showEmpty: false, sessions: false });
+    useTasks.setState({ config: null });
+  });
+
+  it("saves the card properties to the board, and Reset to default puts back the layout, the options and the tracker's card fields", async () => {
+    const moon = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" } };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [moon] } });
+    await saveTrackersConfig((c) => c).catch(() => {});
+    setBoardCards("moon", ["assignee", "due"]);
+    await vi.waitFor(() => expect(trackersConfig(useTasks.getState()).boards?.[0].cards).toEqual(["assignee", "due"]));
+    setLayout("list");
+    setFilters({ hideEmptyDone: true });
+    setDisplay({ ordering: "updated", showEmpty: false, sessions: false });
+    resetDisplay("moon");
+    await vi.waitFor(() => expect(trackersConfig(useTasks.getState()).boards?.[0].cards).toBeUndefined());
+    expect(useTasks.getState()).toMatchObject({ layout: "board", filters: { hideEmptyDone: false }, display: { ordering: "board", showEmpty: true, sessions: true } });
+    useTasks.setState({ config: null });
   });
 });
 
