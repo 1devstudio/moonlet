@@ -1893,35 +1893,38 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
         .unwrap()
         .map(|e| e.unwrap().path())
         .collect();
-    // The changed file on its own, and the whole worktree beside it.
-    let files: Vec<&PathBuf> = kept
-        .iter()
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
-        .collect();
-    assert_eq!(files.len(), 1, "{kept:?}");
+    // Only the changed file: the worktree itself stays where it is.
+    assert_eq!(kept.len(), 1, "{kept:?}");
     assert_eq!(
-        std::fs::read_to_string(files[0].join("src/cart.ts")).unwrap(),
+        std::fs::read_to_string(kept[0].join("src/cart.ts")).unwrap(),
         "while away\n"
     );
-    let whole: Vec<&PathBuf> = kept
-        .iter()
-        .filter(|p| p.display().to_string().contains("-worktree-"))
-        .collect();
-    assert_eq!(whole.len(), 1, "{kept:?}");
-    assert_eq!(
-        std::fs::read_to_string(whole[0].join("src/cart.ts")).unwrap(),
-        "while away\n"
-    );
-    // It keeps a live copy of the session studio-mini runs now (X60).
+    // That worktree is its live copy of the session studio-mini runs now
+    // (X60): a git worktree still, with studio-mini's files.
+    let worktree = path_of(&made);
     within(
         Duration::from_secs(30),
-        "a live copy on the MacBook",
+        "the worktree in sync as the MacBook's live copy",
         || async {
             let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-            copies.iter().any(|c| c["session"] == made["id"])
+            copies.iter().any(|c| {
+                c["session"] == made["id"]
+                    && c["path"].as_str().map(PathBuf::from) == Some(worktree.clone())
+                    && c["state"]["kind"] == json!("in_sync")
+            })
         },
     )
     .await;
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(),
+        "b\n"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
 }
 
 /// The session continued on `mini` while `book` was away, with `book`
@@ -2156,7 +2159,6 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
     let gap: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
         .collect();
     assert_eq!(gap.len(), 1, "{gap:?}");
     assert_eq!(
@@ -2375,6 +2377,10 @@ async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member
     within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
     let ours = project_folder(&book, &here);
     std::fs::create_dir_all(&ours).unwrap();
+    // The copy is the session's own worktree kept where it was (X73), so
+    // the conversation's folder from before may be there: the link
+    // replaces it.
+    let _ = std::fs::remove_dir_all(ours.join(CONVERSATION));
     let elsewhere = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(elsewhere.path(), ours.join(CONVERSATION)).unwrap();
 
@@ -4060,7 +4066,7 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
 }
 
 #[tokio::test]
-async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
+async fn a_lost_session_in_a_read_only_folder_is_let_go_of_where_it_is_keeping_its_gap_once() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
     origin.add_to(&mini).await;
@@ -4069,22 +4075,17 @@ async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
     let worktree = path_of(&made);
     let parent = worktree.parent().unwrap().to_path_buf();
     let folder = project_folder(&book, &worktree);
-    // Its worktree cannot move as the MacBook comes back.
+    // Its worktree's folder cannot change as the MacBook comes back: the
+    // worktree stays where it is all the same (X73).
     lost_while_away(&mini, &mut book, &made, || {
         std::fs::write(worktree.join("src/cart.ts"), "while away\n").unwrap();
         read_only(&parent, true);
     })
     .await;
-    tokio::time::sleep(Duration::from_secs(8)).await;
-    let copied = has_live_copy(&book, &made).await;
-    read_only(&parent, false);
-    assert!(!copied, "let go of before its worktree could move");
     let_go_of(&book, &made).await;
+    read_only(&parent, false);
     let leftovers = book.home.path().join("sync-leftovers");
-    let kept: Vec<PathBuf> = named(&leftovers, "")
-        .into_iter()
-        .filter(|p| !p.display().to_string().contains("-worktree-"))
-        .collect();
+    let kept: Vec<PathBuf> = named(&leftovers, "");
     assert_eq!(kept.len(), 1, "{kept:?}");
     let forks = named(&folder, ".fork-");
     let jsonl: Vec<&PathBuf> = forks

@@ -4631,22 +4631,18 @@ impl Daemon {
                 }
             }
             one.kept.insert(s.id.clone());
-            let keep_at = self.session_copies.worktree_keep_folder(&s.path);
-            let kept_at = match self.sessions.let_go_session(&s.id, &keep_at).await {
-                Ok(kept_at) => kept_at,
-                Err(e) => {
-                    tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
-                    again = true;
-                    continue;
-                }
-            };
-            one.kept.remove(&s.id);
-            if let Some(kept_at) = kept_at {
-                tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", kept_at.display());
+            if let Err(e) = self.sessions.let_go_session(&s.id).await {
+                tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
+                again = true;
+                continue;
             }
+            one.kept.remove(&s.id);
             self.session_copies.forget_sent(&s.id);
-            tracing::info!(session = %s.id, %owner, "another member runs this session now; keeping a copy of it");
-            if let Err(e) = self.sync.start(s.id.clone()) {
+            tracing::info!(session = %s.id, %owner, "another member runs this session now; its worktree stays, as a copy of it");
+            // Its worktree, where it is, becomes the live copy (X60): the
+            // new owner's files replace the ones there, whose gap was kept.
+            let repo = self.sessions.project(&s.project_id).map(|p| PathBuf::from(p.path)).ok();
+            if let Err(e) = self.sync.start_in_place(s.id.clone(), PathBuf::from(&s.path), repo) {
                 tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);
             }
         }

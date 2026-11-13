@@ -2279,21 +2279,6 @@ impl SessionCopies {
         self.talk.lock().unwrap().remove(id);
     }
 
-    /// Where a let-go session's worktree is kept: a new folder under
-    /// `sync-leftovers`, named after it.
-    pub fn worktree_keep_folder(&self, path: &str) -> PathBuf {
-        let name = Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let base = self.home.join("sync-leftovers");
-        let first = base.join(format!("{}-worktree-{}", segment(&name), chrono_stamp()));
-        std::iter::once(first.clone())
-            .chain((2..).map(|n| PathBuf::from(format!("{}-{n}", first.display()))))
-            .find(|p| !p.exists())
-            .unwrap()
-    }
-
     /// The transcript files of session `s`'s chats on this host, relative
     /// to Claude Code's project folder for its worktree (X73).
     pub fn transcripts_of(

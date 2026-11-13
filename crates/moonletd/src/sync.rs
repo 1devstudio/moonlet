@@ -927,6 +927,26 @@ impl LiveCopies {
     /// `sync.start`: keeps `session` on the central host in sync here. A
     /// session already kept returns its copy.
     pub fn start(self: &Arc<Self>, session: String) -> Result<Copy, RpcError> {
+        self.start_at(session, None)
+    }
+
+    /// [`Self::start`] for a session this Mac just let go of (X73): its
+    /// worktree at `path`, of repository `repo`, becomes the copy where it
+    /// is, with the central host's files.
+    pub fn start_in_place(
+        self: &Arc<Self>,
+        session: String,
+        path: PathBuf,
+        repo: Option<PathBuf>,
+    ) -> Result<Copy, RpcError> {
+        self.start_at(session, Some((path, repo)))
+    }
+
+    fn start_at(
+        self: &Arc<Self>,
+        session: String,
+        worktree: Option<(PathBuf, Option<PathBuf>)>,
+    ) -> Result<Copy, RpcError> {
         let host = self
             .link
             .central_name()
@@ -944,10 +964,18 @@ impl LiveCopies {
                 drop(data);
                 return Ok(self.copy_of(&k));
             }
+            let (path, repo) = worktree
+                .filter(|(path, _)| path.is_dir())
+                .map(|(path, repo)| {
+                    (path.display().to_string(), repo.map(|r| r.display().to_string()).unwrap_or_default())
+                })
+                .unwrap_or_default();
             let kept = Kept {
                 id: uuid::Uuid::new_v4().to_string(),
                 host,
                 session,
+                path,
+                repo,
                 ..Kept::default()
             };
             let id = kept.id.clone();
