@@ -2668,6 +2668,30 @@ fn agent_processes(d: &Daemon) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
+async fn a_session_brought_here_is_listed_as_this_macs_own_before_the_account_says_so() {
+    let origin = Origin::new();
+    let (_mini, mut book, made) = continued_and_back(&origin).await;
+    // The MacBook hears no account news as it happens: the record naming
+    // it the owner comes later.
+    book.env.push((
+        "MOONLET_TEST_IGNORE_ACCOUNT_EVENTS".to_string(),
+        "1".to_string(),
+    ));
+    book.restart().await;
+    within(Duration::from_secs(30), "a live copy on the MacBook", || has_live_copy(&book, &made)).await;
+    within(Duration::from_secs(30), "the MacBook linked again", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "brought here, yet not listed as the MacBook's own");
+}
+
+#[tokio::test]
 async fn moving_a_running_session_now_stops_its_agent_on_this_mac() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents_as(&origin, false).await;
@@ -3836,11 +3860,7 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     book.restart().await;
     // For longer than the first few tries take.
     tokio::time::sleep(Duration::from_secs(45)).await;
-    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-    assert!(
-        copies.iter().all(|c| c["session"] != made["id"]),
-        "let go of before its gap was kept"
-    );
+    assert!(!has_live_copy(&book, &made).await, "let go of before its gap was kept");
     // Meanwhile it is listed once, as studio-mini's, never as the
     // MacBook's own too (X73).
     let own: Vec<Value> = book.call("session.list", json!({})).await;
@@ -3849,24 +3869,52 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let listed: Vec<&Value> = all.iter().filter(|s| s["id"] == made["id"]).collect();
     assert_eq!(listed.len(), 1, "listed {} times", listed.len());
     assert_eq!(listed[0]["owner"]["worker"], json!(MINI));
+    // The app hears the same: the MacBook's sessions as they change leave
+    // it out.
+    let mut app = book.app().await;
+    let _: Value = book
+        .call("session.create", json!({ "project_id": project, "name": "probe", "agent": "none" }))
+        .await;
+    let heard = sessions_changed_with(&mut app, "probe").await;
+    assert!(heard.iter().all(|s| s["id"] != made["id"]), "sessions.changed lists it as the MacBook's own");
     // Once the worktree is free, the MacBook lets go by itself, and follows
     // studio-mini with a live copy.
     std::fs::remove_file(&lock).unwrap();
-    within(Duration::from_secs(30), "the MacBook's live copy of fix-cart", || async {
-        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-        copies.iter().any(|c| c["session"] == made["id"])
-    })
-    .await;
+    let_go_of(&book, &made).await;
+}
+
+/// The next `sessions.changed` that `app` hears listing a session named
+/// `name`: the sessions it lists.
+async fn sessions_changed_with(app: &mut moonlet_core::client::Client, name: &str) -> Vec<Value> {
+    use moonlet_proto::{Frame, Message};
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let frame = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .unwrap_or_else(|_| panic!("no sessions.changed listing {name}"))
+            .unwrap()
+            .expect("the daemon closed the connection");
+        if let Frame::Json(Message::Event { name: n, data }) = frame
+            && n == "sessions.changed"
+        {
+            let list: Vec<Value> = serde_json::from_value(data).unwrap();
+            if list.iter().any(|s| s["name"] == json!(name)) {
+                return list;
+            }
+        }
+    }
+}
+
+/// Whether `d` keeps a live copy of session `made` (X60).
+async fn has_live_copy(d: &Daemon, made: &Value) -> bool {
+    let copies: Vec<Value> = d.call("sync.list", json!({})).await;
+    copies.iter().any(|c| c["session"] == made["id"])
 }
 
 /// Waits until the MacBook `book` has let go of session `made`: it follows
 /// it with a live copy then, and no longer lists it as its own (X73).
 async fn let_go_of(book: &Daemon, made: &Value) {
-    within(Duration::from_secs(30), "fix-cart let go of", || async {
-        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-        copies.iter().any(|c| c["session"] == made["id"])
-    })
-    .await;
+    within(Duration::from_secs(30), "the session let go of", || has_live_copy(book, made)).await;
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().all(|s| s["id"] != made["id"]), "still the MacBook's own");
 }
@@ -3925,12 +3973,9 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
     // Nothing can be written beside the transcript as the MacBook comes back.
     lost_while_away(&mini, &mut book, &made, || read_only(&folder, true)).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copied = has_live_copy(&book, &made).await;
     read_only(&folder, false);
-    assert!(
-        copies.iter().all(|c| c["session"] != made["id"]),
-        "let go of before its conversation was forked"
-    );
+    assert!(!copied, "let go of before its conversation was forked");
     let_go_of(&book, &made).await;
     let forks = named(&folder, ".fork-");
     let jsonl: Vec<&PathBuf> = forks
@@ -3964,9 +4009,9 @@ async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
     })
     .await;
     tokio::time::sleep(Duration::from_secs(8)).await;
-    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copied = has_live_copy(&book, &made).await;
     read_only(&parent, false);
-    assert!(copies.iter().all(|c| c["session"] != made["id"]), "let go of before its worktree could move");
+    assert!(!copied, "let go of before its worktree could move");
     let_go_of(&book, &made).await;
     let leftovers = book.home.path().join("sync-leftovers");
     let kept: Vec<PathBuf> = named(&leftovers, "")

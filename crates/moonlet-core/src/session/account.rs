@@ -692,9 +692,9 @@ impl SessionManager {
     /// This member's sessions as its apps and phones see them (X73):
     /// without those the account gives another member, which this member
     /// is about to let go of. Until then they would show twice: here, and
-    /// where they run now. One it runs anyway ([`Self::set_run_here`]) stays.
+    /// where they run now. One it runs anyway ([`Self::keep_listed`]) stays.
     pub fn listed_sessions(&self) -> Vec<Session> {
-        let here = self.run_here.lock().unwrap().clone();
+        let here = self.kept_listed.lock().unwrap().clone();
         let given = self.with_log(|log| {
             let Some(me) = log_owner(log.member()) else {
                 return BTreeSet::new();
@@ -711,11 +711,18 @@ impl SessionManager {
             .collect()
     }
 
-    /// Whether this member runs session `id` whatever the account's record
-    /// says (X73): a takeover the central host has not answered yet.
-    pub fn set_run_here(&self, id: &str, yes: bool) {
+    /// The sessions [`Self::keep_listed`] keeps listed now.
+    pub fn kept_listed(&self) -> BTreeSet<String> {
+        self.kept_listed.lock().unwrap().clone()
+    }
+
+    /// Keeps listing session `id` as this member's own whatever the
+    /// account's record says (X73), while `yes`: a takeover the central
+    /// host has not answered yet, or a session brought here before the
+    /// news of it arrived.
+    pub fn keep_listed(&self, id: &str, yes: bool) {
         let changed = {
-            let mut here = self.run_here.lock().unwrap();
+            let mut here = self.kept_listed.lock().unwrap();
             if yes { here.insert(id.to_string()) } else { here.remove(id) }
         };
         if changed {
@@ -3050,7 +3057,7 @@ mod tests {
             ..SessionCreate::new(&p.id)
         };
         let moved = book.create_session(new("Fix cart")).await.unwrap();
-        let kept = book.create_session(new("Docs pass")).await.unwrap();
+        book.create_session(new("Docs pass")).await.unwrap();
         sync(&book, &mini);
         book.set_central_account(Some("mini".into()));
         let names = |m: &SessionManager| m.listed_sessions().into_iter().map(|s| s.name).collect::<Vec<_>>();
@@ -3061,12 +3068,11 @@ mod tests {
         sync(&book, &mini);
         assert_eq!(names(&book), ["Docs pass"]);
         assert!(book.session(&moved.id).is_ok(), "still here until it is let go of");
-        let _ = kept;
         // Taken over anyway while studio-mini was offline: the MacBook runs
         // it before the account says so.
-        book.set_run_here(&moved.id, true);
+        book.keep_listed(&moved.id, true);
         assert_eq!(names(&book), ["Fix cart", "Docs pass"]);
-        book.set_run_here(&moved.id, false);
+        book.keep_listed(&moved.id, false);
         assert_eq!(names(&book), ["Docs pass"]);
     }
 

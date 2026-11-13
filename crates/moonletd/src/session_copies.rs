@@ -577,7 +577,7 @@ impl SessionCopies {
             .unwrap_or_default();
         // Takeovers the central host has not answered yet: still this Mac's.
         for session in data.forced.keys() {
-            sessions.set_run_here(session, true);
+            sessions.keep_listed(session, true);
         }
         Arc::new_cyclic(|me: &Weak<SessionCopies>| {
             let me = me.clone();
@@ -2266,7 +2266,7 @@ impl SessionCopies {
         self.save(&data);
         drop(data);
         // This Mac runs it before the account says so: listed as its own.
-        self.sessions.set_run_here(session, base.is_some());
+        self.sessions.keep_listed(session, base.is_some());
     }
 
     /// Forgets what was sent of session `id`, once it is let go of (X73).

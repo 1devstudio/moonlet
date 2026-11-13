@@ -4041,14 +4041,20 @@ impl Daemon {
             Err(e) => return give_back(e).await,
         };
         let path = released.path.clone();
+        // This Mac's own from now on, before the account's news of it comes
+        // (X73): listed as such until then.
+        self.sessions.keep_listed(&r.session, true);
         let adopted = self.adopt_brought(&r.session, &record, &released.repo, &path).await;
         let adopted = match adopted {
             Ok(adopted) => {
                 self.sync.hand_over(released).await;
+                // The news may have come already, before the answer did.
+                self.settle_kept_listed();
                 adopted
             }
             // Its copy stays a copy, rather than a folder no one keeps.
             Err(e) => {
+                self.sessions.keep_listed(&r.session, false);
                 self.sync.restore(released);
                 return give_back(e).await;
             }
@@ -4592,7 +4598,9 @@ impl Daemon {
             let Some(owner) = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) else {
                 continue;
             };
-            if owner == info.worker.id || self.session_copies.forced().contains_key(&s.id) {
+            // One this Mac runs whatever the record says stays: a takeover
+            // not answered yet, or one brought here before the news came.
+            if owner == info.worker.id || self.sessions.kept_listed().contains(&s.id) {
                 continue;
             }
             let kept = if one.kept.contains(&s.id) {
@@ -4633,6 +4641,21 @@ impl Daemon {
         again
     }
 
+    /// Stops keeping a session listed as this Mac's own whatever its record
+    /// says (X73) once the record names this Mac, unless it is a takeover
+    /// the central host has not answered yet.
+    fn settle_kept_listed(&self) {
+        let me = self.link.info().worker.id;
+        let records = self.sessions.session_records();
+        let forced = self.session_copies.forced();
+        for id in self.sessions.kept_listed() {
+            let owner = records.get(&id).and_then(|r| r.get("owner")).and_then(Value::as_str);
+            if owner == Some(me.as_str()) && !forced.contains_key(&id) {
+                self.sessions.keep_listed(&id, false);
+            }
+        }
+    }
+
     /// Sends this member's sessions to the central host, and keeps the
     /// central host's copies to the sessions that are still live (X72).
     pub fn keep_session_copies(self: &Arc<Self>) {
@@ -4645,12 +4668,13 @@ impl Daemon {
             }
         });
         // Sessions the central host gave another member, now and as the
-        // news comes (X73).
+        // news comes (X73); and those brought here, once it names this Mac.
         let d = Arc::downgrade(self);
         self.sessions.on_account_applied(move |changes| {
             if let Some(d) = d.upgrade()
                 && changes.iter().any(|c| c.kind == "session")
             {
+                d.settle_kept_listed();
                 tokio::spawn(async move { d.let_go_of_lost().await });
             }
         });
@@ -6101,6 +6125,8 @@ impl Daemon {
                     s.pinned = records.get(&s.id).and_then(|r| r.get("pinned")).and_then(Value::as_str).map(str::to_string);
                 }
                 if r.copies {
+                    // By id alone: a session keeps its id on every member
+                    // of the account (X72), so this is the same session.
                     let own: std::collections::HashSet<String> = list.iter().map(|s| s.id.clone()).collect();
                     list.extend(self.member_sessions().into_iter().filter(|s| !own.contains(&s.id)));
                 }
