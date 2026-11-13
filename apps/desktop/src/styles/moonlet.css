@@ -506,6 +506,8 @@ body:not(.kbd-nav) button:focus {
 .task-check.done { background: var(--color-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5' fill='none' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E") center/100% no-repeat; border-color: var(--color-accent); }
 /* The user's own messages (X92): inline code stands out from the bubble, which is already --color-raised. */
 .chat-md.user-md :not(pre) > code { background: var(--color-bg); }
+/* A message that ends in a code block: the block's corner and scrollbar sit as far from the bubble's bottom as its sides do. */
+.chat-md.user-md > :is(pre, .code-block):last-child { margin-bottom: 6px; }
 /* Code fences in messages and file contents in tool calls (X17, `.code-hl`). */
 :is(.chat-md, .code-hl) :is(.hljs-keyword, .hljs-selector-tag, .hljs-built_in) { color: #c49bff; }
 :is(.chat-md, .code-hl) :is(.hljs-string, .hljs-attr) { color: #8fd18e; }
