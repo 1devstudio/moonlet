@@ -2174,6 +2174,22 @@ describe("a board's sessions across the members of an account (X68)", () => {
     expect(boardInput(state, "local", "W", data, DEFAULT_CONFIG).sessions.map((x) => x.id)).toEqual(["s1"]);
   });
 
+  it("takes a session two members list, as while it moves between them, once (X73)", () => {
+    const state = {
+      ...useStore.getState(),
+      sessions: { local: [session("s1", "p1")], "studio-mini": [session("s2", "q1"), session("s1", "q1")] },
+      projects: {
+        local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }],
+        "studio-mini": [{ id: "q1", name: "web", path: "/code/web", base_branch: "main", identity }],
+      },
+    };
+    const input = boardInput(state, "local", "W", data, DEFAULT_CONFIG, ["local", "studio-mini"]);
+    expect(input.sessions.map((x) => [x.id, x.host ?? null])).toEqual([
+      ["s1", null],
+      ["s2", "studio-mini"],
+    ]);
+  });
+
   it("gives a session on another member the repository of the board's project of the same identity, for its link dialog", () => {
     const state = {
       ...useStore.getState(),

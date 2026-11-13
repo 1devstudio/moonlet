@@ -197,6 +197,30 @@ describe("shownSections (X68)", () => {
     expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local#copy:s7 s7", "local s1"]]]);
   });
 
+  it("lists a session two members both list, as while it moves between them, once (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const parts = sectionParts(["local", "studio-mini"], { ...named("a", "1devstudio"), project_ids: ["a"] }, {
+      sections: { local: [{ ...named("a", "1devstudio"), project_ids: ["a"] }], "studio-mini": [{ ...named("a", "1devstudio"), project_ids: ["x"] }] },
+      projects: { local: [shopA], "studio-mini": [shopX] },
+      // s9 moved to studio-mini; this Mac still lists it until it lets go.
+      sessions: { local: [s("s1", "a"), s("s9", "a")], "studio-mini": [s("s9", "x"), s("s2", "x")] },
+    });
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2", "local s1"]]]);
+  });
+
+  it("holds a session once in a group even when two parts bring it, so its row has one key (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const parts = [
+      { host: "local", sec: { ...named("a", "1devstudio"), project_ids: ["a"] }, projects: [shopA], sessions: [s("s9", "a")] },
+      { host: "studio-mini", sec: { ...named("a", "1devstudio"), project_ids: ["x"] }, projects: [shopX], sessions: [s("s9", "x"), s("s2", "x")] },
+    ];
+    const g = arrangeShared("personal", parts, { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => `${e.host} ${e.session.id}`)])).toEqual([["shop", ["local s9", "studio-mini s2"]]]);
+  });
+
   it("still lists a copy another host listed before it went away (X86)", () => {
     const owner = { worker: "book-id", name: "MacBook", reachable: false };
     const of = {
@@ -233,6 +257,26 @@ describe("shownSections (X68)", () => {
     ]);
     expect(sharedSessionOrder({ ...base, collapsed: { "ws:local/a": true } })).toEqual([]);
     expect(sharedSessionOrder({ ...base, collapsed: { "local/a/proj:a": true } })).toEqual([]);
+  });
+
+  it("orders a session both members list, as while it moves between them, once for ⌘1–9 (X73)", () => {
+    const shopA = { ...p("a", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const shopX = { ...p("x", "shop"), identity: { origin: "github.com/acme/shop", root: "r" } };
+    const order = sharedSessionOrder({
+      shown: { host: "local", id: "W", account: "acct" },
+      hosts: [
+        { host: "local", account: "acct", workspaces: [ws(["a"])], sections: [{ ...named("a", "1devstudio"), project_ids: ["a"] }] },
+        { host: "studio-mini", account: "acct", workspaces: [ws(["a"])], sections: [{ ...named("a", "1devstudio"), project_ids: ["x"] }] },
+      ],
+      projects: { local: [shopA], "studio-mini": [shopX] },
+      sessions: { local: [s("s1", "a", { workspace_id: "W" })], "studio-mini": [s("s2", "x", { workspace_id: "W" }), s("s1", "x", { workspace_id: "W" })] },
+      activeAt: () => 0,
+      collapsed: {},
+    });
+    expect(order).toEqual([
+      { host: "studio-mini", id: "s2" },
+      { host: "local", id: "s1" },
+    ]);
   });
 });
 

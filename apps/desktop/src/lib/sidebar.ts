@@ -4,6 +4,7 @@
 import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace } from "./protocol";
 import { agentCount } from "./subagents";
 import { parseCopyHost } from "./copyHost";
+import { firstListings } from "./sessionsOnce";
 
 /**
  * The sidebar's width, from 260px, where the workspace switcher's square,
@@ -204,7 +205,12 @@ export function arrangeShared(
   const activeAt = (e: HostSession) => o.activeAt(e.host, e.session);
   const stateOf = (e: HostSession) => o.stateOf(e.host, e.session);
   const compare = bySort(view.sort_by, (e: HostSession) => e.session, activeAt, stateOf);
-  for (const g of out) g.sessions.sort(compare);
+  for (const g of out) {
+    // A session two parts bring, as while it moves between two members
+    // (X73), is the first one's: one row, with one key.
+    g.sessions = firstListings([g.sessions], (e) => e.session.id)[0];
+    g.sessions.sort(compare);
+  }
   if (view.group_by === "status") {
     const order = STATUS_ORDER.map((x) => x.label);
     out.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
@@ -260,7 +266,9 @@ export const connectedHosts = (hosts: Record<string, { id: string; status: strin
  * first holder's is `sec` itself. A holder's side also has the sessions
  * other members run that it holds copies of (X86), each under its copy
  * host, except one a host the app is connected to (`connected`, every host
- * when not given) lists as its own: a copy keeps its session's id (X72). */
+ * when not given) lists as its own: a copy keeps its session's id (X72).
+ * A session two holders list, as while it moves between them (X73), is
+ * the first one's only. */
 export function sectionParts(
   holding: string[],
   sec: Section,
@@ -271,6 +279,10 @@ export function sectionParts(
       .filter(([h]) => !parseCopyHost(h) && (!of.connected || of.connected.includes(h)))
       .flatMap(([, list]) => list.map((x) => x.id)),
   );
+  const unclaimed = firstListings(
+    holding.map((h) => of.sessions[h] ?? []),
+    (x) => x.id,
+  );
   return holding.map((h, i) => {
     const copies = Object.entries(of.sessions).flatMap(([key, list]) =>
       parseCopyHost(key)?.host === h ? list.filter((x) => !own.has(x.id)).map((x) => ({ key, session: x })) : [],
@@ -279,7 +291,7 @@ export function sectionParts(
       host: h,
       sec: i === 0 ? sec : ((of.sections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
       projects: of.projects[h] ?? [],
-      sessions: [...(of.sessions[h] ?? []), ...copies.map((c) => c.session)],
+      sessions: [...unclaimed[i], ...copies.map((c) => c.session)],
       ...(copies.length && { hostOf: Object.fromEntries(copies.map((c) => [c.session.id, c.key])) }),
     };
   });

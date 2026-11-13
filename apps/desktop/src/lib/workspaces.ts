@@ -5,6 +5,7 @@ import type { ConfirmOptions } from "./confirmOptions";
 import type { AccountInfo, ProfileInfo, Section, Session, Workspace, WorkspaceColor } from "./protocol";
 import { profileChangeConfirm, profileName } from "./profiles";
 import { workspaceSections } from "./sidebar";
+import { firstListings } from "./sessionsOnce";
 
 /** The design's swatches, in the order the New workspace dialog shows them. */
 export const WORKSPACE_COLORS: { id: WorkspaceColor; label: string; hex: string }[] = [
@@ -83,7 +84,11 @@ export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
     const account = accountOf(h);
     list.forEach((ws, i) => {
       const listing = hosts.filter((x) => accountOf(x) === account && x.workspaces.some((w) => w.id === ws.id));
-      const live = listing.flatMap((x) => x.sessions).filter((s) => !s.archived && s.workspace_id === ws.id).length;
+      // A session two members list while it moves between them is one (X73).
+      const live = firstListings(
+        listing.map((x) => x.sessions.filter((s) => !s.archived && s.workspace_id === ws.id)),
+        (s) => s.id,
+      ).flat().length;
       const n = rows.length;
       rows.push({
         host: h.host,
