@@ -36,6 +36,53 @@ pub const SIDE_DIR: &str = ".moonlet/design";
 /// pages and in its folder under [`SIDE_DIR`].
 const SYSTEM_DIR: &str = "system";
 
+/// The folder of `~/.moonlet/design/` holding each session's own folder,
+/// `<session id>/`, for the designs its project keeps in moonlet (X101),
+/// and beside each one `<session id>.toml`, the workspace it belongs to.
+pub const SESSIONS_DIR: &str = ".sessions";
+
+/// The design folder in a session's own folder under [`SESSIONS_DIR`]:
+/// its designs kept in moonlet are `designs/<slug>/` there (X101).
+pub const MOONLET_FOLDER: &str = "designs";
+
+/// One place a session's designs are kept (X101): a folder every path is
+/// resolved inside, the session's worktree or its own folder under
+/// `~/.moonlet/design/.sessions/`, and the design folder in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shelf {
+    pub root: std::path::PathBuf,
+    pub folder: String,
+}
+
+/// A design to keep in moonlet for a session whose agent was not given its
+/// folder when it started (X101): it is given from its next message.
+#[derive(Debug, thiserror::Error)]
+#[error("The agent can write designs in {0} from its next message. Send a message, then make the design again.")]
+pub struct NoSessionDir(pub String);
+
+/// The workspace a session's own folder belongs to, in
+/// `.sessions/<session id>.toml`, outside the folder its agent may write.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SessionRecord {
+    workspace: String,
+}
+
+/// What moving a session's designs kept in moonlet into its workspace did
+/// (X101): the workspace, each design moved by its slug before and after,
+/// and each left with why.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Adopted {
+    pub workspace: String,
+    pub moved: Vec<(String, String)>,
+    pub left: Vec<(String, String)>,
+}
+
+/// Whether a project keeps its session designs in moonlet rather than in
+/// its worktrees: its config's `[design] store = "moonlet"` (X101).
+pub fn keeps_in_moonlet(config: &moonlet_proto::types::ProjectConfig) -> bool {
+    config.design.store.as_deref() == Some("moonlet")
+}
+
 /// Where the agent saves a screenshot of each built screen after
 /// implementing a session design, `<page>.png`, in its folder under
 /// [`SIDE_DIR`] (X65), for the PR's Design and build.
@@ -183,9 +230,11 @@ impl Store {
     /// whether the workspace's design system was synced since it pinned
     /// it; one whose `design.toml` cannot be read lists with its error.
     pub fn session_design_info(&self, at: &DesignAt, workspace: &str) -> DesignInfo {
+        let side = Some(at.root.join(&at.side).display().to_string());
         match self.design(at) {
             Ok(info) => DesignInfo {
                 system_updated: self.session_system_updated(at, workspace).unwrap_or(false),
+                side,
                 ..info
             },
             Err(err) => DesignInfo {
@@ -193,6 +242,7 @@ impl Store {
                     Place::Session(s) => Some(s.clone()),
                     Place::Workspace(_) => None,
                 },
+                side,
                 ..DesignInfo::unreadable(
                     &at.slug,
                     DesignKind::Session,
@@ -219,6 +269,172 @@ impl Store {
             .collect();
         out.sort_by_key(|d| (d.name.to_lowercase(), d.slug.clone()));
         Ok(out)
+    }
+
+    /// A session's own folder for the designs its project keeps in moonlet,
+    /// `~/.moonlet/design/.sessions/<session id>/` (X101); it may not be
+    /// there.
+    pub fn session_dir(&self, session: &str) -> Result<std::path::PathBuf> {
+        if !super::store::is_name(session) {
+            bail!("bad session \"{session}\"");
+        }
+        Ok(self.root()?.join(SESSIONS_DIR).join(session))
+    }
+
+    /// Makes a session's own folder (private), when missing, and records
+    /// the workspace it belongs to beside it. Gives the folder, which its
+    /// agent is let work in.
+    pub fn make_session_dir(&self, session: &str, workspace: &str) -> Result<std::path::PathBuf> {
+        let dir = self.session_dir(session)?;
+        let sessions = dir.parent().context("no sessions folder")?;
+        crate::paths::ensure_private_dir(sessions)?;
+        crate::paths::ensure_private_dir(&dir)?;
+        let record = SessionRecord { workspace: workspace.to_string() };
+        fsx::write_inside(sessions, &sessions.join(format!("{session}.toml")), toml::to_string(&record)?.as_bytes())?;
+        Ok(dir)
+    }
+
+    /// Whether a session has its own folder: a folder, not a link.
+    fn has_session_dir(&self, session: &str) -> bool {
+        self.session_dir(session)
+            .ok()
+            .and_then(|d| std::fs::symlink_metadata(d).ok())
+            .is_some_and(|m| m.is_dir())
+    }
+
+    /// Where a new session design of `session` is made: in its own folder
+    /// when its project keeps its designs in moonlet, which its agent must
+    /// have been given ([`NoSessionDir`] otherwise); else in the worktree's
+    /// design folder `folder`.
+    pub fn new_design_shelf(
+        &self,
+        session: &str,
+        worktree: &Path,
+        folder: &str,
+        in_moonlet: bool,
+    ) -> Result<Shelf> {
+        if !in_moonlet {
+            check_folder(folder)?;
+            return Ok(Shelf { root: worktree.to_path_buf(), folder: folder.to_string() });
+        }
+        let dir = self.session_dir(session)?;
+        if !self.has_session_dir(session) {
+            return Err(NoSessionDir(dir.display().to_string()).into());
+        }
+        Ok(Shelf { root: dir, folder: MOONLET_FOLDER.to_string() })
+    }
+
+    /// Where a session's designs are (X101): its own folder under
+    /// [`SESSIONS_DIR`] when it has one, then its worktree's design folder
+    /// `folder`.
+    pub fn session_shelves(&self, session: &str, worktree: &Path, folder: &str) -> Vec<Shelf> {
+        let mut out = Vec::new();
+        if self.has_session_dir(session)
+            && let Ok(dir) = self.session_dir(session)
+        {
+            out.push(Shelf { root: dir, folder: MOONLET_FOLDER.to_string() });
+        }
+        out.push(Shelf { root: worktree.to_path_buf(), folder: folder.to_string() });
+        out
+    }
+
+    /// A session's designs on each of its `shelves` in turn (see
+    /// [`Store::session_design_ats`]); a slug already found on an earlier
+    /// one is left out of the later ones.
+    pub fn session_design_ats_on(&self, session: &str, shelves: &[Shelf]) -> Result<Vec<DesignAt>> {
+        let mut out: Vec<DesignAt> = Vec::new();
+        for shelf in shelves {
+            for at in self.session_design_ats(session, &shelf.root, &shelf.folder)? {
+                if !out.iter().any(|o| o.slug == at.slug) {
+                    out.push(at);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// A session's designs as `design.list` gives them: those of each of its
+    /// `shelves` by name, in the shelves' order, a slug once.
+    pub fn session_designs_on(&self, session: &str, shelves: &[Shelf], workspace: &str) -> Result<Vec<DesignInfo>> {
+        let mut out: Vec<DesignInfo> = Vec::new();
+        for shelf in shelves {
+            let mut these = self.session_designs(session, &shelf.root, &shelf.folder, workspace)?;
+            these.retain(|d| !out.iter().any(|o| o.slug == d.slug));
+            out.extend(these);
+        }
+        Ok(out)
+    }
+
+    /// The sessions with a folder of their own under [`SESSIONS_DIR`], by
+    /// id: those whose designs are still to move once archived or gone.
+    pub fn session_dirs(&self) -> Result<Vec<String>> {
+        let sessions = self.root()?.join(SESSIONS_DIR);
+        let Some(entries) = fsx::read_dir_if_there(&sessions)? else {
+            return Ok(Vec::new());
+        };
+        let mut out: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        out.sort();
+        Ok(out)
+    }
+
+    /// Turns each design `session` keeps in moonlet into a workspace design
+    /// of the workspace its folder was made for (X101), as its session is
+    /// archived: its pages, linking the workspace's live design system, its
+    /// labels, viewport, brief, assets and comments; its snapshots are not
+    /// kept. A name the workspace has gets a ` 2`. One that cannot be made
+    /// (its design system is gone) stays, and so do the session's folder
+    /// and its record, for the next try; once every design is moved, both
+    /// are removed.
+    pub fn adopt_session_designs(&self, session: &str, now: u64) -> Result<Adopted> {
+        if !self.has_session_dir(session) {
+            return Ok(Adopted::default());
+        }
+        let dir = self.session_dir(session)?;
+        let sessions = dir.parent().context("no sessions folder")?.to_path_buf();
+        let record = sessions.join(format!("{session}.toml"));
+        let text = fsx::read_inside(&sessions, &record)
+            .with_context(|| format!("cannot read which workspace session {session}'s designs are of"))?;
+        let workspace = toml::from_str::<SessionRecord>(&text)?.workspace;
+        let mut ats = self.session_design_ats(session, &dir, MOONLET_FOLDER)?;
+        ats.sort_by(|a, b| a.slug.cmp(&b.slug));
+        let mut done = Adopted { workspace: workspace.clone(), ..Adopted::default() };
+        for at in ats {
+            match self.adopt_one(&at, &workspace, now) {
+                Ok(slug) => {
+                    fsx::remove_dir_inside(&at.root, &at.folder())?;
+                    fsx::remove_dir_inside(&at.root, &at.root.join(&at.side))?;
+                    done.moved.push((at.slug.clone(), slug));
+                }
+                Err(e) => done.left.push((at.slug.clone(), format!("{e:#}"))),
+            }
+        }
+        if done.left.is_empty() {
+            fsx::remove_dir_inside(&sessions, &dir)?;
+            fsx::remove_file_inside(&sessions, &record)?;
+        }
+        Ok(done)
+    }
+
+    /// One session design made a workspace design of `workspace`, its
+    /// comments with it; gives its slug there.
+    fn adopt_one(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
+        let config = super::designs::read_design_config(at)?;
+        let files = fsx::read_tree(&at.root, &at.dir)?
+            .into_iter()
+            .filter(|(rel, _)| rel.starts_with("pages/") || rel.starts_with("assets/"))
+            .collect();
+        let name = config.name.clone();
+        let from = super::project::ProjectDesign { config, files };
+        let slug = self.create_from_project(workspace, &name, &from, now)?;
+        if let Ok(comments) = fsx::read_file_inside(&at.root, &at.in_side(super::comments::COMMENTS_FILE)) {
+            let to = self.workspace_design(workspace, &slug)?;
+            fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments)?;
+        }
+        Ok(slug)
     }
 
     /// The design system's sync anchor: the SHA-256 of its `_ds_sync.json`
@@ -546,6 +762,36 @@ pub fn session_design(
         bail!("no design \"{slug}\" in {}", at.folder().display());
     }
     Ok(at)
+}
+
+/// A session's design `slug` on the first of its `shelves` that has it
+/// (see [`session_design`]).
+pub fn session_design_on(session: &str, shelves: &[Shelf], slug: &str) -> Result<DesignAt> {
+    let mut last = None;
+    for shelf in shelves {
+        match session_design(session, &shelf.root, &shelf.folder, slug) {
+            Ok(at) => return Ok(at),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no design \"{slug}\"")))
+}
+
+/// A file of a session's designs (see [`session_file`]) from the first of
+/// its `shelves` holding the design its path names, so a slug on two is
+/// served from the one its listing gives.
+pub fn session_file_on(shelves: &[Shelf], rel: &str) -> Result<Vec<u8>> {
+    let slug = rel.split('/').next().unwrap_or_default();
+    let slug = slug.split_once('@').map_or(slug, |(s, _)| s);
+    let holds = |shelf: &Shelf| {
+        super::place::check_slug(slug).is_ok()
+            && made_here(&shelf.root, slug)
+            && fsx::read_file_inside(&shelf.root, &Path::new(&shelf.folder).join(slug).join(DESIGN_FILE)).is_ok()
+    };
+    match shelves.iter().find(|s| holds(s)) {
+        Some(shelf) => session_file(&shelf.root, &shelf.folder, rel),
+        None => Err(anyhow::anyhow!("{rel} is no file of a session design")),
+    }
 }
 
 /// The file of a worktree's session designs the canvas asks for
@@ -943,6 +1189,163 @@ created_at = 1761200000000
                 .map(|(p, t)| (p.to_string(), t.to_string()))
                 .collect()
         );
+    }
+
+    /// A project config with `[design] store = "moonlet"` (X101).
+    fn kept_in_moonlet() -> moonlet_proto::types::ProjectConfig {
+        let mut config = moonlet_proto::types::ProjectConfig::default();
+        config.design.store = Some("moonlet".into());
+        config
+    }
+
+    /// X101: in a project that keeps its session designs in moonlet, a new
+    /// session design is made in the session's own folder under
+    /// `~/.moonlet/design/.sessions/`, its comments, history and system
+    /// copy beside it, and nothing at all in the worktree.
+    #[test]
+    fn a_session_design_kept_in_moonlet_is_made_in_the_sessions_design_folder_and_nothing_in_its_worktree() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let dir = store.make_session_dir("s1", "w1").unwrap();
+        assert_eq!(dir, home.path().join("design/.sessions/s1"));
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", keeps_in_moonlet(&kept_in_moonlet())).unwrap();
+        let at = store
+            .create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Settings page", "b", 1)
+            .unwrap();
+        assert_eq!(at.folder(), home.path().join("design/.sessions/s1/designs/settings-page"));
+        let made = files(&dir);
+        assert!(made.contains_key("designs/settings-page/design.toml"), "{:?}", made.keys());
+        assert!(made.contains_key("designs/settings-page/system/styles.css"));
+        assert_eq!(made.get(".moonlet/design/settings-page/system/README.md").map(String::as_str), Some("# moonlet desktop\n"));
+        assert_eq!(made.get(".moonlet/design/settings-page/comments.json").map(String::as_str), Some("[]\n"));
+        assert_eq!(files(wt), BTreeMap::new());
+        // A second of the same name is numbered there.
+        let again = store
+            .create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Settings page", "b", 2)
+            .unwrap();
+        assert_eq!(again.slug, "settings-page-2");
+        // A project keeping them in the project makes them in the worktree.
+        let in_project = store.new_design_shelf("s1", wt, "docs/design", keeps_in_moonlet(&moonlet_proto::types::ProjectConfig::default())).unwrap();
+        assert_eq!((in_project.root.as_path(), in_project.folder.as_str()), (wt, "docs/design"));
+    }
+
+    /// X101: a session whose project's setting changed while it was open
+    /// has designs in both places: those of its own folder, then those of
+    /// its worktree; a slug in both is its own folder's. Each is reached,
+    /// and its files served, where it is.
+    #[test]
+    fn a_sessions_designs_are_those_of_its_design_folder_then_of_its_worktree() {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let make = |shelf: &Shelf, name: &str| {
+            store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, name, "b", 1).unwrap()
+        };
+        let in_wt = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        make(&in_wt, "Onboarding");
+        make(&in_wt, "Settings page");
+        // Before the session has its own folder, only the worktree's.
+        let listed = |store: &Store| -> Vec<(String, String)> {
+            store
+                .session_designs_on("s1", &store.session_shelves("s1", wt, "docs/design"), "w1")
+                .unwrap()
+                .into_iter()
+                .map(|d| (d.slug, d.path))
+                .collect()
+        };
+        assert_eq!(listed(&store).len(), 2);
+        let dir = store.make_session_dir("s1", "w1").unwrap();
+        let mine = store.new_design_shelf("s1", wt, "docs/design", true).unwrap();
+        let at = make(&mine, "Settings page");
+        std::fs::write(at.folder().join("pages/index.html"), "<body data-mid=\"m1\">mine</body>").unwrap();
+        std::fs::write(wt.join("docs/design/settings-page/pages/index.html"), "<body data-mid=\"m1\">worktree</body>").unwrap();
+        make(&mine, "Billing");
+        let wt_s = wt.display().to_string();
+        let dir_s = dir.display().to_string();
+        assert_eq!(
+            listed(&store),
+            vec![
+                ("billing".to_string(), format!("{dir_s}/designs/billing")),
+                ("settings-page".to_string(), format!("{dir_s}/designs/settings-page")),
+                ("onboarding".to_string(), format!("{wt_s}/docs/design/onboarding")),
+            ]
+        );
+        let shelves = store.session_shelves("s1", wt, "docs/design");
+        assert_eq!(session_design_on("s1", &shelves, "settings-page").unwrap().folder(), dir.join("designs/settings-page"));
+        assert_eq!(session_design_on("s1", &shelves, "onboarding").unwrap().folder(), wt.join("docs/design/onboarding"));
+        assert!(session_design_on("s1", &shelves, "nothing").is_err());
+        assert_eq!(session_file_on(&shelves, "settings-page/pages/index.html").unwrap(), b"<body data-mid=\"m1\">mine</body>");
+        assert!(session_file_on(&shelves, "onboarding/design.toml").is_ok());
+        // Its side folder, for its agent: the system copy and built screenshots.
+        let info = store.session_design_info(&session_design_on("s1", &shelves, "billing").unwrap(), "w1");
+        assert_eq!(info.side.as_deref(), Some(format!("{dir_s}/.moonlet/design/billing").as_str()));
+        let info = store.session_design_info(&session_design_on("s1", &shelves, "onboarding").unwrap(), "w1");
+        assert_eq!(info.side.as_deref(), Some(format!("{wt_s}/.moonlet/design/onboarding").as_str()));
+    }
+
+    /// X101: when its session is archived, each design kept in moonlet
+    /// becomes a workspace design of the session's workspace: its pages
+    /// linking the live design system, its labels, viewport, brief, assets
+    /// and comments; a name the workspace has gets a ` 2`. One that cannot
+    /// be moved stays, with the session's folder and its record; once every
+    /// design is moved, both go. The workspace is the one recorded.
+    #[test]
+    fn archiving_turns_a_sessions_designs_kept_in_moonlet_into_workspace_designs() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let dir = store.make_session_dir("s1", "w1").unwrap();
+        assert_eq!(std::fs::read_to_string(home.path().join("design/.sessions/s1.toml")).unwrap(), "workspace = \"w1\"\n");
+        let mine = store.new_design_shelf("s1", worktree.path(), "docs/design", true).unwrap();
+        let make = |name: &str| store.create_session_design("w1", "moonlet-desktop", "s1", &mine.root, &mine.folder, name, "Settings", 1).unwrap();
+        let settings = make("Settings page");
+        let page = "<head><link rel=\"stylesheet\" href=\"../system/styles.css\"></head><body data-mid=\"m1\">Git</body>\n";
+        std::fs::write(settings.folder().join("pages/index.html"), page).unwrap();
+        std::fs::write(settings.folder().join("assets/logo.svg"), "<svg/>").unwrap();
+        let toml_file = settings.folder().join("design.toml");
+        let text = std::fs::read_to_string(&toml_file).unwrap().replace("viewport = \"1440x900\"", "viewport = \"390x844\"");
+        std::fs::write(&toml_file, format!("{text}\n[pages.index]\nlabel = \"rows\"\n")).unwrap();
+        let comments = "[{\"id\":1,\"page\":\"index\",\"mid\":\"m1\",\"text\":\"Bigger\",\"state\":\"open\"}]\n";
+        std::fs::write(dir.join(".moonlet/design/settings-page/comments.json"), comments).unwrap();
+        make("Onboarding");
+        store.create_design("w1", "Onboarding", "moonlet-desktop", "b", 1).unwrap();
+        // One whose design system is gone cannot be moved.
+        let lost = make("Lost");
+        let text = std::fs::read_to_string(lost.folder().join("design.toml")).unwrap().replace("system = \"moonlet-desktop\"", "system = \"gone\"");
+        std::fs::write(lost.folder().join("design.toml"), text).unwrap();
+
+        let adopted = store.adopt_session_designs("s1", 2).unwrap();
+        assert_eq!(adopted.moved, vec![("onboarding".to_string(), "onboarding-2".to_string()), ("settings-page".to_string(), "settings-page".to_string())]);
+        assert_eq!(adopted.left.iter().map(|(slug, _)| slug.as_str()).collect::<Vec<_>>(), ["lost"]);
+        assert_eq!(adopted.workspace, "w1");
+        let moved = home.path().join("design/w1/designs/settings-page");
+        assert_eq!(
+            std::fs::read_to_string(moved.join("pages/index.html")).unwrap(),
+            page.replace("../system/styles.css", "../../../systems/moonlet-desktop/styles.css")
+        );
+        assert_eq!(std::fs::read_to_string(moved.join("assets/logo.svg")).unwrap(), "<svg/>");
+        assert_eq!(std::fs::read_to_string(moved.join("comments.json")).unwrap(), comments);
+        let listed = store.designs("w1").unwrap();
+        let info = listed.iter().find(|d| d.slug == "settings-page").unwrap();
+        assert_eq!((info.viewport.as_str(), info.brief.as_str(), info.pages[0].label.as_deref()), ("390x844", "Settings", Some("rows")));
+        assert_eq!(listed.iter().find(|d| d.slug == "onboarding-2").map(|d| d.name.as_str()), Some("Onboarding 2"));
+        // The one left stays, with the folder and its record.
+        assert!(dir.join("designs/lost/design.toml").is_file());
+        assert!(!dir.join("designs/settings-page").exists());
+        assert!(home.path().join("design/.sessions/s1.toml").is_file());
+        // Once it can be moved, the folder and the record go.
+        let text = std::fs::read_to_string(dir.join("designs/lost/design.toml")).unwrap().replace("system = \"gone\"", "system = \"moonlet-desktop\"");
+        std::fs::write(dir.join("designs/lost/design.toml"), text).unwrap();
+        assert_eq!(store.session_dirs().unwrap(), ["s1"]);
+        let adopted = store.adopt_session_designs("s1", 3).unwrap();
+        assert_eq!(adopted.moved, vec![("lost".to_string(), "lost".to_string())]);
+        assert!(!dir.exists());
+        assert!(!home.path().join("design/.sessions/s1.toml").exists());
+        assert_eq!(store.session_dirs().unwrap(), Vec::<String>::new());
+        // A session with no folder has nothing to move.
+        assert_eq!(store.adopt_session_designs("s2", 4).unwrap().moved, vec![]);
     }
 
     #[test]

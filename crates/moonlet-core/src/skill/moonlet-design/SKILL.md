@@ -104,10 +104,10 @@ Then `moonlet design check`, fix every problem, `moonlet design check --render` 
 
 ## A session design
 
-A session design lives in this session's worktree and ships in its PR with the spec and the code it leads to.
+A session design lives in this session's worktree and ships in its PR with the spec and the code it leads to; or, when the project keeps its session designs in moonlet, in this session's own folder under `~/.moonlet/design/.sessions/`, never committed.
 
-1. Run `"$MOONLET_BIN" design new --here "<brief>"`. It makes the design on the design system built from this project (when several are, it names them: run it again with `--system <slug>`), prints it as JSON and opens the session's Design tab. Its `path` is the design's folder (`docs/design/<slug>/`, or the project's `[design] dir`); `slug` is its slug.
-2. Read the design system from the copy moonlet made for you: `.moonlet/design/<slug>/system/README.md` first, then its layouts, cards and `.prompt.md` files there. Never edit that copy, nor the pinned `system/` beside the pages.
+1. Run `"$MOONLET_BIN" design new --here "<brief>"`. It makes the design on the design system built from this project (when several are, it names them: run it again with `--system <slug>`), prints it as JSON and opens the session's Design tab. Its `path` is the design's folder (`docs/design/<slug>/`, the project's `[design] dir`, or one under `~/.moonlet/design/.sessions/`); `slug` is its slug; `side` is the folder of its comments, history and your copy of the design system.
+2. Read the design system from the copy moonlet made for you: `<side>/system/README.md` first, then its layouts, cards and `.prompt.md` files there. Never edit that copy, nor the pinned `system/` beside the pages.
 3. Write the pages in the design's `pages/` as [designs.md](designs.md) says, in this chat, and label them in its `design.toml`. After each change run `"$MOONLET_BIN" design check --here <slug>`, with `--fix` for missing ids.
 4. The user comments and edits by hand in the Design tab; their comments and edits come to this chat as messages. A message saying the design system was updated lists the cards that changed: use the new ones.
 
@@ -125,5 +125,5 @@ Then offer **Implement it** and **Back to the design** as the next steps.
 
 Once the code is written and its checks pass:
 
-- Save a screenshot of each built screen at its page's viewport (`viewport` in `design.toml`) to `.moonlet/design/<slug>/built/<page>.png`, with `e2e/snap.ts` in moonlet or the project's own screenshot tool. That folder is not committed.
+- Save a screenshot of each built screen at its page's viewport (`viewport` in `design.toml`) to `<side>/built/<page>.png`, with `e2e/snap.ts` in moonlet or the project's own screenshot tool. That folder is not committed.
 - Start the PR description with `Spec: <id> · Design: <design folder>`.
