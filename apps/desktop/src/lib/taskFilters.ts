@@ -116,8 +116,8 @@ export function filterFields(views: ColumnView[]): FieldChoice[] {
     for (const { c, column } of cards) for (const v of new Set(valuesOf(c, column, field))) counts.set(v, (counts.get(v) ?? 0) + 1);
     if (field === "state") return [{ field, label: FIELD_LABEL[field], values: views.map((v) => ({ id: v.name, label: v.name, count: v.cards.length, category: v.category })) }];
     // A field no task has a value for is left out; an optional field's "none" doesn't count.
-    const has = [...counts.keys()].some((id) => id !== NONE && !(field === "priority" && id === "0"));
-    if (!has && (field === "priority" || field === "type" || field === "labels" || field === "cycle")) return [];
+    const anyValue = [...counts.keys()].some((id) => id !== NONE && !(field === "priority" && id === "0"));
+    if (!anyValue && (field === "priority" || field === "type" || field === "labels" || field === "cycle")) return [];
     const values = sortValues(field, counts).map((id) => ({ id, label: valueLabel(field, id), count: counts.get(id) ?? 0 }));
     return [{ field, label: FIELD_LABEL[field], values }];
   });
@@ -151,7 +151,7 @@ export const removeFilter = (filters: TaskFilter[], field: FilterField): TaskFil
 const isMeOnly = (f: TaskFilter) => f.field === "assignee" && !f.not && f.values.length === 1 && f.values[0] === ME;
 
 /** A board's filters: at Assignee me (X50), the chip Assignee is Me first, in place of a saved Assignee filter; at anyone, those saved. */
-export function boardFilters(saved: TaskFilter[], pick: Assignee): TaskFilter[] {
+export function filtersAtPick(saved: TaskFilter[], pick: Assignee): TaskFilter[] {
   if (pick === "anyone") return saved;
   return [{ field: "assignee", values: [ME], not: false }, ...saved.filter((f) => f.field !== "assignee")];
 }
@@ -208,11 +208,38 @@ export function matchingValues(field: FieldChoice, query: string): FilterValue[]
 }
 
 /** "Add filter…" typed in: the fields whose name has the text, then the values that have it; no values while empty. */
-export function searchFilterMenu(fields: FieldChoice[], query: string): { fields: FieldChoice[]; values: { field: string; id: FilterField; value: FilterValue }[] } {
+export function searchFilterMenu(fields: FieldChoice[], query: string): { fields: FieldChoice[]; values: { field: FilterField; fieldLabel: string; value: FilterValue }[] } {
   const q = query.trim().toLowerCase();
   if (!q) return { fields, values: [] };
   return {
     fields: fields.filter((f) => has(f.label, q)),
-    values: fields.flatMap((f) => matchingValues(f, q).map((value) => ({ field: f.label, id: f.field, value }))),
+    values: fields.flatMap((f) => matchingValues(f, q).map((value) => ({ field: f.field, fieldLabel: f.label, value }))),
   };
+}
+
+/** Each board's saved filters as read back from storage, leaving out any it can't read (an unknown field, values that aren't strings). */
+export function readSavedFilters(raw: unknown): Record<string, TaskFilter[]> {
+  if (!raw || typeof raw !== "object") return {};
+  const ok = (f: unknown): f is TaskFilter => {
+    const x = f as Partial<TaskFilter> | null;
+    return !!x && ORDER.includes(x.field as FilterField) && Array.isArray(x.values) && x.values.length > 0 && x.values.every((v) => typeof v === "string") && typeof x.not === "boolean";
+  };
+  return Object.fromEntries(
+    Object.entries(raw as Record<string, unknown>).flatMap(([id, list]) => {
+      const kept = Array.isArray(list) ? list.filter(ok).map((f) => ({ field: f.field, values: f.values, not: f.not })) : [];
+      return kept.length ? [[id, kept]] : [];
+    }),
+  );
+}
+
+/** What a key does in the Filter menu: in its list of fields (and values found by "Add filter…"), or in a field's values. */
+export type FilterMenuAct = { move: number } | { open: number } | { pick: number } | { back: true } | null;
+
+export function filterMenuKey(key: string, at: { list: "fields" | "values"; active: number; count: number; row: "field" | "value"; query: string }): FilterMenuAct {
+  if (at.list === "values" && (key === "Escape" || (key === "ArrowLeft" && !at.query))) return { back: true };
+  if (!at.count) return null;
+  if (key === "ArrowDown" || key === "ArrowUp") return { move: (at.active + (key === "ArrowDown" ? 1 : at.count - 1)) % at.count };
+  if (at.list === "fields" && at.row === "field" && (key === "Enter" || key === "ArrowRight")) return { open: at.active };
+  if (key === "Enter") return { pick: at.active };
+  return null;
 }

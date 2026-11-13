@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ColumnView } from "./boardColumns";
 import type { Task } from "./tasks";
 import type { BoardSession, Card } from "./tasksBoard";
-import { applyFilters, matchingValues, searchFilterMenu, arrange, countLine, DEFAULT_DISPLAY, panelKey, boardFilters, saveFilters, chipOf, filterFields, flipOp, removeFilter, toggleValue, ME, NONE, type TaskFilter } from "./taskFilters";
+import { applyFilters, filterMenuKey, matchingValues, searchFilterMenu, arrange, countLine, DEFAULT_DISPLAY, panelKey, filtersAtPick, saveFilters, chipOf, filterFields, flipOp, removeFilter, toggleValue, ME, NONE, type TaskFilter } from "./taskFilters";
 
 const task = (key: string, o: Partial<Task> = {}): Task => ({ connection: "linear:acme", key, title: key, url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, ...o });
 const session = (name: string, o: Partial<BoardSession> = {}): BoardSession => ({ id: name, name, branch: name, path: `/w/${name}`, archived: false, task: null, task_unlinked: false, state: "idle", pr: null, additions: 0, subagents: 0, originRepo: null, ...o });
@@ -104,9 +104,9 @@ describe("Assignee's Me is the board's X50 pick (X100)", () => {
   const me: TaskFilter = { field: "assignee", values: [ME], not: false };
   const done: TaskFilter = { field: "state", values: ["Done"], not: true };
   it("shows a board at me as the chip Assignee is Me, first; at anyone, the saved filters as they are", () => {
-    expect(boardFilters([done], "me")).toEqual([me, done]);
-    expect(boardFilters([done, { field: "assignee", values: ["Ana Costa"], not: false }], "me")).toEqual([me, done]);
-    expect(boardFilters([done], "anyone")).toEqual([done]);
+    expect(filtersAtPick([done], "me")).toEqual([me, done]);
+    expect(filtersAtPick([done, { field: "assignee", values: ["Ana Costa"], not: false }], "me")).toEqual([me, done]);
+    expect(filtersAtPick([done], "anyone")).toEqual([done]);
   });
   it("saves Me alone as the pick at me, and anything else as anyone with the filter kept", () => {
     expect(saveFilters([me, done])).toEqual({ saved: [done], pick: "me" });
@@ -154,8 +154,8 @@ describe("searching the Filter menu (X100)", () => {
   it("lists the fields whose name has the text, then the values that have it, ignoring case", () => {
     const found = searchFilterMenu(filterFields(BOARD), " pr ");
     expect(found.fields.map((f) => f.label)).toEqual(["Priority"]);
-    expect(found.values.map((v) => `${v.field} › ${v.value.label}`)).toEqual(["State › In Progress"]);
-    expect(searchFilterMenu(filterFields(BOARD), "ana").values.map((v) => `${v.field} › ${v.value.label}`)).toEqual(["Assignee › Ana Costa"]);
+    expect(found.values.map((v) => `${v.fieldLabel} › ${v.value.label}`)).toEqual(["State › In Progress"]);
+    expect(searchFilterMenu(filterFields(BOARD), "ana").values.map((v) => `${v.fieldLabel} › ${v.value.label}`)).toEqual(["Assignee › Ana Costa"]);
     expect(searchFilterMenu(filterFields(BOARD), "").values).toEqual([]);
   });
   it("lists a field's values that have the text", () => {
@@ -169,5 +169,39 @@ describe("applyFilters keeps a column's WIP to what it shows (X50, X100)", () =>
   it("counts the cards left against the limit", () => {
     const col = [{ ...view("In Progress", "in_progress", BOARD[1].cards), wip: { count: 3, max: 3, full: true } }];
     expect(applyFilters(col, [{ field: "priority", values: ["3"], not: false }])[0].wip).toEqual({ count: 1, max: 3, full: false });
+  });
+});
+
+describe("filterMenuKey (X100 Filter menu keys)", () => {
+  const fields = (key: string, active: number, row: "field" | "value", count = 3) => filterMenuKey(key, { list: "fields", active, count, row, query: "" });
+  const values = (key: string, active: number, query = "", count = 3) => filterMenuKey(key, { list: "values", active, count, row: "value", query });
+  it("moves through the fields with ↑ and ↓, wrapping, and opens a field's values with → or ↵", () => {
+    expect(fields("ArrowDown", 2, "field")).toEqual({ move: 0 });
+    expect(fields("ArrowUp", 0, "field")).toEqual({ move: 2 });
+    expect(fields("ArrowRight", 1, "field")).toEqual({ open: 1 });
+    expect(fields("Enter", 1, "field")).toEqual({ open: 1 });
+  });
+  it("picks a value found by Add filter… with ↵, and → does nothing on it", () => {
+    expect(fields("Enter", 2, "value")).toEqual({ pick: 2 });
+    expect(fields("ArrowRight", 2, "value")).toBeNull();
+  });
+  it("in a field's values: ↑ ↓ move, ↵ picks, ← with nothing typed or Esc goes back to the fields", () => {
+    expect(values("ArrowDown", 0)).toEqual({ move: 1 });
+    expect(values("Enter", 1)).toEqual({ pick: 1 });
+    expect(values("ArrowLeft", 1)).toEqual({ back: true });
+    expect(values("ArrowLeft", 1, "do")).toBeNull();
+    expect(values("Escape", 1, "do")).toEqual({ back: true });
+  });
+  it("does nothing with no rows", () => {
+    expect(values("ArrowDown", 0, "zz", 0)).toBeNull();
+    expect(values("Enter", 0, "zz", 0)).toBeNull();
+  });
+});
+
+describe("a filter's value the board no longer has (X100)", () => {
+  it("stays in the filter and keeps nothing", () => {
+    const left = applyFilters(BOARD, [{ field: "state", values: ["QA"], not: false }]);
+    expect(left.flatMap((v) => v.cards)).toEqual([]);
+    expect(chipOf({ field: "state", values: ["QA"], not: false })).toEqual({ field: "State", op: "is", value: "QA" });
   });
 });

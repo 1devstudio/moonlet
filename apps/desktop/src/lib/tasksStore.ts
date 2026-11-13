@@ -21,7 +21,7 @@ import { boardShows, type Created, createTarget, githubRepoOf, isJira, type NewI
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Board, type BoardInput, type BoardSession, type BoardWorktree, type Card, drawn, tasksBoard, worktreesNotUsedElsewhere } from "./tasksBoard";
 import type { BoardFilters } from "./tasksView";
-import { boardFilters, DEFAULT_DISPLAY, type Display, saveFilters, type TaskFilter } from "./taskFilters";
+import { DEFAULT_DISPLAY, filtersAtPick, type Display, readSavedFilters, saveFilters, type TaskFilter } from "./taskFilters";
 import { accountOf, parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 import { resolveTaskRequest, type TaskRequestEvent } from "./tasksRelay";
 import { snapshotsToShare } from "./taskSnapshot";
@@ -172,7 +172,7 @@ export const useTasks = create<TasksState>(() => ({
   expanded: storedExpanded(),
   filters: storedFilters(),
   assignee: storedAssignee(),
-  boardFilters: storedJson("tasks.boardFilters", {}),
+  boardFilters: readSavedFilters(storedJson("tasks.boardFilters", {})),
   display: { ...DEFAULT_DISPLAY, ...storedJson("tasks.display", {}) },
   ghScopes: {},
   projectStates: {},
@@ -206,6 +206,10 @@ export async function removeBoard(board: Pick<BoardConfig, "id" | "name">): Prom
   const sure = await askConfirm({ title: `Remove ${board.name}?`, message: "It goes from Tasks mode. Sessions keep their links.", action: "Remove", variant: "danger" });
   if (!sure) return false;
   await saveTrackersConfig((c) => ({ ...c, boards: (c.boards ?? []).filter((b) => b.id !== board.id) }));
+  // Its filters go with it (X100).
+  const { [board.id]: _, ...boardFilters } = useTasks.getState().boardFilters;
+  useTasks.setState({ boardFilters });
+  writeStored("tasks.boardFilters", JSON.stringify(boardFilters));
   return true;
 }
 
@@ -440,7 +444,7 @@ function storedJson<T>(name: string, fallback: T): T {
 
 /** A board's filters as its row of chips shows them (X100): Assignee is Me first while the board is at me. */
 export const filtersOf = (t: Pick<TasksState, "boardFilters" | "assignee">, board: Pick<BoardConfig, "id" | "assignee">): TaskFilter[] =>
-  boardFilters(t.boardFilters[board.id] ?? [], assigneeOf(board, t.assignee));
+  filtersAtPick(t.boardFilters[board.id] ?? [], assigneeOf(board, t.assignee));
 
 /** Sets a board's filters (X100), kept in the app; a change of Assignee's Me sets X50's pick, which fetches again. Removed boards' filters are forgotten. */
 export function setBoardFilters(board: Pick<BoardConfig, "id" | "assignee" | "workspace">, filters: TaskFilter[]) {

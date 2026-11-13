@@ -1363,15 +1363,40 @@ describe("a board's filters and Display options (X100)", () => {
     expect(filtersOf(useTasks.getState(), web)).toEqual([{ field: "assignee", values: [":me"], not: false }, done]);
   });
 
-  it("keeps each board's filters and the Display options across restarts, forgetting a removed board's filters", async () => {
-    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [{ id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team", team: "MOON" }, assignee: "anyone" }] }, assignee: {}, boardFilters: { gone: [done] } });
-    setBoardFilters({ id: "moon", workspace: "local/personal", assignee: "anyone" }, [done]);
+  it("keeps each board's filters and the Display options across restarts", async () => {
+    const moon = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, assignee: "anyone" as const };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [moon] }, assignee: {}, boardFilters: {} });
+    setBoardFilters(moon, [done]);
     setDisplay({ ordering: "priority", showEmpty: false, sessions: false });
     vi.resetModules();
     const restarted = await import("./tasksStore");
-    expect(restarted.useTasks.getState().boardFilters).toEqual({ moon: [done] });
+    expect(restarted.filtersOf(restarted.useTasks.getState(), moon)).toEqual([done]);
     expect(restarted.useTasks.getState().display).toEqual({ ordering: "priority", showEmpty: false, sessions: false });
     useTasks.setState({ config: null });
+  });
+
+  it("forgets a removed board's filters", async () => {
+    const moon = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, assignee: "anyone" as const };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [moon] }, assignee: {}, boardFilters: {} });
+    await saveTrackersConfig((c) => c).catch(() => {});
+    setBoardFilters(moon, [done]);
+    const removed = removeBoard(moon);
+    answerConfirm(true, false);
+    expect(await removed).toBe(true);
+    expect(filtersOf(useTasks.getState(), moon)).toEqual([]);
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.filtersOf(restarted.useTasks.getState(), moon)).toEqual([]);
+    useTasks.setState({ config: null });
+  });
+
+  it("drops saved filters it can't read, keeping the rest", async () => {
+    const moon = { id: "moon", assignee: "anyone" as const };
+    localStorage.setItem("moonlet.tasks.boardFilters", JSON.stringify({ moon: [{ field: "dates", values: ["today"], not: false }, done, { field: "labels", values: "ux", not: false }, null], other: "x" }));
+    vi.resetModules();
+    const restarted = await import("./tasksStore");
+    expect(restarted.filtersOf(restarted.useTasks.getState(), moon)).toEqual([done]);
+    localStorage.removeItem("moonlet.tasks.boardFilters");
   });
 
   it("saves the card properties to the board, and Reset to default puts back the layout, the options and the tracker's card fields", async () => {

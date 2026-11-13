@@ -6,7 +6,7 @@ import { type BoardColumn, type BoardConfig, cardFields, type CardField } from "
 import { columnCounts } from "../../lib/boardScreen";
 import { trackerOf } from "../../lib/tasks";
 import { setBoardCards, setColumnShow, setDisplay, setFilters, setLayout, resetDisplay, useTasks } from "../../lib/tasksStore";
-import { chipOf, type FieldChoice, type FilterField, type FilterValue, flipOp, matchingValues, ORDERINGS, type Ordering, removeFilter, searchFilterMenu, type TaskFilter, toggleValue } from "../../lib/taskFilters";
+import { chipOf, type FieldChoice, filterMenuKey, type FilterField, type FilterValue, flipOp, matchingValues, ORDERINGS, type Ordering, removeFilter, searchFilterMenu, type TaskFilter, toggleValue } from "../../lib/taskFilters";
 import { Menu } from "../Menu";
 import { radioProps, Switch } from "../settings/controls";
 import { Button, cx, IconButton, Kbd, selectCls } from "../ui";
@@ -40,16 +40,19 @@ function ValueGlyph({ field, value, size = 13 }: { field: FilterField; value: Pi
 function Popover({ anchor, onClose, align = "right", children }: { anchor: RefObject<HTMLElement | null>; onClose: () => void; align?: "left" | "right"; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState(() => anchor.current?.getBoundingClientRect() ?? null);
+  // The latest onClose, so the listeners are added once, not on every render.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const t = e.target as Element;
       if (panel.current?.contains(t) || anchor.current?.contains(t) || t.closest?.("[data-menu-panel]")) return;
-      onClose();
+      close.current();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || document.querySelector("[data-menu-panel]")) return;
       e.stopPropagation();
-      onClose();
+      close.current();
     };
     const onResize = () => setRect(anchor.current?.getBoundingClientRect() ?? null);
     document.addEventListener("click", onClick, true);
@@ -61,7 +64,7 @@ function Popover({ anchor, onClose, align = "right", children }: { anchor: RefOb
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onResize);
     };
-  }, [onClose]);
+  }, []);
   if (!rect) return null;
   const style: React.CSSProperties = { position: "fixed", top: rect.bottom + 6, ...(align === "right" ? { right: Math.max(8, window.innerWidth - rect.right) } : { left: rect.left }) };
   return createPortal(
@@ -72,7 +75,7 @@ function Popover({ anchor, onClose, align = "right", children }: { anchor: RefOb
   );
 }
 
-const PANEL = "rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl";
+const PANEL = "rounded-xl border border-border-strong bg-[#232323] shadow-2xl";
 const ROW = "flex w-full items-center gap-2.5 rounded-md px-2.5 py-[6px] text-left ui-text-13";
 
 /** A field's values with "Filter…": each with its glyph, count and a check when picked; a click picks or unpicks it, and the list stays. */
@@ -82,7 +85,7 @@ function ValueList({ field, filter, onToggle, onBack, autoFocus }: { field: Fiel
   const values = matchingValues(field, query);
   useEffect(() => setActive(0), [query]);
   return (
-    <div role="menu" aria-label={`${field.label} values`} className={cx(PANEL, "w-[230px]")}>
+    <div role="menu" aria-label={`${field.label} values`} className={cx(PANEL, "w-[230px] p-1")}>
       <input
         autoFocus={autoFocus}
         aria-label={`Filter ${field.label.toLowerCase()} values`}
@@ -90,19 +93,14 @@ function ValueList({ field, filter, onToggle, onBack, autoFocus }: { field: Fiel
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Filter…"
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            const n = values.length;
-            if (n) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
-          } else if (e.key === "Enter" && values[active]) {
-            e.preventDefault();
-            onToggle(values[active].id);
-          } else if ((e.key === "ArrowLeft" && !query) || e.key === "Escape") {
-            if (!onBack) return;
-            e.preventDefault();
-            e.stopPropagation();
-            onBack();
-          }
+          const act = filterMenuKey(e.key, { list: "values", active, count: values.length, row: "value", query });
+          // Without onBack (under a chip), Esc is the popover's: it closes.
+          if (!act || ("back" in act && !onBack)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if ("move" in act) setActive(act.move);
+          else if ("pick" in act) onToggle(values[act.pick].id);
+          else if ("back" in act) onBack?.();
         }}
         className="mb-1 w-full rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-13 outline-none placeholder:text-faint"
       />
@@ -136,7 +134,10 @@ function FilterMenu({ fields, filters, onChange }: { fields: FieldChoice[]; filt
   const [query, setQuery] = useState("");
   const [openField, setOpenField] = useState<FilterField | null>(null);
   const [active, setActive] = useState(0);
+  // A field's values opened by → or ↵ take the focus; opened by pointing, the focus stays in Add filter….
+  const [byKey, setByKey] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const found = searchFilterMenu(fields, query);
   const rows = [...found.fields.map((f) => ({ kind: "field" as const, f })), ...found.values.map((v) => ({ kind: "value" as const, v }))];
   useEffect(() => setActive(0), [query]);
@@ -145,8 +146,15 @@ function FilterMenu({ fields, filters, onChange }: { fields: FieldChoice[]; filt
     setOpenField(null);
     input.current?.focus();
   };
+  const point = (field: FilterField) => {
+    if (field === openField) return;
+    // The values panel about to close has the focus: give it back to Add filter….
+    if (menu.current?.querySelector('[role="menu"]')?.contains(document.activeElement)) input.current?.focus();
+    setByKey(false);
+    setOpenField(field);
+  };
   return (
-    <div role="menu" aria-label="Add filter" className={cx(PANEL, "relative w-[240px]")}>
+    <div ref={menu} role="menu" aria-label="Add filter" className={cx(PANEL, "relative w-[240px] p-1")}>
       <div className="mb-1 flex items-center gap-2 rounded-md bg-panel-2 pr-1.5">
         <input
           ref={input}
@@ -156,17 +164,15 @@ function FilterMenu({ fields, filters, onChange }: { fields: FieldChoice[]; filt
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Add filter…"
           onKeyDown={(e) => {
-            const row = rows[active];
-            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-              e.preventDefault();
-              if (rows.length) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
-            } else if ((e.key === "Enter" || e.key === "ArrowRight") && row?.kind === "field") {
-              e.preventDefault();
+            const act = filterMenuKey(e.key, { list: "fields", active, count: rows.length, row: rows[active]?.kind ?? "field", query });
+            if (!act || "back" in act) return;
+            e.preventDefault();
+            if ("move" in act) return setActive(act.move);
+            const row = rows["open" in act ? act.open : act.pick];
+            if (row.kind === "field") {
+              setByKey(true);
               setOpenField(row.f.field);
-            } else if (e.key === "Enter" && row?.kind === "value") {
-              e.preventDefault();
-              toggle(row.v.id, row.v.value.id);
-            }
+            } else toggle(row.v.field, row.v.value.id);
           }}
           className="min-w-0 flex-1 bg-transparent px-2.5 py-1.5 ui-text-13 outline-none placeholder:text-faint"
         />
@@ -174,12 +180,12 @@ function FilterMenu({ fields, filters, onChange }: { fields: FieldChoice[]; filt
       </div>
       {rows.map((r, i) => {
         if (r.kind === "value") {
-          const on = !!filters.find((f) => f.field === r.v.id)?.values.includes(r.v.value.id);
+          const on = !!filters.find((f) => f.field === r.v.field)?.values.includes(r.v.value.id);
           return (
-            <button key={`${r.v.id} ${r.v.value.id}`} role="menuitemcheckbox" aria-checked={on} onMouseMove={() => setActive(i)} onClick={() => toggle(r.v.id, r.v.value.id)} className={cx(ROW, i === active && "bg-hover")}>
-              <ValueGlyph field={r.v.id} value={r.v.value} />
+            <button key={`${r.v.field} ${r.v.value.id}`} role="menuitemcheckbox" aria-checked={on} onMouseMove={() => setActive(i)} onClick={() => toggle(r.v.field, r.v.value.id)} className={cx(ROW, i === active && "bg-hover")}>
+              <ValueGlyph field={r.v.field} value={r.v.value} />
               <span className="min-w-0 flex-1 truncate">
-                <span className="text-muted">{r.v.field} › </span>
+                <span className="text-muted">{r.v.fieldLabel} › </span>
                 {r.v.value.label}
               </span>
               {on && <Check size={14} className="text-fg" />}
@@ -192,15 +198,15 @@ function FilterMenu({ fields, filters, onChange }: { fields: FieldChoice[]; filt
           <div key={f.field}>
             {/* Sessions, Pull request and Cycle are about the work, after the tracker's own fields. */}
             {f.field === "sessions" && !query && <div className="my-1 border-t border-border" />}
-            <div className="relative" onMouseEnter={() => setOpenField(f.field)}>
-              <button aria-haspopup="menu" aria-expanded={open} onMouseMove={() => setActive(i)} onClick={() => setOpenField(f.field)} className={cx(ROW, (open || i === active) && "bg-hover")}>
+            <div className="relative" onMouseEnter={() => point(f.field)}>
+              <button aria-haspopup="menu" aria-expanded={open} onMouseMove={() => setActive(i)} onClick={() => point(f.field)} className={cx(ROW, (open || i === active) && "bg-hover")}>
                 <span className="flex w-[14px] justify-center text-muted">{FIELD_ICON[f.field]}</span>
                 <span className="flex-1">{f.label}</span>
                 <ChevronRight size={14} className="text-muted" />
               </button>
               {open && (
                 <div className="absolute right-full top-[-5px] z-10 mr-1">
-                  <ValueList field={f} filter={filters.find((x) => x.field === f.field)} onToggle={(id) => toggle(f.field, id)} onBack={back} autoFocus={document.activeElement === input.current && rows[active]?.kind === "field"} />
+                  <ValueList field={f} filter={filters.find((x) => x.field === f.field)} onToggle={(id) => toggle(f.field, id)} onBack={back} autoFocus={byKey} />
                 </div>
               )}
             </div>
@@ -245,7 +251,7 @@ function DisplayOptions({ board, columns, estimate }: { board: BoardConfig; colu
   const row = "flex min-h-[28px] items-center gap-3 text-muted";
   const section = "mt-3 flex flex-col gap-2.5 border-t border-border pt-3";
   return (
-    <div role="dialog" aria-label="Display options" className="w-[320px] rounded-xl border border-border-strong bg-[#232323] p-3 ui-text-13 shadow-2xl">
+    <div role="dialog" aria-label="Display options" className={cx(PANEL, "w-[320px] p-3 ui-text-13")}>
       <LayoutChoice />
       <div className="mt-3 flex flex-col gap-2.5">
         <div className={row}>

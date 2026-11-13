@@ -46,7 +46,7 @@ import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
 import { removeWorktreeAsk } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
-import { applyFilters, arrange, boardFilters as filtersAt, countLine, filterFields, panelKey, type TaskFilter } from "../../lib/taskFilters";
+import { applyFilters, arrange, filtersAtPick, countLine, filterFields, panelKey, type TaskFilter } from "../../lib/taskFilters";
 import { FilterBar, HeaderTools, type Panel } from "./BoardFilters";
 import { modeOf, setMode } from "../../lib/mode";
 import { useNow } from "../../lib/useNow";
@@ -458,12 +458,11 @@ export function TasksMode() {
   // A board's filters as its chips show them; selected in parts, so the selector keeps its answer from render to render.
   const savedFilters = useTasks((t) => (shown ? t.boardFilters[shown.board.id] : undefined));
   const pick = useTasks((t) => (shown ? assigneeOf(shown.board, t.assignee) : null));
-  const boardFilters = useMemo(() => (pick ? filtersAt(savedFilters ?? [], pick) : []), [savedFilters, pick]);
+  const shownFilters = useMemo(() => (pick ? filtersAtPick(savedFilters ?? [], pick) : []), [savedFilters, pick]);
   const boards = useTasks((t) => trackersConfig(t).boards);
   // The Filter menu or Display options, opened by its icon, F or V, or the filter row's + (X100).
   const [panel, setPanel] = useState<Panel>(null);
   useEffect(() => {
-    if (!shown) return;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
@@ -475,7 +474,9 @@ export function TasksMode() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [!shown]);
+  }, []);
+  // A panel opened for one board closes when another is shown.
+  useEffect(() => setPanel(null), [shown?.board.id]);
   // The task Find a task found on the board (X93).
   const found = useTasks((t) => (ws ? searchOf(t, ws.host, ws.id).found : null));
   const selected = useTasks((t) => t.selected);
@@ -551,7 +552,7 @@ export function TasksMode() {
   }
   // Hide empty Done (X45), then the board's filters (X100), Assignee's Me among them (X50); Find a task filters nothing (X93).
   const unfiltered = mapCards(shown.views, (c) => (keepCard(c, { ...filters, mine: false }) ? c : null));
-  const filtered = applyFilters(unfiltered, boardFilters);
+  const filtered = applyFilters(unfiltered, shownFilters);
   const views = arrange(filtered, display);
   const fieldChoices = filterFields(unfiltered);
   const changeFilters = (f: TaskFilter[]) => setBoardFilters(shown.board, f);
@@ -638,7 +639,7 @@ export function TasksMode() {
           />
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {layout === "list" && <ExpandAll cards={listCards} />}
-            <HeaderTools board={shown.board} columns={savedColumns} estimate={estimate} fields={fieldChoices} filters={boardFilters} onChange={changeFilters} open={panel} onOpen={setPanel} />
+            <HeaderTools board={shown.board} columns={savedColumns} estimate={estimate} fields={fieldChoices} filters={shownFilters} onChange={changeFilters} open={panel} onOpen={setPanel} />
             <IconButton
               title="Refresh tasks"
               onClick={() => {
@@ -651,7 +652,7 @@ export function TasksMode() {
           </div>
         </header>
         <Pane className="flex flex-col">
-        <FilterBar fields={fieldChoices} filters={boardFilters} onChange={changeFilters} count={countLine(unfiltered, filtered)} onAdd={() => setPanel("filter")} />
+        <FilterBar fields={fieldChoices} filters={shownFilters} onChange={changeFilters} count={countLine(unfiltered, filtered)} onAdd={() => setPanel("filter")} />
         {problem && (
           // A board whose origin is gone (a Jira board deleted, a team archived) says why, with its settings (X50).
           <div role="alert" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-error/40 bg-error/[0.06] px-3 py-2 ui-text-12.5 text-error">

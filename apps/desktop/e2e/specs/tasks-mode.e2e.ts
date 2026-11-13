@@ -478,6 +478,9 @@ describe("Tasks mode", () => {
   it("filters the board from the Filter menu (F): a chip per filter, is and is not, ×, and Clear; Assignee is Me is the board's pick (X100)", async () => {
     const bar = '//div[@role="group"][@aria-label="Applied filters"]';
     const chip = (label: string) => $(`${bar}/div[@role="group"][@aria-label=${JSON.stringify(label)}]`);
+    // The header holds Filter and Display options instead of X45/X50's controls.
+    await expect($('//header//div[@role="group"][@aria-label="Filters"]')).not.toBeExisting();
+    await expect($('//header//div[@role="group"][@aria-label="Layout"]')).not.toBeExisting();
     // The repository's board is at Assignee: me, the chip shown from the start.
     await expect(chip("Assignee is Me")).toBeDisplayed();
     await expect($('//button[@aria-label="Filter, 1 applied"]')).toBeDisplayed();
@@ -497,6 +500,11 @@ describe("Tasks mode", () => {
     await chip("State is Closed").$('.//button[normalize-space()="is"]').click();
     await expect(chip("State is not Closed")).toBeDisplayed();
     await expect(card("acme/storefront#12", "Open")).toBeDisplayed();
+    // Its value opens the field's values under it, the picked one checked.
+    await chip("State is not Closed").$('.//button[normalize-space()="Closed"]').click();
+    await expect($('//div[@role="menu"][@aria-label="State values"]//button[@role="menuitemcheckbox"][@aria-checked="true"][.//span[normalize-space()="Closed"]]')).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($('//div[@role="menu"][@aria-label="State values"]')).not.toBeExisting();
     // × removes it; Clear removes Assignee is Me too, and the board fetches everyone's issues.
     await $('//button[@aria-label="Remove State filter"]').click();
     await expect(chip("State is not Closed")).not.toBeExisting();
@@ -511,13 +519,14 @@ describe("Tasks mode", () => {
     await expect(chip("Assignee is Me")).toBeDisplayed();
   });
 
-  it("opens Display options (V): Board and List, ordering, and Show sessions on cards (X100)", async () => {
+  it("opens Display options (V) with Board | List and the columns, and turns Show sessions on cards off and on (X100)", async () => {
     // Nothing typed into: the keys reach the board.
     await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
     await browser.keys("v");
     const display = '//div[@role="dialog"][@aria-label="Display options"]';
     await expect($(display)).toBeDisplayed();
-    await expect($(`${display}//button[contains(normalize-space(), "shown")]`)).toBeDisplayed();
+    await expect($(`${display}//div[@role="radiogroup"][@aria-label="Layout"]`)).toBeDisplayed();
+    await expect($(`${display}//button[normalize-space()="2 shown · 1 folded"]`)).toBeDisplayed();
     await browser.keys("Escape");
     await expect($(display)).not.toBeExisting();
     const linked = () => card("acme/storefront#12", "Open").$(`.${sel.text(LINKED)}`);
