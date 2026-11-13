@@ -392,6 +392,14 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", e.to_string())
 }
 
+/// A session's own worktree that becomes its copy where it is (X73).
+#[derive(Default)]
+struct InPlace {
+    path: String,
+    repo: String,
+    made_from: Option<String>,
+}
+
 /// A live copy [`LiveCopies::hold`] holds: nothing else changes it.
 pub struct Holding {
     id: String,
@@ -927,6 +935,25 @@ impl LiveCopies {
     /// `sync.start`: keeps `session` on the central host in sync here. A
     /// session already kept returns its copy.
     pub fn start(self: &Arc<Self>, session: String) -> Result<Copy, RpcError> {
+        self.start_at(session, None)
+    }
+
+    /// [`Self::start`] for session `s`, which this Mac just let go of
+    /// (X73): its worktree becomes the copy where it is, with the central
+    /// host's files. `made_from` is the worktree's files as it was let go
+    /// of: a file changed there since keeps its version. A copy of it not
+    /// made yet takes the worktree too.
+    pub fn start_in_place(self: &Arc<Self>, s: &moonlet_proto::types::Session, made_from: Option<String>) -> Result<Copy, RpcError> {
+        let path = PathBuf::from(&s.path);
+        if !path.is_dir() {
+            tracing::warn!(session = %s.id, "its worktree is gone: a new copy is made instead");
+            return self.start(s.id.clone());
+        }
+        let repo = self.sessions.project(&s.project_id).map(|p| p.path).unwrap_or_default();
+        self.start_at(s.id.clone(), Some(InPlace { path: s.path.clone(), repo, made_from }))
+    }
+
+    fn start_at(self: &Arc<Self>, session: String, in_place: Option<InPlace>) -> Result<Copy, RpcError> {
         let host = self
             .link
             .central_name()
@@ -937,25 +964,40 @@ impl LiveCopies {
             let mut data = self.data.lock().unwrap();
             if let Some(k) = data
                 .worker
-                .iter()
+                .iter_mut()
                 .find(|k| k.session == session && k.host == host && k.kind == CopyKind::Live)
             {
-                let k = k.clone();
-                drop(data);
-                return Ok(self.copy_of(&k));
+                // One not made yet takes the worktree, rather than leave it
+                // to no one.
+                let take = in_place.filter(|_| k.path.is_empty() && k.base.is_none());
+                let Some(w) = take else {
+                    let k = k.clone();
+                    drop(data);
+                    return Ok(self.copy_of(&k));
+                };
+                k.path = w.path;
+                k.repo = w.repo;
+                k.made_from = w.made_from;
+                k.paused = None;
+                k.id.clone()
+            } else {
+                let w = in_place.unwrap_or_default();
+                let kept = Kept {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    host,
+                    session,
+                    path: w.path,
+                    repo: w.repo,
+                    made_from: w.made_from,
+                    ..Kept::default()
+                };
+                let id = kept.id.clone();
+                if !data.auto.contains(&kept.session) {
+                    data.auto.push(kept.session.clone());
+                }
+                data.worker.push(kept);
+                id
             }
-            let kept = Kept {
-                id: uuid::Uuid::new_v4().to_string(),
-                host,
-                session,
-                ..Kept::default()
-            };
-            let id = kept.id.clone();
-            if !data.auto.contains(&kept.session) {
-                data.auto.push(kept.session.clone());
-            }
-            data.worker.push(kept);
-            id
         };
         self.save();
         self.states
@@ -1264,6 +1306,29 @@ impl LiveCopies {
             }
             path
         };
+
+        // A worktree made before, or the session's own kept where it is
+        // (X73), is on the session's branch with no commits the central
+        // host lacks, or nothing of the central host's replaces its files.
+        if made {
+            match off_branch(&path, &opened.branch).await.map_err(|e| Stop::Paused(format!("{e:#}")))? {
+                Some(b) if b.is_empty() => return Err(Stop::Paused(format!("the copy is on a detached HEAD, not {}.", opened.branch))),
+                Some(b) => return Err(Stop::Paused(format!("the copy is on {b}, not {}.", opened.branch))),
+                None => {}
+            }
+            let own = git_sync::head(&path).await.map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            if own != fetched.head {
+                let behind = git_sync::is_ancestor(&path, &own, &fetched.head)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                if !behind {
+                    return Err(Stop::Paused(format!("{} on this Mac has commits {}'s doesn't.", opened.branch, k.host)));
+                }
+                git_sync::fast_forward(&path, &opened.branch, &own, &fetched.head)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            }
+        }
 
         // The worktree is at the session's commit; its files follow. A
         // worktree made before and edited since keeps those edits.
