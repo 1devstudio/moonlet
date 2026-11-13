@@ -350,6 +350,8 @@ pub struct SessionManager {
     /// The account state this member shares (X68), once the daemon has
     /// attached it; tests without it keep the state to themselves.
     account: Mutex<Option<account::Account>>,
+    /// The design store (X101), once the daemon has set it.
+    design: std::sync::OnceLock<crate::design::store::Store>,
 }
 
 fn new_id() -> String {
@@ -475,9 +477,33 @@ impl SessionManager {
             save_blocked,
             lifecycles: Mutex::new(HashMap::new()),
             account: Mutex::new(None),
+            design: std::sync::OnceLock::new(),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
+    }
+
+    /// The design store (X101): a session's agent in a project keeping its
+    /// session designs in moonlet is given its own folder there.
+    pub fn set_design_store(&self, store: crate::design::store::Store) {
+        let _ = self.design.set(store);
+    }
+
+    /// The design folder a session's Claude may work in (X101): its own,
+    /// made for it, when its project keeps its session designs in moonlet;
+    /// none otherwise, or when it cannot be made (logged).
+    fn design_dir(&self, ws: &Session, repo: &Project) -> Option<String> {
+        let store = self.design.get()?;
+        if !crate::design::session::keeps_in_moonlet(&read_config(Path::new(&repo.path))) {
+            return None;
+        }
+        match store.make_session_dir(&ws.id, ws.workspace_id.as_deref().unwrap_or_default()) {
+            Ok(dir) => Some(dir.display().to_string()),
+            Err(e) => {
+                tracing::warn!("cannot make the design folder of session {}: {e:#}", ws.id);
+                None
+            }
+        }
     }
 
     pub fn set_chats(self: &Arc<Self>, chats: Arc<crate::chat::runtime::ChatManager>) {
@@ -1355,6 +1381,8 @@ impl SessionManager {
                         let real = |p: &str| std::fs::canonicalize(p).ok();
                         Path::new(d).is_dir() && real(d).zip(real(&ws.path)).is_some_and(|(d, w)| d.starts_with(w))
                     })
+                    // Its own design folder here, as this host's word (X101).
+                    .chain(self.design_dir(ws, &repo))
                     .collect(),
                 settings: None,
                 workspace: None,
@@ -1398,6 +1426,14 @@ impl SessionManager {
             req.env.entry(k).or_insert(v);
         }
         let chats = if req.chat { self.chat_runtime(req.agent.as_deref()) } else { None };
+        // Its own design folder, when its project keeps them in moonlet (X101).
+        if chats.is_some()
+            && req.agent.as_deref() == Some("claude")
+            && let Some(dir) = self.design_dir(ws, &repo)
+            && !req.add_dirs.contains(&dir)
+        {
+            req.add_dirs.push(dir);
+        }
         let info = match chats {
             Some(chats) => chats.create(crate::chat::runtime::ChatCreate {
                 cwd: req.cwd.clone(),
@@ -3462,6 +3498,48 @@ mod tests {
         }
         let started = std::fs::read_to_string(&args).unwrap();
         assert!(started.contains(&format!("--add-dir {}", extra.display())), "{started}");
+    }
+
+    /// X101: in a project that keeps its session designs in moonlet, a
+    /// session's agent starts with its own design folder under
+    /// `~/.moonlet/design/.sessions/`, made for it; in one that keeps them in
+    /// the project, with no such folder.
+    #[tokio::test]
+    async fn a_sessions_agent_gets_its_design_folder_when_its_project_keeps_designs_in_moonlet() {
+        let (repo, home, mgr, _chats) = structured().await;
+        mgr.set_design_store(crate::design::store::Store::new(home.path()));
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let started = |s: &Session| {
+            let args = std::path::Path::new(&s.path).join("claude-args");
+            async move {
+                for _ in 0..200 {
+                    if args.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                std::fs::read_to_string(&args).unwrap()
+            }
+        };
+        let mut req = spawn_req(&r.id, "In the project", None, None);
+        req.agent = Some("claude".into());
+        let plain = mgr.create_session(req).await.unwrap();
+        assert!(!started(&plain).await.contains("design/.sessions"));
+        assert!(!home.path().join("design/.sessions").exists());
+
+        std::fs::create_dir_all(repo.path().join(".moonlet")).unwrap();
+        std::fs::write(repo.path().join(".moonlet/config.toml"), "[design]\nstore = \"moonlet\"\n").unwrap();
+        let mut req = spawn_req(&r.id, "In moonlet", None, None);
+        req.agent = Some("claude".into());
+        let s = mgr.create_session(req).await.unwrap();
+        let dir = home.path().join("design/.sessions").join(&s.id);
+        assert!(started(&s).await.contains(&format!("--add-dir {}", dir.display())));
+        assert!(dir.is_dir());
+        let workspace = s.workspace_id.clone().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(format!("design/.sessions/{}.toml", s.id))).unwrap(),
+            format!("workspace = \"{workspace}\"\n")
+        );
     }
 
     #[tokio::test]

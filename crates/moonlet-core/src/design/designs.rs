@@ -606,6 +606,7 @@ created_at = 1761200000000
                     built_in: None,
                     system_updated: false,
                     shared: false,
+                    side: None,
                 },
                 DesignInfo {
                     slug: "settings-page".into(),
@@ -631,6 +632,7 @@ created_at = 1761200000000
                     built_in: None,
                     system_updated: false,
                     shared: false,
+                    side: None,
                 },
             ]
         );

@@ -321,6 +321,10 @@ pub struct DesignInfo {
     /// as `{workspace: "library", slug}`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shared: bool,
+    /// A session design's folder of its comments, history, built
+    /// screenshots and its agent's copy of the design system (X101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
 }
 
 impl DesignInfo {
@@ -348,6 +352,7 @@ impl DesignInfo {
             built_in: None,
             system_updated: false,
             shared: false,
+            side: None,
         }
     }
 
@@ -562,6 +567,11 @@ pub struct ProjectDesign {
     /// when not set.
     #[serde(default)]
     pub dir: Option<String>,
+    /// Where its session designs are made (X101): `"moonlet"` keeps them in
+    /// `~/.moonlet/design/.sessions/<session>/`, out of the worktree; any
+    /// other value, or none, in the worktree's design folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<String>,
 }
 
 /// A project's heavy commands, the `[heavy]` table of its config (X62).

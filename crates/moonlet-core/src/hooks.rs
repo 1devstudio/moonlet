@@ -582,6 +582,8 @@ mod tests {
     /// it in the same chat, how `new` and `sync` go, how a spec is written
     /// from a design, and the screenshots and PR description after the build;
     /// the design rules say how a session design links its pinned styles.
+    /// Its copy of the system and its screenshots are in the design's
+    /// `side`, wherever the project keeps it (X101).
     #[test]
     fn the_moonlet_design_skill_takes_a_session_from_a_session_design_to_its_spec_and_pr() {
         let dir = tempfile::tempdir().unwrap();
@@ -590,13 +592,14 @@ mod tests {
         let skill = std::fs::read_to_string(dir.path().join("claude/skills/moonlet-design/SKILL.md")).unwrap();
         for said in [
             "\"$MOONLET_BIN\" design new --here \"<brief>\"",
-            ".moonlet/design/<slug>/system/README.md",
+            "`<side>/system/README.md`",
+            "`side` is the folder of its comments, history and your copy of the design system",
             "\"$MOONLET_BIN\" design check --here <slug>",
             "\"$MOONLET_BIN\" design new --system <slug> \"<brief>\"",
             "- **Design:** <design folder>",
             "names the `data-mid` of the element it describes",
             "the pages you did not choose, each with why",
-            ".moonlet/design/<slug>/built/<page>.png",
+            "`<side>/built/<page>.png`",
             "`Spec: <id> · Design: <design folder>`",
         ] {
             assert!(skill.contains(said), "{said}");
