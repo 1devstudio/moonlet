@@ -902,11 +902,8 @@ impl ChatManager {
     fn may_rest(&self, inner: &Inner) -> bool {
         let st = &inner.state;
         !inner.frozen
-            && !super::busy(st)
-            && st.pending.is_empty()
-            && st.queued.is_empty()
+            && !super::at_work(st)
             && inner.kept.is_empty()
-            && !st.subagents.iter().any(|a| a.status == "running")
             && now_ms().saturating_sub(inner.active_at) >= self.rest_after.load(std::sync::atomic::Ordering::SeqCst)
     }
 

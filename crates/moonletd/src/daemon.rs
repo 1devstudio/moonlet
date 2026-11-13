@@ -4153,8 +4153,8 @@ impl Daemon {
 
     /// The Mac goes to sleep or woke (X73). Going to sleep, this member
     /// freezes the agents of the sessions it runs, sends what is new, and
-    /// hands the sessions that are not pinned to the central host, which
-    /// continues them. Waking, it lets an agent go on only while its
+    /// hands the sessions at work that are not pinned to the central host,
+    /// which continues them; an idle one stays. Waking, it lets an agent go on only while its
     /// session is still this member's; one handed over is let go of.
     pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
         use crate::power::Power;
@@ -4193,10 +4193,22 @@ impl Daemon {
                 // A session the central host would continue from an older
                 // copy stays here, as when the hand-over cannot be sent.
                 let unsent = self.session_copies.send_now().await;
+                // Only one at work or waiting on something: an idle one
+                // stays, so a short idle sleep moves nothing.
+                let at_work = |s: &moonlet_proto::types::Session| {
+                    let states: Vec<_> = s
+                        .terminals
+                        .iter()
+                        .filter(|t| self.chats.is_chat(**t))
+                        .filter_map(|t| self.chats.state(*t).ok())
+                        .collect();
+                    crate::power::hand_over_at_sleep(&states)
+                };
                 let handed: Vec<String> = own
                     .iter()
                     .filter(|s| !unsent.contains(&s.id))
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("pinned")).is_none_or(Value::is_null))
+                    .filter(|s| at_work(s))
                     .map(|s| s.id.clone())
                     .collect();
                 if handed.is_empty() {

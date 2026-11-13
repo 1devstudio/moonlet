@@ -11,9 +11,9 @@
 The user works on the MacBook, closes its lid and leaves with the phone. Today the session stops until the MacBook wakes.
 
 With this spec, a session's agent runs where the user works, and moves on its own:
-- **When the owner goes to sleep,** its daemon stops its agents, sends a last checkpoint and hands its sessions to the central host. The central host continues each from there. A turn that was cut off continues, with a note to the agent.
+- **When the owner goes to sleep,** its daemon stops its agents, sends a last checkpoint and hands its busy sessions to the central host: those with a turn running, an ask open, a message queued or a subagent running in a structured chat. The central host continues each from there. A turn that was cut off continues, with a note to the agent. An idle session stays where it is, so a short idle sleep with the lid open moves nothing.
 - **When the user types into a session in the app on another member,** that member takes the session over once the current turn ends, and the message runs there.
-- **The phone never moves a session.** Its messages reach the owner through the central host (X72). Only when the owner has been unreachable for 30 s with no sleep notice does a phone message make the central host take the session over.
+- **The phone never moves a session.** Its messages reach the owner through the central host (X72). Only when the owner has been unreachable for 30 s, asleep or not, does a phone message make the central host take the session over.
 
 **Run only on…** overrides all of this: it pins the session to one member until the user unpins it, and **Move now** cuts a running turn off to move at once.
 
@@ -29,7 +29,7 @@ What is not known is whether the network still carries data in that window when 
 - **Stopping the agents needs no network.** The owner stops them first, so a session never runs a step after the notice, whatever happens next.
 - **Checkpoints are sent continuously** (X72, after every tool call). At sleep only the last few changes are left to send, and a failed send loses only those.
 - **When the hand-over cannot be sent,** the sessions stay with the sleeping owner, and the central host's copy shows the cut-off turn. The phone offers **Continue on studio-mini** (below), and a message from the phone continues it too.
-- **A hand-over that could not be sent is sent at the next wake,** dark wakes (Power Nap) included, so a MacBook in a bag usually hands its sessions over within minutes even when the lid closed with no network.
+- **A hand-over that could not be sent is sent at the next wake,** dark wakes (Power Nap) included, so a MacBook in a bag usually hands its busy sessions over within minutes even when the lid closed with no network.
 
 Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long the hold lasts and whether the network works during it. Its results can shorten the hold below; they do not change the design.
 
@@ -56,14 +56,14 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 ### When the owner goes to sleep
 
 - [ ] On the sleep notice, the owner's daemon:
-  1. stops (`SIGSTOP`) the process group of every agent it runs, structured chats and PTY agent tabs alike;
+  1. stops (`SIGSTOP`) the process group of every structured chat agent it runs (a PTY agent tab is neither stopped nor handed over, so a session at work only in one stays);
   2. sends each session's last checkpoint (X72): the worktree as it is now, and the transcript up to its last complete tool result;
-  3. asks the central host to take its unpinned sessions (`session.yield`);
+  3. asks the central host to take its unpinned sessions that are busy (`session.yield`): a chat with a turn running (`working` or `blocked`), an ask open, a message queued, or a subagent running (`only_a_session_at_work_or_waiting_on_something_goes_to_the_central_host_at_sleep`);
   4. lets the Mac sleep once the central host answers, or after 25 s, inside macOS's 30 s limit.
 - [ ] A hand-over the central host did not answer is kept in `moves.json` and sent again at the next wake, dark wakes included. Until the central host answers it, the stopped agents stay stopped.
 - [ ] The central host takes every session handed to it: it raises `epoch` and makes itself the owner.
 - [ ] A session pinned to the member going to sleep is not handed over. It waits, and the phone shows "Kept on MacBook · asleep".
-- [ ] A session with no turn running moves and stays idle on the central host.
+- [ ] A session with nothing running, open or queued stays on the member going to sleep. It is listed as the member's while it sleeps, and a phone message reaches it as for any unreachable owner, after 30 s (`an_idle_session_stays_on_the_mac_through_sleep`, `a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_copy`).
 - [ ] A session whose turn was cut off continues on the central host with this message to the agent: "This session moved from MacBook to studio-mini because MacBook went to sleep, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again." When the worktree's path differs, the message adds: "The worktree is now at <new path>. Earlier messages name <old path>."
 - [ ] A session with an ask open (a permission, a plan or a question, X6) moves with the ask open. The ask shows on the phone, and the answer goes to the central host.
 
@@ -92,7 +92,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 
 ### When the owner is unreachable
 
-- [ ] An owner whose link to the central host has missed its pings for 30 s (X41's 3 misses) without a sleep notice keeps its sessions while nobody acts on them elsewhere.
+- [ ] An owner whose link to the central host has missed its pings for 30 s (X41's 3 misses), asleep or not, keeps the sessions it did not hand over while nobody acts on them elsewhere.
 - [ ] A message, an answer to an ask, or **Move now** for such a session, from the phone or another member, makes the central host take it over first. The phone shows "MacBook is not reachable. Continuing on studio-mini."
 - [ ] For a session whose owner is unreachable and whose copy shows a turn that was running, the phone shows "MacBook is not reachable · fix-cart was working" with **Continue on studio-mini**. Pressing it takes the session over as a message would, and continues the turn with the cut-off note.
 - [ ] Until the owner has been unreachable for 30 s, the phone holds **Continue on studio-mini** back and counts down: "Continue on studio-mini in 12 s". The central host would refuse it before then.
@@ -216,7 +216,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - the decision on wake for each case (answered yield, newer epoch, same epoch, central unreachable), against a table of literal outcomes;
   - the decision on typing for each owner state (idle, working, pinned, unreachable).
 - Daemon integration (`crates/moonletd/tests/follow.rs`), two daemons linked through the `tests/account.rs` helpers, with a fake agent and a test-only sleep notice (`MOONLET_TEST_SLEEP`):
-  - a sleep notice hands an idle session to the central host, and `session.list` there shows it owned;
+  - a sleep notice hands a busy session to the central host, and `session.list` there shows it owned; an idle one stays;
   - a sleep notice in the middle of a turn: the central host's agent gets the cut-off note;
   - a pinned session stays and is not taken;
   - `session.bring` while the owner works waits for the turn's end, then the message runs on the new owner;
@@ -243,7 +243,7 @@ What works as specified:
   - It keeps its gap: changed files in leftovers, and the conversation as `<id>.fork-<time>.jsonl`.
   - Its worktree moves, whole, into leftovers; it is never deleted.
   - It then follows the new owner with an X60 live copy, as the user chose. (`a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner`)
-- **Sleep.** The member freezes its chat agents, sends what is new, and hands its unpinned sessions over with `session.yield`, holding sleep for at most 25 s. On wake, an agent goes on only while its session is still its own. (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_not_handed_over_before_sleep_goes_on_here_after_waking`)
+- **Sleep.** The member freezes its chat agents, sends what is new, and hands its unpinned busy sessions over with `session.yield`, holding sleep for at most 25 s. An idle session stays (2026-11-13: a 90 s idle sleep with the lid open had handed over 64 idle sessions; `an_idle_session_stays_on_the_mac_through_sleep`). On wake, an agent goes on only while its session is still its own. (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_not_handed_over_before_sleep_goes_on_here_after_waking`)
 - **Typing brings a session back.** It waits for the end of the turn, or moves at once with Move now. (`typing_on_the_member_brings_the_session_back_from_the_central_host`, `a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now`)
 - **Run only on… pins, and Unpin.** (`a_session_moved_to_the_central_host_stays_there`, `a_session_moved_to_this_mac_stays_through_sleep_until_unpinned`)
 - **Take over anyway.** (`a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back`)

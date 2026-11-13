@@ -298,6 +298,12 @@ pub(crate) fn busy(st: &ChatState) -> bool {
     st.status == "working" || st.status == "blocked"
 }
 
+/// The chat is at work or waits on something (X73, X84): a turn running,
+/// an ask open, a message queued, or a subagent running.
+pub fn at_work(st: &ChatState) -> bool {
+    busy(st) || !st.pending.is_empty() || !st.queued.is_empty() || st.subagents.iter().any(|a| a.status == "running")
+}
+
 /// Moves the messages still queued when their agent is gone into the
 /// transcript, each with a note that it never reached the agent (X49).
 pub(crate) fn undeliver(st: &mut ChatState) -> Vec<Out> {

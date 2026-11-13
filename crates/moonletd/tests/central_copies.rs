@@ -2464,7 +2464,10 @@ async fn a_session_whose_last_copy_cannot_be_sent_stays_on_the_mac_at_sleep() {
     origin.add_to(&mini).await;
     let project = origin.add_to(&book).await;
     let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
     copy_of(&mini, &made).await;
+    // At work, so it would go, were its last copy sent.
+    start_turn(&book, &agent).await;
     // A file git cannot read: the session's last copy cannot be made.
     let locked = path_of(&made).join("locked.txt");
     std::fs::write(&locked, "new work").unwrap();
@@ -2500,6 +2503,50 @@ async fn a_session_not_handed_over_before_sleep_goes_on_here_after_waking() {
     let _: Value = book
         .call("power.simulate", json!({ "event": "wake" }))
         .await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "a turn after waking", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done") && agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_idle_session_stays_on_the_mac_through_sleep() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    // Its turn ended: nothing runs, waits or is queued.
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // A short idle sleep, the lid open.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().all(|s| s["id"] != made["id"]), "handed to studio-mini");
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    // Still the MacBook's, and its agent answers here.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "no longer the MacBook's own");
     let _: Value = book
         .call("chat.send", json!({ "id": agent, "text": "Again" }))
         .await;
@@ -2579,6 +2626,10 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
             .any(|s| s["id"] == made["id"] && s["pinned"] == json!(BOOK))
     })
     .await;
+    // At work through both sleeps, so only its pin keeps it.
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let agent = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    start_turn(&book, &agent).await;
 
     // Pinned here: going to sleep keeps it.
     let _: Value = book
@@ -2980,12 +3031,28 @@ async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept
         },
     )
     .await;
-    // Kept on the MacBook now: going to sleep keeps it.
+    // Kept on the MacBook now: going to sleep keeps it, at work as it is,
+    // so only its pin keeps it.
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    start_turn(&book, &chat).await;
     let _: Value = book
         .call("power.simulate", json!({ "event": "sleep" }))
         .await;
     let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(mini_own.iter().all(|s| s["id"] != made["id"]));
+}
+
+/// Starts a turn on `d`'s chat `agent` that runs until stopped (`HOLD`).
+async fn start_turn(d: &Daemon, agent: &Value) {
+    let _: Value = d
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(Duration::from_secs(30), "the turn running", || async {
+        let st: Value = d.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("working")
+    })
+    .await;
 }
 
 const AIR: &str = "9e2b4d6f-1a3c-4e5f-8b7d-0c2e4a6b8d1f";
