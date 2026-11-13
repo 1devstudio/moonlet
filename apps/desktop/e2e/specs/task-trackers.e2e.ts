@@ -236,14 +236,18 @@ describe("Linear tracker", () => {
   });
 
   it("shows everyone's open issues once the board's Assignee is anyone, others' dimmed (X50)", async () => {
-    const assignee = (who: string) => `//div[@role="group"][@aria-label="Filters"]//button[@aria-label="Assignee: ${who}"]`;
+    // Assignee is Me is the board's pick at me; removing the chip sets it to anyone (X100).
+    const me = '//div[@role="group"][@aria-label="Applied filters"]/div[@role="group"][@aria-label="Assignee is Me"]';
     const pick = async (label: string) => {
-      await $('//div[@role="group"][@aria-label="Filters"]//button[starts-with(@aria-label, "Assignee: ")]').click();
-      await $(`//button[.//span[normalize-space()="${label}"]]`).click();
+      if (label === "Anyone") return $('//button[@aria-label="Remove Assignee filter"]').click();
+      await $('//button[starts-with(@aria-label, "Filter")][@title="Filter  F"]').click();
+      await $('//div[@role="menu"][@aria-label="Add filter"]//button[.//span[normalize-space()="Assignee"]]').click();
+      await $('//div[@role="menu"][@aria-label="Assignee values"]//button[@role="menuitemcheckbox"][.//span[normalize-space()="Me"]]').click();
+      await browser.keys("Escape");
     };
     const grace = '//section[@aria-label="Todo"]//article[starts-with(@aria-label, "ENG-200")]';
-    await pick("Me");
-    await expect($(assignee("me"))).toBeDisplayed();
+    if (!(await $(me).isExisting())) await pick("Me");
+    await expect($(me)).toBeDisplayed();
     await expect($(grace)).not.toBeExisting();
     await pick("Anyone");
     await expect($(grace)).toBeDisplayed({ wait: 15_000 });

@@ -99,6 +99,20 @@ const wt18 = join(w.root, "wt-18-orphan-work");
 const tasksButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[starts-with(@aria-label, "Tasks")]');
 const sessionsButton = () => $('//div[@role="group"][@aria-label="Mode"]/button[@aria-label="Sessions"]');
 const card = (key: string, column: string) => $(`//section[@aria-label=${JSON.stringify(column)}]//article[starts-with(@aria-label, ${JSON.stringify(key)})]`);
+/** Picks Board or List in Display options (X100), then closes it. */
+async function pickLayout(name: "Board" | "List") {
+  await $('//button[@aria-label="Display options"]').click();
+  await $(`//div[@role="radiogroup"][@aria-label="Layout"]/button[normalize-space()=${JSON.stringify(name)}]`).click();
+  await browser.keys("Escape");
+  await expect($('//div[@role="dialog"][@aria-label="Display options"]')).not.toBeExisting();
+}
+/** Turns a Board options switch of Display options (X100) over, then closes it. */
+async function displaySwitch(label: string) {
+  await $('//button[@aria-label="Display options"]').click();
+  await $(`//div[@role="dialog"][@aria-label="Display options"]//button[@role="switch"][@aria-labelledby=//*[normalize-space()=${JSON.stringify(label)}]/@id]`).click();
+  await browser.keys("Escape");
+  await expect($('//div[@role="dialog"][@aria-label="Display options"]')).not.toBeExisting();
+}
 /** #12's whole description inside `scope`, its Markdown rendered: the Task tab and the Tasks mode detail show it alike. */
 async function expectRenderedDescription(scope: string) {
   const el = $(scope);
@@ -129,7 +143,7 @@ describe("Tasks mode", () => {
 
   // The app keeps the layout and open rows across restarts, and localStorage
   // outlives a run: start and end from the defaults.
-  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded", "moonlet.tasks.filters", "moonlet.tasks.assignee"].forEach((k) => localStorage.removeItem(k)));
+  const forgetLayout = () => browser.execute(() => ["moonlet.tasks.layout", "moonlet.tasks.expanded", "moonlet.tasks.filters", "moonlet.tasks.assignee", "moonlet.tasks.boardFilters", "moonlet.tasks.display"].forEach((k) => localStorage.removeItem(k)));
   before(async () => {
     await forgetLayout();
     // The store read them when the app started.
@@ -339,11 +353,11 @@ describe("Tasks mode", () => {
   it("lists sessions without a task, with the issue their name looks like", async () => {
     await tasksButton().click();
     // Sessions without a task are the List's last group (X50).
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    await pickLayout("List");
     const row = $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]`);
     await expect(row).toBeDisplayed();
     await expect(row.$(sel.text("Looks like acme/storefront#12 Fix checkout button"))).toBeDisplayed();
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    await pickLayout("Board");
   });
 
   it("starts a session from a task with the issue as the first message, its branch and the link", async () => {
@@ -456,9 +470,65 @@ describe("Tasks mode", () => {
     // A GitHub repository board folds its Closed column (X50).
     const done = $('//button[starts-with(@aria-label, "Closed: ")]');
     await expect(done).toHaveAttribute("aria-label", "Closed: 2 tasks, 1 needs clean-up", { wait: 15_000 });
-    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
+    await displaySwitch("Hide empty Done");
     await expect(done).toHaveAttribute("aria-label", "Closed: 1 task, 1 needs clean-up");
-    await $('//div[@role="group"][@aria-label="Filters"]/button[normalize-space()="Hide empty Done"]').click();
+    await displaySwitch("Hide empty Done");
+  });
+
+  it("filters the board from the Filter menu (F): a chip per filter, is and is not, ×, and Clear; Assignee is Me is the board's pick (X100)", async () => {
+    const bar = '//div[@role="group"][@aria-label="Applied filters"]';
+    const chip = (label: string) => $(`${bar}/div[@role="group"][@aria-label=${JSON.stringify(label)}]`);
+    // The repository's board is at Assignee: me, the chip shown from the start.
+    await expect(chip("Assignee is Me")).toBeDisplayed();
+    await expect($('//button[@aria-label="Filter, 1 applied"]')).toBeDisplayed();
+    // F opens the menu; State lists the board's columns with their counts.
+    // Nothing typed into: the keys reach the board.
+    await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+    await browser.keys("f");
+    const menu = '//div[@role="menu"][@aria-label="Add filter"]';
+    await expect($(menu)).toBeDisplayed();
+    await $(`${menu}//button[.//span[normalize-space()="State"]]`).click();
+    await $('//div[@role="menu"][@aria-label="State values"]//button[@role="menuitemcheckbox"][.//span[normalize-space()="Closed"]]').click();
+    await browser.keys("Escape");
+    await expect($(menu)).not.toBeExisting();
+    await expect(chip("State is Closed")).toBeDisplayed();
+    await expect(card("acme/storefront#12", "Open")).not.toBeExisting();
+    // Its op flips it: every task but the Closed ones.
+    await chip("State is Closed").$('.//button[normalize-space()="is"]').click();
+    await expect(chip("State is not Closed")).toBeDisplayed();
+    await expect(card("acme/storefront#12", "Open")).toBeDisplayed();
+    // × removes it; Clear removes Assignee is Me too, and the board fetches everyone's issues.
+    await $('//button[@aria-label="Remove State filter"]').click();
+    await expect(chip("State is not Closed")).not.toBeExisting();
+    await $(`${bar}//button[normalize-space()="Clear"]`).click();
+    await expect($(bar)).not.toBeExisting();
+    await expect($('//button[@aria-label="Filter"]')).toBeDisplayed();
+    // Me alone sets the board back to the user's issues.
+    await $('//button[@aria-label="Filter"]').click();
+    await $(`${menu}//button[.//span[normalize-space()="Assignee"]]`).click();
+    await $('//div[@role="menu"][@aria-label="Assignee values"]//button[@role="menuitemcheckbox"][.//span[normalize-space()="Me"]]').click();
+    await browser.keys("Escape");
+    await expect(chip("Assignee is Me")).toBeDisplayed();
+  });
+
+  it("opens Display options (V): Board and List, ordering, and Show sessions on cards (X100)", async () => {
+    // Nothing typed into: the keys reach the board.
+    await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+    await browser.keys("v");
+    const display = '//div[@role="dialog"][@aria-label="Display options"]';
+    await expect($(display)).toBeDisplayed();
+    await expect($(`${display}//button[contains(normalize-space(), "shown")]`)).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(display)).not.toBeExisting();
+    const linked = () => card("acme/storefront#12", "Open").$(`.${sel.text(LINKED)}`);
+    await expect(linked()).toBeDisplayed();
+    await displaySwitch("Show sessions on cards");
+    try {
+      await expect(linked()).not.toBeExisting();
+    } finally {
+      await displaySwitch("Show sessions on cards");
+    }
+    await expect(linked()).toBeDisplayed();
   });
 
   it("offers Start session on a card whose task has a worktree and no session, and No sessions yet on one with neither", async () => {
@@ -471,13 +541,13 @@ describe("Tasks mode", () => {
     await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
     // So does Start a session for <key> in the list.
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    await pickLayout("List");
     const row = $('//div[@role="row"][starts-with(@aria-label, "acme/storefront#19")]');
     await row.$('button[aria-label="Expand acme/storefront#19"]').click();
     await row.$(`.${sel.button("Start a session for acme/storefront#19")}`).click();
     await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Escape");
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    await pickLayout("Board");
   });
 
   it("shows on the card why a Clean up failed, with Retry", async () => {
@@ -655,7 +725,7 @@ describe("Tasks mode", () => {
   it("links a session to a task from a pasted key", async () => {
     await tasksButton().click();
     // Sessions without a task are the List's last group (X50).
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    await pickLayout("List");
     await $(`//section[@aria-label="Sessions without a task"]/div[.//span[normalize-space()=${JSON.stringify(SESSION)}]]//button[normalize-space()="Link to task"]`).click();
     await expect($(`//div[@role="dialog"]`).$(sel.text(`Link “${SESSION}” to a task`))).toBeDisplayed();
     await expect($(sel.text("Links live in moonlet; the tracker hears of a PR only through Keep in step."))).toBeDisplayed();
@@ -669,7 +739,7 @@ describe("Tasks mode", () => {
       timeout: 10_000,
       timeoutMsg: "the seeded session was not linked to acme/storefront#12",
     });
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    await pickLayout("Board");
   });
 
   it("shows the task bar on a session of a task with two sessions", async () => {
@@ -738,7 +808,7 @@ describe("Tasks mode", () => {
   });
 
   it("shows the same tasks as a list whose rows open into their sessions, and unfolds and folds a column", async () => {
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="List"]').click();
+    await pickLayout("List");
     const row = $('//section[@aria-label="Open"]//div[@role="row"][starts-with(@aria-label, "acme/storefront#15")]');
     await expect(row).toBeDisplayed({ wait: 10_000 });
     await expect(row.$(sel.text("1 session"))).toBeDisplayed();
@@ -747,12 +817,12 @@ describe("Tasks mode", () => {
     await expect($('//section[@aria-label="Closed"]')).toBeDisplayed();
     // Expand all opens every row; Collapse all closes them.
     const twelve = $('button[aria-label="Expand acme/storefront#12"], button[aria-label="Collapse acme/storefront#12"]');
-    await $(sel.button("Expand all")).click();
+    await $('//header//button[@aria-label="Expand all"]').click();
     await expect(twelve).toHaveAttribute("aria-expanded", "true");
-    await $(sel.button("Collapse all")).click();
+    await $('//header//button[@aria-label="Collapse all"]').click();
     await expect(twelve).toHaveAttribute("aria-expanded", "false");
     await expect(row.$('button[aria-label="Expand acme/storefront#15"]')).toHaveAttribute("aria-expanded", "false");
-    await $('//div[@role="group"][@aria-label="Layout"]/button[normalize-space()="Board"]').click();
+    await pickLayout("Board");
     // A folded column unfolds when clicked, and its ⋯ menu folds it again (X50).
     await $('//button[starts-with(@aria-label, "Closed: ")]').click();
     await expect($('//section[@aria-label="Closed"]')).toBeDisplayed({ wait: 10_000 });
