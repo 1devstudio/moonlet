@@ -2528,6 +2528,12 @@ async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host()
     })
     .await;
 
+    // Nothing comes back while the MacBook sleeps, for longer than a look
+    // or two takes.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back while the MacBook sleeps");
+
     // The MacBook wakes: the session comes back to it, where it was.
     let _: Value = book
         .call("power.simulate", json!({ "event": "wake" }))
@@ -2595,6 +2601,38 @@ async fn a_session_someone_typed_into_on_the_central_host_while_the_mac_slept_st
 }
 
 #[tokio::test]
+async fn a_session_pinned_on_the_central_host_while_the_mac_slept_stays_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    start_turn(&book, &agent).await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    within(Duration::from_secs(30), "the turn ended on studio-mini", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        let Some(s) = theirs.iter().find(|s| s["id"] == made["id"]) else { return false };
+        let st: Value = mini.call("chat.state", json!({ "id": s["terminals"][0] })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+    // Kept on studio-mini with Run only on…, as the user chose.
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "brought back though kept on studio-mini");
+}
+
+#[tokio::test]
 async fn the_first_start_of_this_version_brings_back_the_untouched_sessions_the_central_host_runs() {
     let origin = Origin::new();
     let (mini, mut book, made) = continued_and_back(&origin).await;
@@ -2603,10 +2641,12 @@ async fn the_first_start_of_this_version_brings_back_the_untouched_sessions_the_
     // As an older version left it: it handed every session over at every
     // sleep, and never looked back.
     book.stop();
-    let file = book.home.path().join("session-copies.json");
-    let mut data: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    data.as_object_mut().unwrap().remove("looked_back");
-    std::fs::write(&file, serde_json::to_vec(&data).unwrap()).unwrap();
+    // The file as 0.1.42 left it: no sessions to bring back, no look back.
+    std::fs::write(
+        book.home.path().join("session-copies.json"),
+        r#"{ "sent": {}, "held": {}, "forced": {}, "files": {} }"#,
+    )
+    .unwrap();
     book.restart().await;
     within(Duration::from_secs(60), "fix-cart back on the MacBook", || async {
         let own: Vec<Value> = book.call("session.list", json!({})).await;

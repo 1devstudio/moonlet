@@ -73,7 +73,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   1. brings its copy's files to the latest it holds;
   2. runs the project's setup there, when it has not run yet and its command is approved for this member (X60);
   3. puts the transcript up to the last checkpoint in its profile's `projects/` folder for the copy's path (X72);
-  4. resumes the agent with `claude --resume <agent session id>` for a structured chat, with the chat's next message (the cut-off note, or the message typed), so a session that moves idle starts no agent; or `claude --continue` in a new terminal tab for a PTY agent tab;
+  4. resumes the agent with `claude --resume <agent session id>` for a structured chat, with the chat's next message (the cut-off note, or the message typed), so a session that moves idle starts no agent (`a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message`); or `claude --continue` in a new terminal tab for a PTY agent tab;
   5. sends the waiting message, if any: the cut-off note, or the message the user typed.
 - [ ] Setup that is not approved does not stop the move. The chat then says "Setup has not run on studio-mini: approve `pnpm install` to run it", with **Run setup**.
 - [ ] Plain terminals and their processes do not move. The new owner's session starts with its agent only. The old owner's terminals are listed as "on MacBook" until it wakes, and close when the session moves away from it.
@@ -130,11 +130,12 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 
 ### Coming back when the Mac is back
 
-- [ ] A session the central host took for a member's sleep comes back to that member once the member is awake and linked, as soon as it is idle on the central host and nobody typed into it there since it moved (moonlet's cut-off note aside). It comes back to the same worktree, and its chats resume with their next message (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`).
-- [ ] While its turn runs on the central host, the member asks again every few seconds; once someone typed into it there, from the phone or the central host's app, it stays there for good. Typing on the member still brings it back as before (`a_session_someone_typed_into_on_the_central_host_while_the_mac_slept_stays_there`).
-- [ ] The central host decides (`session.take {returning: true}`): it answers `busy` or `used`, and a pinned session is never brought back this way.
+- [ ] A session the central host took for a member's sleep comes back to that member once the member is awake and linked, as soon as it is idle on the central host and nobody typed into it there since it moved. What its chats held as the central host took it in never counts as typed: the member's last message, a message it had queued, and moonlet's cut-off note. It comes back to the same worktree, and its chats resume with their next message (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_comes_back_only_while_idle_and_untouched_since_it_moved`).
+- [ ] While its turn runs on the central host, the member asks again every few seconds, for up to about ten minutes. Once someone typed into it there, from the phone or the central host's app, it stays there for good (`a_session_someone_typed_into_on_the_central_host_while_the_mac_slept_stays_there`). Typing on the member still brings it back as before (`typing_on_the_member_brings_the_session_back_from_the_central_host`).
+- [ ] The central host decides (`session.take {returning: true}`): it answers `busy` or `used` (`a_session_comes_back_only_while_idle_and_untouched_since_it_moved`), and a session pinned there, as with Run only on…, is never brought back this way (`a_session_pinned_on_the_central_host_while_the_mac_slept_stays_there`).
+- [ ] Right after a wake, a record from before the hand-over (its news not in yet) does not count as the session being back: the member remembers the ownership number each session had as it was handed over.
 - [ ] The first time a member runs this version, it brings back every idle, untouched session it made that the central host runs: an older version handed every session over at every sleep (`the_first_start_of_this_version_brings_back_the_untouched_sessions_the_central_host_runs`).
-- [ ] Nothing comes back while the member sleeps.
+- [ ] Nothing comes back while the member sleeps (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`). A dark wake (Power Nap) counts as awake, as macOS says it powered on.
 
 ### Run only on…
 
