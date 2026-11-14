@@ -2424,6 +2424,17 @@ async fn a_member_whose_copy_paused_before_it_was_made_makes_it_and_brings_the_s
 }
 
 #[tokio::test]
+async fn a_member_whose_copy_folder_is_gone_makes_it_again_and_brings_the_session() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let folder = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    std::fs::remove_dir_all(&folder).unwrap();
+
+    brought_here(&mini, &book, &made).await;
+}
+
+#[tokio::test]
 async fn a_bring_whose_copy_cannot_be_made_says_why_and_leaves_the_session_there() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;

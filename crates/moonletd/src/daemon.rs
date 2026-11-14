@@ -4061,7 +4061,7 @@ impl Daemon {
         // moved, a copy with no folder is made first; coming back by
         // itself, it waits for one. It is held from now on, so nothing
         // stops it while the central host gives it up.
-        let held = if returning { self.sync.hold(&r.session).await? } else { self.sync.hold_made(&r.session).await? };
+        let held = if returning { self.sync.hold(&r.session).await? } else { self.sync.hold_or_make(&r.session).await? };
         let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
         let taken = host
             .request(
