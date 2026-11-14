@@ -68,15 +68,15 @@ describe("where a copy runs, on the central host (X88)", () => {
 });
 
 describe("Run only on… (X73)", () => {
-  it("offers this Mac and the central host by name, with the member the session is kept on checked, for one Run only on submenu", () => {
+  it("offers this Mac and the central host by name, with the member the session is kept on checked", () => {
     const central = { id: "mini-id", label: "studio-mini" };
     expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central, pinned: null })).toEqual([
-      { to: "book-id", label: "MacBook", checked: false },
-      { to: "mini-id", label: "studio-mini", checked: false },
+      { to: "book-id", label: "Run only on MacBook", checked: false },
+      { to: "mini-id", label: "Run only on studio-mini", checked: false },
     ]);
     expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central, pinned: "mini-id" })).toEqual([
-      { to: "book-id", label: "MacBook", checked: false },
-      { to: "mini-id", label: "studio-mini", checked: true },
+      { to: "book-id", label: "Run only on MacBook", checked: false },
+      { to: "mini-id", label: "Run only on studio-mini", checked: true },
     ]);
     expect(moveTargets({ thisMac: { id: "book-id", label: "MacBook" }, central: null, pinned: null })).toEqual([]);
   });
@@ -84,33 +84,60 @@ describe("Run only on… (X73)", () => {
 
 describe("a session's menu to move it (X73)", () => {
   const base = { centralHost: "mini", me: "book-id", meLabel: "MacBook", centralId: "mini-id", centralLabel: "studio-mini", pinned: null, unreachableSince: null, now: 100_000, copy: true };
-  const none = {
-    kind: "run-only-on",
-    label: "Run only on",
-    targets: [
-      { to: "book-id", label: "MacBook", checked: false },
-      { to: "mini-id", label: "studio-mini", checked: false },
-    ],
-  };
-  it("offers Run only on… as one submenu for this Mac's and the central host's sessions", () => {
-    expect(followMenu({ ...base, host: "local" })).toEqual([none]);
+  it("offers Where it runs as one submenu, with Bring to this Mac for a session the central host runs and nobody kept anywhere", () => {
+    expect(followMenu({ ...base, host: "mini" })).toEqual([
+      {
+        kind: "where",
+        label: "Where it runs",
+        bring: "Bring to this Mac",
+        targets: [
+          { to: "book-id", label: "Run only on MacBook", checked: false },
+          { to: "mini-id", label: "Run only on studio-mini", checked: false },
+        ],
+      },
+    ]);
+    // Here already: nothing to bring.
+    expect(followMenu({ ...base, host: "local" })).toEqual([
+      {
+        kind: "where",
+        label: "Where it runs",
+        bring: null,
+        targets: [
+          { to: "book-id", label: "Run only on MacBook", checked: false },
+          { to: "mini-id", label: "Run only on studio-mini", checked: false },
+        ],
+      },
+    ]);
     expect(followMenu({ ...base, host: "local", pinned: "book-id" })).toEqual([
       {
-        kind: "run-only-on",
-        label: "Run only on",
+        kind: "where",
+        label: "Where it runs",
+        bring: null,
         targets: [
-          { to: "book-id", label: "MacBook", checked: true },
-          { to: "mini-id", label: "studio-mini", checked: false },
+          { to: "book-id", label: "Run only on MacBook", checked: true },
+          { to: "mini-id", label: "Run only on studio-mini", checked: false },
         ],
       },
       { kind: "unpin" },
     ]);
-    expect(followMenu({ ...base, host: "mini", pinned: "mini-id" }).map((i) => i.kind)).toEqual(["run-only-on", "unpin"]);
+    // Kept on the central host: only Run only on moves it.
+    expect(followMenu({ ...base, host: "mini", pinned: "mini-id" })).toEqual([
+      {
+        kind: "where",
+        label: "Where it runs",
+        bring: null,
+        targets: [
+          { to: "book-id", label: "Run only on MacBook", checked: false },
+          { to: "mini-id", label: "Run only on studio-mini", checked: true },
+        ],
+      },
+      { kind: "unpin" },
+    ]);
     expect(followMenu({ ...base, host: "vps" })).toEqual([]);
   });
 
   it("offers Take over anyway only after 30 s offline, for what the central host runs", () => {
-    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([none]);
+    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 }).map((i) => i.kind)).toEqual(["where"]);
     expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000 })).toEqual([{ kind: "take-over" }]);
     expect(followMenu({ ...base, host: "local", unreachableSince: 60_000 })).toEqual([]);
   });

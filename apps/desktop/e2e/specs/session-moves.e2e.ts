@@ -123,18 +123,19 @@ describe("a session follows the Mac you type from (X73)", () => {
     await expect(rows()).toBeElementsArrayOfSize(1);
   });
 
-  it("groups Run only on in one submenu of the session's menu", async () => {
+  it("groups Bring to this Mac and Run only on in one Where it runs submenu of the session's menu", async () => {
     await rightClick(row);
     // A click opens it, as the keyboard can (WebKit's driver moves no
     // pointer for the hover).
-    const opener = '//button[@aria-haspopup="menu"][normalize-space()="Run only on"]';
+    const opener = '//button[@aria-haspopup="menu"][normalize-space()="Where it runs"]';
     await $(opener).click();
-    // This Mac and the central host, by name; the session is kept on neither.
+    // Bring to this Mac, then this Mac and the central host by name; the
+    // session is kept on neither.
     const items = `${opener}/following-sibling::div//button`;
-    await expect($$(items)).toBeElementsArrayOfSize(2, { wait: 5000 });
+    await expect($$(items)).toBeElementsArrayOfSize(3, { wait: 5000 });
+    await expect($(`${items}[normalize-space()="Bring to this Mac"]`)).toBeDisplayed();
     const thisMac = rpc<{ worker: { name: string } }>(w, "link.get", {}).worker.name;
-    await expect($(`${items}[normalize-space()=${JSON.stringify(thisMac)}]`)).toBeDisplayed();
-    await expect($(sel.button("Run only on "))).not.toBeExisting();
+    await expect($(`${items}[normalize-space()=${JSON.stringify(`Run only on ${thisMac}`)}]`)).toBeDisplayed();
     await browser.keys("Escape");
   });
 

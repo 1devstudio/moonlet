@@ -18,8 +18,9 @@ const TYPED_WAIT_MS = Number.POSITIVE_INFINITY;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The message waiting for each session to move here, by session id. */
-const waiting = new Map<string, WaitingMessage>();
+/** The message waiting for each session to move here, by session id;
+ * null for one brought from its menu, with no message (X73). */
+const waiting = new Map<string, WaitingMessage | null>();
 
 /** The message of each session that could not come here, held in a toast
  * until the user sends it there, tries again, or closes the toast. */
@@ -40,6 +41,11 @@ export async function sendOrBring(host: string, sessionId: string | undefined, t
   const s = sessionId ? (st.sessions[host] ?? []).find((x) => x.id === sessionId) : undefined;
   if (!sessionId || !s || !bringsHere(host, st.accounts, s)) return send(text, images);
   const message = { terminal, text, images };
+  // Brought from its menu meanwhile: the message goes with it.
+  if (waiting.has(sessionId) && waiting.get(sessionId) === null) {
+    waiting.set(sessionId, message);
+    return;
+  }
   for (const queue of [held, waiting]) {
     const pending = queue.get(sessionId);
     if (!pending) continue;
@@ -53,8 +59,20 @@ export async function sendOrBring(host: string, sessionId: string | undefined, t
   return bring(host, s, send);
 }
 
-/** Brings session `s`, listed from `host`, here with its waiting message. */
-async function bring(host: string, s: Session, send: Send) {
+/** Bring to this Mac, from session `sessionId`'s menu (X73): brought here
+ * as typing brings it, with no message; a message typed meanwhile goes with
+ * it. When it cannot come, a toast says why, with Try again. */
+export async function bringHere(host: string, sessionId: string) {
+  const st = useStore.getState();
+  const s = (st.sessions[host] ?? []).find((x) => x.id === sessionId);
+  if (!s || !bringsHere(host, st.accounts, s) || waiting.has(sessionId) || held.has(sessionId)) return;
+  waiting.set(sessionId, null);
+  return bring(host, s, null);
+}
+
+/** Brings session `s`, listed from `host`, here with its waiting message;
+ * `send` sends that message where it runs, none when brought with none. */
+async function bring(host: string, s: Session, send: Send | null) {
   const owner = useStore.getState().hosts[host]?.label ?? host;
   // The waiting line, with Move now, stays for as long as the wait.
   let line: number | null = null;
@@ -62,8 +80,9 @@ async function bring(host: string, s: Session, send: Send) {
   try {
     await untilTurnEnds({
       attempt: async (now) => {
-        const m = waiting.get(s.id)!;
-        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: s.id, now, terminal: m.terminal, message: m.text, images: m.images });
+        const m = waiting.get(s.id);
+        const message = m ? { terminal: m.terminal, message: m.text, images: m.images } : { images: [] };
+        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: s.id, now, ...message });
         keptOn = brought?.kept_on;
       },
       waiting: (moveNow) => {
@@ -78,11 +97,11 @@ async function bring(host: string, s: Session, send: Send) {
     selectSession("local", s.id);
     if (keptOn) toast(keptOnLine(s.name, keptOn, s.branch), "info", undefined, { sticky: true });
   } catch (e) {
-    const m = waiting.get(s.id)!;
+    const m = waiting.get(s.id) ?? null;
     waiting.delete(s.id);
     // Kept there since the app last heard: it goes to the owner, as any
     // message for a session kept elsewhere does.
-    if (e instanceof Object && "code" in e && e.code === "pinned") return send(m.text, m.images);
+    if (m && send && e instanceof Object && "code" in e && e.code === "pinned") return send(m.text, m.images);
     hold(host, s, m, errorMessage(e), send);
   } finally {
     if (line !== null) dismissToast(line);
@@ -90,8 +109,16 @@ async function bring(host: string, s: Session, send: Send) {
 }
 
 /** Holds message `m` of session `s` in a toast saying `why` it can't come
- * here, until the user sends it there, tries again, or closes the toast. */
-function hold(host: string, s: Session, m: WaitingMessage, why: string, send: Send) {
+ * here, until the user sends it there, tries again, or closes the toast.
+ * With no message, the toast offers Try again only. */
+function hold(host: string, s: Session, m: WaitingMessage | null, why: string, send: Send | null) {
+  if (!m || !send) {
+    toast(cannotComeLine(s.name, why), "error", {
+      label: "Try again",
+      run: () => void bringHere(host, s.id),
+    }, { sticky: true });
+    return;
+  }
   held.set(s.id, m);
   const take = () => {
     const now = held.get(s.id) ?? m;
