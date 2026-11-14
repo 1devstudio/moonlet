@@ -916,8 +916,9 @@ export async function refreshGit(host: string, id: string) {
   try {
     const st = await rpc<GitStatus>(host, M.gitStatus, { path: w.path, base: w.base });
     const old = get().git[key];
+    const now = Date.now();
     const changed = old !== undefined && !sameJson(old, st);
-    gitChecks[key] = { checkedAt: Date.now(), changedAt: changed ? Date.now() : prev?.changedAt };
+    gitChecks[key] = { checkedAt: now, changedAt: changed ? now : prev?.changedAt };
     // Polls of every open session mostly find nothing new: an unchanged
     // status must not re-render the app or rebuild the boards (X78).
     if (sameJson(old, st)) return;
@@ -1126,14 +1127,14 @@ export async function refreshAllGit(host: string) {
   for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
 }
 
-const gitPass: Record<string, boolean> = {};
+const hostGitPassRunning: Record<string, boolean> = {};
 /** The 20-second poll of a host's sessions: those someone works in on every
  *  poll, the rest every 5 minutes (X102). A pass can take longer than 20
  *  seconds on a loaded Mac; a new one never starts beside it, or they pile
  *  up and slow each other down. */
 export async function pollBackgroundGit(host: string) {
-  if (gitPass[host]) return;
-  gitPass[host] = true;
+  if (hostGitPassRunning[host]) return;
+  hostGitPassRunning[host] = true;
   try {
     for (const w of get().sessions[host] ?? []) {
       if (w.archived) continue;
@@ -1149,7 +1150,7 @@ export async function pollBackgroundGit(host: string) {
       if (due) await refreshGit(host, w.id);
     }
   } finally {
-    gitPass[host] = false;
+    hostGitPassRunning[host] = false;
   }
 }
 
