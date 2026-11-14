@@ -1,6 +1,6 @@
 # X102 — Fewer background git processes
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X78 (background git poll), D1, D2
 - **Related ADRs:** none
