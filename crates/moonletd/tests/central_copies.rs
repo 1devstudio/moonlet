@@ -1970,9 +1970,12 @@ async fn a_lost_session_whose_worktree_has_commits_of_its_own_sends_them_to_the_
         std::fs::write(worktree.join("src/mine.ts"), "committed while away\n").unwrap();
         git_in(&worktree, &["add", "-A"]);
         git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
+        // And an edit not committed, to a file studio-mini changed too.
+        std::fs::write(worktree.join("src/cart.ts"), "not committed\n").unwrap();
     })
     .await;
-    // Its copy goes on in the worktree, in sync, with the commit kept.
+    // Its copy goes on in the worktree, in sync, with the commit and the
+    // edit kept: the file both changed differs.
     within(Duration::from_secs(30), "the copy in sync", || async {
         let copies: Vec<Value> = book.call("sync.list", json!({})).await;
         copies.iter().any(|c| {
@@ -1980,12 +1983,10 @@ async fn a_lost_session_whose_worktree_has_commits_of_its_own_sends_them_to_the_
         })
     })
     .await;
-    let subject = |dir: &Path| {
-        let out = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(dir).output().unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    };
+    let subject = |dir: &Path| git_out(dir, &["log", "-1", "--format=%s"]);
     assert_eq!(subject(&worktree), "while away");
     assert_eq!(std::fs::read_to_string(worktree.join("src/mine.ts")).unwrap(), "committed while away\n");
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "not committed\n");
     // The commit reaches the session on studio-mini.
     let own: Vec<Value> = mini.call("session.list", json!({})).await;
     let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
