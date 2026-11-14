@@ -2024,14 +2024,16 @@ async fn continued_and_back_with(
         .call("session.continue_here", json!({ "session": made["id"] }))
         .await;
     book.restart().await;
+    // In sync, so studio-mini serves it: a copy with only its folder yet
+    // is not one studio-mini knows.
     within(
         Duration::from_secs(30),
-        "a live copy on the MacBook",
+        "a live copy on the MacBook, in sync",
         || async {
             let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-            copies
-                .iter()
-                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+            copies.iter().any(|c| {
+                c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty() && c["state"]["kind"] == json!("in_sync")
+            })
         },
     )
     .await;
