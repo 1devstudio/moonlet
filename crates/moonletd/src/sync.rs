@@ -1356,12 +1356,15 @@ impl LiveCopies {
                 let behind = git_sync::is_ancestor(&path, &own, &fetched.head)
                     .await
                     .map_err(|e| Stop::Paused(format!("{e:#}")))?;
-                if !behind {
-                    return Err(Stop::Paused(format!("{} on this Mac has commits {}'s doesn't.", opened.branch, k.host)));
+                if behind {
+                    git_sync::fast_forward(&path, &opened.branch, &own, &fetched.head)
+                        .await
+                        .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                } else {
+                    // Commits of its own: kept, never moved back, as for a
+                    // copy made on such a branch.
+                    own_commit = Some(own);
                 }
-                git_sync::fast_forward(&path, &opened.branch, &own, &fetched.head)
-                    .await
-                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
             }
         }
 

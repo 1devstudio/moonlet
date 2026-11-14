@@ -1959,7 +1959,7 @@ async fn a_lost_session_whose_worktree_is_on_another_branch_pauses_its_copy_and_
 }
 
 #[tokio::test]
-async fn a_lost_session_whose_worktree_has_commits_of_its_own_pauses_its_copy_and_keeps_them() {
+async fn a_lost_session_whose_worktree_has_commits_of_its_own_sends_them_to_the_new_owner() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
     origin.add_to(&mini).await;
@@ -1967,21 +1967,30 @@ async fn a_lost_session_whose_worktree_has_commits_of_its_own_pauses_its_copy_an
     let made = session_with_a_turn(&book, &project).await;
     let worktree = path_of(&made);
     lost_while_away(&mini, &mut book, &made, || {
-        std::fs::write(worktree.join("src/cart.ts"), "committed while away\n").unwrap();
+        std::fs::write(worktree.join("src/mine.ts"), "committed while away\n").unwrap();
         git_in(&worktree, &["add", "-A"]);
         git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
+        // And an edit not committed, to a file studio-mini changed too.
+        std::fs::write(worktree.join("src/cart.ts"), "not committed\n").unwrap();
     })
     .await;
-    let reason = within_value(Duration::from_secs(30), "the copy paused", || async {
+    // Its copy goes on in the worktree, in sync, with the commit and the
+    // edit kept: the file both changed differs.
+    within(Duration::from_secs(30), "the copy in sync", || async {
         let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-        let c = copies.into_iter().find(|c| c["session"] == made["id"])?;
-        (c["state"]["kind"] == json!("paused")).then(|| c["state"]["reason"].as_str().unwrap_or("").to_string())
+        copies.iter().any(|c| {
+            c["session"] == made["id"] && c["path"].as_str().map(PathBuf::from) == Some(worktree.clone()) && c["state"]["kind"] == json!("in_sync")
+        })
     })
     .await;
-    assert!(reason.contains("has commits"), "{reason}");
-    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "committed while away\n");
-    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&worktree).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "while away");
+    let subject = |dir: &Path| git_out(dir, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject(&worktree), "while away");
+    assert_eq!(std::fs::read_to_string(worktree.join("src/mine.ts")).unwrap(), "committed while away\n");
+    assert_eq!(std::fs::read_to_string(worktree.join("src/cart.ts")).unwrap(), "not committed\n");
+    // The commit reaches the session on studio-mini.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = PathBuf::from(own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    within(Duration::from_secs(30), "the commit on studio-mini", || async { subject(&there) == "while away" }).await;
 }
 
 /// Runs git with `args` in `dir`, which must succeed.
@@ -2281,16 +2290,16 @@ async fn a_bring_with_commits_only_this_mac_has_brings_the_session_with_them() {
     let made = session_with_a_turn(&book, &project).await;
     let worktree = path_of(&made);
     // The MacBook commits while studio-mini runs the session: its copy
-    // pauses, keeping that commit.
+    // keeps that commit.
     lost_while_away(&mini, &mut book, &made, || {
         std::fs::write(worktree.join("src/cart.ts"), "committed while away\n").unwrap();
         git_in(&worktree, &["add", "-A"]);
         git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
     })
     .await;
-    within(Duration::from_secs(30), "the copy paused", || async {
+    within(Duration::from_secs(30), "the copy made", || async {
         let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-        copies.iter().any(|c| c["session"] == made["id"] && c["state"]["kind"] == json!("paused"))
+        copies.iter().any(|c| c["session"] == made["id"] && c["state"]["kind"] == json!("in_sync"))
     })
     .await;
     // studio-mini's session has a file it did not commit.
