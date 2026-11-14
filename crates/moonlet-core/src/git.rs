@@ -308,83 +308,47 @@ pub fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
 
-pub async fn status(path: &Path, base: Option<&str>) -> Result<GitStatus> {
-    let root = toplevel(path).await?;
-    let porcelain = parse_porcelain(
-        &git(
-            &root,
-            &[
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--branch",
-                "--untracked-files=all",
-            ],
-        )
-        .await?,
-    );
-    let (against, base_missing) = resolve_base(&root, base).await;
+/// Work-tree roots by the path `git.status` was asked about: a session's
+/// root never moves, so it is looked up once (X102).
+static ROOTS: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, PathBuf>>> =
+    std::sync::LazyLock::new(Default::default);
 
-    // Status letters against the diff base (covers committed and uncommitted work).
-    let mut files: Vec<FileChange> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
-    let names = git(&root, &["diff", "--name-status", "-z", "-M", &against]).await?;
-    let mut it = names
-        .split(|b| *b == 0)
-        .map(|f| String::from_utf8_lossy(f).into_owned());
-    while let Some(code) = it.next() {
-        if code.is_empty() {
-            continue;
+/// The changes in a work tree, against `base` when given. Two git processes
+/// once the root is known (X102): `status` and one `diff` that carries the
+/// status letters, the line counts and the merge base.
+pub async fn status(path: &Path, base: Option<&str>) -> Result<GitStatus> {
+    let known = ROOTS.lock().unwrap().get(path).cloned();
+    let root = match known {
+        Some(root) => root,
+        None => {
+            let root = toplevel(path).await?;
+            ROOTS.lock().unwrap().insert(path.to_path_buf(), root.clone());
+            root
         }
-        let letter = code.chars().next().unwrap();
-        let (old_path, path) = if letter == 'R' || letter == 'C' {
-            let old = it.next().unwrap_or_default();
-            (Some(old), it.next().unwrap_or_default())
-        } else {
-            (None, it.next().unwrap_or_default())
-        };
-        let status = match letter {
-            'A' => "added",
-            'D' => "deleted",
-            'R' => "renamed",
-            'C' => "added",
-            'U' => "conflicted",
-            _ => "modified",
-        };
-        index.insert(path.clone(), files.len());
-        files.push(FileChange {
-            path,
-            old_path,
-            status: status.into(),
-            staged: false,
-            unstaged: false,
-            additions: 0,
-            deletions: 0,
-            binary: false,
-        });
-    }
-    let numstat = git(&root, &["diff", "--numstat", "-z", "-M", &against]).await?;
-    let mut it = numstat
-        .split(|b| *b == 0)
-        .map(|f| String::from_utf8_lossy(f).into_owned());
-    while let Some(rec) = it.next() {
-        let mut parts = rec.splitn(3, '\t');
-        let (Some(a), Some(d), Some(p)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        let path = if p.is_empty() {
-            it.next();
-            it.next().unwrap_or_default()
-        } else {
-            p.to_string()
-        };
-        if let Some(&i) = index.get(&path) {
-            let f = &mut files[i];
-            f.binary = a == "-";
-            f.additions = a.parse().unwrap_or(0);
-            f.deletions = d.parse().unwrap_or(0);
+    };
+    let porcelain = match git(
+        &root,
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+        ],
+    )
+    .await
+    {
+        Ok(raw) => parse_porcelain(&raw),
+        Err(e) => {
+            // The work tree may have gone; ask for its root again next time.
+            ROOTS.lock().unwrap().remove(path);
+            return Err(e);
         }
-    }
+    };
+    let (against, base_missing, diff) = diff_against_base(&root, porcelain.head.is_some(), base).await?;
+    let mut files = parse_diff(&diff);
+    let mut index: HashMap<String, usize> =
+        files.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
     for path in &porcelain.untracked {
         let (lines, binary) = count_lines(&root.join(path));
         index.insert(path.clone(), files.len());
@@ -434,6 +398,121 @@ pub async fn status(path: &Path, base: Option<&str>) -> Result<GitStatus> {
         additions,
         deletions,
     })
+}
+
+/// `git diff --raw --numstat` of the work tree against the merge base of
+/// HEAD and `base` (or `origin/<base>`), or against HEAD (X102). Returns the
+/// ref diffed against, the base when neither was found, and the output.
+async fn diff_against_base(
+    root: &Path,
+    has_head: bool,
+    base: Option<&str>,
+) -> Result<(String, Option<String>, Vec<u8>)> {
+    if !has_head {
+        return Ok((EMPTY_TREE.into(), None, diff_with_stats(root, EMPTY_TREE, false).await?));
+    }
+    let mut missing = None;
+    if let Some(base) = base.filter(|b| !b.is_empty() && *b != "HEAD") {
+        for candidate in [base.to_string(), format!("origin/{base}")] {
+            let e = match diff_with_stats(root, &candidate, true).await {
+                Ok(out) => return Ok((candidate, None, out)),
+                Err(e) => format!("{e:#}"),
+            };
+            // No such ref: try the next one.
+            if e.contains("bad revision") {
+                continue;
+            }
+            // A slow git is not a missing base, and a second diff would wait as long.
+            if e.contains("timed out") {
+                bail!(e);
+            }
+            // Several merge bases, which `--merge-base` refuses, or a git
+            // before 2.30 without it: pick the merge base as before X102.
+            if let Ok(mb) = git_text(root, &["merge-base", "HEAD", "--end-of-options", &candidate]).await {
+                return Ok((candidate, None, diff_with_stats(root, &mb, false).await?));
+            }
+        }
+        tracing::warn!(base, cwd = %root.display(), "diff base not found; using HEAD");
+        missing = Some(base.to_string());
+    }
+    Ok(("HEAD".into(), missing, diff_with_stats(root, "HEAD", false).await?))
+}
+
+/// `git diff --raw --numstat` of the work tree against `against`, or
+/// against its merge base with HEAD.
+async fn diff_with_stats(root: &Path, against: &str, merge_base: bool) -> Result<Vec<u8>> {
+    let mut args = vec!["diff", "--raw", "--numstat", "-z", "-M"];
+    if merge_base {
+        args.push("--merge-base");
+    }
+    // `against` may come from a client: never read as an option, such as
+    // `--output=<file>`.
+    args.extend(["--end-of-options", against, "--"]);
+    git(root, &args).await
+}
+
+/// The files of `git diff --raw --numstat -z` output: each file's raw
+/// record (`:<modes> <hashes> <letter>`, then its path or two) gives its
+/// status, and its numstat record (`<added>\t<deleted>\t<path>`, or an
+/// empty path and then both paths for a rename) its line counts.
+fn parse_diff(raw: &[u8]) -> Vec<FileChange> {
+    let mut files: Vec<FileChange> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut it = raw
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned());
+    while let Some(rec) = it.next() {
+        if rec.is_empty() {
+            continue;
+        }
+        if rec.starts_with(':') {
+            let letter = rec.rsplit(' ').next().and_then(|c| c.chars().next()).unwrap_or('M');
+            let (old_path, path) = if letter == 'R' || letter == 'C' {
+                let old = it.next().unwrap_or_default();
+                (Some(old), it.next().unwrap_or_default())
+            } else {
+                (None, it.next().unwrap_or_default())
+            };
+            let status = match letter {
+                'A' => "added",
+                'D' => "deleted",
+                'R' => "renamed",
+                'C' => "added",
+                'U' => "conflicted",
+                _ => "modified",
+            };
+            index.insert(path.clone(), files.len());
+            files.push(FileChange {
+                path,
+                old_path,
+                status: status.into(),
+                staged: false,
+                unstaged: false,
+                additions: 0,
+                deletions: 0,
+                binary: false,
+            });
+            continue;
+        }
+        let mut parts = rec.splitn(3, '\t');
+        let (Some(a), Some(d), Some(p)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let path = if p.is_empty() {
+            it.next();
+            it.next().unwrap_or_default()
+        } else {
+            p.to_string()
+        };
+        // Raw records all come first, so the file is already listed.
+        if let Some(&i) = index.get(&path) {
+            let f = &mut files[i];
+            f.binary = a == "-";
+            f.additions = a.parse().unwrap_or(0);
+            f.deletions = d.parse().unwrap_or(0);
+        }
+    }
+    files
 }
 
 async fn show(root: &Path, spec: &str) -> Option<Vec<u8>> {
@@ -1792,6 +1871,110 @@ pub(crate) mod tests {
         let typo = status(p, Some("mian")).await.unwrap();
         assert_eq!(typo.against, "HEAD");
         assert_eq!(typo.base_missing.as_deref(), Some("mian"));
+    }
+
+    #[tokio::test]
+    async fn status_against_the_base_reports_each_kind_of_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "t@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "commit.gpgsign", "false"],
+        ] {
+            git(p, &args).await.unwrap();
+        }
+        std::fs::write(p.join("keep.txt"), "a\nb\nc\nd\ne\nf\ng\nh\n").unwrap();
+        std::fs::write(p.join("gone.txt"), "old\n").unwrap();
+        std::fs::write(p.join("move.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n").unwrap();
+        std::fs::write(p.join("b.bin"), b"\0bin").unwrap();
+        git(p, &["add", "-A"]).await.unwrap();
+        git(p, &["commit", "-qm", "init"]).await.unwrap();
+        git(p, &["checkout", "-qb", "feature"]).await.unwrap();
+        std::fs::write(p.join("keep.txt"), "a\nb\nc\nd\ne\nf\ng\nh\nnew\n").unwrap();
+        git(p, &["rm", "-q", "gone.txt"]).await.unwrap();
+        git(p, &["mv", "move.txt", "moved.txt"]).await.unwrap();
+        std::fs::write(p.join("add.txt"), "added\n").unwrap();
+        std::fs::write(p.join("b.bin"), b"\0bin2").unwrap();
+        git(p, &["add", "-A"]).await.unwrap();
+        git(p, &["commit", "-qm", "feature"]).await.unwrap();
+        std::fs::write(p.join("keep.txt"), "a\nb\nc\nd\ne\nf\ng\nh\nnew\nmore\n").unwrap();
+
+        let st = status(p, Some("main")).await.unwrap();
+        let files: Vec<_> = st
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str(),
+                    f.old_path.as_deref(),
+                    f.status.as_str(),
+                    f.staged,
+                    f.unstaged,
+                    f.additions,
+                    f.deletions,
+                    f.binary,
+                )
+            })
+            .collect();
+        assert_eq!(
+            files,
+            vec![
+                ("add.txt", None, "added", false, false, 1, 0, false),
+                ("b.bin", None, "modified", false, false, 0, 0, true),
+                ("gone.txt", None, "deleted", false, false, 0, 1, false),
+                ("keep.txt", None, "modified", false, true, 2, 0, false),
+                ("moved.txt", Some("move.txt"), "renamed", false, false, 0, 0, false),
+            ]
+        );
+        assert_eq!((st.additions, st.deletions), (3, 1));
+        assert_eq!(st.against, "main");
+
+        // A base that is only on origin.
+        git(p, &["update-ref", "refs/remotes/origin/trunk", "main"]).await.unwrap();
+        let on_origin = status(p, Some("trunk")).await.unwrap();
+        assert_eq!(on_origin.files.len(), 5);
+        assert_eq!(on_origin.against, "origin/trunk");
+        assert!(on_origin.base_missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_against_a_base_with_two_merge_bases_uses_one_of_them() {
+        // main and feature each merged the other: two merge bases, which
+        // `git diff --merge-base` refuses.
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["branch", "feature"]).await.unwrap();
+        std::fs::write(p.join("m1"), "m1\n").unwrap();
+        git(p, &["add", "m1"]).await.unwrap();
+        git(p, &["commit", "-qm", "m1"]).await.unwrap();
+        git(p, &["checkout", "-q", "feature"]).await.unwrap();
+        std::fs::write(p.join("f1"), "f1\n").unwrap();
+        git(p, &["add", "f1"]).await.unwrap();
+        git(p, &["commit", "-qm", "f1"]).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        git(p, &["merge", "-q", "--no-edit", "feature"]).await.unwrap();
+        git(p, &["checkout", "-q", "feature"]).await.unwrap();
+        git(p, &["merge", "-q", "--no-edit", "main~1"]).await.unwrap();
+
+        let st = status(p, Some("main")).await.unwrap();
+        let files: Vec<_> = st.files.iter().map(|f| (f.path.as_str(), f.status.as_str())).collect();
+        assert_eq!(files, vec![("m1", "added")]);
+        assert!(st.base_missing.is_none());
+        assert_eq!(st.against, "main");
+    }
+
+    #[tokio::test]
+    async fn a_base_that_looks_like_an_option_is_not_found_and_runs_nothing() {
+        let dir = repo().await;
+        let p = dir.path();
+        let written = p.join("written-by-git");
+        let base = format!("--output={}", written.display());
+        let st = status(p, Some(&base)).await.unwrap();
+        assert!(!written.exists(), "git took the base for an option");
+        assert_eq!(st.against, "HEAD");
+        assert_eq!(st.base_missing.as_deref(), Some(base.as_str()));
     }
 
     #[tokio::test]
