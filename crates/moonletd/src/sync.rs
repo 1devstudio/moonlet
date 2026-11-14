@@ -1148,22 +1148,110 @@ impl LiveCopies {
             self.set_state(&id, CopyState::Waiting);
             return;
         }
-        self.set_state(&id, CopyState::Copying);
-        match self.make_copy(&k).await {
+        if let Err(Stop::Gone) = self.made(&id, &k).await {
+            drop(_one);
+            if let Err(e) = self.remove(&id, CloseReason::Archived).await {
+                tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
+            }
+        }
+    }
+
+    /// Makes copy `k`, whose lock the caller holds, and keeps its state:
+    /// in sync once made, else waiting or paused, as it stopped.
+    async fn made(self: &Arc<Self>, id: &str, k: &Kept) -> Result<(), Stop> {
+        self.set_state(id, CopyState::Copying);
+        match self.make_copy(k).await {
             Ok(path) => {
-                self.set_state(&id, CopyState::InSync);
+                self.set_state(id, CopyState::InSync);
                 if k.kind == CopyKind::Live {
                     self.watch(&path);
                 }
-                self.begin_setup(&id);
+                self.begin_setup(id);
+                Ok(())
             }
-            Err(Stop::Offline) => self.set_state(&id, CopyState::Waiting),
-            Err(Stop::Paused(reason)) => self.pause(&id, reason),
+            Err(Stop::Offline) => {
+                self.set_state(id, CopyState::Waiting);
+                Err(Stop::Offline)
+            }
+            Err(Stop::Paused(reason)) => {
+                self.pause(id, reason.clone());
+                Err(Stop::Paused(reason))
+            }
+            Err(Stop::Gone) => Err(Stop::Gone),
+        }
+    }
+
+    /// Makes the live copy of `session` now, for a bring (X73), when this
+    /// Mac keeps none with a folder: none at all, one paused before it was
+    /// made, or one whose folder is gone. Answers why it could not.
+    async fn make_for_bring(self: &Arc<Self>, session: &str) -> Result<(), RpcError> {
+        let offline = || RpcError::new("disconnected", "the central host is not connected");
+        let host = self
+            .link
+            .central_name()
+            .ok_or_else(|| RpcError::new("no_central_host", "this Mac has no central host"))?;
+        if !self.registered.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(offline());
+        }
+        let id = {
+            let mut data = self.data.lock().unwrap();
+            match data
+                .worker
+                .iter_mut()
+                .find(|k| k.session == session && k.host == host && k.kind == CopyKind::Live)
+            {
+                Some(k) => {
+                    if !has_folder(k) {
+                        // Made again from the session, as Retry does.
+                        k.path.clear();
+                        k.base = None;
+                        k.base_head = None;
+                        k.tree = None;
+                        k.head = None;
+                        k.diverged = None;
+                        k.differs.clear();
+                    }
+                    k.paused = None;
+                    k.branch_pause = None;
+                    k.id.clone()
+                }
+                None => {
+                    let kept = Kept {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        host,
+                        session: session.to_string(),
+                        ..Kept::default()
+                    };
+                    let id = kept.id.clone();
+                    if !data.auto.contains(&kept.session) {
+                        data.auto.push(kept.session.clone());
+                    }
+                    data.worker.push(kept);
+                    id
+                }
+            }
+        };
+        self.save();
+        self.link.set_synced(self.link_holders());
+        let lock = self.lock(&id);
+        let one = lock.lock().await;
+        let k = self
+            .kept(&id)
+            .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
+        // Made meanwhile, as by its own start.
+        if k.base.is_some() && has_folder(&k) {
+            return Ok(());
+        }
+        match self.made(&id, &k).await {
+            Ok(()) => Ok(()),
+            Err(Stop::Offline) => Err(offline()),
+            Err(Stop::Paused(reason)) => Err(RpcError::new("copy_failed", reason)),
             Err(Stop::Gone) => {
-                drop(_one);
+                drop(one);
                 if let Err(e) = self.remove(&id, CloseReason::Archived).await {
                     tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
                 }
+                Err(RpcError::new("not_found", "the session is gone"))
             }
         }
     }
@@ -2037,6 +2125,17 @@ impl LiveCopies {
             (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
         }
         Ok(saved)
+    }
+
+    /// [`Self::hold`] for a bring (X73): a copy with no folder is made
+    /// first, and until then the session goes on where it runs.
+    pub async fn hold_made(self: &Arc<Self>, session: &str) -> Result<Holding, RpcError> {
+        let usable = |k: &Kept| k.session == session && k.kind == CopyKind::Live && has_folder(k);
+        let made = self.data.lock().unwrap().worker.iter().any(usable);
+        if !made {
+            self.make_for_bring(session).await?;
+        }
+        self.hold(session).await
     }
 
     /// Holds the live copy of session `session`, which this Mac is about to
@@ -3642,6 +3741,11 @@ async fn off_branch(path: &Path, branch: &str) -> anyhow::Result<Option<String>>
 
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
+}
+
+/// Whether copy `k` has its folder on this Mac: made, and not deleted.
+fn has_folder(k: &Kept) -> bool {
+    !k.path.is_empty() && Path::new(&k.path).is_dir()
 }
 
 /// The files a copy edited here since `from` takes when the central host

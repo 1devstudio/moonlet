@@ -4057,9 +4057,11 @@ impl Daemon {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         // Its live copy becomes its worktree here: without one, the central
-        // host keeps it rather than give it up to nowhere. It is held from
-        // now on, so nothing stops it while the central host gives it up.
-        let held = self.sync.hold(&r.session).await?;
+        // host keeps it rather than give it up to nowhere. Typed into or
+        // moved, a copy with no folder is made first; coming back by
+        // itself, it waits for one. It is held from now on, so nothing
+        // stops it while the central host gives it up.
+        let held = if returning { self.sync.hold(&r.session).await? } else { self.sync.hold_made(&r.session).await? };
         let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
         let taken = host
             .request(
