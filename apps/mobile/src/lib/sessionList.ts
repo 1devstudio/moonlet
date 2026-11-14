@@ -153,12 +153,12 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
     .filter((g) => g.rows.length);
 }
 
-/** Where a tap on a row goes. */
+/** Where a tap on a row goes: a waiting plan's sheet, else the session on its Chat, a done session too. */
 export function rowTarget(r: SessionRow): Screen {
   if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
   // Another member's session goes through the central host (X72).
   const host = r.session.owner ? copyHostId(r.host, r.session.id) : r.host;
-  return { kind: "session", host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
+  return { kind: "session", host, id: r.session.id, tab: "chat" };
 }
 
 /** A session's stored task link (X46): a tracker's key whole, a GitHub

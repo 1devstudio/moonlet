@@ -15,7 +15,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 1. The user pairs the phone with the Mac (X39). The app opens on the Inbox.
 2. The Inbox says "3 need you · 2 working · 2 hosts online". The first card asks "Allow Bash?" for `pnpm test --filter search` in "Add search to the product list". The user taps **Allow**, confirms with Face ID, and the card leaves.
 3. The next card says "Claude has a plan: Idempotent refund webhooks". The user taps **Review plan**, reads it in a sheet, and taps **Approve, auto mode**.
-4. In Sessions, under the **Review** filter, the user taps "Fix checkout button on mobile" and opens its Changes tab, which lists 4 files. The user opens a file, long-presses line 15, writes "SKU match should be prefix and case-insensitive", and taps **Send to Claude**. The session's chat shows the comment as the user's message.
+4. In Sessions, under the **Review** filter, the user taps "Fix checkout button on mobile", which opens on its Chat, and taps the Changes tab, which lists 4 files. The user opens a file, long-presses line 15, writes "SKU match should be prefix and case-insensitive", and taps **Send to Claude**. The session's chat shows the comment as the user's message.
 5. In the Sessions tab the user taps **New**, types a task, picks the project, and taps **Start session**. The new session's chat opens.
 6. The PR tab of a session shows `#147 open · Review required` and "1 failing". The user taps **Ask Claude to fix ci / test**.
 
@@ -59,7 +59,7 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 - [x] Each row shows the state glyph, the title, a state word (`needs you`, the time since its turn started while working, `done`, `failed`, `plan` for a waiting plan), the branch, the diff stat against the base, and the PR number with its state colour when there is a PR. Diff stats and PRs load as rows show and are kept for a minute. (`sessionList.test.ts`)
 - [x] Filter chips: **All**, **Needs you**, **Working**, **Review**, each with its count. Search filters by title, branch and project. (`lib/sessionList.test.ts`)
 - [x] A project whose base branch is behind `origin` (as last fetched) shows "main 3 behind · Pull", which pulls (X13).
-- [x] Tapping a row opens the session on the tab that matters: the plan sheet for a waiting plan, Changes for a done session, Chat otherwise. (`rowTarget` in `sessionList.test.ts`)
+- [x] Tapping a row opens the plan sheet for a waiting plan, else the session on its Chat, a done session too. (`rowTarget` in `sessionList.test.ts`)
 
 ### New session
 
