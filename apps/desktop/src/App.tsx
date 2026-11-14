@@ -128,6 +128,17 @@ function Toasts() {
               {t.action.label}
             </button>
           )}
+          {t.also && (
+            <button
+              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
+              onClick={() => {
+                t.also?.run();
+                dismissToast(t.id);
+              }}
+            >
+              {t.also.label}
+            </button>
+          )}
           <IconButton title="Dismiss" className="shrink-0" onClick={() => dismissToast(t.id)}>
             <X size={14} />
           </IconButton>

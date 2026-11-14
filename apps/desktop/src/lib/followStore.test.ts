@@ -81,4 +81,51 @@ describe("typing into a session another Mac runs (X73)", () => {
     expect(brought).toEqual([{ session: "fix-cart", now: false, terminal: 3, message: "And the tests", images: [] }]);
     expect(useStore.getState().selected).toEqual({ host: "local", session: "fix-cart" });
   });
+  const shown = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null, t.also?.label ?? null]);
+  const press = (label: string) => {
+    const t = useStore.getState().toasts.find((t) => t.action?.label === label || t.also?.label === label)!;
+    (t.action?.label === label ? t.action : t.also)!.run();
+  };
+
+  it("says why a session can't come here, and sends the message there only when asked", async () => {
+    answers["local session.bring"] = () => {
+      throw Object.assign(new Error("moonlet/fix-cart is checked out in ~/src/shop on this Mac."), { code: "copy_failed" });
+    };
+    const sentThere = vi.fn(() => Promise.resolve());
+
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
+    expect(sentThere).not.toHaveBeenCalled();
+    expect(shown()).toEqual([["fix-cart can't come to this Mac: moonlet/fix-cart is checked out in ~/src/shop on this Mac.", "Send it there", "Try again"]]);
+
+    press("Send it there");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentThere).toHaveBeenCalledWith("And the tests", []);
+  });
+
+  it("brings it again with the message on Try again", async () => {
+    let fails = true;
+    const brought: unknown[] = [];
+    answers["local session.bring"] = (p) => {
+      if (fails) throw Object.assign(new Error("the central host is not connected"), { code: "unreachable" });
+      brought.push(p);
+      return session("fix-cart");
+    };
+    const sentThere = vi.fn(() => Promise.resolve());
+
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
+    expect(shown()).toEqual([["fix-cart can't come to this Mac: the central host is not connected.", "Send it there", "Try again"]]);
+    fails = false;
+    press("Try again");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(brought).toEqual([{ session: "fix-cart", now: false, terminal: 3, message: "And the tests", images: [] }]);
+    expect(sentThere).not.toHaveBeenCalled();
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "fix-cart" });
+  });
+
+  it("names the branch this Mac's commits went on", async () => {
+    answers["local session.bring"] = () => ({ ...session("fix-cart"), kept_on: "moonlet/fix-cart-this-mac" });
+
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], vi.fn());
+    expect(shown()).toEqual([["fix-cart is here. Its commits from this Mac are on moonlet/fix-cart-this-mac: merge that branch into moonlet/fix-cart to keep them.", null, null]]);
+  });
 });
