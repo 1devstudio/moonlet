@@ -5,7 +5,7 @@ import { M, type Copy, type HostInfo, type Project, type Section, type SectionVi
 import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
-import { moveSession, useReady } from "../lib/followStore";
+import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings, restoreSession } from "../lib/actions";
@@ -835,12 +835,15 @@ function followItems(host: string, s: Session): MenuItem[] {
     { kind: "divider" },
     ...items.map((i): MenuItem => {
       switch (i.kind) {
-        case "run-only-on":
+        case "where":
           return {
             kind: "submenu",
             label: i.label,
             icon: <Server size={14} className="text-muted" />,
-            items: i.targets.map((t): MenuItem => ({ label: t.label, checked: t.checked, onSelect: () => void moveSession(s.id, t.to) })),
+            items: [
+              ...(i.bring ? [{ label: i.bring, onSelect: () => void bringHere(host, s.id) }, { kind: "divider" as const }] : []),
+              ...i.targets.map((t): MenuItem => ({ label: t.label, checked: t.checked, onSelect: () => void moveSession(s.id, t.to) })),
+            ],
           };
         case "unpin":
           return { label: "Unpin", icon: <Pin size={14} className="text-muted" />, onSelect: () => void rpc("local", M.sessionUnpin, { session: s.id }).catch(errorToast) };

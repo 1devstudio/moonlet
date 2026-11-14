@@ -98,7 +98,7 @@ describe("the central host's copies of other members' sessions (X88)", () => {
     }, row);
     await expect($(sel.button("Archive"))).toBeDisplayed();
     await expect($(sel.button("Keep in sync with this Mac"))).not.toBeExisting();
-    await expect($(sel.button("Run only on"))).not.toBeExisting();
+    await expect($(sel.button("Where it runs"))).not.toBeExisting();
     await browser.keys("Escape");
   });
 

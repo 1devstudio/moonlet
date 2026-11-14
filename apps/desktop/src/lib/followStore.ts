@@ -1,5 +1,6 @@
 // Typing into a session another member runs brings it to this Mac (X73),
-// and Run only on… moves one. The daemons move them; this asks and follows.
+// as Bring to this Mac in its menu does, and Run only on… moves one. The
+// daemons move them; this asks and follows.
 
 import { create } from "zustand";
 import { rpc } from "./daemon";
@@ -18,14 +19,22 @@ const TYPED_WAIT_MS = Number.POSITIVE_INFINITY;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The message waiting for each session to move here, by session id. */
-const waiting = new Map<string, WaitingMessage>();
-
-/** The message of each session that could not come here, held in a toast
- * until the user sends it there, tries again, or closes the toast. */
-const held = new Map<string, WaitingMessage>();
-
 type Send = (text: string, images: ChatImage[]) => Promise<unknown>;
+
+/** A message typed for a session, with how it is sent where the session
+ * runs. */
+interface Typed {
+  message: WaitingMessage;
+  send: Send;
+}
+
+/** What each session waits to move here with, by session id: a typed
+ * message, or nothing when brought from its menu (X73). */
+const waiting = new Map<string, Typed | null>();
+
+/** The message of each session that could not come here, held in toast
+ * `toast` until the user sends it there, tries again, or closes it. */
+const held = new Map<string, Typed & { toast: number }>();
 
 /** Sends `text` and `images`, typed into chat `terminal` of session
  * `sessionId` listed from `host`: brought here first when it runs on
@@ -40,21 +49,42 @@ export async function sendOrBring(host: string, sessionId: string | undefined, t
   const s = sessionId ? (st.sessions[host] ?? []).find((x) => x.id === sessionId) : undefined;
   if (!sessionId || !s || !bringsHere(host, st.accounts, s)) return send(text, images);
   const message = { terminal, text, images };
+  // Brought from its menu meanwhile: the message goes with it.
+  if (waiting.get(sessionId) === null) {
+    waiting.set(sessionId, { message, send });
+    return;
+  }
   for (const queue of [held, waiting]) {
     const pending = queue.get(sessionId);
     if (!pending) continue;
-    const joined = joinWaiting(pending, message);
+    const joined = joinWaiting(pending.message, message);
     // Another chat's message is not held behind this one: it goes there.
     if (!joined) return send(text, images);
-    queue.set(sessionId, joined);
+    pending.message = joined;
     return;
   }
-  waiting.set(sessionId, message);
-  return bring(host, s, send);
+  waiting.set(sessionId, { message, send });
+  return bring(host, s);
 }
 
-/** Brings session `s`, listed from `host`, here with its waiting message. */
-async function bring(host: string, s: Session, send: Send) {
+/** Bring to this Mac, from session `sessionId`'s menu (X73): brought here
+ * as typing brings it, with no message, or with the message held in its
+ * toast; a message typed meanwhile goes with it. When it cannot come, a
+ * toast says why, with Try again. On its way already, nothing more. */
+export async function bringHere(host: string, sessionId: string) {
+  const st = useStore.getState();
+  const s = (st.sessions[host] ?? []).find((x) => x.id === sessionId);
+  if (!s || waiting.has(sessionId)) return;
+  const kept = held.get(sessionId);
+  held.delete(sessionId);
+  // Its toast's message goes with it, so nothing is left to send there.
+  if (kept) dismissToast(kept.toast);
+  waiting.set(sessionId, kept ? { message: kept.message, send: kept.send } : null);
+  return bring(host, s);
+}
+
+/** Brings session `s`, listed from `host`, here with what it waits with. */
+async function bring(host: string, s: Session) {
   const owner = useStore.getState().hosts[host]?.label ?? host;
   // The waiting line, with Move now, stays for as long as the wait.
   let line: number | null = null;
@@ -62,8 +92,9 @@ async function bring(host: string, s: Session, send: Send) {
   try {
     await untilTurnEnds({
       attempt: async (now) => {
-        const m = waiting.get(s.id)!;
-        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: s.id, now, terminal: m.terminal, message: m.text, images: m.images });
+        const m = waiting.get(s.id)?.message;
+        const message = m ? { terminal: m.terminal, message: m.text, images: m.images } : { images: [] };
+        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: s.id, now, ...message });
         keptOn = brought?.kept_on;
       },
       waiting: (moveNow) => {
@@ -78,27 +109,33 @@ async function bring(host: string, s: Session, send: Send) {
     selectSession("local", s.id);
     if (keptOn) toast(keptOnLine(s.name, keptOn, s.branch), "info", undefined, { sticky: true });
   } catch (e) {
-    const m = waiting.get(s.id)!;
+    const typed = waiting.get(s.id) ?? null;
     waiting.delete(s.id);
+    const pinned = e instanceof Object && "code" in e && e.code === "pinned";
+    if (!typed) {
+      // Kept there: trying again would not bring it.
+      if (pinned) toast(cannotComeLine(s.name, errorMessage(e)), "error");
+      else toast(cannotComeLine(s.name, errorMessage(e)), "error", { label: "Try again", run: () => void bringHere(host, s.id) }, { sticky: true });
+      return;
+    }
     // Kept there since the app last heard: it goes to the owner, as any
     // message for a session kept elsewhere does.
-    if (e instanceof Object && "code" in e && e.code === "pinned") return send(m.text, m.images);
-    hold(host, s, m, errorMessage(e), send);
+    if (pinned) return typed.send(typed.message.text, typed.message.images);
+    hold(host, s, typed, errorMessage(e));
   } finally {
     if (line !== null) dismissToast(line);
   }
 }
 
-/** Holds message `m` of session `s` in a toast saying `why` it can't come
- * here, until the user sends it there, tries again, or closes the toast. */
-function hold(host: string, s: Session, m: WaitingMessage, why: string, send: Send) {
-  held.set(s.id, m);
-  const take = () => {
-    const now = held.get(s.id) ?? m;
+/** Holds message `typed` of session `s` in a toast saying `why` it can't
+ * come here, until the user sends it there, tries again, or closes it. */
+function hold(host: string, s: Session, typed: Typed, why: string) {
+  const take = (): Typed => {
+    const now = held.get(s.id) ?? typed;
     held.delete(s.id);
-    return now;
+    return { message: now.message, send: now.send };
   };
-  toast(
+  const id = toast(
     cannotComeLine(s.name, why),
     "error",
     {
@@ -106,9 +143,9 @@ function hold(host: string, s: Session, m: WaitingMessage, why: string, send: Se
       run: () => {
         const now = take();
         // Not sent: held again, so it is not lost.
-        void send(now.text, now.images).catch((e) => {
+        void now.send(now.message.text, now.message.images).catch((e) => {
           errorToast(e);
-          hold(host, s, now, why, send);
+          hold(host, s, now, why);
         });
       },
     },
@@ -118,12 +155,13 @@ function hold(host: string, s: Session, m: WaitingMessage, why: string, send: Se
         label: "Try again",
         run: () => {
           waiting.set(s.id, take());
-          void bring(host, s, send);
+          void bring(host, s);
         },
       },
       onClose: () => void held.delete(s.id),
     },
   );
+  held.set(s.id, { ...typed, toast: id });
 }
 
 /** Run only on… `to` (a worker id), and keep the session there. While a turn
