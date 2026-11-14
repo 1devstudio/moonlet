@@ -136,6 +136,8 @@ describe("a session follows the Mac you type from (X73)", () => {
     await expect($(`${items}[normalize-space()="Bring to this Mac"]`)).toBeDisplayed();
     const thisMac = rpc<{ worker: { name: string } }>(w, "link.get", {}).worker.name;
     await expect($(`${items}[normalize-space()=${JSON.stringify(`Run only on ${thisMac}`)}]`)).toBeDisplayed();
+    // None of them at the menu's top level any more.
+    await expect($(`//button[not(ancestor::div[button[@aria-haspopup="menu"]])][starts-with(normalize-space(), "Run only on ")]`)).not.toBeExisting();
     await browser.keys("Escape");
   });
 

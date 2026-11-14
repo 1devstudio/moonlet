@@ -137,7 +137,17 @@ describe("a session's menu to move it (X73)", () => {
   });
 
   it("offers Take over anyway only after 30 s offline, for what the central host runs", () => {
-    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 }).map((i) => i.kind)).toEqual(["where"]);
+    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([
+      {
+        kind: "where",
+        label: "Where it runs",
+        bring: "Bring to this Mac",
+        targets: [
+          { to: "book-id", label: "Run only on MacBook", checked: false },
+          { to: "mini-id", label: "Run only on studio-mini", checked: false },
+        ],
+      },
+    ]);
     expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000 })).toEqual([{ kind: "take-over" }]);
     expect(followMenu({ ...base, host: "local", unreachableSince: 60_000 })).toEqual([]);
   });

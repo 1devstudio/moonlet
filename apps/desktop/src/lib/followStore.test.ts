@@ -226,6 +226,82 @@ describe("typing into a session another Mac runs (X73)", () => {
     expect(shown()).toEqual([[cantCome, "Try again", null]]);
   });
 
+  it("brings it again on Try again, from its menu", async () => {
+    let fails = true;
+    const brought: unknown[] = [];
+    answers["local session.bring"] = (p) => {
+      if (fails) refuses();
+      brought.push(p);
+      return session("fix-cart");
+    };
+    await bringHere("studio-mini", "fix-cart");
+    fails = false;
+    press("Try again");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(brought).toEqual([{ session: "fix-cart", now: false, images: [] }]);
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "fix-cart" });
+    expect(shown()).toEqual([]);
+  });
+
+  it("says a session kept there since the app last heard can't come from its menu, with nothing to try again", async () => {
+    answers["local session.bring"] = () => {
+      throw Object.assign(new Error("that session is kept where it is"), { code: "pinned" });
+    };
+    await bringHere("studio-mini", "fix-cart");
+    expect(shown()).toEqual([["fix-cart can't come to this Mac: that session is kept where it is.", null, null]]);
+  });
+
+  it("holds a message typed while the menu's bring waits, when the session can't come", async () => {
+    const ends = Date.now() + 60_000;
+    answers["local session.bring"] = () => {
+      if (Date.now() < ends) throw Object.assign(new Error("a turn is running; it moves when the turn ends"), { code: "busy" });
+      refuses();
+    };
+    const sentThere = vi.fn(() => Promise.resolve());
+    const done = bringHere("studio-mini", "fix-cart");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await done;
+    expect(shown()).toEqual([[cantCome, "Send it there", "Try again"]]);
+    press("Send it there");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentThere).toHaveBeenCalledWith("And the tests", []);
+  });
+
+  it("sends a message typed while the menu's bring waits to the owner, when the session is kept there", async () => {
+    const ends = Date.now() + 60_000;
+    answers["local session.bring"] = () => {
+      if (Date.now() < ends) throw Object.assign(new Error("a turn is running; it moves when the turn ends"), { code: "busy" });
+      throw Object.assign(new Error("that session is kept where it is"), { code: "pinned" });
+    };
+    const sentThere = vi.fn(() => Promise.resolve());
+    const done = bringHere("studio-mini", "fix-cart");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await done;
+    expect(sentThere).toHaveBeenCalledWith("And the tests", []);
+    expect(shown()).toEqual([]);
+  });
+
+  it("brings the message held in a toast with it, when brought from the menu", async () => {
+    answers["local session.bring"] = refuses;
+    const sentThere = vi.fn(() => Promise.resolve());
+    await sendOrBring("studio-mini", "fix-cart", 3, "And the tests", [], sentThere);
+    expect(shown()).toEqual([[cantCome, "Send it there", "Try again"]]);
+    const brought: unknown[] = [];
+    answers["local session.bring"] = (p) => {
+      brought.push(p);
+      return session("fix-cart");
+    };
+    await bringHere("studio-mini", "fix-cart");
+    expect(brought).toEqual([{ session: "fix-cart", now: false, terminal: 3, message: "And the tests", images: [] }]);
+    // Its toast is gone: nothing is left to send there.
+    expect(shown()).toEqual([]);
+    expect(sentThere).not.toHaveBeenCalled();
+  });
+
   it("brings a message typed while the menu's bring waits, with it", async () => {
     const ends = Date.now() + 60_000;
     const brought: unknown[] = [];
