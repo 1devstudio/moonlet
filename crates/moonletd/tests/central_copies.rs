@@ -2047,6 +2047,28 @@ async fn continued_and_back_with(
 }
 
 #[tokio::test]
+async fn a_session_the_central_host_runs_is_reachable_while_the_link_to_it_is_up() {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    let owner = |list: Vec<Value>| list.into_iter().find(|s| s["id"] == made["id"]).map(|s| s["owner"].clone());
+
+    // The central host is never linked to the MacBook as a worker: the
+    // MacBook's link to it says.
+    let link: Value = book.call("link.get", json!({})).await;
+    assert_eq!(link["state"]["kind"], json!("connected"), "{link}");
+    let listed = owner(with_copies(&book).await).expect("listed on the MacBook");
+    assert_eq!(listed["reachable"], json!(true), "{listed}");
+    assert!(listed.get("unreachable_since").is_none(), "{listed}");
+
+    mini.stop();
+    let away = within_value(Duration::from_secs(30), "studio-mini unreachable", || async {
+        owner(with_copies(&book).await).filter(|o| o["reachable"] == json!(false))
+    })
+    .await;
+    assert!(away["unreachable_since"].as_u64().is_some(), "{away}");
+}
+
+#[tokio::test]
 async fn a_message_typed_for_a_session_already_back_here_runs_here() {
     let origin = Origin::new();
     let (_mini, book, made) = continued_and_back(&origin).await;
