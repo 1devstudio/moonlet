@@ -43,6 +43,7 @@ import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettin
 import { type ToolCallView, forgetChat, onChatItem, onChatState, reloadChats } from "./chat";
 import { afterFetch, autoPulls, elsewhereToast, fetchDue, justMerged, pullToast, sameProjectElsewhere, type ElsewhereOutcome, type ElsewherePull, type FetchInfo } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
+import { type GitCheck, gitCheckDue } from "./gitPoll";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
@@ -904,19 +905,27 @@ export function switchWorkspaceByIndex(n: number) {
 const sameJson = (a: unknown, b: unknown) => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
 const gitInflight: Record<string, boolean> = {};
+/** Each session's last git check, for the background poll (X102). */
+const gitChecks: Record<string, GitCheck> = {};
 export async function refreshGit(host: string, id: string) {
   const key = sesKey(host, id);
   const w = get().sessions[host]?.find((x) => x.id === id);
   if (!w || w.archived || gitInflight[key]) return;
   gitInflight[key] = true;
+  const prev = gitChecks[key];
   try {
     const st = await rpc<GitStatus>(host, M.gitStatus, { path: w.path, base: w.base });
+    const old = get().git[key];
+    const now = Date.now();
+    const changed = old !== undefined && !sameJson(old, st);
+    gitChecks[key] = { checkedAt: now, changedAt: changed ? now : prev?.changedAt };
     // Polls of every open session mostly find nothing new: an unchanged
     // status must not re-render the app or rebuild the boards (X78).
-    if (sameJson(get().git[key], st)) return;
+    if (sameJson(old, st)) return;
     set((s) => ({ git: { ...s.git, [key]: st } }));
   } catch {
-    /* worktree may be gone */
+    /* worktree may be gone: asked again at the idle pace */
+    gitChecks[key] = { checkedAt: Date.now(), changedAt: prev?.changedAt };
   } finally {
     gitInflight[key] = false;
   }
@@ -1114,8 +1123,45 @@ async function fetchAndPull(host: string, p: Project, folder: string | null): Pr
   return { ...of, ...outcome };
 }
 
+const hostGitPassRunning: Record<string, boolean> = {};
+/** Runs one pass over a host's sessions, unless one already runs there. A
+ *  pass can take longer than the 20-second poll on a loaded Mac; a new one
+ *  never starts beside it, or they pile up and slow each other down (X102). */
+async function hostGitPass(host: string, pass: () => Promise<void>) {
+  if (hostGitPassRunning[host]) return;
+  hostGitPassRunning[host] = true;
+  try {
+    await pass();
+  } finally {
+    hostGitPassRunning[host] = false;
+  }
+}
+
+/** Every session's git status, when a host connects. */
 export async function refreshAllGit(host: string) {
-  for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
+  await hostGitPass(host, async () => {
+    for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
+  });
+}
+
+/** The 20-second poll of a host's sessions: those someone works in on every
+ *  poll, the rest every 5 minutes (X102). */
+export async function pollBackgroundGit(host: string) {
+  await hostGitPass(host, async () => {
+    for (const w of get().sessions[host] ?? []) {
+      if (w.archived) continue;
+      const s = get();
+      const terms = sessionTerminals(s, host, w.id);
+      const due = gitCheckDue({
+        now: Date.now(),
+        last: gitChecks[sesKey(host, w.id)],
+        open: s.selected?.host === host && s.selected.session === w.id,
+        working: terms.some((t) => t.agent_state === "working"),
+        lastOutputAt: Math.max(0, ...terms.map((t) => t.last_output_at)),
+      });
+      if (due) await refreshGit(host, w.id);
+    }
+  });
 }
 
 function updateBadge() {
@@ -1467,7 +1513,7 @@ export async function startStore() {
   }, 60_000);
   // Diffstats for background sessions.
   setInterval(() => {
-    for (const h of Object.keys(get().sessions)) void refreshAllGit(h);
+    for (const h of Object.keys(get().sessions)) void pollBackgroundGit(h);
   }, 20_000);
 }
 

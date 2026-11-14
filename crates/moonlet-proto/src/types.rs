@@ -1147,7 +1147,8 @@ pub struct GitStatus {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
-    /// Ref the diff is computed against (merge-base with the workspace base, or HEAD).
+    /// Ref the diff is computed against: the workspace base (its merge base
+    /// with HEAD), `origin/<base>`, HEAD, or the empty tree (X102).
     pub against: String,
     /// The requested base could not be resolved (typo, or not fetched), so
     /// the diff fell back to HEAD and committed work is not shown.
