@@ -67,3 +67,12 @@ export function agentReadiness(t?: { created_at: number; last_output_at: number;
   if (!t || t.exit) return "gone";
   return t.last_output_at > t.created_at ? "ready" : "waiting";
 }
+
+/** The TUI a chat opens in a terminal (X7): its agent resuming conversation
+ * `id`. Claude starts in the footer's `mode` when it knows it, and with
+ * `--chrome` when the host's Claude in Chrome switch is on (X103). */
+export function tuiCommand(agent: string | null | undefined, id: string, mode: string | null | undefined, chrome: boolean): string[] {
+  if (agent === "codex") return ["codex", "resume", id];
+  const known = mode && [...CLAUDE_MODES.map((m) => m.id), BYPASS_MODE.id].includes(mode);
+  return ["claude", "--resume", id, ...(known ? ["--permission-mode", mode] : []), ...(chrome ? ["--chrome"] : [])];
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReadiness, nextMode, resolveMode, resolvePlanMode, tabAgent } from "./agents";
+import { agentReadiness, nextMode, resolveMode, resolvePlanMode, tabAgent , tuiCommand } from "./agents";
 
 describe("nextMode", () => {
   it("cycles manual, accept edits, plan, auto", () => {
@@ -58,5 +58,19 @@ describe("tabAgent", () => {
     expect(tabAgent(null)).toBe("claude");
     expect(tabAgent("none")).toBe("claude");
     expect(tabAgent("")).toBe("claude");
+  });
+});
+
+describe("the TUI a chat opens in a terminal (X7, X103)", () => {
+  it("resumes Claude's conversation in the footer's mode, with --chrome when the host's switch is on", () => {
+    expect(tuiCommand("claude", "s1", "plan", false)).toEqual(["claude", "--resume", "s1", "--permission-mode", "plan"]);
+    expect(tuiCommand("claude", "s1", "plan", true)).toEqual(["claude", "--resume", "s1", "--permission-mode", "plan", "--chrome"]);
+    expect(tuiCommand("claude", "s1", "bypassPermissions", false)).toEqual(["claude", "--resume", "s1", "--permission-mode", "bypassPermissions"]);
+    expect(tuiCommand("claude", "s1", "yolo", false)).toEqual(["claude", "--resume", "s1"]);
+    expect(tuiCommand("claude", "s1", null, true)).toEqual(["claude", "--resume", "s1", "--chrome"]);
+  });
+
+  it("resumes Codex's thread without Claude's flags", () => {
+    expect(tuiCommand("codex", "th9", "plan", true)).toEqual(["codex", "resume", "th9"]);
   });
 });
