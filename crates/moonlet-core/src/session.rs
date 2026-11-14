@@ -1116,7 +1116,14 @@ impl SessionManager {
             .agents
             .get(agent)
             .cloned()
-            .or_else(|| builtin_agent(agent, resume).map(String::from))
+            .or_else(|| {
+                let builtin = builtin_agent(agent, resume)?;
+                // The host's Claude in Chrome switch (X103); a project's
+                // own agents run as written.
+                let chrome = agent == "claude"
+                    && self.file.parent().is_some_and(crate::claude_settings::chrome_in);
+                Some(if chrome { format!("{builtin} --chrome") } else { builtin.to_string() })
+            })
             .unwrap_or_else(|| agent.to_string());
         if let Some(s) = session {
             cmd.push_str(&agent_flags(&cmd, s));
@@ -3117,6 +3124,34 @@ mod tests {
         assert!(!args.contains("--permission-mode"), "{args}");
     }
 
+    /// X103: the host's Claude in Chrome switch, read at each start.
+    #[tokio::test]
+    async fn a_chats_claude_starts_with_chrome_when_the_host_says_so() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let start = |name: &str| {
+            let mut req = new_session(&r.id, None);
+            req.name = Some(name.into());
+            req.agent = Some("claude".into());
+            req.prompt = Some("hi".into());
+            req
+        };
+        let off = mgr.create_session(start("Off")).await.unwrap();
+        let args = nth_line(&Path::new(&off.path).join("claude-args"), 1).await;
+        assert!(!args.contains("--chrome"), "{args}");
+
+        std::fs::write(home.path().join("claude.toml"), "chrome = true\n").unwrap();
+        let on = mgr.create_session(start("On")).await.unwrap();
+        let args = nth_line(&Path::new(&on.path).join("claude-args"), 1).await;
+        assert!(args.contains(" --chrome"), "{args}");
+
+        // The chat started without it gets it when its Claude starts again.
+        chats.settings(off.terminals[0], Some("opus".into()), None, None).unwrap();
+        chats.send(off.terminals[0], "again", &[]).unwrap();
+        let args = nth_line(&Path::new(&off.path).join("claude-args"), 2).await;
+        assert!(args.contains(" --chrome"), "{args}");
+    }
+
     /// X73: a continued chat keeps the folders it was given inside the
     /// session's worktree here; one anywhere else, or gone, is not given.
     #[tokio::test]
@@ -3980,6 +4015,27 @@ mod tests {
             mgr.agent_command(&r, "fake", None, false, None)
                 .starts_with("sh -c")
         );
+    }
+
+    /// X103: the host's Claude in Chrome switch reaches the built-in
+    /// `claude` of a terminal tab; a project's own agents run as written.
+    #[tokio::test]
+    async fn the_built_in_claude_gets_chrome_and_a_projects_own_agents_do_not() {
+        let (repo, home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        std::fs::write(
+            repo.path().join(".moonlet/config.toml"),
+            "[agents]\nclaude-yolo = \"claude --dangerously-skip-permissions\"\n",
+        )
+        .unwrap();
+        std::fs::write(home.path().join("claude.toml"), "chrome = true\n").unwrap();
+        assert_eq!(mgr.agent_command(&r, "claude", Some("fix it"), false, None), "claude --chrome 'fix it'");
+        assert_eq!(mgr.agent_command(&r, "claude", None, true, None), "claude --continue --chrome");
+        assert_eq!(mgr.agent_command(&r, "codex", None, false, None), "codex");
+        assert_eq!(mgr.agent_command(&r, "claude-yolo", None, false, None), "claude --dangerously-skip-permissions");
+
+        std::fs::write(home.path().join("claude.toml"), "chrome = false\n").unwrap();
+        assert_eq!(mgr.agent_command(&r, "claude", Some("fix it"), false, None), "claude 'fix it'");
     }
 
     #[tokio::test]

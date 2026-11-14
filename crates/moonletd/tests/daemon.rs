@@ -667,6 +667,36 @@ async fn git_settings_are_kept_by_the_daemon_in_git_toml() {
     }
 }
 
+/// X103: the Claude in Chrome switch is the host's, in `claude.toml`.
+#[tokio::test]
+async fn claude_in_chrome_is_kept_by_the_daemon_in_claude_toml() {
+    use moonlet_proto::types::ClaudeSettings;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let mut other = d.client().await;
+    let s: ClaudeSettings = c.request(methods::CLAUDE_SETTINGS, serde_json::json!({})).await.unwrap();
+    assert!(!s.chrome);
+
+    let s: ClaudeSettings = c.request(methods::CLAUDE_SET_SETTINGS, serde_json::json!({"chrome": true})).await.unwrap();
+    assert!(s.chrome);
+    assert_eq!(std::fs::read_to_string(d.home.path().join("claude.toml")).unwrap(), "chrome = true\n");
+    let s: ClaudeSettings = other.request(methods::CLAUDE_SETTINGS, serde_json::json!({})).await.unwrap();
+    assert!(s.chrome);
+
+    // Every client hears of a change.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, other.next_frame()).await.expect("timeout").unwrap().unwrap();
+        let Frame::Json(Message::Event { name, data }) = f else { continue };
+        if name == methods::EV_CLAUDE_SETTINGS_CHANGED {
+            assert_eq!(data, serde_json::json!({"chrome": true}));
+            break;
+        }
+    }
+    let e = c.request::<_, serde_json::Value>(methods::CLAUDE_SET_SETTINGS, serde_json::json!({"chrome": "yes"})).await.unwrap_err();
+    assert!(e.to_string().contains("invalid Claude settings"), "{e}");
+}
+
 fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])

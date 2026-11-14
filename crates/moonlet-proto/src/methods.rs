@@ -209,6 +209,11 @@ pub const GIT_SETTINGS: &str = "git.settings";
 /// Changes some of the host's Git settings: a partial `GitSettings` → the
 /// whole, as saved (X55).
 pub const GIT_SET_SETTINGS: &str = "git.set_settings";
+/// The host's Claude settings (X103): `{}` → `ClaudeSettings`.
+pub const CLAUDE_SETTINGS: &str = "claude.settings";
+/// Changes some of the host's Claude settings: a partial `ClaudeSettings` →
+/// the whole, as saved (X103).
+pub const CLAUDE_SET_SETTINGS: &str = "claude.set_settings";
 /// `GitUnpushed` → `UnpushedWork`: what in a session is only on its host (X55).
 pub const GIT_UNPUSHED: &str = "git.unpushed";
 /// `GitUnpushed`: `git push -u origin <branch>`, else HEAD (X55 "Push, then archive").
@@ -698,6 +703,8 @@ pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 /// A host's Git settings after a change: the whole `GitSettings` (X55).
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
+/// A host's Claude settings after a change: the whole `ClaudeSettings` (X103).
+pub const EV_CLAUDE_SETTINGS_CHANGED: &str = "claude.settings_changed";
 /// A project's base branch was fast-forwarded by `git.pull_base`, by any
 /// client: [`BasePulled`](crate::types::BasePulled) (X13). Another host's
 /// pull reaches this host's app only through it.

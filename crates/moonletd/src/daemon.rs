@@ -6501,6 +6501,12 @@ impl Daemon {
                 self.terminals.emit(Message::event(m::EV_GIT_SETTINGS_CHANGED, &saved));
                 ok(saved)
             }
+            m::CLAUDE_SETTINGS => ok(moonlet_core::claude_settings::load(&moonlet_core::claude_settings::path())),
+            m::CLAUDE_SET_SETTINGS => {
+                let saved = moonlet_core::claude_settings::update(&moonlet_core::claude_settings::path(), p).map_err(internal)?;
+                self.terminals.emit(Message::event(m::EV_CLAUDE_SETTINGS_CHANGED, &saved));
+                ok(saved)
+            }
             m::GIT_ORIGIN_URL => {
                 let r: m::GitPath = params(p)?;
                 ok(git::origin_url(&path(&r.path)).await)

@@ -94,6 +94,9 @@ pub struct ChatConfig {
     /// The `CLAUDE_CONFIG_DIR` of the last start (X33): a conversation kept
     /// in another profile's folder cannot be resumed.
     pub config_dir: Option<String>,
+    /// Claude's `--chrome`, for the Claude in Chrome extension: the host's
+    /// switch at the last start (X103).
+    pub chrome: bool,
 }
 
 /// What an adapter asks the runtime to do.

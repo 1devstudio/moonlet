@@ -330,6 +330,9 @@ impl Adapter for Claude {
         if let Some(s) = &cfg.settings {
             args.extend(["--settings".into(), s.clone()]);
         }
+        if cfg.chrome {
+            args.push("--chrome".into());
+        }
         ("claude".into(), args)
     }
 

@@ -37,7 +37,7 @@ import {
 import { rpc } from "../lib/daemon";
 import { projectFiles } from "../lib/projectFiles";
 import { slashMenu, type SlashRow } from "../lib/sessionDesign";
-import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
+import { CLAUDE_MODELS, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode, tuiCommand } from "../lib/agents";
 import {
   type QuestionPick,
   type SuggestedReply,
@@ -86,7 +86,7 @@ import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
 import { ShowEarlier } from "./ShowEarlier";
 import { useShowEarlier } from "../lib/showEarlier";
-import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
+import { type AsideAnswer, type ChatItem, type ClaudeSettings, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLines, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
@@ -1343,10 +1343,11 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
     toast("The conversation has not started yet");
     return;
   }
-  // The TUI starts in the mode the footer shows (X7).
-  const mode = st.mode && [...CLAUDE_MODES.map((m) => m.id), BYPASS_MODE.id].includes(st.mode) ? ["--permission-mode", st.mode] : [];
-  const command = info.agent === "codex" ? ["codex", "resume", id] : ["claude", "--resume", id, ...mode];
   try {
+    // As every Claude on the host, with --chrome when its switch is on (X103); a daemon too old to know it says no.
+    const chrome = info.agent !== "codex" && (await rpc<ClaudeSettings>(host, M.claudeSettings).then((c) => c.chrome).catch(() => false));
+    // The TUI starts in the mode the footer shows (X7).
+    const command = tuiCommand(info.agent, id, st.mode, chrome);
     const t = await rpc<TerminalInfo>(host, M.terminalCreate, {
       cwd: info.cwd,
       session_id: info.session_id,

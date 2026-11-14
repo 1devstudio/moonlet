@@ -142,6 +142,7 @@ function index(c: SearchContext): Entry[] {
     app("agents", "App › Agents", "default-mode", "Default permission mode for new Claude sessions", labelOf(CLAUDE_MODES, resolveMode(s.defaultMode))),
     app("agents", "App › Agents", "plan-approve", "When a plan is approved, switch to", labelOf(PLAN_APPROVE_MODES, resolvePlanMode(s.planApproveMode))),
     app("agents", "App › Agents", "tool-calls", "Tool calls in the conversation", s.toolCalls === "expanded" ? "Expanded" : "Collapsed"),
+    app("agents", "App › Agents", "claude-chrome", "Claude in Chrome", "", "browser extension --chrome"),
     app("notifications", "App › Notifications", "notify-focused", "Notify even while moonlet is focused", onOff(s.notifyWhenFocused), "desktop notification"),
     app("notifications", "App › Notifications", "banner-blocked", "Notification when an agent needs you", onOff(bannerOn(s.banners, "blocked")), "desktop banner"),
     app("notifications", "App › Notifications", "banner-done", "Notification when an agent is done", onOff(bannerOn(s.banners, "done")), "desktop banner"),
