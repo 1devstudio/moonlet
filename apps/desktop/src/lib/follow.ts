@@ -53,6 +53,14 @@ export function bringsHere(host: string, accounts: Record<string, { account?: st
  * move here. */
 export const waitingLine = (owner: string) => `Moves here when ${owner}'s turn ends`;
 
+/** Why session `name` can't come to this Mac, from the daemon's `reason`. */
+export const cannotComeLine = (name: string, reason: string) => `${name} can't come to this Mac: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+
+/** Session `name` came here on `branch`, and this Mac's own commits went on
+ * branch `keptOn`, as each side had commits the other lacked. */
+export const keptOnLine = (name: string, keptOn: string, branch: string) =>
+  `${name} is here. Its commits from this Mac are on ${keptOn}: merge that branch into ${branch} to keep them.`;
+
 /** Asks `attempt` until the turn running where the session is has ended
  * (X73): an attempt that answers `busy`, or finds the link down for a
  * moment, is asked again every `everyMs`, for up to `waitMs`. `waiting` gets Move now, which asks once with `now`.
