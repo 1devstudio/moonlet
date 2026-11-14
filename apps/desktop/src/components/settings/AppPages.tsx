@@ -4,7 +4,7 @@
 import { useEffect, useId, useState } from "react";
 import { Play } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
-import { hostsApi } from "../../lib/daemon";
+import { hostsApi, rpc } from "../../lib/daemon";
 import { checkClaudeVersion, checkForUpdates, errorToast, toast, updateActions, updateClaude, updateSettings, useStore } from "../../lib/store";
 import { updateButton } from "../../lib/updater";
 import { claudeOffer } from "../../lib/claudeUpdate";
@@ -15,7 +15,7 @@ import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
 import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
-import type { DaemonService } from "../../lib/protocol";
+import { M, type ClaudeSettings, type DaemonService } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -346,6 +346,36 @@ export function TerminalPage() {
   );
 }
 
+/** This Mac's Claude in Chrome switch (X103), kept by its daemon in
+ * `claude.toml`; `null` while unread or when the daemon is too old. */
+function ChromeRow() {
+  const [settings, setSettings] = useState<ClaudeSettings | null>(null);
+  useEffect(() => {
+    void rpc<ClaudeSettings>("local", M.claudeSettings)
+      .then(setSettings)
+      .catch(() => setSettings(null));
+  }, []);
+  const set = (chrome: boolean) => {
+    setSettings({ chrome });
+    void rpc<ClaudeSettings>("local", M.claudeSetSettings, { chrome })
+      .then(setSettings)
+      .catch((e) => {
+        errorToast(e);
+        setSettings({ chrome: !chrome });
+      });
+  };
+  return (
+    <SwitchRow
+      setting="claude-chrome"
+      label="Claude in Chrome"
+      hint="New Claude sessions on this Mac start with --chrome and can use the Claude in Chrome extension. Running ones get it when they next start."
+      on={!!settings?.chrome}
+      disabled={!settings}
+      onChange={set}
+    />
+  );
+}
+
 export function AgentsPage() {
   const mode = useStore((s) => resolveMode(s.settings.defaultMode));
   const planMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
@@ -381,6 +411,11 @@ export function AgentsPage() {
               labelledBy={toolsId}
             />
           </Row>
+        </Card>
+      </Section>
+      <Section title="Browser">
+        <Card>
+          <ChromeRow />
         </Card>
       </Section>
     </>

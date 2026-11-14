@@ -50,6 +50,7 @@ describe("searching settings (X43)", () => {
     expect(shown("claude")).toEqual([
       ["Claude Code version", "App › General › Updates", "2.1.292"],
       ["Default permission mode for new Claude sessions", "App › Agents", "Auto"],
+      ["Claude in Chrome", "App › Agents", ""],
       ["Claude profiles", "Claude Code › Profiles", "3 profiles"],
       ["Claude Code hooks", "Claude Code › Hooks", ""],
       ["Claude profile", "Workspaces › Personal", "Default"],
@@ -83,6 +84,13 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("unpushed", git)[0]).toMatchObject({ value: "On", setting: "git-warn-unpushed" });
     expect(searchSettings("fetch from origin", git)[0]).toMatchObject({ value: "15 min", setting: "git-fetch" });
     expect(searchSettings("start new branches", git)[0]).toMatchObject({ value: "origin/main", setting: "git-start-from" });
+  });
+
+  it("finds Claude in Chrome by chrome and browser (X103)", () => {
+    for (const q of ["chrome", "browser", "--chrome"]) {
+      expect(searchSettings(q, ctx)[0]).toMatchObject({ before: expect.any(String), path: "App › Agents", route: { page: "agents" }, setting: "claude-chrome" });
+    }
+    expect(shown("claude in")).toEqual([["Claude in Chrome", "App › Agents", ""]]);
   });
 
   it("splits the name around the match, whatever its case", () => {

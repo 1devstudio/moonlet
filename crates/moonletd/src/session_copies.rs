@@ -2779,6 +2779,8 @@ mod tests {
             "session.create",
             "git.settings",
             "git.set_settings",
+            "claude.settings",
+            "claude.set_settings",
             "chat.mcp",
         ] {
             assert_eq!(

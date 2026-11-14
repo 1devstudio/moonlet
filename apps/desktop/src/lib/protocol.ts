@@ -384,6 +384,12 @@ export interface UnpushedWork {
   upstream: string | null;
 }
 
+/** A host's Claude settings, kept by its daemon in `~/.moonlet/claude.toml` (X103). */
+export interface ClaudeSettings {
+  /** Every Claude the host starts gets `--chrome`, for the Claude in Chrome extension. */
+  chrome: boolean;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */
@@ -1494,6 +1500,8 @@ export const M = {
   /** Whether the moonlet app is open on the daemon (X76): `{open}`. */
   tasksApp: "tasks.app",
   gitSetSettings: "git.set_settings",
+  claudeSettings: "claude.settings",
+  claudeSetSettings: "claude.set_settings",
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",
   prCreate: "gh.pr_create",
@@ -1668,6 +1676,7 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
+  claudeSettingsChanged: "claude.settings_changed",
   /** A project's base branch was pulled on that host, by any client (X13). */
   gitBasePulled: "git.base_pulled",
   /** A workspace's board snapshot changed (X76). */

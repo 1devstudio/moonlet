@@ -467,6 +467,16 @@ impl Default for GitSettings {
     }
 }
 
+/// A host's Claude settings (X103), kept by its daemon in
+/// `~/.moonlet/claude.toml`. Missing keys take their defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeSettings {
+    /// Start every Claude with `--chrome`, for the Claude in Chrome
+    /// extension.
+    pub chrome: bool,
+}
+
 /// Where new session branches start (X55).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
