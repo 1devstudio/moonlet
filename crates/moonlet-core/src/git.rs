@@ -409,22 +409,38 @@ async fn diff_against_base(
     base: Option<&str>,
 ) -> Result<(String, Option<String>, Vec<u8>)> {
     if !has_head {
-        return Ok((EMPTY_TREE.into(), None, diff_raw(root, EMPTY_TREE, false).await?));
+        return Ok((EMPTY_TREE.into(), None, diff_with_stats(root, EMPTY_TREE, false).await?));
     }
     let mut missing = None;
     if let Some(base) = base.filter(|b| !b.is_empty() && *b != "HEAD") {
         for candidate in [base.to_string(), format!("origin/{base}")] {
-            if let Ok(out) = diff_raw(root, &candidate, true).await {
-                return Ok((candidate, None, out));
+            let e = match diff_with_stats(root, &candidate, true).await {
+                Ok(out) => return Ok((candidate, None, out)),
+                Err(e) => format!("{e:#}"),
+            };
+            // No such ref: try the next one.
+            if e.contains("bad revision") {
+                continue;
+            }
+            // A slow git is not a missing base, and a second diff would wait as long.
+            if e.contains("timed out") {
+                bail!(e);
+            }
+            // Several merge bases, which `--merge-base` refuses, or a git
+            // before 2.30 without it: pick the merge base as before X102.
+            if let Ok(mb) = git_text(root, &["merge-base", "HEAD", "--end-of-options", &candidate]).await {
+                return Ok((candidate, None, diff_with_stats(root, &mb, false).await?));
             }
         }
         tracing::warn!(base, cwd = %root.display(), "diff base not found; using HEAD");
         missing = Some(base.to_string());
     }
-    Ok(("HEAD".into(), missing, diff_raw(root, "HEAD", false).await?))
+    Ok(("HEAD".into(), missing, diff_with_stats(root, "HEAD", false).await?))
 }
 
-async fn diff_raw(root: &Path, against: &str, merge_base: bool) -> Result<Vec<u8>> {
+/// `git diff --raw --numstat` of the work tree against `against`, or
+/// against its merge base with HEAD.
+async fn diff_with_stats(root: &Path, against: &str, merge_base: bool) -> Result<Vec<u8>> {
     let mut args = vec!["diff", "--raw", "--numstat", "-z", "-M"];
     if merge_base {
         args.push("--merge-base");
@@ -1921,6 +1937,32 @@ pub(crate) mod tests {
         assert_eq!(on_origin.files.len(), 5);
         assert_eq!(on_origin.against, "origin/trunk");
         assert!(on_origin.base_missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_against_a_base_with_two_merge_bases_uses_one_of_them() {
+        // main and feature each merged the other: two merge bases, which
+        // `git diff --merge-base` refuses.
+        let dir = repo().await;
+        let p = dir.path();
+        git(p, &["branch", "feature"]).await.unwrap();
+        std::fs::write(p.join("m1"), "m1\n").unwrap();
+        git(p, &["add", "m1"]).await.unwrap();
+        git(p, &["commit", "-qm", "m1"]).await.unwrap();
+        git(p, &["checkout", "-q", "feature"]).await.unwrap();
+        std::fs::write(p.join("f1"), "f1\n").unwrap();
+        git(p, &["add", "f1"]).await.unwrap();
+        git(p, &["commit", "-qm", "f1"]).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        git(p, &["merge", "-q", "--no-edit", "feature"]).await.unwrap();
+        git(p, &["checkout", "-q", "feature"]).await.unwrap();
+        git(p, &["merge", "-q", "--no-edit", "main~1"]).await.unwrap();
+
+        let st = status(p, Some("main")).await.unwrap();
+        let files: Vec<_> = st.files.iter().map(|f| (f.path.as_str(), f.status.as_str())).collect();
+        assert_eq!(files, vec![("m1", "added")]);
+        assert!(st.base_missing.is_none());
+        assert_eq!(st.against, "main");
     }
 
     #[tokio::test]
