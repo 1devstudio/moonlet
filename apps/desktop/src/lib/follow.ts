@@ -143,16 +143,16 @@ export const offlineLine = (name: string, since: number) => `${name} is offline 
 /** The time a member went offline, for a row's tooltip. */
 export const offlineSince = (since: number) => clock(since);
 
-/** Run only on…'s members (X73): this Mac and the central host, by name,
- * the one the session is kept on (`pinned`, a worker id) checked. None
- * without a central host. */
+/** Run only on…'s members (X73), its submenu's items: this Mac and the
+ * central host, by name, the one the session is kept on (`pinned`, a
+ * worker id) checked. None without a central host. */
 export function moveTargets(o: { thisMac: { id: string; label: string }; central: { id: string; label: string } | null; pinned: string | null }): { to: string; label: string; checked: boolean }[] {
   if (!o.central) return [];
-  return [o.thisMac, o.central].map((m) => ({ to: m.id, label: `Run only on ${m.label}`, checked: o.pinned === m.id }));
+  return [o.thisMac, o.central].map((m) => ({ to: m.id, label: m.label, checked: o.pinned === m.id }));
 }
 
-/** What a session's menu offers to move it (X73): Run only on… this Mac
- * and the central host, Unpin when kept somewhere, and Take over anyway
+/** What a session's menu offers to move it (X73): a Run only on submenu
+ * with this Mac and the central host, Unpin when kept somewhere, and Take over anyway
  * while the central host, which runs it, has been offline 30 s or more and
  * this Mac holds a live copy of it (`copy`) to take it from. */
 export function followMenu(o: {
@@ -166,13 +166,13 @@ export function followMenu(o: {
   unreachableSince: number | null;
   now: number;
   copy: boolean;
-}): ({ kind: "move"; to: string; label: string; checked: boolean } | { kind: "unpin" } | { kind: "take-over" })[] {
+}): ({ kind: "run-only-on"; label: string; targets: { to: string; label: string; checked: boolean }[] } | { kind: "unpin" } | { kind: "take-over" })[] {
   if (!o.me || !o.centralId || !o.centralHost) return [];
   if (o.host !== "local" && o.host !== o.centralHost) return [];
-  const moves = moveTargets({ thisMac: { id: o.me, label: o.meLabel }, central: { id: o.centralId, label: o.centralLabel }, pinned: o.pinned }).map((t) => ({ kind: "move" as const, ...t }));
+  const targets = moveTargets({ thisMac: { id: o.me, label: o.meLabel }, central: { id: o.centralId, label: o.centralLabel }, pinned: o.pinned });
   const offline = o.unreachableSince !== null && o.now - o.unreachableSince >= 30_000;
   return [
-    ...(offline ? [] : moves),
+    ...(offline ? [] : [{ kind: "run-only-on" as const, label: "Run only on", targets }]),
     ...(o.pinned && !offline ? [{ kind: "unpin" as const }] : []),
     ...(offline && o.host === o.centralHost && o.copy ? [{ kind: "take-over" as const }] : []),
   ];

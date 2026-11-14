@@ -123,6 +123,21 @@ describe("a session follows the Mac you type from (X73)", () => {
     await expect(rows()).toBeElementsArrayOfSize(1);
   });
 
+  it("groups Run only on in one submenu of the session's menu", async () => {
+    await rightClick(row);
+    // A click opens it, as the keyboard can (WebKit's driver moves no
+    // pointer for the hover).
+    const opener = '//button[@aria-haspopup="menu"][normalize-space()="Run only on"]';
+    await $(opener).click();
+    // This Mac and the central host, by name; the session is kept on neither.
+    const items = `${opener}/following-sibling::div//button`;
+    await expect($$(items)).toBeElementsArrayOfSize(2, { wait: 5000 });
+    const thisMac = rpc<{ worker: { name: string } }>(w, "link.get", {}).worker.name;
+    await expect($(`${items}[normalize-space()=${JSON.stringify(thisMac)}]`)).toBeDisplayed();
+    await expect($(sel.button("Run only on "))).not.toBeExisting();
+    await browser.keys("Escape");
+  });
+
   it("moves the session here when you type into it, and the message runs here", async () => {
     await $(row).click();
     await browser.execute(() => {

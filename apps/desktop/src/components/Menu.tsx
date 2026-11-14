@@ -50,11 +50,18 @@ export function MenuItems({
         if (it.kind === "submenu")
           return (
             <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen((o) => (o === i ? null : o))}>
-              <div className={cx("flex cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] ui-text-14", open === i && "bg-hover")}>
+              {/* A button, so a click or the keyboard opens it too. */}
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={open === i}
+                onClick={() => setOpen((o) => (o === i ? null : i))}
+                className={cx("flex w-full cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14", open === i && "bg-hover")}
+              >
                 {it.icon}
                 <span className="flex-1">{it.label}</span>
                 <ChevronRight size={14} className="text-muted" />
-              </div>
+              </button>
               {open === i && (
                 <div className="absolute left-full top-[-5px] z-50 ml-1 min-w-[200px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
                   <MenuItems items={it.items} onClose={onClose} />

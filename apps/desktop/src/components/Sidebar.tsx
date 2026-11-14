@@ -835,8 +835,13 @@ function followItems(host: string, s: Session): MenuItem[] {
     { kind: "divider" },
     ...items.map((i): MenuItem => {
       switch (i.kind) {
-        case "move":
-          return { label: i.label, checked: i.checked, onSelect: () => void moveSession(s.id, i.to) };
+        case "run-only-on":
+          return {
+            kind: "submenu",
+            label: i.label,
+            icon: <Server size={14} className="text-muted" />,
+            items: i.targets.map((t): MenuItem => ({ label: t.label, checked: t.checked, onSelect: () => void moveSession(s.id, t.to) })),
+          };
         case "unpin":
           return { label: "Unpin", icon: <Pin size={14} className="text-muted" />, onSelect: () => void rpc("local", M.sessionUnpin, { session: s.id }).catch(errorToast) };
         case "take-over":
