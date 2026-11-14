@@ -2154,8 +2154,12 @@ impl LiveCopies {
     /// are now (X73), once it gave the session up and before the copy
     /// becomes the session's worktree here: what it sent while the copy
     /// was held never landed. A file this Mac changed in the copy since
-    /// keeps its version, as when a copy resumes.
-    pub async fn catch_up(&self, h: &Holding) -> Result<(), RpcError> {
+    /// keeps its version, as when a copy resumes. No commit is lost: ahead
+    /// of the central host's, the copy keeps its own; diverged, its own go
+    /// on a branch of their own, which it gives, or with `keep_own` off
+    /// the bring answers `diverged` and nothing moves. A failure after that
+    /// names the branch.
+    pub async fn catch_up(&self, h: &Holding, keep_own: bool) -> Result<Option<String>, RpcError> {
         let k = self
             .kept(&h.id)
             .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
@@ -2181,49 +2185,65 @@ impl LiveCopies {
             self.unpack_from_central(&k, &repo, &pack).await?;
         }
         self.check_paths(&k, &repo, &fetched.tree).await?;
-        // Each side with commits the other lacks: nothing moves, so neither
-        // side's commits are lost.
         let own = git_sync::head(&path).await.map_err(internal)?;
-        if own != fetched.head
-            && !git_sync::is_ancestor(&path, &own, &fetched.head).await.map_err(internal)?
-            && !git_sync::is_ancestor(&path, &fetched.head, &own).await.map_err(internal)?
-        {
-            return Err(RpcError::new(
-                "diverged",
-                format!("{} here and {}'s each have commits the other lacks.", k.branch, k.host),
-            ));
+        let ahead = own != fetched.head && git_sync::is_ancestor(&path, &fetched.head, &own).await.map_err(internal)?;
+        let mut kept_on = None;
+        if own != fetched.head && !ahead && !git_sync::is_ancestor(&path, &own, &fetched.head).await.map_err(internal)? {
+            let branch = self.branch_of(&k, &path).await?;
+            if !keep_own {
+                return Err(RpcError::new(
+                    "diverged",
+                    format!("{branch} here and {}'s each have commits the other lacks.", k.host),
+                ));
+            }
+            // Each side with commits the other lacks: this Mac's go on a
+            // branch of their own, and the session's moves to the commit it
+            // had where it ran.
+            let name = keep_own_commits(&repo, &path, &branch, &own, &fetched.head).await?;
+            tracing::info!(copy = %k.id, "kept this Mac's commits of {branch} on {name}");
+            kept_on = Some(name);
         }
-        let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
-            .await
-            .map_err(internal)?;
-        let from = k.base.clone().or(k.tree.clone()).unwrap_or_else(|| local.tree.clone());
-        let (target, base, differs) = if local.tree == from {
-            (fetched.tree.clone(), fetched.tree.clone(), Vec::new())
-        } else {
-            reconciled(&repo, from, fetched.tree.clone(), local.tree)
+        let files = async {
+            let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
                 .await
-                .map_err(internal)?
+                .map_err(internal)?;
+            let from = match k.base.clone().or(k.tree.clone()) {
+                Some(from) => from,
+                // Never in sync, and ahead: this Mac's commits are changes of
+                // its own, on the central host's commit.
+                None if ahead => git_sync::commit_tree(&repo, &fetched.head).await.map_err(internal)?,
+                None => local.tree.clone(),
+            };
+            let (target, base, differs) = if local.tree == from {
+                (fetched.tree.clone(), fetched.tree.clone(), Vec::new())
+            } else {
+                reconciled(&repo, from, fetched.tree.clone(), local.tree)
+                    .await
+                    .map_err(internal)?
+            };
+            apply_tries(&self.sessions, &path, &target, &k.host)
+                .await
+                .map_err(|e| match e {
+                    Stop::Offline => RpcError::new("disconnected", "the central host is not connected"),
+                    Stop::Gone => RpcError::new("not_found", "the session is gone"),
+                    Stop::Paused(reason) => RpcError::new("paused", reason),
+                })?;
+            git_sync::set_base_ref(&repo, &k.id, &base)
+                .await
+                .map_err(internal)?;
+            self.update_kept(&k.id, |kept| {
+                kept.base = Some(base.clone());
+                kept.sent_base = Some(fetched.tree.clone());
+                kept.base_head = Some(fetched.head.clone());
+                kept.tree = Some(fetched.tree.clone());
+                kept.too_big = fetched.too_big.clone();
+                kept.differs = differs.clone();
+            });
+            self.follow_head(&k.id, &path, &fetched.head).await?;
+            Ok::<(), RpcError>(())
         };
-        apply_tries(&self.sessions, &path, &target, &k.host)
-            .await
-            .map_err(|e| match e {
-                Stop::Offline => RpcError::new("disconnected", "the central host is not connected"),
-                Stop::Gone => RpcError::new("not_found", "the session is gone"),
-                Stop::Paused(reason) => RpcError::new("paused", reason),
-            })?;
-        git_sync::set_base_ref(&repo, &k.id, &base)
-            .await
-            .map_err(internal)?;
-        self.update_kept(&k.id, |kept| {
-            kept.base = Some(base.clone());
-            kept.sent_base = Some(fetched.tree.clone());
-            kept.base_head = Some(fetched.head.clone());
-            kept.tree = Some(fetched.tree.clone());
-            kept.too_big = fetched.too_big.clone();
-            kept.differs = differs.clone();
-        });
-        self.follow_head(&k.id, &path, &fetched.head).await?;
-        Ok(())
+        files.await.map_err(|e| told(e, kept_on.as_deref()))?;
+        Ok(kept_on)
     }
 
     /// Lets go of held copy `h` and keeps its worktree: this Mac now owns
@@ -2910,20 +2930,7 @@ impl LiveCopies {
                 ));
             }
             let own = git_sync::head(&path).await.map_err(internal)?;
-            let mut name = format!("{branch}-this-mac");
-            let mut n = 1;
-            while git_sync::branch_exists(&repo, &name).await {
-                n += 1;
-                name = format!("{branch}-this-mac-{n}");
-            }
-            git_sync::create_branch(&repo, &name, &own)
-                .await
-                .map_err(internal)?;
-            if let Err(e) = git_sync::reset_branch(&path, &own, &central).await {
-                // Nothing moved: the backup branch would only be clutter.
-                let _ = git_sync::delete_branch(&repo, &name, &own).await;
-                return Err(internal(e));
-            }
+            keep_own_commits(&repo, &path, &branch, &own, &central).await?;
             self.update_kept(id, |kept| {
                 kept.head = Some(central.clone());
                 kept.diverged = None;
@@ -3740,6 +3747,35 @@ async fn off_branch(path: &Path, branch: &str) -> anyhow::Result<Option<String>>
 
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
+}
+
+/// Keeps this Mac's commits, at `own`, on a branch of their own,
+/// `<branch>-this-mac` (`-2`, `-3`… when taken), and moves `branch`, checked
+/// out at `path` of `repo`, to the central host's commit `central`; the
+/// files stay as they are. Gives that branch.
+async fn keep_own_commits(repo: &Path, path: &Path, branch: &str, own: &str, central: &str) -> Result<String, RpcError> {
+    let mut name = format!("{branch}-this-mac");
+    let mut n = 1;
+    while git_sync::branch_exists(repo, &name).await {
+        n += 1;
+        name = format!("{branch}-this-mac-{n}");
+    }
+    git_sync::create_branch(repo, &name, own).await.map_err(internal)?;
+    if let Err(e) = git_sync::reset_branch(path, own, central).await {
+        // Nothing moved: the branch would only be clutter.
+        let _ = git_sync::delete_branch(repo, &name, own).await;
+        return Err(internal(e));
+    }
+    Ok(name)
+}
+
+/// Error `e`, naming the branch this Mac's commits went on, if any, so a
+/// bring that fails after it still says where they are (X73).
+pub(crate) fn told(e: RpcError, kept_on: Option<&str>) -> RpcError {
+    match kept_on {
+        Some(b) => RpcError::new(&e.code, format!("{} This Mac's commits are on {b}.", e.message)),
+        None => e,
+    }
 }
 
 /// Whether copy `k` has its folder on this Mac: made, and not deleted.

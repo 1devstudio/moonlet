@@ -4027,13 +4027,16 @@ impl Daemon {
     /// worktree, its transcript is fetched, and each chat goes on here,
     /// resuming its conversation. `busy` while a turn runs there, unless
     /// `now`.
-    async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
+    async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<m::SessionBrought, RpcError> {
         self.bring_as(r, false, false).await
     }
 
     /// [`Self::bring`]; with `pin`, the session is kept here after. With
     /// `returning`, it comes back only while idle and untouched there (X73).
-    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool, returning: bool) -> Result<moonlet_proto::types::Session, RpcError> {
+    /// Gives the session, and the branch this Mac's own commits went on
+    /// when each side had commits the other lacked; coming back by itself,
+    /// such a session stays there instead, until the user brings it.
+    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool, returning: bool) -> Result<m::SessionBrought, RpcError> {
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -4048,7 +4051,7 @@ impl Daemon {
                 && let Some(chat) = s.terminals.iter().copied().find(|t| self.chats.is_chat(*t))
             {
                 self.chats.send(chat, message, &r.images).map_err(internal)?;
-                return Ok(s);
+                return Ok(m::SessionBrought { session: s, kept_on: None });
             }
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
@@ -4086,16 +4089,18 @@ impl Daemon {
                 Ok(_) => tracing::info!(session = %r.session, "handed the session back after failing to take it in: {}", e.message),
                 Err(back) => tracing::warn!(session = %r.session, "cannot hand the session back: {}", back.message),
             }
-            Err::<moonlet_proto::types::Session, _>(e)
+            Err::<m::SessionBrought, _>(e)
         };
         // The central host's last files first: what it sent while the copy
         // was held never landed.
-        if let Err(e) = self.sync.catch_up(&held).await {
-            return give_back(e).await;
-        }
+        let kept_on = match self.sync.catch_up(&held, !returning).await {
+            Ok(kept_on) => kept_on,
+            Err(e) => return give_back(e).await,
+        };
+        let told = |e: RpcError| crate::sync::told(e, kept_on.as_deref());
         let released = match self.sync.let_go(held) {
             Ok(released) => released,
-            Err(e) => return give_back(e).await,
+            Err(e) => return give_back(told(e)).await,
         };
         let path = released.path.clone();
         // This Mac's own from now on, before the account's news of it comes
@@ -4113,7 +4118,7 @@ impl Daemon {
             Err(e) => {
                 self.sessions.keep_listed(&r.session, false);
                 self.sync.restore(released);
-                return give_back(e).await;
+                return give_back(told(e)).await;
             }
         };
         for file in &taken.transcripts {
@@ -4158,7 +4163,7 @@ impl Daemon {
         {
             tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
         }
-        self.sessions.session(&r.session).map_err(internal)
+        Ok(m::SessionBrought { session: self.sessions.session(&r.session).map_err(internal)?, kept_on })
     }
 
     /// Takes in `session`, with account record `record`, at worktree
@@ -4351,7 +4356,8 @@ impl Daemon {
     /// `session.move` on a member (X73): moves a session to this Mac or to
     /// the central host, and keeps it there (pinned). It moves at the end
     /// of a running turn (`busy` until then), or now, cutting it off.
-    async fn move_session(self: &Arc<Self>, r: m::SessionMove) -> Result<moonlet_proto::types::Session, RpcError> {
+    async fn move_session(self: &Arc<Self>, r: m::SessionMove) -> Result<m::SessionBrought, RpcError> {
+        let here = |session| m::SessionBrought { session, kept_on: None };
         let me = self.link.info().worker.id;
         let central = self.link.account_info().account;
         let record = self
@@ -4363,7 +4369,7 @@ impl Daemon {
         if r.to == me {
             if owner == me {
                 self.pin_at_central(&r.session, Some(me.clone())).await?;
-                return self.sessions.session(&r.session).map_err(internal);
+                return self.sessions.session(&r.session).map(here).map_err(internal);
             }
             return self
                 .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true, false)
@@ -4413,7 +4419,7 @@ impl Daemon {
             }
             let mut moved = s;
             moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true, unreachable_since: None });
-            return Ok(moved);
+            return Ok(here(moved));
         }
         if r.to == central && owner == central {
             // It runs there already: it is kept there now.
@@ -4422,6 +4428,7 @@ impl Daemon {
                 .member_sessions()
                 .into_iter()
                 .find(|s| s.id == r.session)
+                .map(here)
                 .ok_or_else(|| RpcError::new("not_found", "no such session in the account"));
         }
         Err(RpcError::new("unsupported", "a session moves to this Mac or to the central host"))
