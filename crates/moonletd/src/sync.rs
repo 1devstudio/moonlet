@@ -1237,6 +1237,9 @@ impl LiveCopies {
         }
 
         let made = !k.path.is_empty() && Path::new(&k.path).exists();
+        // This Mac's commit, when its branch has commits of its own (X60):
+        // the worktree is made there, never moved back.
+        let mut own_commit = None;
         let path = if made {
             PathBuf::from(&k.path)
         } else {
@@ -1289,20 +1292,31 @@ impl LiveCopies {
                 kept.project = opened.project.clone();
                 kept.made_from = Some(made_from.clone());
             });
-            if let Err(e) =
-                git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head).await
-            {
-                self.update_kept(&k.id, |kept| {
-                    kept.path.clear();
-                    kept.made_from = None;
-                });
-                return Err(match e {
-                    git_sync::WorktreeError::Ahead => Stop::Paused(format!(
-                        "{} on this Mac has commits {}'s doesn't.",
-                        opened.branch, k.host
-                    )),
-                    e => Stop::Paused(e.to_string()),
-                });
+            let added = match k.kind {
+                CopyKind::Live => git_sync::add_worktree_keeping_own(&repo, &path, &opened.branch, &fetched.head).await,
+                CopyKind::Run => git_sync::add_worktree(&repo, &path, &opened.branch, &fetched.head).await.map(|()| None),
+            };
+            match added {
+                Ok(own) => own_commit = own,
+                Err(e) => {
+                    self.update_kept(&k.id, |kept| {
+                        kept.path.clear();
+                        kept.made_from = None;
+                    });
+                    return Err(match e {
+                        git_sync::WorktreeError::Ahead => Stop::Paused(format!(
+                            "{} on this Mac has commits {}'s doesn't.",
+                            opened.branch, k.host
+                        )),
+                        e => Stop::Paused(e.to_string()),
+                    });
+                }
+            }
+            if let Some(own) = &own_commit {
+                let tree = git_sync::commit_tree(&repo, own)
+                    .await
+                    .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+                self.update_kept(&k.id, |kept| kept.made_from = Some(tree.clone()));
             }
             path
         };
@@ -1347,6 +1361,25 @@ impl LiveCopies {
                     .map_err(Stop::Paused)?;
             }
         }
+        // Ahead of the session: what the session changed since its commit
+        // goes on top of this Mac's, whose own changes are then offered.
+        // Diverged, the copy takes the session's files, as X60's diverged
+        // copies keep them.
+        if let Some(own) = &own_commit
+            && git_sync::is_ancestor(&path, &fetched.head, own)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?
+        {
+            let tree_of = |c: String| {
+                let repo = repo.clone();
+                async move { git_sync::commit_tree(&repo, &c).await.map_err(|e| Stop::Paused(format!("{e:#}"))) }
+            };
+            let from = tree_of(fetched.head.clone()).await?;
+            let local = tree_of(own.clone()).await?;
+            (target, base, differs) = reconciled(&repo, from, fetched.tree.clone(), local)
+                .await
+                .map_err(Stop::Paused)?;
+        }
         apply_tries(&self.sessions, &path, &target, &host_name).await?;
         git_sync::set_base_ref(&repo, &k.id, &base)
             .await
@@ -1365,6 +1398,13 @@ impl LiveCopies {
             kept.differs = differs.clone();
             kept.made_from = None;
         });
+        // Ahead, its commits go to the session in the next round; diverged,
+        // the copy says so.
+        if own_commit.is_some() {
+            self.follow_head(&k.id, &path, &fetched.head)
+                .await
+                .map_err(|e| Stop::Paused(e.message))?;
+        }
         Ok(path)
     }
 

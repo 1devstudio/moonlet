@@ -1441,6 +1441,28 @@ pub async fn add_worktree(
     branch: &str,
     head: &str,
 ) -> Result<(), WorktreeError> {
+    add_worktree_at(repo, dir, branch, head, false).await.map(|_| ())
+}
+
+/// [`add_worktree`], except that a branch here with commits of its own
+/// (X60) gets its worktree too, at its own commit, which it gives: it is
+/// never moved back. `None` when the worktree is at `head`.
+pub async fn add_worktree_keeping_own(
+    repo: &Path,
+    dir: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, WorktreeError> {
+    add_worktree_at(repo, dir, branch, head, true).await
+}
+
+async fn add_worktree_at(
+    repo: &Path,
+    dir: &Path,
+    branch: &str,
+    head: &str,
+    keep_own: bool,
+) -> Result<Option<String>, WorktreeError> {
     let valid_name = !branch.starts_with('-')
         && run_raw_env(
             "git",
@@ -1476,6 +1498,7 @@ pub async fn add_worktree(
     .await
     .ok()
     .map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    let mut own = None;
     match here {
         // Made only if still missing.
         None => {
@@ -1502,10 +1525,14 @@ pub async fn add_worktree(
                 == 0;
             // A cloud machine's copy gets each head as a new boundary.
             if !behind && !is_boundary(repo, &here).await {
-                return Err(WorktreeError::Ahead);
+                if !keep_own {
+                    return Err(WorktreeError::Ahead);
+                }
+                own = Some(here);
+            } else {
+                // Moved only from where it was seen.
+                git_env(repo, &[], &["update-ref", &r, head, &here], None).await?;
             }
-            // Moved only from where it was seen.
-            git_env(repo, &[], &["update-ref", &r, head, &here], None).await?;
         }
     }
     if let Some(parent) = dir.parent() {
@@ -1519,7 +1546,7 @@ pub async fn add_worktree(
         None,
     )
     .await?;
-    Ok(())
+    Ok(own)
 }
 
 /// The NUL-separated names of `out` that are text. Names that aren't are
@@ -2596,6 +2623,40 @@ mod tests {
         assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
         assert_eq!(rev(p, "mine").await, mine);
         assert!(!other.path().join("mine").exists());
+    }
+
+    #[tokio::test]
+    async fn a_branch_with_commits_of_its_own_can_get_its_worktree_where_it_is() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = head(p).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "theirs"])
+            .await
+            .unwrap();
+        let theirs = head(p).await.unwrap();
+        git(p, &["reset", "-q", "--soft", &base]).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        git(p, &["branch", "mine", &base]).await.unwrap();
+        git(p, &["checkout", "-q", "mine"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"])
+            .await
+            .unwrap();
+        let mine = head(p).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+
+        let kept = add_worktree_keeping_own(p, &other.path().join("mine"), "mine", &theirs)
+            .await
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some(mine.as_str()));
+        assert_eq!(rev(p, "mine").await, mine);
+        assert_eq!(head(&other.path().join("mine")).await.unwrap(), mine);
+        // Behind, it still moves up, and says nothing.
+        git(p, &["branch", "behind", &base]).await.unwrap();
+        let kept = add_worktree_keeping_own(p, &other.path().join("behind"), "behind", &theirs)
+            .await
+            .unwrap();
+        assert_eq!(kept, None);
+        assert_eq!(rev(p, "behind").await, theirs);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

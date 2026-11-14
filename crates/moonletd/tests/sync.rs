@@ -1053,12 +1053,53 @@ async fn own_clone(central: &Central, worker: &Daemon, setup: &[&[&str]]) -> Pat
 }
 
 #[tokio::test]
-async fn a_branch_on_this_mac_with_commits_of_its_own_pauses_the_copy_and_stays() {
+async fn a_branch_on_this_mac_ahead_of_the_sessions_makes_the_copy_and_its_commits_reach_the_session() {
+    let central = central().await;
+    let worker = worker_with(None).await;
+    let s = central.session_path();
+    // The session, at origin's commit, with an edit not committed yet.
+    write(&s.join("src/cart.ts"), "b\n");
+    // This Mac's branch has the session's commit and one more.
+    let repo = own_clone(
+        &central,
+        &worker,
+        &[&["checkout", "-q", "-b", "moonlet/fix-cart"]],
+    )
+    .await;
+    write(&repo.join("src/mine.ts"), "mine\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "mine"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    let mine = git(&repo, &["rev-parse", "moonlet/fix-cart"]);
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+
+    let copy = in_sync(&worker).await;
+    let c = PathBuf::from(&copy.path);
+    // The copy is at this Mac's commit, with the session's edit on top.
+    assert_eq!(git(&c, &["rev-parse", "HEAD"]), mine);
+    assert_eq!(read(&c.join("src/mine.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("b\n"));
+    // This Mac's commit reaches the session, which keeps its edit.
+    // Its branch moves first, then its staging area follows.
+    eventually("the session at this Mac's commit", || async {
+        git(&s, &["rev-parse", "HEAD"]) == mine && git(&s, &["status", "--porcelain"]) == "M src/cart.ts"
+    })
+    .await;
+    assert_eq!(read(&s.join("src/mine.ts")).as_deref(), Some("mine\n"));
+    assert_eq!(git(&s, &["status", "--porcelain"]), "M src/cart.ts");
+}
+
+#[tokio::test]
+async fn a_branch_on_this_mac_diverged_from_the_sessions_makes_a_diverged_copy_and_moves_neither() {
     let central = central().await;
     let worker = worker_with(None).await;
     let s = central.session_path();
     write(&s.join("src/cart.ts"), "b\n");
     git(&s, &["commit", "-qam", "cart"]);
+    let session = git(&s, &["rev-parse", "HEAD"]);
     let repo = own_clone(
         &central,
         &worker,
@@ -1074,12 +1115,19 @@ async fn a_branch_on_this_mac_with_commits_of_its_own_pauses_the_copy_and_stays(
     let _: Copy = worker
         .call("sync.start", json!({ "session": central.session_id() }))
         .await;
-    let copy = copy_in(&worker, paused, "paused").await;
+
+    let copy = in_sync(&worker).await;
     assert_eq!(
-        reason(&copy),
-        "moonlet/fix-cart on this Mac has commits studio-mini's doesn't."
+        copy.diverged,
+        Some(moonlet_proto::methods::Diverged { ahead: 1, behind: 1 })
     );
+    let c = PathBuf::from(&copy.path);
+    // The copy is at this Mac's commit with the session's files; neither
+    // branch moved.
+    assert_eq!(git(&c, &["rev-parse", "HEAD"]), mine);
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("b\n"));
     assert_eq!(git(&repo, &["rev-parse", "moonlet/fix-cart"]), mine);
+    assert_eq!(git(&s, &["rev-parse", "HEAD"]), session);
 }
 
 #[tokio::test]
