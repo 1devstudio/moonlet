@@ -223,12 +223,12 @@ describe("chips and filters", () => {
 });
 
 describe("rowTarget", () => {
-  it("opens a waiting plan's sheet, a done session's changes, else the chat", () => {
+  it("opens a waiting plan's sheet, else the session's Chat", () => {
     const w = world();
     const rows = sessionGroups(w.hosts, w.data, null, NOW).flatMap((g) => g.rows);
     const by = (name: string) => rowTarget(rows.find((r) => r.session.name === name)!);
     expect(by("Idempotent refund webhooks")).toEqual({ kind: "plan", host: "mac/devbox", terminal: 5, ask: "p1" });
-    expect(by("Fix checkout button on mobile")).toEqual({ kind: "session", host: "mac", id: "checkout", tab: "changes" });
+    expect(by("Fix checkout button on mobile")).toEqual({ kind: "session", host: "mac", id: "checkout", tab: "chat" });
     expect(by("Add search to the product list")).toEqual({ kind: "session", host: "mac", id: "add-search", tab: "chat" });
   });
 });
