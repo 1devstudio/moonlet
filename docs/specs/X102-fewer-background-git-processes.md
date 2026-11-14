@@ -23,24 +23,25 @@ This feature cuts all three. A status runs 2 git processes. Sessions nobody work
 
 ## Behaviour and acceptance criteria
 
-App, background poll:
+App, background poll (tests in `apps/desktop/src/lib/gitPoll.test.ts`):
 
-- [ ] A host's 20-second poll does not start a pass while that host's previous one is still running. (The pass over every session when a host connects is not part of it; each session is still asked once at a time.)
-- [ ] The 20-second poll checks the open session, sessions with an agent working, and sessions with terminal output or a change in their status in the last 5 minutes.
-- [ ] It checks every other session once it has gone 5 minutes without a check.
-- [ ] A session never checked yet is checked on the next poll.
-- [ ] Opening a session checks it at once, as before.
-- [ ] A session whose status failed (its worktree gone, say) is asked again at the 5-minute pace, not on every poll.
+- [ ] A host's pass over its sessions, the 20-second poll's or the one when it connects, does not start while another pass on that host still runs. Tests: "starts no second pass on a host while its first still runs", "starts no poll pass on a host while its pass on connecting still runs".
+- [ ] The 20-second poll checks the open session, sessions with an agent working, and sessions with terminal output or a change in their status in the last 5 minutes. Tests: "checks the open session on every poll", "checks a session with a working agent on every poll", "checks a session on every poll for 5 minutes after its terminal last printed", "checks a session on every poll for 5 minutes after its status changed".
+- [ ] It checks every other session once it has gone 5 minutes without a check. Test: "checks a session nobody works in again once it has gone 5 minutes without a check".
+- [ ] A session never checked yet is checked on the next poll. Test: the first poll in each of the tests above.
+- [ ] Opening a session checks it at once, as before. Test: "checks a session nobody works in as soon as it is opened".
+- [ ] A session whose status failed (its worktree gone, say) is asked again at the 5-minute pace, not on every poll. Test: "asks again about a session whose status failed only once it has gone 5 minutes".
 
-Daemon, `git.status`:
+Daemon, `git.status` (tests in `crates/moonlet-core`):
 
-- [ ] A status against a local base, or against HEAD, runs 2 git processes (`status` and one `diff`) once the worktree's root is known. The root is looked up once per path, and again after a failed status. A base only on `origin` costs one more `diff`, and a missing base two more.
-- [ ] Its answer is the same as before: the same files, status letters, staged and unstaged flags, line counts, binary flags, and `base_missing`.
-- [ ] A worktree without commits diffs against the empty tree, as before.
-- [ ] A base that is neither a local branch nor on `origin` falls back to HEAD with `base_missing` set, as before.
-- [ ] A base with several merge bases (main and the branch merged each other), which `git diff --merge-base` refuses, or a git before 2.30, which lacks it, diffs against `git merge-base`'s pick, as before.
-- [ ] A diff that times out is an error, as before, not a missing base.
-- [ ] `against` names the ref the diff is against (`main`, `origin/main`, `HEAD`, or the empty tree) instead of the merge-base's hash. No client reads it.
+- [ ] A status against a local base, or against HEAD, runs 2 git processes (`status` and one `diff`) once the worktree's root is known. The root is looked up once per path, and again after a failed status. A base only on `origin` costs one more `diff`, and a missing base two more. Test: `tests/status_processes.rs` › `a_status_against_the_base_runs_two_git_processes`.
+- [ ] Its answer is the same as before: the same files, status letters, staged and unstaged flags, line counts, binary flags, and `base_missing`. Tests: `git::tests::status_against_the_base_reports_each_kind_of_change` (its file list passed on the old code too), `git::tests::status_against_head_and_base`.
+- [ ] A worktree without commits diffs against the empty tree, as before. Test: `git::tests::fresh_repo_without_commits`.
+- [ ] A base that is neither a local branch nor on `origin` falls back to HEAD with `base_missing` set, as before. Test: `git::tests::status_against_head_and_base`.
+- [ ] A base with several merge bases (main and the branch merged each other), which `git diff --merge-base` refuses, or a git before 2.30, which lacks it, diffs against `git merge-base`'s pick, as before. Test: `git::tests::status_against_a_base_with_two_merge_bases_uses_one_of_them`. A git before 2.30 takes the same path; no test runs an old git.
+- [ ] A diff that times out is an error, as before, not a missing base. No automated test: it needs a git that runs for 60 seconds.
+- [ ] A base that looks like an option is never read as one. Test: `git::tests::a_base_that_looks_like_an_option_is_not_found_and_runs_nothing`.
+- [ ] `against` names the ref the diff is against (`main`, `origin/main`, `HEAD`, or the empty tree) instead of the merge-base's hash. No client reads it. Tests: `git::tests::status_against_the_base_reports_each_kind_of_change`, `git::tests::fresh_repo_without_commits`.
 
 ## UI
 
@@ -65,9 +66,7 @@ No config. The intervals are fixed: 20 seconds for active sessions, 5 minutes fo
 
 ## Test plan
 
-- Vitest `apps/desktop/src/lib/gitPoll.test.ts` › "background git poll passes (X102)": "starts no second pass on a host while its first still runs", "checks a session nobody works in again once it has gone 5 minutes without a check", "checks a session with a working agent on every poll", "checks a session on every poll for 5 minutes after its terminal last printed", "checks a session nobody works in as soon as it is opened", "checks the open session on every poll", "checks a session on every poll for 5 minutes after its status changed".
-- Rust `crates/moonlet-core/tests/status_processes.rs` › `a_status_against_the_base_runs_two_git_processes`, which counts the `start` events in git's trace2 log.
-- Rust `crates/moonlet-core/src/git.rs` › `status_against_the_base_reports_each_kind_of_change` (added, deleted, renamed, binary, committed and uncommitted, a local and an `origin/` base), `status_against_a_base_with_two_merge_bases_uses_one_of_them`, `a_base_that_looks_like_an_option_is_not_found_and_runs_nothing`; the existing `status_against_head_and_base` (a missing base) and `fresh_repo_without_commits` stay green.
+- Each criterion above names its tests.
 - Manual: `top` on a Mac with many sessions, before and after.
 
 ## Open questions
