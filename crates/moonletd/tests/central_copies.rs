@@ -2024,14 +2024,16 @@ async fn continued_and_back_with(
         .call("session.continue_here", json!({ "session": made["id"] }))
         .await;
     book.restart().await;
+    // In sync, so studio-mini serves it: a copy with only its folder yet
+    // is not one studio-mini knows.
     within(
         Duration::from_secs(30),
-        "a live copy on the MacBook",
+        "a live copy on the MacBook, in sync",
         || async {
             let copies: Vec<Value> = book.call("sync.list", json!({})).await;
-            copies
-                .iter()
-                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+            copies.iter().any(|c| {
+                c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty() && c["state"]["kind"] == json!("in_sync")
+            })
         },
     )
     .await;
@@ -2403,20 +2405,97 @@ async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host(
 }
 
 #[tokio::test]
-async fn a_member_without_a_copy_of_the_session_leaves_it_on_the_central_host() {
+async fn a_member_without_a_copy_of_the_session_makes_one_and_brings_it() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;
     let copies: Vec<Value> = book.call("sync.list", json!({})).await;
     let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap()["id"].clone();
     let _: Value = book.call("sync.stop", json!({ "copy": copy })).await;
 
+    brought_here(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_member_whose_copy_paused_before_it_was_made_makes_it_and_brings_the_session() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let repo = with_a_copy_paused_before_it_was_made(&book, &made).await;
+    git_in(&repo, &["checkout", "-q", "main"]);
+
+    brought_here(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_member_whose_copy_folder_is_gone_makes_it_again_and_brings_the_session() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let folder = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    std::fs::remove_dir_all(&folder).unwrap();
+
+    brought_here(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_bring_whose_copy_cannot_be_made_says_why_and_leaves_the_session_there() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    with_a_copy_paused_before_it_was_made(&book, &made).await;
+
     let refused = book
-        .try_call("session.bring", json!({ "session": made["id"] }))
+        .try_call("session.bring", json!({ "session": made["id"], "message": "Back here" }))
         .await
         .unwrap_err();
-    assert!(refused.starts_with("no_copy"), "{refused}");
+    assert!(refused.starts_with("copy_failed"), "{refused}");
+    assert!(refused.contains("moonlet/fix-cart is checked out in"), "{refused}");
     let own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]), "still studio-mini's");
+}
+
+/// Stops `book`'s copy of `made` and starts it again while the session's
+/// branch is checked out in `book`'s own clone, so the copy pauses before
+/// it is made, with no folder. Gives that clone.
+async fn with_a_copy_paused_before_it_was_made(book: &Daemon, made: &Value) -> PathBuf {
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap()["id"].clone();
+    let _: Value = book.call("sync.stop", json!({ "copy": copy })).await;
+    let repo = book.home.path().join("src/shop");
+    git_in(&repo, &["checkout", "-q", "moonlet/fix-cart"]);
+    let _: Value = book.call("sync.start", json!({ "session": made["id"] })).await;
+    within(Duration::from_secs(30), "the copy paused with no folder", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        copies
+            .iter()
+            .any(|c| c["session"] == made["id"] && c["state"]["kind"] == json!("paused") && c["path"] == json!(""))
+    })
+    .await;
+    repo
+}
+
+/// Brings `made` from `mini` to `book` with a message, which must work: the
+/// session is `book`'s, on its own branch, and its agent gets the message.
+async fn brought_here(mini: &Daemon, book: &Daemon, made: &Value) {
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"], "message": "Back here" }))
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "{own:?}");
+    within(Duration::from_secs(30), "no longer studio-mini's", || async {
+        let there: Vec<Value> = mini.call("session.list", json!({})).await;
+        there.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
+    within(Duration::from_secs(30), "the message on the MacBook", || async {
+        agent_log(book, "claude-user").contains("Back here")
+    })
+    .await;
 }
 
 #[tokio::test]

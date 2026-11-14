@@ -207,6 +207,21 @@ struct Kept {
     in_use_until: Option<u64>,
 }
 
+impl Kept {
+    /// Forgets the copy's folder and all it agreed with the central host,
+    /// so it is made again from the session.
+    fn forget_folder(&mut self) {
+        self.path.clear();
+        self.base = None;
+        self.base_head = None;
+        self.sent_base = None;
+        self.tree = None;
+        self.head = None;
+        self.diverged = None;
+        self.differs.clear();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Side {
@@ -1021,15 +1036,7 @@ impl LiveCopies {
         });
         if k.base.is_some() && !Path::new(&k.path).exists() {
             // Its folder was deleted here: made again from the session.
-            self.update_kept(id, |k| {
-                k.path.clear();
-                k.base = None;
-                k.base_head = None;
-                k.tree = None;
-                k.head = None;
-                k.diverged = None;
-                k.differs.clear();
-            });
+            self.update_kept(id, Kept::forget_folder);
             self.set_state(id, CopyState::Copying);
             tokio::spawn(self.clone().make(id.to_string()));
         } else if k.base.is_none() {
@@ -1148,25 +1155,39 @@ impl LiveCopies {
             self.set_state(&id, CopyState::Waiting);
             return;
         }
-        self.set_state(&id, CopyState::Copying);
-        match self.make_copy(&k).await {
-            Ok(path) => {
-                self.set_state(&id, CopyState::InSync);
-                if k.kind == CopyKind::Live {
-                    self.watch(&path);
-                }
-                self.begin_setup(&id);
-            }
-            Err(Stop::Offline) => self.set_state(&id, CopyState::Waiting),
-            Err(Stop::Paused(reason)) => self.pause(&id, reason),
-            Err(Stop::Gone) => {
-                drop(_one);
-                if let Err(e) = self.remove(&id, CloseReason::Archived).await {
-                    tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
-                }
+        if let Err(Stop::Gone) = self.make_now(&id, &k).await {
+            drop(_one);
+            if let Err(e) = self.remove(&id, CloseReason::Archived).await {
+                tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
             }
         }
     }
+
+    /// Makes copy `k`, whose lock the caller holds, and keeps its state:
+    /// in sync once made, else waiting or paused, as it stopped.
+    async fn make_now(self: &Arc<Self>, id: &str, k: &Kept) -> Result<(), Stop> {
+        self.set_state(id, CopyState::Copying);
+        match self.make_copy(k).await {
+            Ok(path) => {
+                self.set_state(id, CopyState::InSync);
+                if k.kind == CopyKind::Live {
+                    self.watch(&path);
+                }
+                self.begin_setup(id);
+                Ok(())
+            }
+            Err(Stop::Offline) => {
+                self.set_state(id, CopyState::Waiting);
+                Err(Stop::Offline)
+            }
+            Err(Stop::Paused(reason)) => {
+                self.pause(id, reason.clone());
+                Err(Stop::Paused(reason))
+            }
+            Err(Stop::Gone) => Err(Stop::Gone),
+        }
+    }
+
 
     async fn make_copy(&self, k: &Kept) -> Result<PathBuf, Stop> {
         let host = self.host_for(k).ok_or(Stop::Offline)?;
@@ -2037,6 +2058,83 @@ impl LiveCopies {
             (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
         }
         Ok(saved)
+    }
+
+    /// [`Self::hold`] for a bring (X73). When this Mac keeps no copy of
+    /// `session` with a folder (none at all, one paused before it was
+    /// made, or one whose folder is gone), the copy is made first, under
+    /// its lock, and held as made; until then the session goes on where it
+    /// runs. Answers why it could not be made.
+    pub async fn hold_or_make(self: &Arc<Self>, session: &str) -> Result<Holding, RpcError> {
+        let usable = |k: &Kept| k.session == session && k.kind == CopyKind::Live && has_folder(k);
+        let has_one = self.data.lock().unwrap().worker.iter().any(usable);
+        if has_one {
+            return self.hold(session).await;
+        }
+        let offline = || RpcError::new("disconnected", "the central host is not connected");
+        let host = self
+            .link
+            .central_name()
+            .ok_or_else(|| RpcError::new("no_central_host", "this Mac has no central host"))?;
+        if !self.registered.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(offline());
+        }
+        // Found or added; nothing of it changes before its lock is held, so
+        // a make under way finishes first.
+        let id = {
+            let mut data = self.data.lock().unwrap();
+            match data
+                .worker
+                .iter()
+                .find(|k| k.session == session && k.host == host && k.kind == CopyKind::Live)
+            {
+                Some(k) => k.id.clone(),
+                None => {
+                    let kept = Kept {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        host,
+                        session: session.to_string(),
+                        ..Kept::default()
+                    };
+                    let id = kept.id.clone();
+                    if !data.auto.contains(&kept.session) {
+                        data.auto.push(kept.session.clone());
+                    }
+                    data.worker.push(kept);
+                    id
+                }
+            }
+        };
+        self.save();
+        self.link.set_synced(self.link_holders());
+        let one = self.lock(&id).lock_owned().await;
+        let none = || RpcError::new("no_copy", "this Mac keeps no copy of that session");
+        let k = self.kept(&id).ok_or_else(none)?;
+        // Made meanwhile, as by its own start: held as it is.
+        if k.base.is_some() && has_folder(&k) {
+            return Ok(Holding { id, _one: one });
+        }
+        self.update_kept(&id, |k| {
+            if !has_folder(k) {
+                // Made again from the session, as Retry does.
+                k.forget_folder();
+            }
+            k.paused = None;
+            k.branch_pause = None;
+        });
+        let k = self.kept(&id).ok_or_else(none)?;
+        match self.make_now(&id, &k).await {
+            Ok(()) => Ok(Holding { id, _one: one }),
+            Err(Stop::Offline) => Err(offline()),
+            Err(Stop::Paused(reason)) => Err(RpcError::new("copy_failed", reason)),
+            Err(Stop::Gone) => {
+                drop(one);
+                if let Err(e) = self.remove(&id, CloseReason::Archived).await {
+                    tracing::warn!(copy = %id, "cannot remove the copy: {}", e.message);
+                }
+                Err(RpcError::new("not_found", "the session is gone"))
+            }
+        }
     }
 
     /// Holds the live copy of session `session`, which this Mac is about to
@@ -3642,6 +3740,11 @@ async fn off_branch(path: &Path, branch: &str) -> anyhow::Result<Option<String>>
 
 fn outside(host: &str) -> String {
     format!("{host} sent a path outside the copy.")
+}
+
+/// Whether copy `k` has its folder on this Mac: made, and not deleted.
+fn has_folder(k: &Kept) -> bool {
+    !k.path.is_empty() && Path::new(&k.path).is_dir()
 }
 
 /// The files a copy edited here since `from` takes when the central host
