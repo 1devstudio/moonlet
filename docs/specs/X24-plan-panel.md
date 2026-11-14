@@ -35,6 +35,7 @@ Design: `Plan Panel.html` (a Claude Design bundle built from moonlet's own compo
 - [x] The compact card sits right after the transcript row of its `ExitPlanMode` call, has the approval buttons while the plan waits, and stays with the outcome after. (`plan-approval.e2e.ts`)
 - [x] Keep planning focuses the composer with the placeholder "What should change in the plan?"; sending answers the plan with the feedback; Escape in the empty composer leaves without sending and without stopping Claude. (`plan-approval.e2e.ts`)
 - [x] The Plan tab shows a dot while a plan waits and another tab is selected. (`planTabDot`)
+- [x] The Plan tab is there only while the chat it follows has a plan: one waits, or its transcript has an `ExitPlanMode` call with one. Chosen without one, the panel shows Files instead. While the chat's items are not in memory (X81), the daemon's `has_plan` in the chat's state and summary says whether it has one. (`hasPlan` in `plan.test.ts`; `summaries_say_which_chats_have_a_plan_after_it_is_answered`)
 - [x] The right panel's tabs are Plan, Files, Changes and Review (X42 added Agents after Plan), styled as underlined 13px labels that scale with the text size. (`font-size.e2e.ts`)
 
 ## UI
@@ -49,7 +50,7 @@ Plan tab (right panel):
     # Add a dark theme                     ← markdown, scrolls
     …
 
-Empty: "No plan yet" / "Plans Claude proposes in Plan mode show here."
+Empty: "No plan yet" / "Plans Claude proposes in Plan mode show here." (Since the tab hides without a plan, this shows only for a moment, while a chat's items load.)
 
 Card (conversation):
 
@@ -84,6 +85,7 @@ Claude then edited the file without another `can_use_tool` ask.
 
 - `planApproveMode` (`auto` | `acceptEdits`) in the app settings (`moonlet.settings` in localStorage). The daemon never sees it.
 - `rightTab` may now be `plan`.
+- `has_plan` (bool, default false) in `ChatState`, set by the daemon on every `chat.state` event and in `chat.summaries`.
 
 ## Security considerations
 

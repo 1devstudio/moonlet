@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planCardBelow, planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
+import { hasPlan, planCardBelow, planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
 import type { ChatItem, ChatState, PermissionAsk } from "./protocol";
 
 // The input of an ExitPlanMode call as claude 2.1.291 sent it.
@@ -134,5 +134,23 @@ describe("planTabDot (X24)", () => {
     // With its items, a call that runs before its ask arrives waits too.
     expect(planWaits(chat([user, call("t1", "running")]))).toBe(true);
     expect(planWaits(chat([user, call("t1", "ok")]))).toBe(false);
+  });
+});
+
+describe("hasPlan: the Plan tab shows only for a chat with a plan", () => {
+  it("hides the tab for a chat without a plan, and before the chat is loaded", () => {
+    expect(hasPlan(undefined)).toBe(false);
+    expect(hasPlan(chat([user]))).toBe(false);
+    const { items: _, ...summary } = chat([]);
+    expect(hasPlan(summary)).toBe(false);
+    expect(hasPlan({ ...summary, has_plan: false })).toBe(false);
+  });
+
+  it("shows the tab for a plan in the transcript, a waiting plan, or the daemon's word while the items are not in memory", () => {
+    expect(hasPlan(chat([user, call("t1", "ok")]))).toBe(true);
+    expect(hasPlan(chat([user, call("t1", "denied")]))).toBe(true);
+    const { items: _, ...summary } = chat([]);
+    expect(hasPlan({ ...summary, pending: [ask] })).toBe(true);
+    expect(hasPlan({ ...summary, has_plan: true })).toBe(true);
   });
 });

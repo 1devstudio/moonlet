@@ -74,6 +74,14 @@ export function planWaits(st: ChatState | ChatSummary | undefined): boolean {
   return "items" in st ? planView(st)?.status === "pending" : st.pending.some((a) => planOf(a));
 }
 
+/** Whether the right panel has a Plan tab for the chat it follows: a plan
+ *  waits, or its transcript has one, read from its items in memory, else
+ *  from the daemon's `has_plan` (X81). */
+export function hasPlan(st: ChatState | ChatSummary | undefined): boolean {
+  if (!st) return false;
+  return "items" in st ? planView(st) !== null : st.pending.some((a) => planOf(a)) || !!st.has_plan;
+}
+
 /** The Plan tab's dot: a plan waits and the tab is not showing it. */
 export const planTabDot = (tab: string, waiting: boolean) => waiting && tab !== "plan";
 

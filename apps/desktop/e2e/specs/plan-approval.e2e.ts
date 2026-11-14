@@ -70,7 +70,7 @@ describe("plan approval", () => {
     writeFileSync(FAKE, FAKE_CLAUDE);
     chmodSync(FAKE, 0o755);
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
-    sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "claude", mode: "plan", prompt: "Plan a dark theme" }).id;
+    sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "claude", mode: "plan" }).id;
     // A window in the background never runs the card's entry animation, so
     // the card would stay at opacity 0 and never count as displayed.
     await browser.execute(() => {
@@ -84,6 +84,13 @@ describe("plan approval", () => {
       files?.click();
     });
     await $(sel.sessionRow(SESSION)).click();
+    // A chat without a plan has no Plan tab; the first plan brings it.
+    await expect($('//button[@role="tab"][normalize-space()="Agents"]')).toBeDisplayed();
+    await expect($(planTab)).not.toBeExisting();
+    await browser.waitUntil(() => rpc<{ chat: boolean; session_id?: string }[]>(w, "terminal.list", {}).some((t) => t.chat && t.session_id === sessionId), {
+      timeoutMsg: "the session's chat never started",
+    });
+    rpc(w, "chat.send", { id: chatId(), text: "Plan a dark theme" });
     // The repo's setup script opens first; the conversation is the next tab.
     // Tabs switch on mousedown, which the embedded driver's click does not
     // send. The tab may not exist yet, so retry until the card shows.
