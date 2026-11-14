@@ -1089,7 +1089,7 @@ impl ChatManager {
     /// The host's Claude in Chrome switch (X103), read from `claude.toml`
     /// beside the chats folder at each call.
     fn host_wants_chrome(&self) -> bool {
-        self.dir.parent().is_some_and(|home| crate::claude_settings::load(&crate::claude_settings::path_in(home)).chrome)
+        self.dir.parent().is_some_and(crate::claude_settings::chrome_in)
     }
 
     /// The environment an agent of `chat` runs in.

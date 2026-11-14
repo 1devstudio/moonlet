@@ -1121,7 +1121,7 @@ impl SessionManager {
                 // The host's Claude in Chrome switch (X103); a project's
                 // own agents run as written.
                 let chrome = agent == "claude"
-                    && self.file.parent().is_some_and(|home| crate::claude_settings::load(&crate::claude_settings::path_in(home)).chrome);
+                    && self.file.parent().is_some_and(crate::claude_settings::chrome_in);
                 Some(if chrome { format!("{builtin} --chrome") } else { builtin.to_string() })
             })
             .unwrap_or_else(|| agent.to_string());

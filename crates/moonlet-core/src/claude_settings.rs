@@ -16,6 +16,13 @@ pub fn path() -> PathBuf {
     path_in(&crate::paths::home())
 }
 
+/// Whether the Claude in Chrome switch of the host whose moonlet home is
+/// `home` is on. Callers pass the home their own files sit in, so tests
+/// with a scratch home read their own `claude.toml`.
+pub fn chrome_in(home: &Path) -> bool {
+    load(&path_in(home)).chrome
+}
+
 /// The settings in `file`. A missing file, or one that does not parse,
 /// gives the defaults.
 pub fn load(file: &Path) -> ClaudeSettings {
