@@ -123,6 +123,22 @@ describe("a session follows the Mac you type from (X73)", () => {
     await expect(rows()).toBeElementsArrayOfSize(1);
   });
 
+  it("groups Run only on in one submenu of the session's menu", async () => {
+    await rightClick(row);
+    const sub = '//div[@class="relative"][div/span[normalize-space()="Run only on"]]';
+    // WebKit's driver moves no pointer: a mouseover is what React's
+    // onMouseEnter hears.
+    await $(sub).waitForExist({ timeout: 5000 });
+    await browser.execute((xp: string) => {
+      const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
+    }, sub);
+    // This Mac and the central host, by name; the session is kept on neither.
+    await expect($$(`${sub}//button`)).toBeElementsArrayOfSize(2, { wait: 5000 });
+    await expect($(sel.button("Run only on "))).not.toBeExisting();
+    await browser.keys("Escape");
+  });
+
   it("moves the session here when you type into it, and the message runs here", async () => {
     await $(row).click();
     await browser.execute(() => {
