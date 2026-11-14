@@ -429,7 +429,9 @@ async fn diff_raw(root: &Path, against: &str, merge_base: bool) -> Result<Vec<u8
     if merge_base {
         args.push("--merge-base");
     }
-    args.extend([against, "--"]);
+    // `against` may come from a client: never read as an option, such as
+    // `--output=<file>`.
+    args.extend(["--end-of-options", against, "--"]);
     git(root, &args).await
 }
 
@@ -1919,6 +1921,18 @@ pub(crate) mod tests {
         assert_eq!(on_origin.files.len(), 5);
         assert_eq!(on_origin.against, "origin/trunk");
         assert!(on_origin.base_missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_base_that_looks_like_an_option_is_not_found_and_runs_nothing() {
+        let dir = repo().await;
+        let p = dir.path();
+        let written = p.join("written-by-git");
+        let base = format!("--output={}", written.display());
+        let st = status(p, Some(&base)).await.unwrap();
+        assert!(!written.exists(), "git took the base for an option");
+        assert_eq!(st.against, "HEAD");
+        assert_eq!(st.base_missing.as_deref(), Some(base.as_str()));
     }
 
     #[tokio::test]
