@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasPlan, planCardBelow, planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
+import { hasPlan, planCardBelow, planOnScreen, planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
 import type { ChatItem, ChatState, PermissionAsk } from "./protocol";
 
 // The input of an ExitPlanMode call as claude 2.1.291 sent it.
@@ -152,5 +152,16 @@ describe("hasPlan: the Plan tab shows only for a chat with a plan", () => {
     const { items: _, ...summary } = chat([]);
     expect(hasPlan({ ...summary, pending: [ask] })).toBe(true);
     expect(hasPlan({ ...summary, has_plan: true })).toBe(true);
+  });
+});
+
+describe("planOnScreen: a plan card offers Open plan unless the Plan tab shows its plan", () => {
+  it("counts the plan as shown only while the open Plan tab follows its chat", () => {
+    expect(planOnScreen({ rightOpen: true, rightTab: "plan" }, 7, 7)).toBe(true);
+    // The tab follows another chat, which has no plan: the panel shows Files.
+    expect(planOnScreen({ rightOpen: true, rightTab: "plan" }, 3, 7)).toBe(false);
+    expect(planOnScreen({ rightOpen: true, rightTab: "plan" }, null, 7)).toBe(false);
+    expect(planOnScreen({ rightOpen: false, rightTab: "plan" }, 7, 7)).toBe(false);
+    expect(planOnScreen({ rightOpen: true, rightTab: "files" }, 7, 7)).toBe(false);
   });
 });

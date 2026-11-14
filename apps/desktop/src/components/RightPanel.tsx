@@ -11,7 +11,8 @@ import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { chatKey, chatSummary, loadChatSummaries, useChat, useChatOnScreen } from "../lib/chat";
-import { hasPlan, planChat, planTabDot, planView, planWaits } from "../lib/plan";
+import { hasPlan, planTabDot, planView, planWaits } from "../lib/plan";
+import { usePlanChat } from "../lib/usePlanChat";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
@@ -228,20 +229,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
  *  while the tab is the `chosen` one and shows, whether a plan waits, and
  *  whether there is a plan for the tab to show at all. */
 function useSessionPlan(host: string, ws: Session, chosen: RightTab) {
-  // A string, so the selector result compares by value.
-  const ids = useStore((s) =>
-    Object.values(s.terminals[host] ?? {})
-      .filter((t) => t.session_id === ws.id && t.chat && !t.exit)
-      .map((t) => t.id)
-      .join(","),
-  );
-  const focused = useStore((s) => s.layouts[sesKey(host, ws.id)]?.focused ?? null);
-  const chatId = useChat((s) =>
-    planChat(
-      focused,
-      ids ? ids.split(",").map((id) => ({ id: Number(id), st: chatSummary(s, host, Number(id)) })) : [],
-    ),
-  );
+  const chatId = usePlanChat(host, ws.id);
   // Without a plan the Plan tab is not there; before the chat's items are
   // in memory, the daemon's summary says whether it has one (X81).
   const has = useChat((s) => chatId !== null && hasPlan(chatSummary(s, host, chatId)));
@@ -406,10 +394,10 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const offers = copyOffers(host);
   const fallback = offers.files ? "files" : "changes";
   // The Plan tab is there while the chat it follows has a plan.
-  const { view: plan, waits: planWaiting, has: planTab } = useSessionPlan(host, ws, chosen);
-  const picked = (chosen === "plan" && !planTab) || (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? fallback : chosen;
+  const { view: plan, waits: planWaiting, has: hasPlanTab } = useSessionPlan(host, ws, chosen);
+  const picked = (chosen === "plan" && !hasPlanTab) || (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? fallback : chosen;
   const tab = (picked === "files" && !offers.files) || (picked === "processes" && !offers.processes) ? "changes" : picked;
-  const base = TABS.filter((t) => (t.id !== "files" || offers.files) && (t.id !== "plan" || planTab));
+  const base = TABS.filter((t) => (t.id !== "files" || offers.files) && (t.id !== "plan" || hasPlanTab));
   const withJobs = jobs.length ? base.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : base;
   const withDesign = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   // The Processes tab shows while it is the chosen one, picked from the ⋯ menu (X83).
