@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus, Session, TerminalInfo } from "./protocol";
-import { pollBackgroundGit, refreshGit, selectSession, useStore } from "./store";
+import { pollBackgroundGit, refreshAllGit, refreshGit, selectSession, useStore } from "./store";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
@@ -79,9 +79,22 @@ describe("background git poll passes (X102)", () => {
     daemon.rpc.mockImplementationOnce(() => new Promise<GitStatus>((r) => (answer = r))).mockResolvedValue(status(1));
     const first = pollBackgroundGit("local");
     await pollBackgroundGit("local");
+    expect(asked()).toEqual(["/w/a"]);
     answer(status(1));
     await first;
     expect(asked()).toEqual(["/w/a", "/w/b"]);
+  });
+
+  it("starts no poll pass on a host while its pass on connecting still runs", async () => {
+    let answer!: (st: GitStatus) => void;
+    daemon.rpc.mockImplementationOnce(() => new Promise<GitStatus>((r) => (answer = r))).mockResolvedValue(status(1));
+    useStore.setState({ sessions: { local: [session("c"), session("d")] } });
+    const connecting = refreshAllGit("local");
+    await pollBackgroundGit("local");
+    expect(asked()).toEqual(["/w/c"]);
+    answer(status(1));
+    await connecting;
+    expect(asked()).toEqual(["/w/c", "/w/d"]);
   });
 
   describe("which sessions a pass checks", () => {
@@ -147,6 +160,16 @@ describe("background git poll passes (X102)", () => {
       vi.setSystemTime(t0 + 20_000);
       selectSession("local", "later");
       await vi.waitFor(() => expect(asked()).toEqual(["/w/later", "/w/later"]));
+    });
+
+    it("asks again about a session whose status failed only once it has gone 5 minutes", async () => {
+      useStore.setState({ sessions: { local: [session("gone")] } });
+      daemon.rpc.mockRejectedValue(new Error("not a git repository"));
+      await pollAt(0);
+      await pollAt(20_000);
+      expect(asked()).toEqual(["/w/gone"]);
+      await pollAt(300_000);
+      expect(asked()).toEqual(["/w/gone", "/w/gone"]);
     });
 
     it("checks the open session on every poll", async () => {

@@ -1123,19 +1123,31 @@ async function fetchAndPull(host: string, p: Project, folder: string | null): Pr
   return { ...of, ...outcome };
 }
 
-export async function refreshAllGit(host: string) {
-  for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
-}
-
 const hostGitPassRunning: Record<string, boolean> = {};
-/** The 20-second poll of a host's sessions: those someone works in on every
- *  poll, the rest every 5 minutes (X102). A pass can take longer than 20
- *  seconds on a loaded Mac; a new one never starts beside it, or they pile
- *  up and slow each other down. */
-export async function pollBackgroundGit(host: string) {
+/** Runs one pass over a host's sessions, unless one already runs there. A
+ *  pass can take longer than the 20-second poll on a loaded Mac; a new one
+ *  never starts beside it, or they pile up and slow each other down (X102). */
+async function hostGitPass(host: string, pass: () => Promise<void>) {
   if (hostGitPassRunning[host]) return;
   hostGitPassRunning[host] = true;
   try {
+    await pass();
+  } finally {
+    hostGitPassRunning[host] = false;
+  }
+}
+
+/** Every session's git status, when a host connects. */
+export async function refreshAllGit(host: string) {
+  await hostGitPass(host, async () => {
+    for (const w of get().sessions[host] ?? []) if (!w.archived) await refreshGit(host, w.id);
+  });
+}
+
+/** The 20-second poll of a host's sessions: those someone works in on every
+ *  poll, the rest every 5 minutes (X102). */
+export async function pollBackgroundGit(host: string) {
+  await hostGitPass(host, async () => {
     for (const w of get().sessions[host] ?? []) {
       if (w.archived) continue;
       const s = get();
@@ -1149,9 +1161,7 @@ export async function pollBackgroundGit(host: string) {
       });
       if (due) await refreshGit(host, w.id);
     }
-  } finally {
-    hostGitPassRunning[host] = false;
-  }
+  });
 }
 
 function updateBadge() {
