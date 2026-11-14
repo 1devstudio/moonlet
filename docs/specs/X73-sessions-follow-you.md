@@ -70,9 +70,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 ### Continuing on a member
 
 - [ ] The member taking a session over:
-  1. brings its copy's files and commit to the ones the session had where it ran, as that member gave it up; a file it changed in the copy meanwhile keeps its version (`a_session_brought_back_has_the_central_hosts_last_files`). No commit is lost on either side (2026-11-14; until then a bring while each side had commits the other lacked answered `diverged`, and the session stayed where it ran):
-     - **This Mac's branch is ahead** (the session's commit is in it): the session comes with this Mac's commits, and the files the session had uncommitted where it ran (`a_bring_with_commits_only_this_mac_has_brings_the_session_with_them`).
-     - **Each side has commits the other lacks:** this Mac's commits go on a branch of their own, `fix-cart-this-mac` (`-2`, `-3` and so on when taken), as X60's **Use studio-mini's branch** does. The session's branch moves to the commit it had where it ran, and the session comes here. The bring names that branch (`kept_on`), and the app says: "fix-cart is here. Its commits from this Mac are on fix-cart-this-mac: merge that branch into moonlet/fix-cart to keep them." (`a_bring_while_each_side_has_commits_the_other_lacks_keeps_this_macs_on_a_branch_of_their_own`, `follow.test.ts` › "names the branch this Mac's commits went on");
+  1. brings its copy's files and commit to the ones the session had where it ran, as that member gave it up; a file it changed in the copy meanwhile keeps its version (`a_session_brought_back_has_the_central_hosts_last_files`). While each side has commits the other lacks, nothing moves: the bring answers `diverged`, and the session goes on where it ran (`a_bring_refuses_while_each_side_has_commits_the_other_lacks`);
   2. runs the project's setup there, when it has not run yet and its command is approved for this member (X60);
   3. puts the transcript up to the last checkpoint in its profile's `projects/` folder for the copy's path (X72);
   4. resumes the agent with `claude --resume <agent session id>` for a structured chat, with the chat's next message (the cut-off note, or the message typed), so a session that moves idle starts no agent (`a_continued_chat_resumes_its_conversation_in_the_workspaces_profile_with_its_next_message`); or `claude --continue` in a new terminal tab for a PTY agent tab;
@@ -86,12 +84,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - **The owner is idle:** the move happens at once, and the message runs on the new owner.
   - **The owner is in a turn:** the message waits on this member, and the composer shows "Moves here when studio-mini's turn ends", with **Move now**. The move happens at the end of the turn, then the message runs.
   - **A message reaches the owner while the session moves:** the owner keeps the session and its message, and the move waits for that turn to end, as above (`a_message_typed_while_the_session_moves_keeps_it_on_the_central_host`).
-- [ ] A member that has no copy of the session makes one first (X60's copy), then brings the session. So does a member whose copy has no folder: one paused before it was made, or whose folder is gone. The session goes on where it runs until then (`a_member_without_a_copy_of_the_session_makes_one_and_brings_it`, `a_member_whose_copy_paused_before_it_was_made_makes_it_and_brings_the_session`).
-- [ ] When the copy cannot be made, the bring answers `copy_failed` with the copy's reason, such as "moonlet/fix-cart is checked out in ~/src/shop on this Mac.", and the session goes on where it runs (`a_bring_whose_copy_cannot_be_made_says_why_and_leaves_the_session_there`).
-- [ ] A session that cannot come here does not send the message anywhere by itself. A sticky toast says why and keeps the message:
-  - "fix-cart can't come to this Mac: moonlet/fix-cart is checked out in ~/src/shop on this Mac." with **Send it there**, which sends the message to studio-mini, where the session runs, and **Try again**, which brings it again with the message.
-  - When a message reached studio-mini as the session moved (`busy`): "fix-cart stays on studio-mini: a message reached it there as it was moving." with **Send it there** and **Bring it anyway**, which cuts that turn off and brings the session here now, with the message.
-  - Closing the toast drops the message. (`follow.test.ts` › "says why a session can't come here, and what to do")
+- [ ] A member that has no copy of the session makes one first (X60's copy), showing "Bringing fix-cart to this Mac…".
 - [ ] The copy that becomes the session's worktree is held while the central host gives the session up, so stopping it then waits. When this member then cannot take the session in, the copy stays kept, in the same folder, rather than a folder no one keeps (`a_bring_that_cannot_take_the_session_in_keeps_its_copy`).
 - [ ] When this member cannot take the session in after the central host gave it up, it hands the session back (`session.give_back`): the central host owns it again, its worktree is back on the session's own branch, and its chats go on there as they were, not paused (`a_bring_whose_mac_fails_after_the_hand_over_leaves_the_session_running_on_the_central_host`).
 - [ ] Typing on the phone never moves a session. Neither does opening or reading a session on any member.
@@ -160,7 +153,6 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - [ ] The icon follows the session as it moves. It appears when the session moves away from this Mac and goes when it comes back, with no other change to the row.
 - [ ] A pinned session's icon carries a pin, and its tooltip reads "Kept on studio-mini". A session pinned to this Mac shows only a pin.
 - [ ] While the owner is unreachable, the icon is drawn dimmed, and its tooltip adds "· offline since 14:02".
-- [ ] A session the central host runs is unreachable only while this Mac's link to the central host is down, as `link.get` says, and offline since the link went down. The central host is never one of the members linked to this Mac as a worker, so their links say nothing of it (`a_session_the_central_host_runs_is_reachable_while_the_link_to_it_is_up`).
 - [ ] The session's header shows the same icon with the member's name beside it, so the place is clear while reading the chat.
 
 ### Readiness

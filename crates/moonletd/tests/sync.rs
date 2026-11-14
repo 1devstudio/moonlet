@@ -1057,9 +1057,11 @@ async fn a_branch_on_this_mac_ahead_of_the_sessions_makes_the_copy_and_its_commi
     let central = central().await;
     let worker = worker_with(None).await;
     let s = central.session_path();
-    // The session, at origin's commit, with an edit not committed yet.
+    // The session, at origin's commit, with edits not committed yet.
     write(&s.join("src/cart.ts"), "b\n");
-    // This Mac's branch has the session's commit and one more.
+    write(&s.join("src/new.ts"), "new\n");
+    // This Mac's branch has the session's commit and one more, which
+    // changes src/cart.ts too.
     let repo = own_clone(
         &central,
         &worker,
@@ -1067,6 +1069,7 @@ async fn a_branch_on_this_mac_ahead_of_the_sessions_makes_the_copy_and_its_commi
     )
     .await;
     write(&repo.join("src/mine.ts"), "mine\n");
+    write(&repo.join("src/cart.ts"), "mine too\n");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "mine"]);
     git(&repo, &["checkout", "-q", "main"]);
@@ -1078,18 +1081,21 @@ async fn a_branch_on_this_mac_ahead_of_the_sessions_makes_the_copy_and_its_commi
 
     let copy = in_sync(&worker).await;
     let c = PathBuf::from(&copy.path);
-    // The copy is at this Mac's commit, with the session's edit on top.
+    // The copy is at this Mac's commit, with the session's edits on top;
+    // the file both changed differs and keeps this Mac's version.
     assert_eq!(git(&c, &["rev-parse", "HEAD"]), mine);
     assert_eq!(read(&c.join("src/mine.ts")).as_deref(), Some("mine\n"));
-    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("b\n"));
-    // This Mac's commit reaches the session, which keeps its edit.
+    assert_eq!(read(&c.join("src/new.ts")).as_deref(), Some("new\n"));
+    assert_eq!(read(&c.join("src/cart.ts")).as_deref(), Some("mine too\n"));
+    assert_eq!(copy.differs, vec!["src/cart.ts".to_string()]);
+    // This Mac's commit reaches the session, which keeps its edits.
     // Its branch moves first, then its staging area follows.
     eventually("the session at this Mac's commit", || async {
-        git(&s, &["rev-parse", "HEAD"]) == mine && git(&s, &["status", "--porcelain"]) == "M src/cart.ts"
+        git(&s, &["rev-parse", "HEAD"]) == mine && git(&s, &["status", "--porcelain"]) == "M src/cart.ts\n?? src/new.ts"
     })
     .await;
     assert_eq!(read(&s.join("src/mine.ts")).as_deref(), Some("mine\n"));
-    assert_eq!(git(&s, &["status", "--porcelain"]), "M src/cart.ts");
+    assert_eq!(read(&s.join("src/cart.ts")).as_deref(), Some("b\n"));
 }
 
 #[tokio::test]

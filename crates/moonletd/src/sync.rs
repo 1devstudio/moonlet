@@ -1362,21 +1362,22 @@ impl LiveCopies {
             }
         }
         // Ahead of the session: what the session changed since its commit
-        // goes on top of this Mac's, whose own changes are then offered.
-        // Diverged, the copy takes the session's files, as X60's diverged
-        // copies keep them.
+        // goes on top of the worktree's files, this Mac's commits and any
+        // edit since, which are then offered; a file both changed differs
+        // and keeps this Mac's version. Diverged, the copy takes the
+        // session's files, as X60's diverged copies keep them.
         if let Some(own) = &own_commit
             && git_sync::is_ancestor(&path, &fetched.head, own)
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?
         {
-            let tree_of = |c: String| {
-                let repo = repo.clone();
-                async move { git_sync::commit_tree(&repo, &c).await.map_err(|e| Stop::Paused(format!("{e:#}"))) }
-            };
-            let from = tree_of(fetched.head.clone()).await?;
-            let local = tree_of(own.clone()).await?;
-            (target, base, differs) = reconciled(&repo, from, fetched.tree.clone(), local)
+            let from = git_sync::commit_tree(&repo, &fetched.head)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+            (target, base, differs) = reconciled(&repo, from, fetched.tree.clone(), local.tree)
                 .await
                 .map_err(Stop::Paused)?;
         }
