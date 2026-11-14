@@ -1415,6 +1415,17 @@ pub struct SessionBring {
     pub images: Vec<crate::types::ChatImage>,
 }
 
+/// `session.bring`'s answer: the session, now this Mac's, and the branch
+/// this Mac's own commits went on when each side had commits the other
+/// lacked (X73), for the user to merge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBrought {
+    #[serde(flatten)]
+    pub session: crate::types::Session,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_on: Option<String>,
+}
+
 /// `session.yield {sessions}`, member → central host (X73): the member is
 /// going to sleep. Answers the sessions the central host took.
 #[derive(Debug, Clone, Serialize, Deserialize)]

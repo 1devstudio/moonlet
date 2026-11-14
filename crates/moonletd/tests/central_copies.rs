@@ -2210,7 +2210,7 @@ async fn a_session_brought_back_has_the_central_hosts_last_files() {
 }
 
 #[tokio::test]
-async fn a_bring_refuses_while_each_side_has_commits_the_other_lacks() {
+async fn a_bring_while_each_side_has_commits_the_other_lacks_keeps_this_macs_on_a_branch_of_their_own() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;
     let own: Vec<Value> = mini.call("session.list", json!({})).await;
@@ -2225,16 +2225,66 @@ async fn a_bring_refuses_while_each_side_has_commits_the_other_lacks() {
     // Each side commits on its own, so neither holds the other's commit.
     commit(&there, "src/mini.ts", "on studio-mini\n");
     commit(&here, "src/book.ts", "on the MacBook\n");
-    let refused = book
-        .try_call("session.bring", json!({ "session": made["id"] }))
-        .await
-        .unwrap_err();
-    assert!(refused.starts_with("diverged"), "{refused}");
-    // Nothing is lost: it still runs on studio-mini with its commit.
-    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    assert_eq!(back["kept_on"], json!("moonlet/fix-cart-this-mac"));
+    // The session is here at studio-mini's commit, and the MacBook's commit
+    // is on its own branch.
+    let subject = |rev: &str| {
+        let out = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%s", rev])
+            .current_dir(back["path"].as_str().unwrap())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(subject("moonlet/fix-cart"), "on studio-mini");
+    assert_eq!(subject("moonlet/fix-cart-this-mac"), "on the MacBook");
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]));
-    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&there).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "on studio-mini");
+}
+
+#[tokio::test]
+async fn a_bring_with_commits_only_this_mac_has_brings_the_session_with_them() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    // The MacBook commits while studio-mini runs the session: its copy
+    // pauses, keeping that commit.
+    lost_while_away(&mini, &mut book, &made, || {
+        std::fs::write(worktree.join("src/cart.ts"), "committed while away\n").unwrap();
+        git_in(&worktree, &["add", "-A"]);
+        git_in(&worktree, &["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "while away"]);
+    })
+    .await;
+    within(Duration::from_secs(30), "the copy paused", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        copies.iter().any(|c| c["session"] == made["id"] && c["state"]["kind"] == json!("paused"))
+    })
+    .await;
+
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    assert_eq!(back["kept_on"], Value::Null);
+    let here = PathBuf::from(back["path"].as_str().unwrap());
+    let last = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&here).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&last.stdout).trim(), "while away");
+    // Its commit's file is as committed, not put back to studio-mini's.
+    assert_eq!(std::fs::read_to_string(here.join("src/cart.ts")).unwrap(), "committed while away\n");
 }
 
 #[tokio::test]
