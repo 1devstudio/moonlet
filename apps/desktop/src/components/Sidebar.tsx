@@ -838,7 +838,7 @@ function followItems(host: string, s: Session): MenuItem[] {
         case "run-only-on":
           return {
             kind: "submenu",
-            label: "Run only on",
+            label: i.label,
             icon: <Server size={14} className="text-muted" />,
             items: i.targets.map((t): MenuItem => ({ label: t.label, checked: t.checked, onSelect: () => void moveSession(s.id, t.to) })),
           };

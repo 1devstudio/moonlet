@@ -84,22 +84,33 @@ describe("Run only on… (X73)", () => {
 
 describe("a session's menu to move it (X73)", () => {
   const base = { centralHost: "mini", me: "book-id", meLabel: "MacBook", centralId: "mini-id", centralLabel: "studio-mini", pinned: null, unreachableSince: null, now: 100_000, copy: true };
-  const both = (checked: string | null) => ({
+  const none = {
     kind: "run-only-on",
+    label: "Run only on",
     targets: [
-      { to: "book-id", label: "MacBook", checked: checked === "book-id" },
-      { to: "mini-id", label: "studio-mini", checked: checked === "mini-id" },
+      { to: "book-id", label: "MacBook", checked: false },
+      { to: "mini-id", label: "studio-mini", checked: false },
     ],
-  });
+  };
   it("offers Run only on… as one submenu for this Mac's and the central host's sessions", () => {
-    expect(followMenu({ ...base, host: "local" })).toEqual([both(null)]);
-    expect(followMenu({ ...base, host: "local", pinned: "book-id" })).toEqual([both("book-id"), { kind: "unpin" }]);
+    expect(followMenu({ ...base, host: "local" })).toEqual([none]);
+    expect(followMenu({ ...base, host: "local", pinned: "book-id" })).toEqual([
+      {
+        kind: "run-only-on",
+        label: "Run only on",
+        targets: [
+          { to: "book-id", label: "MacBook", checked: true },
+          { to: "mini-id", label: "studio-mini", checked: false },
+        ],
+      },
+      { kind: "unpin" },
+    ]);
     expect(followMenu({ ...base, host: "mini", pinned: "mini-id" }).map((i) => i.kind)).toEqual(["run-only-on", "unpin"]);
     expect(followMenu({ ...base, host: "vps" })).toEqual([]);
   });
 
   it("offers Take over anyway only after 30 s offline, for what the central host runs", () => {
-    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([both(null)]);
+    expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([none]);
     expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000 })).toEqual([{ kind: "take-over" }]);
     expect(followMenu({ ...base, host: "local", unreachableSince: 60_000 })).toEqual([]);
   });

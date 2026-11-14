@@ -147,7 +147,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 
 ### Run only on…
 
-- [ ] A session's menu has one **Run only on** submenu, with each of the account's members by name: "MacBook", "studio-mini" (until 2026-11-14, one item each, "Run only on MacBook" and so on, at the menu's top level; `follow.test.ts` › "offers Run only on… as one submenu for this Mac's and the central host's sessions"). Every member is listed, the one running the session too, since choosing it keeps the session there. The member the session is kept on is checked; an unpinned session has none checked. Choosing one pins the session there (`pinned`) and moves it at the end of the current turn, or at once when idle.
+- [ ] A session's menu has one **Run only on** submenu, with this Mac and the central host by name (a session moves only between a member and the central host, see Implementation notes): "MacBook", "studio-mini". A click on it opens it, as hovering does, so the keyboard reaches it too (until 2026-11-14, one item each, "Run only on MacBook" and so on, at the menu's top level; `follow.test.ts` › "offers Run only on… as one submenu for this Mac's and the central host's sessions"). Every member is listed, the one running the session too, since choosing it keeps the session there. The member the session is kept on is checked; an unpinned session has none checked. Choosing one pins the session there (`pinned`) and moves it at the end of the current turn, or at once when idle.
 - [ ] **Move now** moves it at once: a running turn is cut off and continues on the chosen member with the cut-off note.
 - [ ] A pinned session never moves on its own: not on sleep, not on typing, and not when unreachable. **Unpin** in its menu, or **Run only on** another member, changes that.
 - [ ] Choosing a member that is not reachable is refused: "studio-mini is not reachable."
@@ -186,7 +186,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - The line above the composer while the central host is offline: "studio-mini is offline since 14:02. fix-cart runs there, so it can't move here until studio-mini is back.", with **Take over anyway** after 30 s.
 - The chat: one muted line where a session moved: "Continued on studio-mini after MacBook went to sleep.", "Moved to MacBook because you typed here.", "Moved to studio-mini (Move now)."
 - The composer, while a typed message waits: "Moves here when studio-mini's turn ends", with **Move now** and **Send to studio-mini instead**.
-- The session menu: **Run only on <member>** for each member, **Move now** (while a turn runs), **Unpin**.
+- The session menu: a **Run only on** submenu with each member, **Move now** (while a turn runs), **Unpin**.
 - The phone, for an unreachable owner's session whose turn was running: a line above the composer, "MacBook is not reachable · fix-cart was working", with **Continue on studio-mini**.
 - The readiness mark: a small hollow triangle after the session's name, in the muted colour.
 

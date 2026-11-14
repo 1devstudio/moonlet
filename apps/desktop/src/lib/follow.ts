@@ -166,13 +166,13 @@ export function followMenu(o: {
   unreachableSince: number | null;
   now: number;
   copy: boolean;
-}): ({ kind: "run-only-on"; targets: { to: string; label: string; checked: boolean }[] } | { kind: "unpin" } | { kind: "take-over" })[] {
+}): ({ kind: "run-only-on"; label: string; targets: { to: string; label: string; checked: boolean }[] } | { kind: "unpin" } | { kind: "take-over" })[] {
   if (!o.me || !o.centralId || !o.centralHost) return [];
   if (o.host !== "local" && o.host !== o.centralHost) return [];
   const targets = moveTargets({ thisMac: { id: o.me, label: o.meLabel }, central: { id: o.centralId, label: o.centralLabel }, pinned: o.pinned });
   const offline = o.unreachableSince !== null && o.now - o.unreachableSince >= 30_000;
   return [
-    ...(offline ? [] : [{ kind: "run-only-on" as const, targets }]),
+    ...(offline ? [] : [{ kind: "run-only-on" as const, label: "Run only on", targets }]),
     ...(o.pinned && !offline ? [{ kind: "unpin" as const }] : []),
     ...(offline && o.host === o.centralHost && o.copy ? [{ kind: "take-over" as const }] : []),
   ];
