@@ -2065,7 +2065,10 @@ async fn a_session_the_central_host_runs_is_reachable_while_the_link_to_it_is_up
         owner(with_copies(&book).await).filter(|o| o["reachable"] == json!(false))
     })
     .await;
-    assert!(away["unreachable_since"].as_u64().is_some(), "{away}");
+    // Offline since the link went down, as the link says.
+    let link: Value = book.call("link.get", json!({})).await;
+    assert!(link["unreachable_since"].as_u64().is_some(), "{link}");
+    assert_eq!(away["unreachable_since"], link["unreachable_since"], "{away} {link}");
 }
 
 #[tokio::test]

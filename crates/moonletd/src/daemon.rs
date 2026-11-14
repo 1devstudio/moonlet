@@ -5893,8 +5893,6 @@ impl Daemon {
         use moonlet_proto::types::{ProjectIdentity, Session, SessionOwner};
         let link = self.link.info();
         let me = link.worker.id.clone();
-        // The central host is never linked here as a worker: this Mac's
-        // link to it says whether it is reached.
         let central = self.link.account_info().account;
         let central_up = matches!(link.state, m::LinkState::Connected { .. });
         let names = self.sessions.member_names();
@@ -5944,20 +5942,18 @@ impl Daemon {
                     archived_at: None,
                     archived_restore: Vec::new(),
                     pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
-                    owner: Some(if owner == central {
+                    owner: Some({
+                        // The central host is never linked here as a worker:
+                        // this Mac's link to it says.
+                        let (reachable, unreachable_since) = if owner == central {
+                            (central_up, if central_up { None } else { link.unreachable_since })
+                        } else {
+                            (self.workers.conn(&owner).is_some(), self.workers.unreachable_since(&owner))
+                        };
                         SessionOwner {
                             name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
-                            reachable: central_up,
-                            unreachable_since: (!central_up)
-                                .then(|| link.unreachable_since.or_else(|| self.workers.unreachable_since(&owner)))
-                                .flatten(),
-                            worker: owner,
-                        }
-                    } else {
-                        SessionOwner {
-                            name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
-                            reachable: self.workers.conn(&owner).is_some(),
-                            unreachable_since: self.workers.unreachable_since(&owner),
+                            reachable,
+                            unreachable_since,
                             worker: owner,
                         }
                     }),
