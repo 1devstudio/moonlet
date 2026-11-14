@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus, Session, TerminalInfo } from "./protocol";
-import { pollBackgroundGit, refreshGit, useStore } from "./store";
+import { pollBackgroundGit, refreshGit, selectSession, useStore } from "./store";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
 
 const ws: Session = {
   id: "s1",
@@ -138,6 +139,14 @@ describe("background git poll passes (X102)", () => {
       // 5 minutes after the output, and 280 seconds after the last check.
       await pollAt(400_000);
       expect(asked()).toEqual(["/w/printed", "/w/printed"]);
+    });
+
+    it("checks a session nobody works in as soon as it is opened", async () => {
+      useStore.setState({ sessions: { local: [session("later")] } });
+      await pollAt(0);
+      vi.setSystemTime(t0 + 20_000);
+      selectSession("local", "later");
+      await vi.waitFor(() => expect(asked()).toEqual(["/w/later", "/w/later"]));
     });
 
     it("checks the open session on every poll", async () => {
