@@ -325,6 +325,11 @@ pub(crate) fn update(st: &mut ChatState, id: &str, f: impl FnOnce(&mut ChatItem)
     Some(Out::Item(Box::new(it.clone())))
 }
 
+/// Whether a transcript has a plan: an `ExitPlanMode` call with a plan in it.
+pub(crate) fn has_plan(items: &[ChatItem]) -> bool {
+    items.iter().any(|i| i.tool.as_ref().is_some_and(|t| t.name == "ExitPlanMode" && t.input["plan"].as_str().is_some_and(|p| !p.trim().is_empty())))
+}
+
 pub(crate) fn tool_item(id: &str, name: &str, input: serde_json::Value, status: &str) -> ChatItem {
     let mut it = item(id, "tool", "");
     it.tool = Some(ToolCall { name: name.into(), summary: summarize(name, &input), diff: diff_for(name, &input), input, output: None, status: status.into() });

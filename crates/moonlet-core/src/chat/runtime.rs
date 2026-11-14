@@ -342,7 +342,8 @@ impl ChatManager {
                 let mut inner = c.inner.lock().unwrap();
                 // The rest of the state is cloned; the items are not copied.
                 let items = std::mem::take(&mut inner.state.items);
-                let st = inner.state.clone();
+                let mut st = inner.state.clone();
+                st.has_plan = super::has_plan(&items);
                 inner.state.items = items;
                 (id, st)
             })
@@ -1356,6 +1357,7 @@ impl ChatManager {
             if inner.cfg.agent == "claude" && inner.state.mode.is_some() {
                 inner.cfg.mode = inner.state.mode.clone();
             }
+            inner.state.has_plan = super::has_plan(&inner.state.items);
             // Items travel as `chat.item`; the state event leaves them out.
             let items = std::mem::take(&mut inner.state.items);
             self.terms.emit(Message::event(methods::EV_CHAT_STATE, ChatStateEvent { id: chat.id, state: inner.state.clone() }));
@@ -1825,6 +1827,28 @@ done
         let asked = sa.pending[0].asked_at.expect("the ask says when it was asked");
         assert!(before <= asked && asked <= after, "{before} <= {asked} <= {after}");
         assert!(sums[1].1.pending.is_empty());
+        chats.shutdown().await;
+    }
+
+    /// The Plan tab shows only for a chat with a plan, which the app knows
+    /// without the chat's items once the plan is answered.
+    #[tokio::test]
+    async fn summaries_say_which_chats_have_a_plan_after_it_is_answered() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        let a = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
+        let b = chats.create(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, a.id, |s| s.agent_session.is_some()).await;
+        chats.send(a.id, "propose a plan", &[]).unwrap();
+        wait_for(&chats, a.id, |s| s.status == "blocked").await;
+        chats.permission(a.id, "p1", "allow", None, None, Some("auto")).unwrap();
+        let st = wait_for(&chats, a.id, |s| s.status == "done" && s.pending.is_empty()).await;
+        assert!(st.has_plan, "the state `chat.state` events carry says so too");
+
+        let mut sums = chats.summaries();
+        sums.sort_by_key(|(id, _)| *id);
+        assert_eq!(sums.iter().map(|(id, st)| (*id, st.has_plan)).collect::<Vec<_>>(), [(a.id, true), (b.id, false)]);
+        assert!(sums[0].1.items.is_empty(), "items are left out");
         chats.shutdown().await;
     }
 
