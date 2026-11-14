@@ -167,6 +167,7 @@ fn agent_state(status: &str) -> AgentState {
 /// it had not read yet say they never reached it.
 fn continued_state(mut st: ChatState) -> ChatState {
     super::stop_subagents(&mut st);
+    st.has_plan = super::has_plan(&st.items);
     for it in &mut st.items {
         it.partial = false;
         if let Some(t) = it.tool.as_mut().filter(|t| t.status == "running") {
@@ -689,6 +690,8 @@ impl ChatManager {
             return None;
         };
         let mut state = saved.state;
+        // A daemon from before `has_plan` saved none.
+        state.has_plan = super::has_plan(&state.items);
         let mut interrupted = false;
         let mut kept = Vec::new();
         if matches!(state.status.as_str(), "working" | "blocked") {
@@ -1345,6 +1348,11 @@ impl ChatManager {
                     if !item.partial {
                         inner.dirty = true;
                     }
+                    // Items are never taken out, so a plan, once there, stays.
+                    if !inner.state.has_plan && super::has_plan(std::slice::from_ref(&*item)) {
+                        inner.state.has_plan = true;
+                        state_changed = true;
+                    }
                     self.terms.emit(Message::event(methods::EV_CHAT_ITEM, ChatItemEvent { id: chat.id, item: *item }));
                 }
                 Out::State => state_changed = true,
@@ -1828,6 +1836,28 @@ done
         chats.shutdown().await;
     }
 
+    /// The Plan tab shows only for a chat with a plan, which the app knows
+    /// without the chat's items once the plan is answered.
+    #[tokio::test]
+    async fn summaries_say_which_chats_have_a_plan_after_it_is_answered() {
+        let (dir, _terms, chats) = setup().await;
+        let cwd = dir.path().display().to_string();
+        let a = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }).unwrap();
+        let b = chats.create(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, a.id, |s| s.agent_session.is_some()).await;
+        chats.send(a.id, "propose a plan", &[]).unwrap();
+        wait_for(&chats, a.id, |s| s.status == "blocked").await;
+        chats.permission(a.id, "p1", "allow", None, None, Some("auto")).unwrap();
+        let st = wait_for(&chats, a.id, |s| s.status == "done" && s.pending.is_empty()).await;
+        assert!(st.has_plan, "and so does the state that `chat.state` events carry");
+
+        let mut sums = chats.summaries();
+        sums.sort_by_key(|(id, _)| *id);
+        assert_eq!(sums.iter().map(|(id, st)| (*id, st.has_plan)).collect::<Vec<_>>(), [(a.id, true), (b.id, false)]);
+        assert!(sums[0].1.items.is_empty(), "items are left out");
+        chats.shutdown().await;
+    }
+
     #[tokio::test]
     async fn an_added_directory_restarts_the_agent_with_it() {
         let (dir, _terms, chats) = setup().await;
@@ -2236,6 +2266,38 @@ done
             assert_eq!(st.items.last().unwrap().text, "Interrupted");
         }
         chats2.shutdown().await;
+    }
+
+    /// A chat saved by a daemon from before `has_plan` still has its plan
+    /// after a restart, in its state and its summary.
+    #[tokio::test]
+    async fn a_chat_saved_without_has_plan_has_its_plan_after_a_restart() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
+        chats.shutdown().await;
+        let file = dir.path().join("chats").join(format!("{id}.json"));
+        let mut saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        saved["state"].as_object_mut().unwrap().remove("has_plan");
+        std::fs::write(&file, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+        let chats2 = restarted(dir.path(), &terms);
+        assert!(chats2.state(id).unwrap().has_plan);
+        assert_eq!(chats2.summaries().iter().map(|(i, st)| (*i, st.has_plan)).collect::<Vec<_>>(), [(id, true)]);
+    }
+
+    /// Another member's chat, from a daemon from before `has_plan`, goes
+    /// on here with its plan (X73).
+    #[tokio::test]
+    async fn a_chat_continued_from_another_member_has_its_plan() {
+        let (dir, _terms, chats) = setup().await;
+        let history = ChatState {
+            status: "done".into(),
+            items: vec![crate::chat::tool_item("t2", "ExitPlanMode", serde_json::json!({ "plan": "Add a theme" }), "ok")],
+            ..Default::default()
+        };
+        let info = chats.create_continuing(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }, history).unwrap();
+        assert!(chats.state(info.id).unwrap().has_plan);
+        chats.shutdown().await;
     }
 
     #[tokio::test]

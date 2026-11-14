@@ -197,6 +197,8 @@ export interface ChatState {
   context?: ContextUsage | null;
   /** Subagents the agent launched, oldest first (X42). */
   subagents?: Subagent[];
+  /** The transcript has a plan, for the Plan tab while the items are not in memory (X24). */
+  has_plan?: boolean;
 }
 
 /** The agent's context window, from Claude's `get_context_usage` (X34). */

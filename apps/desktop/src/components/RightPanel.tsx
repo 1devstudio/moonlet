@@ -11,7 +11,8 @@ import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { chatKey, chatSummary, loadChatSummaries, useChat, useChatOnScreen } from "../lib/chat";
-import { planChat, planTabDot, planView, planWaits } from "../lib/plan";
+import { hasPlan, planTabDot, planView, planWaits } from "../lib/plan";
+import { usePlanChat } from "../lib/usePlanChat";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
@@ -225,29 +226,21 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
 }
 
 /** The latest plan of the session's chat the Plan tab follows (X24), read
- *  while the tab is `open`, and whether a plan waits. */
-function useSessionPlan(host: string, ws: Session, open: boolean) {
-  // A string, so the selector result compares by value.
-  const ids = useStore((s) =>
-    Object.values(s.terminals[host] ?? {})
-      .filter((t) => t.session_id === ws.id && t.chat && !t.exit)
-      .map((t) => t.id)
-      .join(","),
-  );
-  const focused = useStore((s) => s.layouts[sesKey(host, ws.id)]?.focused ?? null);
-  const chatId = useChat((s) =>
-    planChat(
-      focused,
-      ids ? ids.split(",").map((id) => ({ id: Number(id), st: chatSummary(s, host, Number(id)) })) : [],
-    ),
-  );
+ *  while the tab is the `chosen` one and shows, whether a plan waits, and
+ *  whether there is a plan for the tab to show at all. */
+function useSessionPlan(host: string, ws: Session, chosen: RightTab) {
+  const chatId = usePlanChat(host, ws.id);
+  // Without a plan the Plan tab is not there; before the chat's items are
+  // in memory, the daemon's summary says whether it has one (X81).
+  const has = useChat((s) => chatId !== null && hasPlan(chatSummary(s, host, chatId)));
+  const open = chosen === "plan" && has;
   // The plan is read from the chat's items, which the open Plan tab shows;
   // closed, the tab's dot reads the chat's asks (X81).
   const st = useChat((s) => (chatId === null ? undefined : s.chats[chatKey(host, chatId)]));
   const waits = useChat((s) => chatId !== null && planWaits(chatSummary(s, host, chatId)));
   useChatOnScreen(host, chatId, open);
   const view = useMemo(() => (st ? planView(st) : null), [st]);
-  return { view, waits };
+  return { view, waits, has };
 }
 
 /** The subagents of every chat in the session (X42), loading chats not yet
@@ -400,15 +393,16 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   // A copy of another member's session has no Files or Processes (X88).
   const offers = copyOffers(host);
   const fallback = offers.files ? "files" : "changes";
-  const picked = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? fallback : chosen;
+  // The Plan tab is there while the chat it follows has a plan.
+  const { view: plan, waits: planWaiting, has: hasPlanTab } = useSessionPlan(host, ws, chosen);
+  const picked = (chosen === "plan" && !hasPlanTab) || (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? fallback : chosen;
   const tab = (picked === "files" && !offers.files) || (picked === "processes" && !offers.processes) ? "changes" : picked;
-  const base = offers.files ? TABS : TABS.filter((t) => t.id !== "files");
+  const base = TABS.filter((t) => (t.id !== "files" || offers.files) && (t.id !== "plan" || hasPlanTab));
   const withJobs = jobs.length ? base.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : base;
   const withDesign = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   // The Processes tab shows while it is the chosen one, picked from the ⋯ menu (X83).
   const shown = tab === "processes" ? [...withDesign, { id: "processes" as const, label: "Processes" }] : withDesign;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
-  const { view: plan, waits: planWaiting } = useSessionPlan(host, ws, tab === "plan");
   const agents = useSessionAgents(host, ws, tab);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
   const exists = useProjectFiles(host, tab === "plan" ? ws.path : "", plan?.plan);

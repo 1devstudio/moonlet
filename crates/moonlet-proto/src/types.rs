@@ -1495,6 +1495,10 @@ pub struct ChatState {
     /// Subagents the agent launched, oldest first (X42).
     #[serde(default)]
     pub subagents: Vec<Subagent>,
+    /// The transcript has a plan, an `ExitPlanMode` call with one: the app
+    /// shows the Plan tab by it while the items are not in memory (X24).
+    #[serde(default)]
+    pub has_plan: bool,
 }
 
 /// A message waiting in the agent's queue (X49).

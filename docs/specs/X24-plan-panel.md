@@ -35,6 +35,8 @@ Design: `Plan Panel.html` (a Claude Design bundle built from moonlet's own compo
 - [x] The compact card sits right after the transcript row of its `ExitPlanMode` call, has the approval buttons while the plan waits, and stays with the outcome after. (`plan-approval.e2e.ts`)
 - [x] Keep planning focuses the composer with the placeholder "What should change in the plan?"; sending answers the plan with the feedback; Escape in the empty composer leaves without sending and without stopping Claude. (`plan-approval.e2e.ts`)
 - [x] The Plan tab shows a dot while a plan waits and another tab is selected. (`planTabDot`)
+- [x] The Plan tab is there only while the chat it follows has a plan: one waits, or its transcript has an `ExitPlanMode` call with one. Chosen without one, the panel shows another view (Files, or Changes in a copy of another member's session). While the chat's items are not in memory (X81), the daemon's `has_plan` in the chat's state and summary says whether it has one, also for a chat saved or continued from a daemon without it. (`hides the tab for a chat without a plan, and before the chat is loaded`, `shows the tab for a plan in the transcript, a waiting plan, or the daemon's word while the items are not in memory`; `summaries_say_which_chats_have_a_plan_after_it_is_answered`, `a_chat_saved_without_has_plan_has_its_plan_after_a_restart`, `a_chat_continued_from_another_member_has_its_plan`; `plan-approval.e2e.ts` before the first plan)
+- [x] A plan card offers Open plan unless the open Plan tab follows its chat. (`counts the plan as shown only while the open Plan tab follows its chat`)
 - [x] The right panel's tabs are Plan, Files, Changes and Review (X42 added Agents after Plan), styled as underlined 13px labels that scale with the text size. (`font-size.e2e.ts`)
 
 ## UI
@@ -49,7 +51,7 @@ Plan tab (right panel):
     # Add a dark theme                     ← markdown, scrolls
     …
 
-Empty: "No plan yet" / "Plans Claude proposes in Plan mode show here."
+Empty: "No plan yet" / "Plans Claude proposes in Plan mode show here." (Since the tab hides without a plan, this shows only for a moment, while a chat's items load.)
 
 Card (conversation):
 
@@ -84,6 +86,7 @@ Claude then edited the file without another `can_use_tool` ask.
 
 - `planApproveMode` (`auto` | `acceptEdits`) in the app settings (`moonlet.settings` in localStorage). The daemon never sees it.
 - `rightTab` may now be `plan`.
+- `has_plan` (bool, default false) in `ChatState`: set by the daemon once a plan item arrives (with a `chat.state` event), and worked out from the items when a chat is restored or continued; `chat.state` events and `chat.summaries` carry it.
 
 ## Security considerations
 
