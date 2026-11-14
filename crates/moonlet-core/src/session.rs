@@ -1121,7 +1121,7 @@ impl SessionManager {
                 // The host's Claude in Chrome switch (X103); a project's
                 // own agents run as written.
                 let chrome = agent == "claude"
-                    && crate::claude_settings::load(&self.file.with_file_name("claude.toml")).chrome;
+                    && self.file.parent().is_some_and(|home| crate::claude_settings::load(&crate::claude_settings::path_in(home)).chrome);
                 Some(if chrome { format!("{builtin} --chrome") } else { builtin.to_string() })
             })
             .unwrap_or_else(|| agent.to_string());
@@ -3127,7 +3127,7 @@ mod tests {
     /// X103: the host's Claude in Chrome switch, read at each start.
     #[tokio::test]
     async fn a_chats_claude_starts_with_chrome_when_the_host_says_so() {
-        let (repo, home, mgr, _chats) = structured().await;
+        let (repo, home, mgr, chats) = structured().await;
         let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
         let start = |name: &str| {
             let mut req = new_session(&r.id, None);
@@ -3143,6 +3143,12 @@ mod tests {
         std::fs::write(home.path().join("claude.toml"), "chrome = true\n").unwrap();
         let on = mgr.create_session(start("On")).await.unwrap();
         let args = nth_line(&Path::new(&on.path).join("claude-args"), 1).await;
+        assert!(args.contains(" --chrome"), "{args}");
+
+        // The chat started without it gets it when its Claude starts again.
+        chats.settings(off.terminals[0], Some("opus".into()), None, None).unwrap();
+        chats.send(off.terminals[0], "again", &[]).unwrap();
+        let args = nth_line(&Path::new(&off.path).join("claude-args"), 2).await;
         assert!(args.contains(" --chrome"), "{args}");
     }
 
