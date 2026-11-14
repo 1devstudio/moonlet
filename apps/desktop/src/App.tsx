@@ -107,7 +107,7 @@ function Home() {
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
   return (
-    <div className="pointer-events-none fixed right-4 top-[60px] z-[60] flex flex-col items-end gap-2">
+    <div role="status" aria-live="polite" className="pointer-events-none fixed right-4 top-[60px] z-[60] flex flex-col items-end gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -117,34 +117,36 @@ function Toasts() {
           )}
         >
           <span className="min-w-0 break-words py-0.5">{t.text}</span>
-          {t.action && (
-            <button
-              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
-              onClick={() => {
-                t.action?.run();
-                dismissToast(t.id);
-              }}
-            >
-              {t.action.label}
-            </button>
-          )}
-          {t.also && (
-            <button
-              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
-              onClick={() => {
-                t.also?.run();
-                dismissToast(t.id);
-              }}
-            >
-              {t.also.label}
-            </button>
-          )}
-          <IconButton title="Dismiss" className="shrink-0" onClick={() => dismissToast(t.id)}>
+          {t.action && <ToastButton id={t.id} action={t.action} />}
+          {t.secondAction && <ToastButton id={t.id} action={t.secondAction} />}
+          <IconButton
+            title="Dismiss"
+            className="shrink-0"
+            onClick={() => {
+              t.onClose?.();
+              dismissToast(t.id);
+            }}
+          >
             <X size={14} />
           </IconButton>
         </div>
       ))}
     </div>
+  );
+}
+
+/** A toast's action: it runs, and the toast closes. */
+function ToastButton({ id, action }: { id: number; action: { label: string; run: () => void } }) {
+  return (
+    <button
+      className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
+      onClick={() => {
+        action.run();
+        dismissToast(id);
+      }}
+    >
+      {action.label}
+    </button>
   );
 }
 

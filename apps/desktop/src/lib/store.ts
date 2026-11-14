@@ -210,7 +210,9 @@ export interface Toast {
   text: string;
   action?: { label: string; run: () => void };
   /** A second action, after `action`. */
-  also?: { label: string; run: () => void };
+  secondAction?: { label: string; run: () => void };
+  /** Runs when the user closes the toast with its ✕, not on an action. */
+  onClose?: () => void;
 }
 
 interface State extends UiPersist {
@@ -407,9 +409,14 @@ let toastId = 0;
  * `sticky`: then it stays until the user dismisses it or runs its action. */
 /** Shows a toast, gone after a few seconds unless `sticky`; gives its id,
  * for `dismissToast`. */
-export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"], opts: { sticky?: boolean; also?: Toast["also"] } = {}): number {
+export function toast(
+  text: string,
+  kind: Toast["kind"] = "info",
+  action?: Toast["action"],
+  opts: { sticky?: boolean; secondAction?: Toast["secondAction"]; onClose?: Toast["onClose"] } = {},
+): number {
   const id = ++toastId;
-  set((s) => ({ toasts: [...s.toasts, { id, kind, text, action, also: opts.also }] }));
+  set((s) => ({ toasts: [...s.toasts, { id, kind, text, action, secondAction: opts.secondAction, onClose: opts.onClose }] }));
   if (!opts.sticky) setTimeout(() => dismissToast(id), action ? 10_000 : kind === "error" ? 7000 : 3500);
   return id;
 }

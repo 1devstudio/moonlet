@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { rpc } from "./daemon";
 import { bringsHere, cannotComeLine, joinWaiting, keptOnLine, movedHost, readinessOf, untilTurnEnds, waitingLine, type ReadyRow, type WaitingMessage } from "./follow";
 import type { ChatImage } from "./attachments";
-import { M } from "./protocol";
+import { M, type Session } from "./protocol";
 import { dismissToast, errorMessage, errorToast, selectSession, toast, useStore } from "./store";
 import { useSync } from "./syncStore";
 
@@ -21,43 +21,49 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** The message waiting for each session to move here, by session id. */
 const waiting = new Map<string, WaitingMessage>();
 
+/** The message of each session that could not come here, held in a toast
+ * until the user sends it there, tries again, or closes the toast. */
+const held = new Map<string, WaitingMessage>();
+
+type Send = (text: string, images: ChatImage[]) => Promise<unknown>;
+
 /** Sends `text` and `images`, typed into chat `terminal` of session
  * `sessionId` listed from `host`: brought here first when it runs on
  * another member of this Mac's account, with the message going to that
  * chat once here; else sent as `send` does. While a turn runs there, it
  * waits until the turn ends, however long, with Move now; more typed into
  * that chat meanwhile goes with it. When it cannot be brought, a toast says
- * why and keeps the message: Send it there sends it by `send`, Try again
- * brings it again. */
-export async function sendOrBring(
-  host: string,
-  sessionId: string | undefined,
-  terminal: number,
-  text: string,
-  images: ChatImage[],
-  send: (text: string, images: ChatImage[]) => Promise<unknown>,
-) {
+ * why and holds the message, with what is typed into that chat meanwhile:
+ * Send it there sends it by `send`, Try again brings it again. */
+export async function sendOrBring(host: string, sessionId: string | undefined, terminal: number, text: string, images: ChatImage[], send: Send) {
   const st = useStore.getState();
   const s = sessionId ? (st.sessions[host] ?? []).find((x) => x.id === sessionId) : undefined;
   if (!sessionId || !s || !bringsHere(host, st.accounts, s)) return send(text, images);
-  const pending = waiting.get(sessionId);
-  if (pending) {
-    const joined = joinWaiting(pending, { terminal, text, images });
+  const message = { terminal, text, images };
+  for (const queue of [held, waiting]) {
+    const pending = queue.get(sessionId);
+    if (!pending) continue;
+    const joined = joinWaiting(pending, message);
     // Another chat's message is not held behind this one: it goes there.
     if (!joined) return send(text, images);
-    waiting.set(sessionId, joined);
+    queue.set(sessionId, joined);
     return;
   }
-  waiting.set(sessionId, { terminal, text, images });
-  const owner = st.hosts[host]?.label ?? host;
+  waiting.set(sessionId, message);
+  return bring(host, s, send);
+}
+
+/** Brings session `s`, listed from `host`, here with its waiting message. */
+async function bring(host: string, s: Session, send: Send) {
+  const owner = useStore.getState().hosts[host]?.label ?? host;
   // The waiting line, with Move now, stays for as long as the wait.
   let line: number | null = null;
   let keptOn: string | undefined;
   try {
     await untilTurnEnds({
       attempt: async (now) => {
-        const m = waiting.get(sessionId)!;
-        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: sessionId, now, terminal: m.terminal, message: m.text, images: m.images });
+        const m = waiting.get(s.id)!;
+        const brought = await rpc<{ kept_on?: string }>("local", M.sessionBring, { session: s.id, now, terminal: m.terminal, message: m.text, images: m.images });
         keptOn = brought?.kept_on;
       },
       waiting: (moveNow) => {
@@ -68,33 +74,72 @@ export async function sendOrBring(
       waitMs: TYPED_WAIT_MS,
       everyMs: 3000,
     });
-    waiting.delete(sessionId);
-    selectSession("local", sessionId);
+    waiting.delete(s.id);
+    selectSession("local", s.id);
     if (keptOn) toast(keptOnLine(s.name, keptOn, s.branch), "info", undefined, { sticky: true });
   } catch (e) {
-    // Not brought: the message waits in a toast that says why, until the
-    // user sends it there or tries again.
-    const m = waiting.get(sessionId)!;
-    waiting.delete(sessionId);
-    toast(
-      cannotComeLine(s.name, errorMessage(e)),
-      "error",
-      { label: "Send it there", run: () => void send(m.text, m.images).catch(errorToast) },
-      { sticky: true, also: { label: "Try again", run: () => void sendOrBring(host, sessionId, m.terminal, m.text, m.images, send) } },
-    );
+    const m = waiting.get(s.id)!;
+    waiting.delete(s.id);
+    // Kept there since the app last heard: it goes to the owner, as any
+    // message for a session kept elsewhere does.
+    if (e instanceof Object && "code" in e && e.code === "pinned") return send(m.text, m.images);
+    hold(host, s, m, errorMessage(e), send);
   } finally {
     if (line !== null) dismissToast(line);
   }
+}
+
+/** Holds message `m` of session `s` in a toast saying `why` it can't come
+ * here, until the user sends it there, tries again, or closes the toast. */
+function hold(host: string, s: Session, m: WaitingMessage, why: string, send: Send) {
+  held.set(s.id, m);
+  const take = () => {
+    const now = held.get(s.id) ?? m;
+    held.delete(s.id);
+    return now;
+  };
+  toast(
+    cannotComeLine(s.name, why),
+    "error",
+    {
+      label: "Send it there",
+      run: () => {
+        const now = take();
+        // Not sent: held again, so it is not lost.
+        void send(now.text, now.images).catch((e) => {
+          errorToast(e);
+          hold(host, s, now, why, send);
+        });
+      },
+    },
+    {
+      sticky: true,
+      secondAction: {
+        label: "Try again",
+        run: () => {
+          waiting.set(s.id, take());
+          void bring(host, s, send);
+        },
+      },
+      onClose: () => void held.delete(s.id),
+    },
+  );
 }
 
 /** Run only on… `to` (a worker id), and keep the session there. While a turn
  * runs, it moves when the turn ends, with Move now; then the session is
  * shown where it is listed now. */
 export async function moveSession(sessionId: string, to: string) {
+  // As listed before it moves, for the branch its commits may go on.
+  const s = Object.values(useStore.getState().sessions)
+    .flat()
+    .find((x) => x.id === sessionId);
+  let keptOn: string | undefined;
   try {
     const got = await untilTurnEnds({
       attempt: async (now) => {
-        await rpc("local", M.sessionMove, { session: sessionId, to, now });
+        const moved = await rpc<{ kept_on?: string }>("local", M.sessionMove, { session: sessionId, to, now });
+        keptOn = moved?.kept_on;
       },
       waiting: (moveNow) => toast("It moves when the turn ends.", "info", { label: "Move now", run: moveNow }),
       sleep,
@@ -103,6 +148,7 @@ export async function moveSession(sessionId: string, to: string) {
       everyMs: 3000,
     });
     if (got === "timeout") return toast("Not moved: the turn still runs after ten minutes.", "error");
+    if (keptOn && s) toast(keptOnLine(s.name, keptOn, s.branch), "info", undefined, { sticky: true });
     const sync = useSync.getState();
     const shown = movedHost({ to, me: sync.me, centralHost: sync.central });
     if (shown) selectSession(shown, sessionId);
