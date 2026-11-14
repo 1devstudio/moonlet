@@ -153,7 +153,7 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
     .filter((g) => g.rows.length);
 }
 
-/** Where a tap on a row goes: a waiting plan's sheet, else the session on its Chat, a done session too. */
+/** Where a tap on a row goes: a waiting plan's sheet, else the session's Chat, whatever the agent's state. */
 export function rowTarget(r: SessionRow): Screen {
   if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
   // Another member's session goes through the central host (X72).

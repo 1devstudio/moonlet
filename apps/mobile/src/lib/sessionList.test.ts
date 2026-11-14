@@ -223,7 +223,7 @@ describe("chips and filters", () => {
 });
 
 describe("rowTarget", () => {
-  it("opens a waiting plan's sheet, else the session on its chat, a done session too", () => {
+  it("opens a waiting plan's sheet, else the session's Chat", () => {
     const w = world();
     const rows = sessionGroups(w.hosts, w.data, null, NOW).flatMap((g) => g.rows);
     const by = (name: string) => rowTarget(rows.find((r) => r.session.name === name)!);
