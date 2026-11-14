@@ -1676,7 +1676,6 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
-  claudeSettingsChanged: "claude.settings_changed",
   /** A project's base branch was pulled on that host, by any client (X13). */
   gitBasePulled: "git.base_pulled",
   /** A workspace's board snapshot changed (X76). */

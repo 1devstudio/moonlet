@@ -250,7 +250,7 @@ impl ChatManager {
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
         let continuing = history.is_some();
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None, chrome: self.chrome() };
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None, chrome: self.host_wants_chrome() };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
@@ -1086,9 +1086,9 @@ impl ChatManager {
         }
     }
 
-    /// The host's Claude in Chrome switch (X103), in `claude.toml` beside
-    /// the chats folder.
-    fn chrome(&self) -> bool {
+    /// The host's Claude in Chrome switch (X103), read from `claude.toml`
+    /// beside the chats folder at each call.
+    fn host_wants_chrome(&self) -> bool {
         self.dir.parent().is_some_and(|home| crate::claude_settings::load(&crate::claude_settings::path_in(home)).chrome)
     }
 
@@ -1151,7 +1151,7 @@ impl ChatManager {
             self.apply(chat, inner, vec![o]);
         }
         inner.cfg.config_dir = config_dir;
-        inner.cfg.chrome = self.chrome();
+        inner.cfg.chrome = self.host_wants_chrome();
         let mut cfg = inner.cfg.clone();
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
