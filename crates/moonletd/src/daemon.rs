@@ -2851,14 +2851,21 @@ impl Daemon {
                 let _history = history.lock().await;
                 let comments = self.lock_of(&at, DesignLock::Comments);
                 let _comments = comments.lock().await;
-                self.take_hand_edits(&at);
+                // Never within the session agent's turn: it writes the pages
+                // straight in the folder the move deletes.
+                if self.design_agent_in_turn(&at).await? {
+                    return Err(RpcError::new("busy", "Claude is changing the design; move it once it stops"));
+                }
                 let (name, brief) = {
                     let (store, at) = (store.clone(), at.clone());
                     let config = blocking(move || store.design_config(&at)).await?;
                     (config.name, config.brief)
                 };
-                let (moved, ws) = (store.clone(), workspace.clone());
-                let slug = blocking(move || moved.adopt_session_design(&at, &ws, now_ms())).await?;
+                let (moved, ws, from) = (store.clone(), workspace.clone(), at.clone());
+                let slug = blocking(move || moved.adopt_session_design(&from, &ws, now_ms())).await?;
+                // Its edits by hand not kept yet go with it only once it moved:
+                // a refused move leaves them, and their wait, as they were.
+                self.take_hand_edits(&at);
                 drop((_pages, _history, _comments));
                 // Its own agent starts from the pages it has, as Use as a start's.
                 let intro = format!(
