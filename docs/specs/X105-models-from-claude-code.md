@@ -21,13 +21,14 @@ moonlet's Claude model menus came from a list written into the app: Fable 5.1, O
 
 - [x] Claude Code's `initialize` reply gives the chat its models: for each, the value passed to `--model`, the label, the description, the model it resolves to and its effort levels. A reply without `models` leaves the list empty. (`claude.rs` `the_initialize_reply_gives_the_models_claude_code_offers`)
 - [x] `claude.models {workspace?}` answers the models Claude Code offers in that workspace's Claude profile (X33). The daemon starts `claude` with the profile's environment, sends only `initialize`, reads the reply and stops it: no message is sent and no conversation is made. (`moonletd/tests/daemon.rs` `claude_models_come_from_claude_codes_initialize_reply`)
-- [x] A Claude that ends without answering, a host without `claude`, or a Claude that does not answer within 20 seconds gives an empty list, not an error. (`moonletd/tests/daemon.rs` `claude_models_are_empty_when_claude_does_not_answer`)
+- [x] A Claude that ends without answering gives an empty list, not an error, and for a minute after that the daemon answers empty without starting Claude again. (`moonletd/tests/daemon.rs` `claude_models_are_empty_when_claude_does_not_answer`)
 - [x] The newest models are the aliases: every value without the `claude-` prefix except `default`, in Claude Code's order. Every other model goes under More models, in Claude Code's order. (`agents.test.ts` "puts the aliases at the top and the pinned models under More models")
 - [x] With no list (a daemon from before X105, an older Claude Code, or before the answer), the menu offers Opus, Fable, Sonnet and Haiku without version numbers and no More models. (`agents.test.ts` "falls back to the aliases without versions")
 - [x] A model's label is its Claude Code label; a model id the list does not have shows as it is. (`agents.test.ts` "labels a model by Claude Code's name, else by its id")
-- [x] The Effort menu offers only the efforts the chosen model lists. A model that lists none has no Effort menu. A model the list does not have, or no list, offers all five. (`agents.test.ts` "offers the efforts the chosen model supports")
-- [x] Choosing a model that does not support the chosen effort sets the effort to High, or to none for a model without efforts; in a running chat, the effort is left as it is for a model without efforts. (`agents.test.ts` "keeps the effort when the new model supports it, else High")
-- [x] The phone's model sheet and chat footer use the chat's list the same way. (`chatView.test.ts` "names the model by the chat's list")
+- [x] The Effort menu offers only the efforts the chosen model lists. A model that lists none has no Effort menu. A model the list does not have, or no list, offers all five; Codex keeps its three. (`agents.test.ts` "offers the efforts the chosen model supports")
+- [x] Choosing a model for a new session keeps the chosen effort when the model supports it, else sets High, or none for a model without efforts. (`agents.test.ts` "keeps the effort when the new model supports it, else High")
+- [x] Choosing a model in a running chat changes its effort only when the new model lacks it; for a model without efforts the effort stays as it is. (`agents.test.ts` "switches a running chat's model, and its effort only when the new model lacks it")
+- [x] The phone's chat footer names the model by the chat's list. (`chatView.test.ts` "names the model by the chat's list (X105)") Its model sheets build their groups with the same `modelMenu`.
 - [x] The Composer shows Claude Code's newest models and the older ones under More models. (`models-from-claude-code.e2e.ts` "lists the newest models, the older ones under More models, and the efforts of the chosen one")
 
 ## UI
@@ -56,7 +57,7 @@ A model picked from More models shows a check on the More models row too (in the
 
 ## Data and config
 
-The daemon keeps each profile's list in memory, refreshed whenever a chat in that profile starts its Claude. Nothing is written to disk.
+The daemon keeps each profile's list in memory, refreshed whenever a chat in that profile starts its Claude. Nothing is written to disk. One Claude at a time is started to ask; it gets 20 seconds to answer, and a host without `claude` answers empty at once. The probe's whole process group is killed when it ends, so nothing it started outlives it.
 
 ## Security considerations
 
