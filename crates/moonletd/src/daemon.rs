@@ -287,6 +287,7 @@ fn design_key(workspace: &str, slug: &str) -> String {
 /// the design they name lets them through, not a workspace they claim.
 const DESIGN_ADDRESSED: &[&str] = &[
     m::DESIGN_REMOVE,
+    m::DESIGN_ADOPT,
     m::DESIGN_OPEN,
     m::DESIGN_VIEWPORT,
     m::DESIGN_COMMENTS,
@@ -2831,6 +2832,42 @@ impl Daemon {
                 }
                 self.workspace_exists(&r.into)?;
                 ok(self.move_design_to(LIBRARY, &r.slug, &r.into).await?)
+            }
+            m::DESIGN_ADOPT => {
+                // The user's choice, never an agent's: an agent could move its
+                // session's designs out of the branch.
+                app_only(conn, "moving a design to the workspace")?;
+                let r: m::DesignRef = params(p)?;
+                let m::DesignRef::Session { session, .. } = &r else {
+                    return Err(RpcError::new("invalid_params", "only a session design moves to the workspace"));
+                };
+                // Found as every {session, slug} design is; its workspace is its session's.
+                let at = self.locate(&r).await?;
+                let workspace = self.sessions.session(session).map_err(internal)?.workspace_id.unwrap_or_default();
+                // No save, snapshot or restore of it meanwhile, as design.remove.
+                let pages = self.lock_of(&at, DesignLock::Pages);
+                let _pages = pages.lock().await;
+                let history = self.lock_of(&at, DesignLock::History);
+                let _history = history.lock().await;
+                self.take_hand_edits(&at);
+                let (name, brief) = {
+                    let (store, at) = (store.clone(), at.clone());
+                    let config = blocking(move || store.design_config(&at)).await?;
+                    (config.name, config.brief)
+                };
+                let (moved, ws) = (store.clone(), workspace.clone());
+                let slug = blocking(move || moved.adopt_session_design(&at, &ws, now_ms())).await?;
+                drop((_pages, _history));
+                // Its own agent starts from the pages it has, as Use as a start's.
+                let intro = format!(
+                    "This design was moved here from a session as the design \"{name}\": its pages are written already. Read them, then wait for what the user asks. Its brief was: {}",
+                    brief.trim()
+                );
+                let at = self.locate(&m::DesignRef::Workspace { workspace, slug: slug.clone() }).await?;
+                if let Err(e) = self.start_design_agent(&at, Some(intro)).await {
+                    tracing::warn!("the agent of design {slug} moved to the workspace did not start: {e:#}");
+                }
+                ok(slug)
             }
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;

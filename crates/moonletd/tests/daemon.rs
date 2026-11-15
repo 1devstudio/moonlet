@@ -4507,6 +4507,53 @@ async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, 
 /// own; the design RPCs reach it by `{session, slug}`, its comments in the
 /// worktree's `.moonlet/design/`, and `design.list` gives it as a session
 /// design of its session and project.
+/// X104: **Move to workspace** from the app makes a session design a
+/// workspace design of its session's workspace and takes it out of the
+/// worktree; `design.list` then gives it as a workspace design and no
+/// longer as the session's. An agent (the CLI) is refused, and so is a
+/// design the session does not have.
+#[tokio::test]
+async fn a_session_design_moved_to_the_workspace_is_listed_there_and_no_longer_in_the_session() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let worktree = std::path::PathBuf::from(&session.path);
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "From the agreed requirements"}),
+        )
+        .await
+        .unwrap();
+    std::fs::write(worktree.join("docs/design/settings-page/pages/index.html"), "<body data-mid=\"m1\">Git</body>\n").unwrap();
+    let at = serde_json::json!({"session": session.id, "slug": "settings-page"});
+
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_ADOPT, at.clone()).await;
+    assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("forbidden")), "{refused:?}");
+
+    let mut app = d.app().await;
+    let missing = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": session.id, "slug": "nothing"})).await;
+    assert!(missing.is_err(), "{missing:?}");
+    let moved: String = app.request(methods::DESIGN_ADOPT, at).await.unwrap();
+    assert_eq!(moved, "settings-page");
+    assert!(!worktree.join("docs/design/settings-page").exists());
+    assert_eq!(
+        std::fs::read_to_string(d.home.path().join(format!(".moonlet/design/{ws}/designs/settings-page/pages/index.html"))).unwrap(),
+        "<body data-mid=\"m1\">Git</body>\n"
+    );
+    let list: serde_json::Value = app.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let listed: Vec<(String, String)> =
+        list.as_array().unwrap().iter().map(|d| (d["slug"].as_str().unwrap().to_string(), d["kind"].as_str().unwrap().to_string())).collect();
+    assert_eq!(listed, [("settings-page".to_string(), "workspace".to_string())]);
+    // Its own agent starts, told its pages are written already.
+    assert!(list[0]["agent"].is_u64(), "{list}");
+}
+
 #[tokio::test]
 async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and_slug() {
     let d = fake_claude_daemon(FAKE_CLAUDE).await;

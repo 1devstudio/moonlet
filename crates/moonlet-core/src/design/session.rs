@@ -419,6 +419,17 @@ impl Store {
         Ok(done)
     }
 
+    /// **Move to workspace** (X104): one session design, in the worktree or
+    /// kept in moonlet, made a workspace design of `workspace` as archiving
+    /// makes one, then taken out of the session: its folder and its
+    /// comments folder are removed. One that cannot be made stays as it
+    /// was. Gives its slug in the workspace.
+    pub fn adopt_session_design(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
+        let slug = self.adopt_one(at, workspace, now)?;
+        self.remove_design(at)?;
+        Ok(slug)
+    }
+
     /// One session design made a workspace design of `workspace`, its
     /// comments with it; gives its slug there.
     fn adopt_one(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
@@ -1346,6 +1357,81 @@ created_at = 1761200000000
         assert_eq!(store.session_dirs().unwrap(), Vec::<String>::new());
         // A session with no folder has nothing to move.
         assert_eq!(store.adopt_session_designs("s2", 4).unwrap().moved, vec![]);
+    }
+
+    /// X104: **Move to workspace** makes one session design, in the
+    /// worktree or kept in moonlet, a workspace design of the session's
+    /// workspace, as archiving does (X101): its pages linking the live
+    /// design system, its labels, viewport, brief, assets and comments; a
+    /// name the workspace has gets a ` 2`. It then leaves the session: its
+    /// folder and its comments folder are gone, and the session's listing
+    /// no longer has it.
+    #[test]
+    fn moving_a_session_design_to_the_workspace_makes_it_a_workspace_design_and_takes_it_out_of_the_session() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let in_wt = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let settings = store.create_session_design("w1", "moonlet-desktop", "s1", &in_wt.root, &in_wt.folder, "Settings page", "Settings", 1).unwrap();
+        let page = "<head><link rel=\"stylesheet\" href=\"../system/styles.css\"></head><body data-mid=\"m1\">Git</body>\n";
+        std::fs::write(wt.join("docs/design/settings-page/pages/index.html"), page).unwrap();
+        std::fs::write(wt.join("docs/design/settings-page/assets/logo.svg"), "<svg/>").unwrap();
+        let toml_file = wt.join("docs/design/settings-page/design.toml");
+        let text = std::fs::read_to_string(&toml_file).unwrap().replace("viewport = \"1440x900\"", "viewport = \"390x844\"");
+        std::fs::write(&toml_file, format!("{text}\n[pages.index]\nlabel = \"rows\"\n")).unwrap();
+        let comments = "[{\"id\":1,\"page\":\"index\",\"mid\":\"m1\",\"text\":\"Bigger\",\"state\":\"open\"}]\n";
+        std::fs::write(wt.join(".moonlet/design/settings-page/comments.json"), comments).unwrap();
+        store.create_session_design("w1", "moonlet-desktop", "s1", &in_wt.root, &in_wt.folder, "Billing", "b", 1).unwrap();
+        // One kept in moonlet, whose name the workspace has already.
+        store.make_session_dir("s1", "w1").unwrap();
+        let mine = store.new_design_shelf("s1", wt, "docs/design", true).unwrap();
+        let onboarding = store.create_session_design("w1", "moonlet-desktop", "s1", &mine.root, &mine.folder, "Onboarding", "b", 1).unwrap();
+        store.create_design("w1", "Onboarding", "moonlet-desktop", "b", 1).unwrap();
+
+        assert_eq!(store.adopt_session_design(&settings, "w1", 2).unwrap(), "settings-page");
+        let moved = home.path().join("design/w1/designs/settings-page");
+        assert_eq!(
+            std::fs::read_to_string(moved.join("pages/index.html")).unwrap(),
+            "<head><link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\"></head><body data-mid=\"m1\">Git</body>\n"
+        );
+        assert_eq!(std::fs::read_to_string(moved.join("assets/logo.svg")).unwrap(), "<svg/>");
+        assert_eq!(std::fs::read_to_string(moved.join("comments.json")).unwrap(), comments);
+        let info = store.designs("w1").unwrap().into_iter().find(|d| d.slug == "settings-page").unwrap();
+        assert_eq!((info.name.as_str(), info.viewport.as_str(), info.brief.as_str(), info.pages[0].label.as_deref()), ("Settings page", "390x844", "Settings", Some("rows")));
+        // Out of the worktree, its comments folder too.
+        assert!(!wt.join("docs/design/settings-page").exists());
+        assert!(!wt.join(".moonlet/design/settings-page").exists());
+
+        assert_eq!(store.adopt_session_design(&onboarding, "w1", 3).unwrap(), "onboarding-2");
+        assert_eq!(store.designs("w1").unwrap().iter().find(|d| d.slug == "onboarding-2").map(|d| d.name.as_str()), Some("Onboarding 2"));
+        assert!(!home.path().join("design/.sessions/s1/designs/onboarding").exists());
+
+        let left: Vec<String> = store
+            .session_designs_on("s1", &store.session_shelves("s1", wt, "docs/design"), "w1")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.slug)
+            .collect();
+        assert_eq!(left, ["billing"]);
+    }
+
+    /// X104: a session design whose design system is gone cannot be a
+    /// workspace design, so it is refused and stays in the session.
+    #[test]
+    fn a_session_design_whose_system_is_gone_is_not_moved_and_stays() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let lost = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Lost", "b", 1).unwrap();
+        let toml_file = wt.join("docs/design/lost/design.toml");
+        let text = std::fs::read_to_string(&toml_file).unwrap().replace("system = \"moonlet-desktop\"", "system = \"gone\"");
+        std::fs::write(&toml_file, text).unwrap();
+
+        assert!(store.adopt_session_design(&lost, "w1", 2).is_err());
+        assert!(toml_file.is_file());
+        assert!(wt.join(".moonlet/design/lost").is_dir());
+        assert!(!home.path().join("design/w1/designs/lost").exists());
     }
 
     #[test]
