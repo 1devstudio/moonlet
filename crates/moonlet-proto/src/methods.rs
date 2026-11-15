@@ -214,6 +214,9 @@ pub const CLAUDE_SETTINGS: &str = "claude.settings";
 /// Changes some of the host's Claude settings: a partial `ClaudeSettings` →
 /// the whole, as saved (X103).
 pub const CLAUDE_SET_SETTINGS: &str = "claude.set_settings";
+/// The models Claude Code offers in a workspace's Claude profile (X105):
+/// [`ClaudeModels`] → `Vec<ClaudeModel>`, empty when Claude cannot say.
+pub const CLAUDE_MODELS: &str = "claude.models";
 /// `GitUnpushed` → `UnpushedWork`: what in a session is only on its host (X55).
 pub const GIT_UNPUSHED: &str = "git.unpushed";
 /// `GitUnpushed`: `git push -u origin <branch>`, else HEAD (X55 "Push, then archive").
@@ -2928,6 +2931,14 @@ pub struct ChatUnqueue {
 pub struct ChatAside {
     pub id: TerminalId,
     pub text: String,
+}
+
+/// `claude.models` params (X105): the workspace whose Claude profile to ask
+/// in; none for the default profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClaudeModels {
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

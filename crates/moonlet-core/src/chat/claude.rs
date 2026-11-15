@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{AsideAnswer, ChatImage, ChatState, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
+use moonlet_proto::types::{AsideAnswer, ChatImage, ChatState, ClaudeModel, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -277,6 +277,27 @@ pub fn aside_args(cfg: &ChatConfig, session: &str, question: &str, running: Opti
     }
     args.push(format!("{prompt}\n\n{question}"));
     args
+}
+
+/// The models Claude Code offers, from its answer to `initialize` (X105).
+/// An answer without `models`, from an older Claude Code, gives none.
+pub fn models(reply: &Value) -> Vec<ClaudeModel> {
+    let text = |m: &Value, k: &str| m[k].as_str().unwrap_or_default().to_string();
+    let Some(list) = reply["models"].as_array() else { return vec![] };
+    list.iter()
+        .filter(|m| m["value"].is_string())
+        .map(|m| ClaudeModel {
+            value: text(m, "value"),
+            label: text(m, "displayName"),
+            description: text(m, "description"),
+            resolved: text(m, "resolvedModel"),
+            efforts: if m["supportsEffort"] == true {
+                m["supportedEffortLevels"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(String::from)).collect()
+            } else {
+                vec![]
+            },
+        })
+        .collect()
 }
 
 /// An aside's answer from its Claude's `--output-format json` result, or
@@ -589,6 +610,7 @@ impl Adapter for Claude {
                             .filter_map(|a| Some(NamedItem { name: a["name"].as_str()?.to_string(), description: a["description"].as_str().unwrap_or_default().to_string() }))
                             .collect();
                     }
+                    st.models = models(r);
                     out.push(Out::State);
                     out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
                 }
@@ -1003,6 +1025,34 @@ mod tests {
                 NamedItem { name: "statusline-setup".into(), description: "Use this agent to configure the user's Claude Code status line setting.".into() },
             ]
         );
+    }
+
+    /// X105: captured from Claude Code 2.1.325, its `models` only.
+    const MODELS_REPLY: &str = include_str!("fixtures/claude-init-models.jsonl");
+
+    #[test]
+    fn the_initialize_reply_gives_the_models_claude_code_offers() {
+        use moonlet_proto::types::ClaudeModel;
+        let mut a = Claude::default();
+        let mut st = ChatState::default();
+        a.start(&ChatConfig::default(), &mut st);
+        assert!(a.on_line(MODELS_REPLY.trim(), &mut st).contains(&Out::State));
+        let all = ["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec();
+        assert_eq!(st.models.len(), 14);
+        assert_eq!(
+            st.models[2],
+            ClaudeModel { value: "fable".into(), label: "Fable 5.2".into(), description: "For your toughest challenges".into(), resolved: "claude-fable-5-2".into(), efforts: all }
+        );
+        assert_eq!(
+            st.models[6],
+            ClaudeModel { value: "claude-haiku-4-5-20251001".into(), label: "Haiku 4.5".into(), description: "Fastest for quick answers".into(), resolved: "claude-haiku-4-5-20251001".into(), efforts: vec![] }
+        );
+        assert_eq!(st.models[12].efforts, ["low", "medium", "high", "max"]);
+
+        // An older Claude Code that lists no models leaves the list empty.
+        let mut st = ChatState::default();
+        a.on_line(INIT_REPLY.replace(r#""models":[{"value":"haiku","displayName":"Haiku"}],"#, "").as_str(), &mut st);
+        assert!(st.models.is_empty());
     }
 
     #[test]

@@ -1495,6 +1495,10 @@ pub struct ChatState {
     /// Subagents the agent launched, oldest first (X42).
     #[serde(default)]
     pub subagents: Vec<Subagent>,
+    /// The models the agent offers, from Claude Code's answer to
+    /// `initialize`; empty until it has answered (X105).
+    #[serde(default)]
+    pub models: Vec<ClaudeModel>,
     /// The transcript has a plan, an `ExitPlanMode` call with one: the app
     /// shows the Plan tab by it while the items are not in memory (X24).
     #[serde(default)]
@@ -1571,6 +1575,21 @@ pub struct ChatImage {
     pub name: String,
     pub media_type: String,
     pub data: String,
+}
+
+/// A model Claude Code offers, from its answer to `initialize` (X105).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeModel {
+    /// What `--model` takes: an alias such as `fable`, or a full id.
+    pub value: String,
+    /// Claude Code's name for it, such as "Fable 5.2".
+    pub label: String,
+    pub description: String,
+    /// The model the value stands for, such as `claude-fable-5-2`.
+    pub resolved: String,
+    /// The `--effort` levels it supports; empty when it has none.
+    pub efforts: Vec<String>,
 }
 
 /// A name with a one-line description, such as a subagent.

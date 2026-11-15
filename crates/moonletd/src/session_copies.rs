@@ -2781,6 +2781,7 @@ mod tests {
             "git.set_settings",
             "claude.settings",
             "claude.set_settings",
+            "claude.models",
             "chat.mcp",
         ] {
             assert_eq!(
