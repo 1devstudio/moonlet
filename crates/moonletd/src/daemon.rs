@@ -42,11 +42,19 @@ struct Asleep {
     frozen: Vec<moonlet_proto::TerminalId>,
     /// The sessions the central host answered it took.
     taken: std::collections::HashSet<String>,
+    /// The `epoch` of each session this member owned as it went to sleep.
+    epochs: std::collections::HashMap<String, u64>,
     /// How many sleeps began: a wake that a newer sleep overtook leaves
     /// what it holds to that sleep's wake.
     sleeps: u64,
     /// Between a sleep and its wake: no session comes back meanwhile.
     sleeping: bool,
+}
+
+/// A session's `epoch` in its account record: 1 for a record from before
+/// X73, which had none (X73).
+fn epoch_of(record: Option<&moonlet_core::account::Record>) -> u64 {
+    record.and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1)
 }
 
 /// What looks for sessions another member now owns keep between them (X73).
@@ -4261,8 +4269,9 @@ impl Daemon {
     /// The Mac goes to sleep or woke (X73). Going to sleep, this member
     /// freezes the agents of the sessions it runs, sends what is new, and
     /// hands the sessions at work that are not pinned to the central host,
-    /// which continues them; an idle one stays. Waking, it lets an agent go on only while its
-    /// session is still this member's; one handed over is let go of.
+    /// which continues them; an idle one stays. Waking, it asks the central
+    /// host first, and lets an agent go on only while its session is still
+    /// this member's at the epoch it slept at; one handed over is let go of.
     pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
         use crate::power::Power;
         let info = self.link.info();
@@ -4285,6 +4294,11 @@ impl Daemon {
                     let mut asleep = self.asleep.lock().unwrap();
                     asleep.sleeps += 1;
                     asleep.sleeping = true;
+                    // After a wake a newer sleep overtook, the first sleep's
+                    // epochs stay: its agents froze at them.
+                    for s in &own {
+                        asleep.epochs.entry(s.id.clone()).or_insert(epoch_of(records.get(&s.id)));
+                    }
                     // An agent that starts from now on starts stopped too.
                     self.chats.hold();
                 }
@@ -4343,23 +4357,22 @@ impl Daemon {
                 if sleeps == 0 {
                     return;
                 }
-                // A moment for the link and the account's news: what was
-                // handed over is let go of, not woken.
-                for _ in 0..50 {
-                    if matches!(self.link.info().state, m::LinkState::Connected { .. }) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // Who owns each session, as the central host says after the
+                // wake, up to 5 s: never the link's state or records from
+                // before the sleep, when it may have taken a session. What
+                // it gave another member is let go of, not woken. With no
+                // answer, the agents go on, as offline work does (ADR 0014).
+                if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
+                    tracing::info!("no word from the central host after the wake; agents go on by this Mac's records");
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let (frozen, taken) = {
+                let (frozen, taken, epochs) = {
                     let mut asleep = self.asleep.lock().unwrap();
                     if asleep.sleeps != sleeps {
                         return;
                     }
                     asleep.sleeping = false;
                     asleep.frozen.extend(self.chats.release());
-                    (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
+                    (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken), std::mem::take(&mut asleep.epochs))
                 };
                 // What the central host took for this sleep comes back once
                 // idle there and untouched.
@@ -4378,12 +4391,18 @@ impl Daemon {
                             self.chats.freeze(chat, false);
                             return None;
                         };
-                        let owner = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str);
-                        Some(crate::power::Frozen { chat, session: &s.id, owner })
+                        let record = records.get(&s.id);
+                        let owner = record.and_then(|r| r.get("owner")).and_then(Value::as_str);
+                        Some(crate::power::Frozen { chat, session: &s.id, owner, epoch: epoch_of(record), slept_at: epochs.get(&s.id).copied() })
                     })
                     .collect();
                 for t in crate::power::to_thaw(&frozen, &taken, &me) {
                     self.chats.freeze(t, false);
+                }
+                // Never a step of a turn from before a move: the next
+                // message resumes the conversation with a new agent.
+                for t in crate::power::to_end(&frozen, &taken, &me) {
+                    self.chats.stop(t, false);
                 }
             }
         }
