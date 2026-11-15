@@ -81,6 +81,12 @@ async fn mac_with(id: &str, name: &str, extra: &[(&str, &str)]) -> Daemon {
 
 /// Makes `central` the Mac's central host.
 async fn link(mac: &Daemon, central: &Daemon, addr: &str) {
+    link_through(mac, central, addr, addr).await;
+}
+
+/// [`link`], the Mac reaching `central` at `through`, which carries its
+/// link on to `addr`.
+async fn link_through(mac: &Daemon, central: &Daemon, addr: &str, through: &str) {
     let p: MobilePairing = central
         .call("mobile.pair_start", json!({ "kind": "desktop" }))
         .await;
@@ -92,7 +98,7 @@ async fn link(mac: &Daemon, central: &Daemon, addr: &str) {
     let _: Value = mac
         .call(
             "link.set",
-            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
+            json!({ "central": { "name": "studio-mini", "addrs": [through], "token": token } }),
         )
         .await;
 }
@@ -795,6 +801,28 @@ async fn pair_with_agents(origin: &Origin) -> (Daemon, Daemon) {
 /// that leads the origin to a local folder, so its own project of `shop`
 /// has the identity the MacBook's has, as on real Macs.
 async fn pair_with_agents_as(origin: &Origin, clone_rule: bool) -> (Daemon, Daemon) {
+    let (mini, addr, book) = agents_not_linked(origin, clone_rule).await;
+    link(&book, &mini, &addr).await;
+    (mini, book)
+}
+
+/// [`pair_with_agents_as`] without `clone_rule`, the MacBook's link going
+/// through a [`Network`] the test can cut.
+async fn pair_with_agents_through_a_network(origin: &Origin) -> (Daemon, Daemon, Network) {
+    let (mini, addr, book) = agents_not_linked(origin, false).await;
+    let network = Network::to(&addr).await;
+    link_through(&book, &mini, &addr, &network.addr).await;
+    within(Duration::from_secs(30), "the MacBook linked", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+    (mini, book, network)
+}
+
+/// studio-mini, at the address it gives, and the MacBook, not linked yet,
+/// both with [`TOOL_CLAUDE`] for an agent.
+async fn agents_not_linked(origin: &Origin, clone_rule: bool) -> (Daemon, String, Daemon) {
     let scratch = tempfile::tempdir().unwrap();
     let mini_home = scratch.path().join("mini");
     let book_home = scratch.path().join("book");
@@ -812,9 +840,103 @@ async fn pair_with_agents_as(origin: &Origin, clone_rule: bool) -> (Daemon, Daem
         .collect();
     let (mini, addr) = central_with(&m).await;
     let book = mac_with(BOOK, "MacBook", &b).await;
-    link(&book, &mini, &addr).await;
     std::mem::forget(scratch);
-    (mini, book)
+    (mini, addr, book)
+}
+
+/// The network between the MacBook and studio-mini, which can go down as
+/// it does while a Mac sleeps (X73): cut, it carries nothing either way
+/// and passes no close on, so each end can go on taking the other for
+/// there. Back up, a MacBook writing on a connection studio-mini closed
+/// meanwhile has it closed, as studio-mini's reset would; or, back on
+/// another network, the connections from before carry nothing ever again.
+struct Network {
+    addr: String,
+    cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Which network it is: a connection made on an earlier one is dead.
+    which: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Network {
+    /// A network that carries each connection made to it on to `addr`.
+    async fn to(addr: &str) -> Network {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let network = Network {
+            addr: listener.local_addr().unwrap().to_string(),
+            cut: Default::default(),
+            which: Default::default(),
+        };
+        let (addr, cut, which) = (addr.to_string(), network.cut.clone(), network.which.clone());
+        tokio::spawn(async move {
+            while let Ok((member, _)) = listener.accept().await {
+                if let Ok(central) = tokio::net::TcpStream::connect(&addr).await {
+                    tokio::spawn(carry(member, central, cut.clone(), which.clone()));
+                }
+            }
+        });
+        network
+    }
+
+    fn cut(&self, down: bool) {
+        self.cut.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Back up, the same network.
+    fn cut_back(&self) {
+        self.cut(false);
+    }
+
+    /// Back up, as another network: the connections from before stay
+    /// silent for good, closing nothing.
+    fn back_as_another(&self) {
+        self.which.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.cut(false);
+    }
+}
+
+/// Carries one connection of a [`Network`].
+async fn carry(
+    member: tokio::net::TcpStream,
+    central: tokio::net::TcpStream,
+    cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    which: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) {
+    use std::sync::atomic::Ordering::SeqCst;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let on = which.load(SeqCst);
+    let down = || cut.load(SeqCst) || which.load(SeqCst) != on;
+    let (mut from_member, mut to_member) = member.into_split();
+    let (mut from_central, mut to_central) = central.into_split();
+    let (mut a, mut b) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    let mut central_closed = false;
+    loop {
+        tokio::select! {
+            n = from_member.read(&mut a) => {
+                let n = n.unwrap_or(0);
+                // What reaches a connection the central host closed while
+                // the network was down gets the member's end closed.
+                if n == 0 || (central_closed && !down()) {
+                    return;
+                }
+                if !down() && to_central.write_all(&a[..n]).await.is_err() {
+                    return;
+                }
+            }
+            n = from_central.read(&mut b), if !central_closed => match n {
+                Ok(n) if n > 0 => {
+                    if !down() && to_member.write_all(&b[..n]).await.is_err() {
+                        return;
+                    }
+                }
+                _ => {
+                    central_closed = true;
+                    if !down() {
+                        return;
+                    }
+                }
+            },
+        }
+    }
 }
 
 /// A session of `shop` on `book` with a chat agent, after one message.
@@ -3065,6 +3187,78 @@ async fn an_idle_session_stays_on_the_mac_through_sleep() {
         st["status"] == json!("done") && agent_log(&book, "claude-user").contains("Again")
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_session_the_central_host_took_while_the_mac_slept_is_not_resumed_at_wake() {
+    taken_while_asleep_then_woken(Network::cut_back).await;
+}
+
+#[tokio::test]
+async fn a_link_that_stays_silent_after_the_wake_is_made_again_before_agents_go_on() {
+    // The MacBook wakes on another network: the link from before the sleep
+    // still looks up, but nothing it sends gets an answer, nor is it closed.
+    taken_while_asleep_then_woken(Network::back_as_another).await;
+}
+
+/// The MacBook sleeps with its session's turn over, so it hands nothing
+/// over. The network goes down, studio-mini takes the session as from the
+/// phone, the network comes back as `back` makes it, and the MacBook
+/// wakes: its agent must never go on.
+async fn taken_while_asleep_then_woken(back: fn(&Network)) {
+    let origin = Origin::new();
+    let (mini, book, network) = pair_with_agents_through_a_network(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let agents = agent_processes(&book);
+    assert!(!agents.is_empty() && agents.iter().all(|(_, stat)| stat.starts_with('T')), "{agents:?}");
+
+    // The MacBook sleeps on with no network, having handed nothing over.
+    // studio-mini stops hearing from it, and the user continues the
+    // session there, as from the phone.
+    network.cut(true);
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    // The MacBook wakes with the network back. Its link still looks up,
+    // and its record still names it the owner.
+    back(&network);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    // Its agent never goes on: it stays stopped until the MacBook lets
+    // go of the session, which ends it.
+    within(
+        Duration::from_secs(30),
+        "the MacBook to let go of the session",
+        || async {
+            let agents = agent_processes(&book);
+            assert!(
+                agents.iter().all(|(_, stat)| stat.starts_with('T') || stat.starts_with('Z')),
+                "the MacBook's agent went on: {agents:?}"
+            );
+            agents.is_empty() && has_live_copy(&book, &made).await
+        },
+    )
+    .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "still the MacBook's own");
 }
 
 // --- Move to…, pins and Take over anyway (X73) ---------------------------

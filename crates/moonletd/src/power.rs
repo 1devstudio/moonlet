@@ -19,17 +19,22 @@ pub enum Power {
 }
 
 /// A chat frozen as the Mac went to sleep: its session, and that
-/// session's owner as this member knows it at wake.
+/// session's owner and `epoch` as this member knows them at wake.
 pub struct Frozen<'a> {
     pub chat: moonlet_proto::TerminalId,
     pub session: &'a str,
     pub owner: Option<&'a str>,
+    pub epoch: u64,
+    /// The session's `epoch` as the Mac went to sleep, when it was this
+    /// member's then.
+    pub slept_at: Option<u64>,
 }
 
 /// The frozen chats that go on at wake (X73): those of a session this
-/// member `me` still owns and that the central host did not answer it took
-/// (`taken`), even when the news of its new owner has not arrived yet. The
-/// rest stay stopped until the member lets go of their session.
+/// member `me` still owns at the `epoch` it had as the Mac slept, and that
+/// the central host did not answer it took (`taken`), even when the news
+/// of its new owner has not arrived yet. The rest stay stopped until the
+/// member lets go of their session.
 pub fn to_thaw(
     frozen: &[Frozen],
     taken: &std::collections::HashSet<String>,
@@ -38,6 +43,24 @@ pub fn to_thaw(
     frozen
         .iter()
         .filter(|f| f.owner == Some(me) && !taken.contains(f.session))
+        .filter(|f| f.slept_at.is_none_or(|e| e == f.epoch))
+        .map(|f| f.chat)
+        .collect()
+}
+
+/// The frozen chats whose agent ends at wake (X73), its conversation kept
+/// for the next message: those of a session this member `me` owns again,
+/// but at another `epoch` than as the Mac slept. The other chats that do
+/// not go on end as their session is let go of.
+pub fn to_end(
+    frozen: &[Frozen],
+    taken: &std::collections::HashSet<String>,
+    me: &str,
+) -> Vec<moonlet_proto::TerminalId> {
+    frozen
+        .iter()
+        .filter(|f| f.owner == Some(me) && !taken.contains(f.session))
+        .filter(|f| f.slept_at.is_some_and(|e| e != f.epoch))
         .map(|f| f.chat)
         .collect()
 }
@@ -179,6 +202,8 @@ mod tests {
                 chat: 1,
                 session: "fix-cart",
                 owner: Some("macbook"),
+                epoch: 1,
+                slept_at: Some(1),
             },
             // The central host said it took this one, though the news of
             // its new owner has not arrived yet.
@@ -186,20 +211,58 @@ mod tests {
                 chat: 2,
                 session: "big-refactor",
                 owner: Some("macbook"),
+                epoch: 1,
+                slept_at: Some(1),
             },
             Frozen {
                 chat: 3,
                 session: "docs",
                 owner: Some("studio-mini"),
+                epoch: 2,
+                slept_at: Some(1),
             },
             Frozen {
                 chat: 4,
                 session: "fix-cart",
                 owner: Some("macbook"),
+                epoch: 1,
+                slept_at: Some(1),
             },
         ];
         let taken = ["big-refactor".to_string()].into_iter().collect();
         assert_eq!(to_thaw(&frozen, &taken, "macbook"), vec![1, 4]);
+    }
+
+    #[test]
+    fn on_waking_a_chat_goes_on_only_at_the_epoch_its_session_had_as_the_mac_slept() {
+        let frozen = [
+            Frozen {
+                chat: 1,
+                session: "fix-cart",
+                owner: Some("macbook"),
+                epoch: 3,
+                slept_at: Some(3),
+            },
+            // This member's again, but from a later move: the agent frozen
+            // in its old turn is not the session's any more.
+            Frozen {
+                chat: 2,
+                session: "big-refactor",
+                owner: Some("macbook"),
+                epoch: 5,
+                slept_at: Some(3),
+            },
+            // Started frozen while asleep: no epoch from before to go by.
+            Frozen {
+                chat: 3,
+                session: "docs",
+                owner: Some("macbook"),
+                epoch: 1,
+                slept_at: None,
+            },
+        ];
+        assert_eq!(to_thaw(&frozen, &Default::default(), "macbook"), vec![1, 3]);
+        assert_eq!(to_end(&frozen, &Default::default(), "macbook"), vec![2]);
     }
 
     #[test]

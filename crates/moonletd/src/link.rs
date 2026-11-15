@@ -317,6 +317,10 @@ pub fn should_link(central: bool, needs: LinkNeeds) -> bool {
 /// How often a member catches up with its central host's account, in case
 /// an `account.changed` went missing (X68). `MOONLET_ACCOUNT_RESYNC_MS`
 /// shortens it in tests.
+/// How long [`WorkerLink::sync_now`] waits for an answer before it makes
+/// the link again.
+const PROVE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn account_resync_interval() -> std::time::Duration {
     std::env::var("MOONLET_ACCOUNT_RESYNC_MS")
         .ok()
@@ -923,6 +927,42 @@ impl WorkerLink {
             (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
         }
         Ok(got.version)
+    }
+
+    /// Asks the central host now for what of the account this member lacks,
+    /// and takes it in (X73, after a sleep): true once it answered, within
+    /// `wait`. The link's state is not taken at its word, as a link from
+    /// before a sleep can look up long after the central host dropped it:
+    /// one that gives no answer within [`PROVE_WITHIN`] is made again, once,
+    /// and asked again.
+    pub async fn sync_now(self: &Arc<Self>, wait: std::time::Duration) -> bool {
+        if !self.sessions.has_account() || self.is_cloud() {
+            return false;
+        }
+        let until = tokio::time::Instant::now() + wait;
+        let mut made_again = false;
+        loop {
+            let left = until.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            let up = matches!(*self.state.lock().unwrap(), LinkState::Connected { .. });
+            if let Some(host) = self.host().filter(|_| up) {
+                match tokio::time::timeout(left.min(PROVE_WITHIN), self.sync_account(&host)).await {
+                    Ok(Ok(())) => return true,
+                    // A central host that shares no account has none to say.
+                    Ok(Err(e)) if e.code == "unknown_method" || e.code == "no_account" => return false,
+                    // Lost, or not registered yet on a new link: again.
+                    Ok(Err(_)) => {}
+                    Err(_) if !made_again => {
+                        made_again = true;
+                        host.reconnect();
+                    }
+                    Err(_) => {}
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100).min(left)).await;
+        }
     }
 
     /// Sends changes made on this member to its central host, when linked.
