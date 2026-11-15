@@ -1035,11 +1035,10 @@ impl Daemon {
     }
 
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
-        // A cloud machine reaches only what a worker needs (X63).
-        if let Some(device) = conn.phone.as_deref()
-            && self.machines.machine_of(device).is_some()
-            && !CLOUD_METHODS.contains(&method)
-        {
+        // A cloud machine reaches only what a worker needs (X63), for the
+        // whole life of its connection: its device is forgotten while its
+        // machine is being removed, but the connection stays a cloud one.
+        if conn.cloud.load(Ordering::Relaxed) && !CLOUD_METHODS.contains(&method) {
             return Err(RpcError::new("forbidden", "a cloud machine only runs heavy commands"));
         }
         let s = &self.terminals;

@@ -321,6 +321,9 @@ pub struct Authed {
     /// Set when this connection just paired.
     pub token: Option<String>,
     pub route: Option<String>,
+    /// A cloud machine's device (X63), as it was when it authenticated: its
+    /// connection stays limited even once removal forgets the device.
+    pub cloud: bool,
 }
 
 struct LiveConn {
@@ -693,11 +696,13 @@ impl Mobile {
                 }
                 d.last_seen = Some(now_ms());
                 let device_id = d.id.clone();
+                let cloud = d.kind == DeviceKind::Cloud;
                 self.save(&data);
                 Some(Authed {
                     device_id,
                     token: None,
                     route,
+                    cloud,
                 })
             }
             (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
@@ -732,6 +737,7 @@ impl Mobile {
                     device_id,
                     token: Some(token),
                     route: None,
+                    cloud: true,
                 })
             }
             (None, Some(code)) if route.is_none() => {
@@ -774,6 +780,7 @@ impl Mobile {
                             device_id,
                             token: Some(token),
                             route: None,
+                            cloud: kind == DeviceKind::Cloud,
                         })
                     }
                     (PairCheck::Exhausted, current) => {

@@ -71,7 +71,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     let (r, w) = stream.into_split();
-                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid).await {
+                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid, false).await {
                         tracing::debug!("connection ended: {e:#}");
                     }
                 });
@@ -250,6 +250,7 @@ pub async fn handle_connection<R, W>(
     writer: W,
     phone: Option<String>,
     peer_pid: Option<u32>,
+    cloud: bool,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -369,11 +370,8 @@ where
         }
     }
     // A cloud machine (X63) reaches only what a worker needs: no terminal,
-    // and none of the central host's events.
-    let cloud = conn
-        .phone
-        .as_deref()
-        .is_some_and(|d| daemon.machines.machine_of(d).is_some());
+    // and none of the central host's events. Decided when it authenticated,
+    // so a hello sent after removal forgot its device changes nothing.
     conn.cloud.store(cloud, Ordering::Relaxed);
     let event_task = tokio::spawn(async move {
         loop {

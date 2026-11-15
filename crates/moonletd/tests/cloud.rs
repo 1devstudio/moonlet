@@ -884,18 +884,7 @@ async fn a_machine_being_removed_opens_no_copy_over_its_open_connection() {
             json!({ "project_id": c.project, "name": "mine", "agent": "none" }),
         )
         .await;
-    // The machine answers nothing, so its retire waits while the link is open.
-    let pid = nix::unistd::Pid::from_raw(
-        std::fs::read_to_string(c.fake_dirs()[0].join("pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap(),
-    );
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
-    let m = &c.machines().await["machines"][0];
-    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let pid = remove_while_stalled(&c).await;
     let refused = ask_link(
         &mut link,
         2,
@@ -908,6 +897,88 @@ async fn a_machine_being_removed_opens_no_copy_over_its_open_connection() {
         refused,
         Some(("forbidden".into(), "this machine is being removed".into()))
     );
+}
+
+#[tokio::test]
+async fn a_machine_being_removed_calls_only_worker_methods_over_its_open_connection() {
+    // Its device is forgotten while the retire waits; the connection is still
+    // a cloud machine's.
+    let c = cloud().await;
+    c.ready().await;
+    let mut link = worker_link(&c.addr, &c.machine_token()).await;
+    let pid = remove_while_stalled(&c).await;
+    let mut refused = Vec::new();
+    for (id, method) in [(2, "session.list"), (3, "terminal.list"), (4, "mobile.status")] {
+        refused.push(ask_link(&mut link, id, method, json!({})).await);
+    }
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    let forbidden = Some((
+        "forbidden".to_string(),
+        "a cloud machine only runs heavy commands".to_string(),
+    ));
+    assert_eq!(refused, vec![forbidden.clone(), forbidden.clone(), forbidden]);
+}
+
+#[tokio::test]
+async fn a_connection_that_says_hello_after_its_machine_began_removal_calls_only_worker_methods() {
+    // It authenticated as the cloud machine before its device was forgotten,
+    // and says hello only after.
+    use moonlet_proto::{read_frame, write_frame};
+    let c = cloud().await;
+    c.ready().await;
+    let mut s = tokio::net::TcpStream::connect(&c.addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(c.machine_token()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    assert!(matches!(
+        read_frame(&mut s).await,
+        Ok(Some(Frame::Json(Message::Authed { .. })))
+    ));
+    let pid = remove_while_stalled(&c).await;
+    let hello = Message::Hello {
+        protocol: moonlet_proto::PROTOCOL_VERSION,
+        client: "moonletd-worker".into(),
+        app_token: None,
+    };
+    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let refused = ask_link(&mut s, 1, "session.list", json!({})).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(
+        refused,
+        Some((
+            "forbidden".into(),
+            "a cloud machine only runs heavy commands".into()
+        ))
+    );
+}
+
+/// Removes the first machine while it answers nothing, so its retire waits
+/// with its connections open, and returns once its device token no longer
+/// opens a connection. The caller resumes the returned process.
+async fn remove_while_stalled(c: &Cloud) -> nix::unistd::Pid {
+    let token = c.machine_token();
+    let pid = nix::unistd::Pid::from_raw(
+        std::fs::read_to_string(c.fake_dirs()[0].join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let m = &c.machines().await["machines"][0];
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while authed(&c.addr, &token).await {
+        assert!(std::time::Instant::now() < deadline, "the device token still works");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    pid
 }
 
 /// A connection with `token`, registered as a worker, as a machine's link is.
