@@ -1381,6 +1381,7 @@ created_at = 1761200000000
         std::fs::write(&toml_file, format!("{text}\n[pages.index]\nlabel = \"rows\"\n")).unwrap();
         let comments = "[{\"id\":1,\"page\":\"index\",\"mid\":\"m1\",\"text\":\"Bigger\",\"state\":\"open\"}]\n";
         std::fs::write(wt.join(".moonlet/design/settings-page/comments.json"), comments).unwrap();
+        assert!(store.take_snapshot(&settings, super::super::history::Take::AgentTurn, 1).unwrap().is_some());
         store.create_session_design("w1", "moonlet-desktop", "s1", &in_wt.root, &in_wt.folder, "Billing", "b", 1).unwrap();
         // One kept in moonlet, whose name the workspace has already.
         store.make_session_dir("s1", "w1").unwrap();
@@ -1396,6 +1397,8 @@ created_at = 1761200000000
         );
         assert_eq!(std::fs::read_to_string(moved.join("assets/logo.svg")).unwrap(), "<svg/>");
         assert_eq!(std::fs::read_to_string(moved.join("comments.json")).unwrap(), comments);
+        // Its snapshots are not kept.
+        assert!(store.history(&store.workspace_design("w1", "settings-page").unwrap()).unwrap().is_empty());
         let info = store.designs("w1").unwrap().into_iter().find(|d| d.slug == "settings-page").unwrap();
         assert_eq!((info.name.as_str(), info.viewport.as_str(), info.brief.as_str(), info.pages[0].label.as_deref()), ("Settings page", "390x844", "Settings", Some("rows")));
         // Out of the worktree, its comments folder too.
@@ -1405,6 +1408,8 @@ created_at = 1761200000000
         assert_eq!(store.adopt_session_design(&onboarding, "w1", 3).unwrap(), "onboarding-2");
         assert_eq!(store.designs("w1").unwrap().iter().find(|d| d.slug == "onboarding-2").map(|d| d.name.as_str()), Some("Onboarding 2"));
         assert!(!home.path().join("design/.sessions/s1/designs/onboarding").exists());
+        assert!(!home.path().join("design/.sessions/s1/.moonlet/design/onboarding").exists());
+        assert!(home.path().join("design/.sessions/s1/.moonlet/design").is_dir());
 
         let left: Vec<String> = store
             .session_designs_on("s1", &store.session_shelves("s1", wt, "docs/design"), "w1")

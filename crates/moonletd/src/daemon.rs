@@ -2838,17 +2838,19 @@ impl Daemon {
                 // session's designs out of the branch.
                 app_only(conn, "moving a design to the workspace")?;
                 let r: m::DesignRef = params(p)?;
-                let m::DesignRef::Session { session, .. } = &r else {
+                if !matches!(r, m::DesignRef::Session { .. }) {
                     return Err(RpcError::new("invalid_params", "only a session design moves to the workspace"));
-                };
+                }
                 // Found as every {session, slug} design is; its workspace is its session's.
                 let at = self.locate(&r).await?;
-                let workspace = self.sessions.session(session).map_err(internal)?.workspace_id.unwrap_or_default();
-                // No save, snapshot or restore of it meanwhile, as design.remove.
+                let workspace = self.workspace_of(&at);
+                // No save, snapshot, restore or comment of it meanwhile.
                 let pages = self.lock_of(&at, DesignLock::Pages);
                 let _pages = pages.lock().await;
                 let history = self.lock_of(&at, DesignLock::History);
                 let _history = history.lock().await;
+                let comments = self.lock_of(&at, DesignLock::Comments);
+                let _comments = comments.lock().await;
                 self.take_hand_edits(&at);
                 let (name, brief) = {
                     let (store, at) = (store.clone(), at.clone());
@@ -2857,7 +2859,7 @@ impl Daemon {
                 };
                 let (moved, ws) = (store.clone(), workspace.clone());
                 let slug = blocking(move || moved.adopt_session_design(&at, &ws, now_ms())).await?;
-                drop((_pages, _history));
+                drop((_pages, _history, _comments));
                 // Its own agent starts from the pages it has, as Use as a start's.
                 let intro = format!(
                     "This design was moved here from a session as the design \"{name}\": its pages are written already. Read them, then wait for what the user asks. Its brief was: {}",

@@ -4502,11 +4502,6 @@ async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, 
     (ws, project, session)
 }
 
-/// X65 entry 12: `design.create` with a session makes a session design in
-/// that session's worktree, under `docs/design/`, and starts no agent of its
-/// own; the design RPCs reach it by `{session, slug}`, its comments in the
-/// worktree's `.moonlet/design/`, and `design.list` gives it as a session
-/// design of its session and project.
 /// X104: **Move to workspace** from the app makes a session design a
 /// workspace design of its session's workspace and takes it out of the
 /// worktree; `design.list` then gives it as a workspace design and no
@@ -4539,6 +4534,8 @@ async fn a_session_design_moved_to_the_workspace_is_listed_there_and_no_longer_i
     let mut app = d.app().await;
     let missing = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": session.id, "slug": "nothing"})).await;
     assert!(missing.is_err(), "{missing:?}");
+    let gone = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": "nosession", "slug": "settings-page"})).await;
+    assert!(gone.as_ref().is_err_and(|e| e.to_string().starts_with("invalid_params")), "{gone:?}");
     let moved: String = app.request(methods::DESIGN_ADOPT, at).await.unwrap();
     assert_eq!(moved, "settings-page");
     assert!(!worktree.join("docs/design/settings-page").exists());
@@ -4552,8 +4549,23 @@ async fn a_session_design_moved_to_the_workspace_is_listed_there_and_no_longer_i
     assert_eq!(listed, [("settings-page".to_string(), "workspace".to_string())]);
     // Its own agent starts, told its pages are written already.
     assert!(list[0]["agent"].is_u64(), "{list}");
+    let user = until_contains(
+        {
+            let p = d.home.path().join(format!(".moonlet/design/{ws}/designs/settings-page/claude-user"));
+            move || std::fs::read_to_string(&p).unwrap_or_default()
+        },
+        "moved here from a session",
+    )
+    .await;
+    // Logged as the JSON line it was sent as, its quotes escaped.
+    assert!(user.contains(r#"as the design \"Settings page\": its pages are written already"#) && user.contains("Its brief was: From the agreed requirements"), "{user}");
 }
 
+/// X65 entry 12: `design.create` with a session makes a session design in
+/// that session's worktree, under `docs/design/`, and starts no agent of its
+/// own; the design RPCs reach it by `{session, slug}`, its comments in the
+/// worktree's `.moonlet/design/`, and `design.list` gives it as a session
+/// design of its session and project.
 #[tokio::test]
 async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and_slug() {
     let d = fake_claude_daemon(FAKE_CLAUDE).await;
