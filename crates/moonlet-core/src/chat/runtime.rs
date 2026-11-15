@@ -136,6 +136,11 @@ pub struct ChatManager {
     /// The models Claude Code offers, by Claude profile folder (`None` for
     /// the default one), as its last answer to `initialize` gave them (X105).
     models: Mutex<HashMap<Option<String>, Vec<ClaudeModel>>>,
+    /// When asking each profile's Claude for its models last gave nothing,
+    /// so a host that cannot answer is not asked on every open (X105).
+    models_failed: Mutex<HashMap<Option<String>, Instant>>,
+    /// One Claude at a time is started to ask for models (X105).
+    probing: tokio::sync::Mutex<()>,
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
     leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
@@ -190,6 +195,9 @@ const ASIDE_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long Claude may take to answer `initialize` with its models (X105).
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long after Claude gave no models it is not asked again (X105).
+const MODELS_RETRY: Duration = Duration::from_secs(60);
+
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
     ask.tool == tool.name && ask.input == tool.input
@@ -216,7 +224,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -1123,13 +1131,27 @@ impl ChatManager {
             _ => SessionLaunch::default(),
         };
         let profile = launch.env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
-        if let Some(known) = self.models.lock().unwrap().get(&profile) {
-            return known.clone();
+        let known = || -> Option<Vec<ClaudeModel>> {
+            if let Some(m) = self.models.lock().unwrap().get(&profile) {
+                return Some(m.clone());
+            }
+            let failed = self.models_failed.lock().unwrap().get(&profile).is_some_and(|at| at.elapsed() < MODELS_RETRY);
+            failed.then(Vec::new)
+        };
+        if let Some(m) = known() {
+            return m;
+        }
+        // An ask made while another Claude answers gets that answer.
+        let _one = self.probing.lock().await;
+        if let Some(m) = known() {
+            return m;
         }
         let mut env = self.terms.base_env().clone();
         env.extend(launch.env);
         let models = probe_models(&env).await.unwrap_or_default();
-        if !models.is_empty() {
+        if models.is_empty() {
+            self.models_failed.lock().unwrap().insert(profile, Instant::now());
+        } else {
             self.models.lock().unwrap().insert(profile, models.clone());
         }
         models
@@ -1455,8 +1477,16 @@ async fn probe_models(env: &BTreeMap<String, String>) -> Result<Vec<ClaudeModel>
         .kill_on_drop(true)
         .spawn()
         .context("failed to start claude")?;
-    // What it started too, such as MCP servers, ends with it.
-    let group = child.id().and_then(|p| i32::try_from(p).ok());
+    // What it started too, such as MCP servers, ends with it, on every way out.
+    struct Group(Option<i32>);
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0 {
+                unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+        }
+    }
+    let group = Group(child.id().and_then(|p| i32::try_from(p).ok()));
     let ask = serde_json::json!({"type": "control_request", "request_id": "models-1", "request": {"subtype": "initialize"}});
     let mut stdin = child.stdin.take().context("no stdin")?;
     stdin.write_all(format!("{ask}\n").as_bytes()).await?;
@@ -1474,9 +1504,8 @@ async fn probe_models(env: &BTreeMap<String, String>) -> Result<Vec<ClaudeModel>
     };
     let models = tokio::time::timeout(MODELS_TIMEOUT, answer).await.unwrap_or(Ok(vec![]));
     drop(stdin);
-    if let Some(pid) = group {
-        unsafe { libc::kill(-pid, libc::SIGKILL) };
-    }
+    // The group goes before Claude is reaped, while its id is still the group's.
+    drop(group);
     let _ = child.kill().await;
     models
 }

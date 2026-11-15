@@ -1051,7 +1051,8 @@ mod tests {
 
         // An older Claude Code that lists no models leaves the list empty.
         let mut st = ChatState::default();
-        a.on_line(INIT_REPLY.replace(r#""models":[{"value":"haiku","displayName":"Haiku"}],"#, "").as_str(), &mut st);
+        let outs = a.on_line(INIT_REPLY.replace(r#""models":[{"value":"haiku","displayName":"Haiku"}],"#, "").as_str(), &mut st);
+        assert!(outs.contains(&Out::State));
         assert!(st.models.is_empty());
     }
 

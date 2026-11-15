@@ -1299,13 +1299,17 @@ async fn claude_models_come_from_claude_codes_initialize_reply() {
     assert_eq!(models.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(), ["Opus in Work"]);
 }
 
-/// X105: a Claude that ends without answering gives no models, not an error.
+/// X105: a Claude that ends without answering gives no models, not an
+/// error, and is not started again for each ask within a minute.
 #[tokio::test]
 async fn claude_models_are_empty_when_claude_does_not_answer() {
-    let d = fake_claude_daemon("#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n").await;
+    let d = fake_claude_daemon("#!/bin/sh\necho started >> \"$HOME/claude-starts\"\necho 'Not logged in' >&2\nexit 1\n").await;
     let mut c = d.client().await;
-    let models: Vec<serde_json::Value> = c.request(methods::CLAUDE_MODELS, serde_json::json!({})).await.unwrap();
-    assert!(models.is_empty());
+    for _ in 0..3 {
+        let models: Vec<serde_json::Value> = c.request(methods::CLAUDE_MODELS, serde_json::json!({})).await.unwrap();
+        assert!(models.is_empty());
+    }
+    assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
 }
 
 const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
