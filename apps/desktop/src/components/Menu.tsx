@@ -240,3 +240,32 @@ export function Menu({
     </div>
   );
 }
+
+/** A right-click menu at the pointer (`at`), named `label` for assistive
+ *  tech; Esc, a click elsewhere or a resize closes it. `height`: how much
+ *  room it keeps below the pointer before the window's bottom. */
+export function ContextMenu({ at, label, items, onClose, height = 260 }: { at: { x: number; y: number }; label: string; items: MenuItem[]; onClose: () => void; height?: number }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", onClose);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onClose);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      role="menu"
+      aria-label={label}
+      className="fixed z-50 w-56 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+      style={{ left: Math.min(at.x, window.innerWidth - 234), top: Math.min(at.y, window.innerHeight - height) }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <MenuItems items={items} onClose={onClose} />
+    </div>,
+    document.body,
+  );
+}

@@ -4,7 +4,6 @@
 
 import { ArrowUpFromLine, Command, Lock, MessageSquare, Plus, Share2, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { designHostOf, designMembersOf, errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { copyLabel, ownerWorking, sessionDesignsAcross } from "../../lib/designCopies";
@@ -22,7 +21,7 @@ import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
 import { DesignsIndex } from "./DesignsIndex";
 import { ScrollArea } from "../ScrollArea";
-import { MenuItems, type MenuItem } from "../Menu";
+import { ContextMenu } from "../Menu";
 import { askConfirm } from "../../lib/confirm";
 import { designRowMenu } from "../../lib/designsIndex";
 
@@ -89,34 +88,6 @@ function Heading({ label, add, open }: { label: string; add?: { title: string; r
   );
 }
 
-/** A design row's right-click menu (X104), at the pointer; Esc, a click
- *  elsewhere or a resize closes it. */
-function DesignRowMenu({ at, items, onClose }: { at: { x: number; y: number }; items: MenuItem[]; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onClose);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("resize", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onClose);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onClose);
-    };
-  }, [onClose]);
-  return createPortal(
-    <div
-      role="menu"
-      aria-label="Design actions"
-      className="fixed z-50 w-56 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
-      style={{ left: Math.min(at.x, window.innerWidth - 234), top: Math.min(at.y, window.innerHeight - 80) }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <MenuItems items={items} onClose={onClose} />
-    </div>,
-    document.body,
-  );
-}
-
 /** **Move to workspace** of a session design's row (X104): asked first,
  *  then made on the host its session runs on. */
 async function moveRow(on: string, ws: { host: string; id: string }, d: Design) {
@@ -142,7 +113,7 @@ export function DesignSidebar() {
   const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
   // The row right-clicked, and where (X104).
-  const [menu, setMenu] = useState<{ x: number; y: number; on: string; design: Design } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; on: string; design: Design; label: string } | null>(null);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <nav className="px-2">
@@ -211,9 +182,10 @@ export function DesignSidebar() {
                 title={session ? "Its pages live in the session's branch; this opens the session" : undefined}
                 onClick={() => ws && (session ? void openSessionDesign(on, ws.id, session, d.slug, true) : showDesign(ws.host, ws.id, d.slug))}
                 onContextMenu={(ev) => {
-                  if (!designRowMenu(d, undefined)) return;
+                  const offered = designRowMenu(d, undefined);
+                  if (!offered) return;
                   ev.preventDefault();
-                  setMenu({ x: ev.clientX, y: ev.clientY, on, design: d });
+                  setMenu({ x: ev.clientX, y: ev.clientY, on, design: d, label: offered.label });
                 }}
                 className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
               >
@@ -260,10 +232,12 @@ export function DesignSidebar() {
         )}
       </ScrollArea>
       {menu && ws && (
-        <DesignRowMenu
+        <ContextMenu
           at={menu}
+          label="Design actions"
+          height={80}
           onClose={() => setMenu(null)}
-          items={[{ label: "Move to workspace", icon: <ArrowUpFromLine size={14} />, onSelect: () => void moveRow(menu.on, ws, menu.design) }]}
+          items={[{ label: menu.label, icon: <ArrowUpFromLine size={14} />, onSelect: () => void moveRow(menu.on, ws, menu.design) }]}
         />
       )}
     </div>

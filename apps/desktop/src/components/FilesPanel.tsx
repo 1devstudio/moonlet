@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ChevronDown, Copy, Eye, EyeOff, FilePlus, FolderPlus, Pencil, Plus, SquareTerminal, Trash2 } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type DirEntry, type FsDuplicated, type Session } from "../lib/protocol";
@@ -11,7 +10,7 @@ import { isUnder, movedPath } from "../lib/layout";
 import { entryOpenIn, openInChoices, syncedOpenIn, type OpenTarget } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { FileIcon } from "./FileIcon";
-import { Menu, MenuItems, type MenuItem } from "./Menu";
+import { ContextMenu, Menu, type MenuItem } from "./Menu";
 import { IconButton, cx } from "./ui";
 import { ScrollArea } from "./ScrollArea";
 
@@ -297,32 +296,6 @@ function Dir({ path, depth, tree }: { path: string; depth: number; tree: Tree })
 }
 
 /** The right-click menu of a row, or of the panel's empty space, at the pointer (X98). */
-function EntryMenu({ at, items, onClose }: { at: { x: number; y: number }; items: MenuItem[]; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onClose);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("resize", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onClose);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onClose);
-    };
-  }, [onClose]);
-  return createPortal(
-    <div
-      role="menu"
-      aria-label="File actions"
-      className="fixed z-50 w-56 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
-      style={{ left: Math.min(at.x, window.innerWidth - 234), top: Math.min(at.y, window.innerHeight - 260) }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <MenuItems items={items} onClose={onClose} />
-    </div>,
-    document.body,
-  );
-}
-
 export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
   const [showIgnored, setShowIgnored] = useState(false);
   const version = useStore((s) => s.fsVersion[hostPath(host, ws.path)] ?? 0);
@@ -409,7 +382,7 @@ export function FilesPanel({ host, ws }: { host: string; ws: Session }) {
           <Dir path={ws.path} depth={0} tree={tree} />
         </div>
       </ScrollArea>
-      {menu && <EntryMenu at={menu} items={entryItems(menu.entry, tree)} onClose={closeMenu} />}
+      {menu && <ContextMenu at={menu} label="File actions" items={entryItems(menu.entry, tree)} onClose={closeMenu} />}
     </div>
   );
 }
