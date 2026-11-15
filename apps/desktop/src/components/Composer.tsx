@@ -7,7 +7,7 @@ import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, or
 import { pasteLookup, typedTask } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
 import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
-import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
+import { M, type ClaudeModel, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, hostWorkspaces, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { syncOffered } from "../lib/sync";
 import { declineSync, keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
@@ -16,7 +16,8 @@ import { useCloud } from "../lib/cloudStore";
 import type { CloudInfo } from "../lib/protocol";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
-import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
+import { EFFORTS, type ModelChoice, agentEfforts, claudeModelLabel, effortAfter, modelMenu, resolveMode } from "../lib/agents";
+import { useClaudeModels } from "../lib/claudeModelsStore";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
 import { Markdown } from "./AgentView";
@@ -236,7 +237,32 @@ function Opt({ checked, onClick, children }: { checked: boolean; onClick: () => 
 }
 
 /** Agent · model · effort in one compact panel above the footer. */
-function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents: string[]; choice: Choice; onChange: (c: Choice) => void; label: string; effortLabel?: string }) {
+/** The older models under More models (X105), opened by hovering or clicking its row. The list
+ * opens beside the whole panel, not over the Effort column, so it is not
+ * positioned against its row and stays open until the panel closes. */
+function MoreModels({ items, chosen, onPick }: { items: ModelChoice[]; chosen: string | null; onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-[6px] text-left ui-text-14 hover:bg-hover", open && "bg-hover")} onMouseEnter={() => setOpen(true)} onClick={() => setOpen(true)}>
+        <span className="flex-1">More models</span>
+        {items.some((m) => m.id === chosen) && <Check size={13} />}
+        <ChevronRight size={13} className="text-muted" />
+      </button>
+      {open && (
+        <div className="absolute bottom-0 left-full ml-1 max-h-[320px] min-w-[150px] overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+          {items.map((m) => (
+            <Opt key={m.id} checked={chosen === m.id} onClick={() => onPick(m.id)}>
+              {m.label}
+            </Opt>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ModelPicker({ agents, choice, onChange, label, effortLabel, models }: { agents: string[]; choice: Choice; onChange: (c: Choice) => void; label: string; effortLabel?: string; models: ClaudeModel[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -245,7 +271,9 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents:
     window.addEventListener("mousedown", down, true);
     return () => window.removeEventListener("mousedown", down, true);
   }, [open]);
-  const efforts = EFFORTS.filter((e) => choice.agent === "claude" || ["low", "medium", "high"].includes(e.id));
+  const efforts = agentEfforts(choice.agent, models, choice.model);
+  const menu = modelMenu(models);
+  const pickModel = (id: string) => onChange({ ...choice, model: id, effort: effortAfter(models, id, choice.effort) });
   return (
     <div ref={ref} className="relative">
       <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 ui-text-14 hover:bg-hover" onClick={() => setOpen(!open)}>
@@ -278,14 +306,15 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel }: { agents:
           </Column>
           {choice.agent === "claude" && (
             <Column title="Model">
-              {CLAUDE_MODELS.map((m) => (
-                <Opt key={m.id} checked={choice.model === m.id} onClick={() => onChange({ ...choice, model: m.id })}>
+              {menu.latest.map((m) => (
+                <Opt key={m.id} checked={choice.model === m.id} onClick={() => pickModel(m.id)}>
                   {m.label}
                 </Opt>
               ))}
+              {menu.more.length > 0 && <MoreModels items={menu.more} chosen={choice.model} onPick={pickModel} />}
             </Column>
           )}
-          {(choice.agent === "claude" || choice.agent === "codex") && (
+          {(choice.agent === "claude" || choice.agent === "codex") && efforts.length > 0 && (
             <Column title="Effort">
               {efforts.map((e) => (
                 <Opt key={e.id} checked={choice.effort === e.id} onClick={() => onChange({ ...choice, effort: e.id })}>
@@ -515,11 +544,21 @@ export function Composer({
   }, [task, worktree, current?.host]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
+  // The models Claude Code offers in the target workspace's profile (X105).
+  const claudeModels = useClaudeModels(current?.host, current ? workspaceFor(current.host) : undefined);
+  // A saved effort the model turns out not to support, once its list arrives (X105).
+  useEffect(() => {
+    if (!claudeModels.length || choice.agent !== "claude" || !choice.model) return;
+    const effort = effortAfter(claudeModels, choice.model, choice.effort);
+    if (effort !== choice.effort) setAndSave({ ...choice, effort });
+  }, [claudeModels, choice.agent, choice.model]); // eslint-disable-line react-hooks/exhaustive-deps
   const modelLabel =
     choice.agent === "none"
       ? "Terminal only"
       : choice.agent === "claude"
-        ? (CLAUDE_MODELS.find((m) => m.id === choice.model)?.label ?? "Claude")
+        ? choice.model
+          ? claudeModelLabel(claudeModels, choice.model)
+          : "Claude"
         : choice.model
           ? `${choice.agent} · ${choice.model}`
           : choice.agent;
@@ -927,7 +966,7 @@ export function Composer({
           />
         </div>
         <div className="flex items-center gap-2.5 px-5 pb-4">
-          <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} />
+          <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} models={claudeModels} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />
           <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />

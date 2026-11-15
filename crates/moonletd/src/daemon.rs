@@ -6568,6 +6568,10 @@ impl Daemon {
                 self.terminals.emit(Message::event(m::EV_GIT_SETTINGS_CHANGED, &saved));
                 ok(saved)
             }
+            m::CLAUDE_MODELS => {
+                let r: m::ClaudeModels = params(p)?;
+                ok(self.chats.claude_models(r.workspace.as_deref()).await)
+            }
             m::CLAUDE_SETTINGS => ok(moonlet_core::claude_settings::load(&moonlet_core::claude_settings::path())),
             m::CLAUDE_SET_SETTINGS => {
                 let saved = moonlet_core::claude_settings::update(&moonlet_core::claude_settings::path(), p).map_err(internal)?;

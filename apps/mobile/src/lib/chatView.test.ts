@@ -44,7 +44,14 @@ describe("sessionLine", () => {
 describe("chatFooter", () => {
   it("shows the context used, the cost, model and effort, and the mode", () => {
     const st = { ...chat([]), cost_usd: 1.837, model: "opus", effort: "high", mode: "manual", context: { used: 68_000, max: 200_000, categories: [] } };
-    expect(chatFooter(st)).toEqual({ context: 34, cost: "$1.84", model: "Opus 5.5 · High", mode: "Manual" });
+    expect(chatFooter(st)).toEqual({ context: 34, cost: "$1.84", model: "Opus · High", mode: "Manual" });
+  });
+
+  it("names the model by the chat's list (X105)", () => {
+    const models = [{ value: "fable", label: "Fable 5.2", description: "For your toughest challenges", resolved: "claude-fable-5-2", efforts: ["low", "high"] }];
+    expect(chatFooter({ ...chat([]), model: "fable", effort: "high", models }).model).toBe("Fable 5.2 · High");
+    // Before Claude has said, an alias has no version.
+    expect(chatFooter({ ...chat([]), model: "fable", effort: "high" }).model).toBe("Fable · High");
   });
 
   it("leaves out what the agent has not said yet", () => {

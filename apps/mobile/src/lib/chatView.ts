@@ -1,6 +1,6 @@
 // The session screen's header and Chat tab (X40).
 
-import { CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS } from "@desktop/lib/agents";
+import { CLAUDE_MODES, DEFAULT_MODE, EFFORTS, claudeModelLabel } from "@desktop/lib/agents";
 import { type ChatBlock, contextView } from "@desktop/lib/chat";
 import type { ChatState, Project, QueuedMessage, Session, TerminalInfo } from "@desktop/lib/protocol";
 import { sendNowLabel, sendNowParams, unqueued } from "@desktop/lib/queued";
@@ -37,7 +37,7 @@ export interface ChatFooter {
 }
 
 export function chatFooter(st: ChatSummary): ChatFooter {
-  const model = st.model ? (CLAUDE_MODELS.find((m) => m.id === st.model)?.label ?? st.model) : "Default model";
+  const model = st.model ? claudeModelLabel(st.models, st.model) : "Default model";
   const effort = EFFORTS.find((e) => e.id === st.effort)?.label;
   return {
     context: st.context ? contextView(st.context).percent : null,

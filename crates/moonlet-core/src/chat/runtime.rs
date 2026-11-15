@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{self, ChatItemEvent, ChatStateEvent};
-use moonlet_proto::types::{AgentState, ArchivedChat, AsideAnswer, ChatImage, ChatState, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
+use moonlet_proto::types::{AgentState, ArchivedChat, AsideAnswer, ChatImage, ChatState, ClaudeModel, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -82,6 +82,9 @@ struct Inner {
     /// Whether the agent is frozen (SIGSTOP) while the Mac sleeps or its
     /// session moves (X73): it does not rest until it thaws (X84).
     frozen: bool,
+    /// The Claude profile folder the agent runs in, from its environment
+    /// (`None` for the default one): whose models it lists (X105).
+    profile: Option<String>,
 }
 
 struct Chat {
@@ -133,6 +136,14 @@ pub struct ChatManager {
     stopping: std::sync::atomic::AtomicBool,
     /// How long, in milliseconds, an agent stays idle before it rests (X84).
     rest_after: std::sync::atomic::AtomicU64,
+    /// The models Claude Code offers, by Claude profile folder (`None` for
+    /// the default one), as its last answer to `initialize` gave them (X105).
+    models: Mutex<HashMap<Option<String>, Vec<ClaudeModel>>>,
+    /// When asking each profile's Claude for its models last gave nothing,
+    /// so a host that cannot answer is not asked on every open (X105).
+    models_failed: Mutex<HashMap<Option<String>, Instant>>,
+    /// One Claude at a time is started to ask for models (X105).
+    probing: tokio::sync::Mutex<()>,
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
     leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
@@ -184,6 +195,12 @@ const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 /// How long an aside may take before moonlet gives up on it (X49).
 const ASIDE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long Claude may take to answer `initialize` with its models (X105).
+const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long after Claude gave no models it is not asked again (X105).
+const MODELS_RETRY: Duration = Duration::from_secs(60);
+
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
     ask.tool == tool.name && ask.input == tool.input
@@ -210,7 +227,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -304,6 +321,7 @@ impl ChatManager {
                 dirty: true,
                 active_at: now_ms(),
                 frozen: false,
+                profile: None,
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
@@ -739,6 +757,7 @@ impl ChatManager {
                 dirty: true,
                 active_at: now_ms(),
                 frozen: false,
+                profile: None,
             }),
         });
         self.chats.lock().unwrap().insert(chat.id, chat.clone());
@@ -1108,6 +1127,41 @@ impl ChatManager {
         env
     }
 
+    /// The models Claude Code offers in `workspace`'s Claude profile (X105),
+    /// as a chat in that profile last reported them, else from a Claude
+    /// started only to answer `initialize`. Empty when it cannot say.
+    pub async fn claude_models(&self, workspace: Option<&str>) -> Vec<ClaudeModel> {
+        let launch = match (workspace, self.session_env.get()) {
+            (Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
+            _ => SessionLaunch::default(),
+        };
+        let mut env = self.terms.base_env().clone();
+        env.extend(launch.env);
+        let profile = env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+        let known = || -> Option<Vec<ClaudeModel>> {
+            if let Some(m) = self.models.lock().unwrap().get(&profile) {
+                return Some(m.clone());
+            }
+            let failed = self.models_failed.lock().unwrap().get(&profile).is_some_and(|at| at.elapsed() < MODELS_RETRY);
+            failed.then(Vec::new)
+        };
+        if let Some(m) = known() {
+            return m;
+        }
+        // An ask made while another Claude answers gets that answer.
+        let _one = self.probing.lock().await;
+        if let Some(m) = known() {
+            return m;
+        }
+        let models = probe_models(&env).await.unwrap_or_default();
+        if models.is_empty() {
+            self.models_failed.lock().unwrap().insert(profile, Instant::now());
+        } else {
+            self.models.lock().unwrap().insert(profile, models.clone());
+        }
+        models
+    }
+
     /// Answers a side question from the chat's conversation in a separate,
     /// tool-less Claude, leaving the chat as it is (X49).
     pub async fn aside(&self, id: TerminalId, question: &str) -> Result<AsideAnswer> {
@@ -1159,6 +1213,7 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let env = self.agent_env(chat.id, inner, launch.env);
+        inner.profile = env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
         require_folder(&cfg.cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
@@ -1356,6 +1411,11 @@ impl ChatManager {
                     self.terms.emit(Message::event(methods::EV_CHAT_ITEM, ChatItemEvent { id: chat.id, item: *item }));
                 }
                 Out::State => state_changed = true,
+                // A chat's Claude refreshes its profile's models (X105).
+                Out::Models if !inner.state.models.is_empty() => {
+                    self.models.lock().unwrap().insert(inner.profile.clone(), inner.state.models.clone());
+                }
+                Out::Models => {}
             }
         }
         if state_changed {
@@ -1402,6 +1462,56 @@ fn require_folder(cwd: &str) -> Result<()> {
         bail!("This session's folder no longer exists: {cwd}");
     }
     Ok(())
+}
+
+/// Starts `claude` only to ask it `initialize`, and gives the models of its
+/// answer (X105). No message is sent, so no conversation is made.
+async fn probe_models(env: &BTreeMap<String, String>) -> Result<Vec<ClaudeModel>> {
+    let exe = crate::paths::find_program("claude", env).context("claude not found on PATH")?;
+    let cwd = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
+    let mut child = tokio::process::Command::new(&exe)
+        .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
+        .current_dir(&cwd)
+        .env_clear()
+        .envs(env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to start claude")?;
+    // What it started too, such as MCP servers, ends with it, on every way out.
+    struct Group(Option<i32>);
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0 {
+                unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+        }
+    }
+    let group = Group(child.id().and_then(|p| i32::try_from(p).ok()));
+    let ask = serde_json::json!({"type": "control_request", "request_id": "models-1", "request": {"subtype": "initialize"}});
+    let mut stdin = child.stdin.take().context("no stdin")?;
+    stdin.write_all(format!("{ask}\n").as_bytes()).await?;
+    stdin.flush().await?;
+    let mut lines = BufReader::new(child.stdout.take().context("no stdout")?).lines();
+    let answer = async {
+        while let Some(line) = lines.next_line().await? {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+            let r = &v["response"];
+            if v["type"] == "control_response" && r["request_id"] == "models-1" {
+                return Ok(super::claude::models(&r["response"]));
+            }
+        }
+        anyhow::Ok(vec![])
+    };
+    let models = tokio::time::timeout(MODELS_TIMEOUT, answer).await.unwrap_or(Ok(vec![]));
+    drop(stdin);
+    // The group goes before Claude is reaped, while its id is still the group's.
+    drop(group);
+    let _ = child.kill().await;
+    models
 }
 
 #[cfg(test)]
@@ -1532,6 +1642,42 @@ done
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("timed out: {:?}", chats.state(id).unwrap());
+    }
+
+    /// X105: a fake `claude` that answers `initialize` with one model named
+    /// after who asked (a chat or the models probe) and its profile.
+    const MODELS_CLAUDE: &str = r#"#!/bin/sh
+case "$*" in *--permission-prompt-tool*) who=Chat ;; *) who=Probe ;; esac
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[],"models":[{"value":"opus","displayName":"%s %s"}]}}}\n' "$id" "$who" "${CLAUDE_CONFIG_DIR:-default}" ;;
+  esac
+done
+"#;
+
+    /// X105: a chat's Claude gives its profile the models it lists, under the
+    /// profile it really runs in, so the Composer needs no probe.
+    #[tokio::test]
+    async fn a_chats_claude_gives_its_profile_the_models_it_lists() {
+        let (dir, _terms, chats) = setup().await;
+        std::fs::write(dir.path().join("bin/claude"), MODELS_CLAUDE).unwrap();
+        let cwd = dir.path().display().to_string();
+        let label = |m: Vec<ClaudeModel>| m.into_iter().map(|m| m.label).collect::<Vec<_>>();
+
+        let plain = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, plain.id, |s| !s.models.is_empty()).await;
+        assert_eq!(label(chats.claude_models(None).await), ["Chat default"]);
+
+        // A chat started in another profile through its own environment
+        // leaves the default profile's list as it is.
+        let work = dir.path().join("work").display().to_string();
+        let env = BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), work.clone())]);
+        let other = chats.create(ChatCreate { cwd, agent: "claude".into(), env, ..Default::default() }).unwrap();
+        let st = wait_for(&chats, other.id, |s| !s.models.is_empty()).await;
+        assert_eq!(label(st.models), [format!("Chat {work}")]);
+        assert_eq!(label(chats.claude_models(None).await), ["Chat default"]);
     }
 
     #[tokio::test]

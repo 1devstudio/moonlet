@@ -1261,6 +1261,57 @@ async fn fake_claude_daemon_with(script: &str, env: Vec<(String, String)>) -> Ho
     HomeDaemon::start_with(home, Some(&path), env).await
 }
 
+/// X105: a fake `claude` that answers `initialize` with one model, named
+/// after the profile folder it runs in, and then waits as Claude does.
+const MODELS_CLAUDE: &str = r#"#!/bin/sh
+read line
+id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+case "$CLAUDE_CONFIG_DIR" in
+  */claude-work) m='{"value":"opus","displayName":"Opus in Work","resolvedModel":"claude-opus-5-5"}' ;;
+  *) m='{"value":"fable","displayName":"Fable 5.2","description":"For your toughest challenges","resolvedModel":"claude-fable-5-2","supportsEffort":true,"supportedEffortLevels":["low","high"]}' ;;
+esac
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[],"models":[%s]}}}\n' "$id" "$m"
+sleep 20
+"#;
+
+/// X105: the models come from Claude Code's answer to `initialize`, in the
+/// workspace's Claude profile.
+#[tokio::test]
+async fn claude_models_come_from_claude_codes_initialize_reply() {
+    use moonlet_proto::types::{ClaudeModel, ClaudeProfile, Workspace};
+    let d = fake_claude_daemon(MODELS_CLAUDE).await;
+    let mut c = d.client().await;
+    let models: Vec<ClaudeModel> = c.request(methods::CLAUDE_MODELS, serde_json::json!({})).await.unwrap();
+    assert_eq!(
+        models,
+        [ClaudeModel {
+            value: "fable".into(),
+            label: "Fable 5.2".into(),
+            description: "For your toughest challenges".into(),
+            resolved: "claude-fable-5-2".into(),
+            efforts: vec!["low".into(), "high".into()],
+        }]
+    );
+
+    let p: ClaudeProfile = c.request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")})).await.unwrap();
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme", "color": "blue", "claude_profile": p.id})).await.unwrap();
+    let models: Vec<ClaudeModel> = c.request(methods::CLAUDE_MODELS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    assert_eq!(models.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(), ["Opus in Work"]);
+}
+
+/// X105: a Claude that ends without answering gives no models, not an
+/// error, and is not started again for each ask within a minute.
+#[tokio::test]
+async fn claude_models_are_empty_when_claude_does_not_answer() {
+    let d = fake_claude_daemon("#!/bin/sh\necho started >> \"$HOME/claude-starts\"\necho 'Not logged in' >&2\nexit 1\n").await;
+    let mut c = d.client().await;
+    for _ in 0..3 {
+        let models: Vec<serde_json::Value> = c.request(methods::CLAUDE_MODELS, serde_json::json!({})).await.unwrap();
+        assert!(models.is_empty());
+    }
+    assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
+}
+
 const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
 
 /// X33: a profile gets moonlet's hooks in its own folder; it can be renamed;
