@@ -2,14 +2,15 @@
 // (a design system's view or a design's screen), and the New design system
 // dialog (X64).
 
-import { Command, Lock, MessageSquare, Plus, Share2, SwatchBook } from "lucide-react";
+import { ArrowUpFromLine, Command, Lock, MessageSquare, Plus, Share2, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { designHostOf, designMembersOf, errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { copyLabel, ownerWorking, sessionDesignsAcross } from "../../lib/designCopies";
-import { type DesignCover } from "../../lib/protocol";
+import { type Design, type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownDesignPlace, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, createSystem, designsOf, moveToWorkspace, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownDesignPlace, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { LIBRARY, sourcesByWorkspace } from "../../lib/designLibrary";
 import { projectsOfWorkspace } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
@@ -21,6 +22,9 @@ import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
 import { DesignsIndex } from "./DesignsIndex";
 import { ScrollArea } from "../ScrollArea";
+import { MenuItems, type MenuItem } from "../Menu";
+import { askConfirm } from "../../lib/confirm";
+import { designRowMenu } from "../../lib/designsIndex";
 
 /** The shown workspace, its design systems and designs, and the ones shown;
  * `load` lists them when the workspace is shown (the sidebar does, so a
@@ -85,6 +89,44 @@ function Heading({ label, add, open }: { label: string; add?: { title: string; r
   );
 }
 
+/** A design row's right-click menu (X104), at the pointer; Esc, a click
+ *  elsewhere or a resize closes it. */
+function DesignRowMenu({ at, items, onClose }: { at: { x: number; y: number }; items: MenuItem[]; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", onClose);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onClose);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      role="menu"
+      aria-label="Design actions"
+      className="fixed z-50 w-56 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+      style={{ left: Math.min(at.x, window.innerWidth - 234), top: Math.min(at.y, window.innerHeight - 80) }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <MenuItems items={items} onClose={onClose} />
+    </div>,
+    document.body,
+  );
+}
+
+/** **Move to workspace** of a session design's row (X104): asked first,
+ *  then made on the host its session runs on. */
+async function moveRow(on: string, ws: { host: string; id: string }, d: Design) {
+  const worktree = useStore.getState().sessions[on]?.find((s) => s.id === d.session)?.path;
+  const menu = designRowMenu(d, worktree);
+  if (!menu || !d.session) return;
+  if (!(await askConfirm(menu.confirm))) return;
+  await moveToWorkspace(on, ws.host, ws.id, d.session, d.slug).catch(errorToast);
+}
+
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
   const { ws, systems, shown, designs: own, inSessions, design, place, shared, indexed } = useWorkspaceDesign(true);
@@ -99,6 +141,8 @@ export function DesignSidebar() {
   const now = useNow(true);
   const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
+  // The row right-clicked, and where (X104).
+  const [menu, setMenu] = useState<{ x: number; y: number; on: string; design: Design } | null>(null);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <nav className="px-2">
@@ -166,6 +210,11 @@ export function DesignSidebar() {
                 aria-current={current ? "page" : undefined}
                 title={session ? "Its pages live in the session's branch; this opens the session" : undefined}
                 onClick={() => ws && (session ? void openSessionDesign(on, ws.id, session, d.slug, true) : showDesign(ws.host, ws.id, d.slug))}
+                onContextMenu={(ev) => {
+                  if (!designRowMenu(d, undefined)) return;
+                  ev.preventDefault();
+                  setMenu({ x: ev.clientX, y: ev.clientY, on, design: d });
+                }}
                 className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
@@ -210,6 +259,13 @@ export function DesignSidebar() {
           </>
         )}
       </ScrollArea>
+      {menu && ws && (
+        <DesignRowMenu
+          at={menu}
+          onClose={() => setMenu(null)}
+          items={[{ label: "Move to workspace", icon: <ArrowUpFromLine size={14} />, onSelect: () => void moveRow(menu.on, ws, menu.design) }]}
+        />
+      )}
     </div>
   );
 }

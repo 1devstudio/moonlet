@@ -365,6 +365,16 @@ export async function unshareDesign(host: string, workspace: string, slug: strin
   showDesign(host, workspace, moved);
 }
 
+/** **Move to workspace** (X104): makes session `session`'s design a
+ *  workspace design of `workspace` on `on`, the host the session runs on,
+ *  and takes it out of the session. Shown when `on` is the host the
+ *  sidebar shows (`shown`); another member's lists it once copied (X71). */
+export async function moveToWorkspace(on: string, shown: string, workspace: string, session: string, slug: string): Promise<void> {
+  const moved = await rpc<string>(on, M.designAdopt, { session, slug });
+  await loadDesigns(on, workspace, true);
+  if (on === shown) showDesign(on, workspace, moved);
+}
+
 /** The visual editor's say over a page changed on disk: true when it
  *  takes the change, deciding itself whether the page loads again. */
 export type PageOwner = (host: string, place: DesignPlace, slug: string, page: string) => boolean;

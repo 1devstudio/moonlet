@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design } from "./protocol";
-import { designsIndex } from "./designsIndex";
+import { designRowMenu, designsIndex } from "./designsIndex";
 
 const design = (over: Partial<Design>): Design => ({
   slug: "settings-page",
@@ -144,5 +144,26 @@ describe("designsIndex's shared designs (X95)", () => {
         },
       ],
     });
+  });
+});
+
+describe("designRowMenu (X104 Move to workspace)", () => {
+  const worktree = "/Users/alex/.moonlet/worktrees/moonlet/settings-page";
+  const inSession = design({ kind: "session", session: "s7", project: "p-moon", path: `${worktree}/docs/design/settings-page` });
+
+  it("offers Move to workspace for a session design's row and no menu for a workspace design's", () => {
+    expect(designRowMenu(inSession, worktree)?.label).toBe("Move to workspace");
+    expect(designRowMenu(design({}), worktree)).toBeNull();
+    expect(designRowMenu(design({ shared: true }), worktree)).toBeNull();
+  });
+
+  it("says a design kept in the worktree is deleted from it when moved", () => {
+    expect(designRowMenu(inSession, worktree)?.confirm).toEqual({
+      title: "Move Settings page to the workspace?",
+      message: "It leaves the session: its folder is deleted from the session's worktree, a change you commit with the branch.",
+      action: "Move",
+    });
+    const kept = design({ kind: "session", session: "s7", path: "/Users/alex/.moonlet/design/.sessions/s7/designs/settings-page" });
+    expect(designRowMenu(kept, worktree)?.confirm.message).toBe("It leaves the session.");
   });
 });
