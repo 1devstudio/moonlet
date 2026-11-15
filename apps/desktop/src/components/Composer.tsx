@@ -546,6 +546,12 @@ export function Composer({
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   // The models Claude Code offers in the target workspace's profile (X105).
   const claudeModels = useClaudeModels(current?.host, current ? workspaceFor(current.host) : undefined);
+  // A saved effort the model turns out not to support, once its list arrives (X105).
+  useEffect(() => {
+    if (!claudeModels.length || choice.agent !== "claude" || !choice.model) return;
+    const effort = effortAfter(claudeModels, choice.model, choice.effort);
+    if (effort !== choice.effort) setAndSave({ ...choice, effort });
+  }, [claudeModels, choice.agent, choice.model]); // eslint-disable-line react-hooks/exhaustive-deps
   const modelLabel =
     choice.agent === "none"
       ? "Terminal only"

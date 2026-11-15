@@ -188,6 +188,10 @@ export function NewSessionScreen() {
   const choice = choices[Math.min(pick, choices.length - 1)];
   // The models Claude Code offers in the chosen workspace's profile (X105).
   const models = useClaudeModels(choice?.host, choice?.workspaceId);
+  // A chosen effort the model turns out not to support, once its list arrives.
+  useEffect(() => {
+    if (models.length) setEffort((e) => effortAfter(models, model, e));
+  }, [models, model]);
   // The task's project on its host is picked once, as the Mac's composer does.
   const presetKey = preset ? `${fromBoard!.key} ${preset.key}` : null;
   useEffect(() => {
@@ -417,15 +421,18 @@ export function NewSessionScreen() {
       {picker === "model" && (
         <Sheet label="Model" onClose={() => setPicker(null)}>
           <div className="eyebrow px-5 pt-1">Model</div>
-          <div className="px-2">
-            <ModelChoices models={models} current={model} onPick={(m) => (setModel(m), setEffort(effortAfter(models, m, effort)))} />
+          {/* One scroll for every model and the efforts, as the chat's sheet has (X105). */}
+          <div className="scroll flex min-h-0 flex-col">
+            <div className="px-2">
+              <ModelChoices models={models} current={model} onPick={(m) => (setModel(m), setEffort(effortAfter(models, m, effort)))} />
+            </div>
+            {efforts.length > 0 && (
+              <>
+                <div className="eyebrow px-5">Effort</div>
+                <Choices items={efforts} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
+              </>
+            )}
           </div>
-          {efforts.length > 0 && (
-            <>
-              <div className="eyebrow px-5">Effort</div>
-              <Choices items={efforts} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
-            </>
-          )}
         </Sheet>
       )}
       {picker === "source" && choice && (
