@@ -984,6 +984,15 @@ describe("shared designs (X95)", () => {
     expect(shownDesignPlace(useDesign.getState(), "local", "w-1devstudio")).toBe("w-1devstudio");
   });
 
+  it("Move to workspace of a session on another member moves it there and leaves the design shown here as it was", async () => {
+    answers["design.adopt"] = () => "settings-page";
+    answers["design.list"] = () => [design({ slug: "settings-page", name: "Settings page" })];
+    await moveToWorkspace("studio-mini", "local", "w-1devstudio", "s7", "settings-page");
+    expect(calls.find((c) => c.method === "design.adopt")).toEqual(expect.objectContaining({ host: "studio-mini", params: { session: "s7", slug: "settings-page" } }));
+    expect(designsOf(useDesign.getState(), "studio-mini", "w-1devstudio")?.map((d) => d.name)).toEqual(["Settings page"]);
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
+  });
+
   it("opens a shared design in the workspace shown, never in a workspace named library", async () => {
     const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
     useStore.setState({
