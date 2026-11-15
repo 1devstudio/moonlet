@@ -452,7 +452,10 @@ impl Store {
             let to = self.workspace_design(workspace, &slug)?;
             // One whose comments cannot be written is not made at all.
             if let Err(e) = fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments) {
-                let _ = self.remove_design(&to);
+                // One left behind is said, so it is never taken for a move.
+                if let Err(left) = self.remove_design(&to) {
+                    return Err(e.context(format!("cannot write its comments, nor remove {} again: {left:#}", to.folder().display())));
+                }
                 return Err(e.context("cannot write its comments"));
             }
         }
@@ -1449,6 +1452,38 @@ created_at = 1761200000000
         assert!(wt.join("docs/design/pricing/design.toml").is_file());
         assert!(wt.join(".moonlet/design/pricing/comments.json").is_dir());
         assert!(!home.path().join("design/w1/designs/pricing").exists());
+    }
+
+    /// X104: a moved design whose comments cannot be written in the
+    /// workspace is not made there: the move is refused, the workspace has
+    /// no design of that name, and the session design stays.
+    #[test]
+    fn a_session_design_whose_comments_cannot_be_written_in_the_workspace_is_not_made_there() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let at = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Pricing", "b", 1).unwrap();
+        std::fs::write(wt.join(".moonlet/design/pricing/comments.json"), "[{\"id\":1}]\n").unwrap();
+        // Making the design writes its empty comments first; the copy is the second write.
+        let target = home.path().join("design/w1/designs/pricing/comments.json");
+        let mut writes = 0;
+        fsx::BEFORE_WRITE.set(Some(Box::new(move |p| {
+            if p == target {
+                writes += 1;
+                if writes == 2 {
+                    bail!("disk full");
+                }
+            }
+            Ok(())
+        })));
+        let moved = store.adopt_session_design(&at, "w1", 2);
+        fsx::BEFORE_WRITE.set(None);
+
+        assert!(moved.is_err());
+        assert!(!home.path().join("design/w1/designs/pricing").exists());
+        assert!(wt.join("docs/design/pricing/design.toml").is_file());
+        assert_eq!(std::fs::read_to_string(wt.join(".moonlet/design/pricing/comments.json")).unwrap(), "[{\"id\":1}]\n");
     }
 
     /// X104: a session design whose design system is gone cannot be a
