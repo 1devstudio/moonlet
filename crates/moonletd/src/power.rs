@@ -30,6 +30,14 @@ pub struct Frozen<'a> {
     pub slept_at: Option<u64>,
 }
 
+impl Frozen<'_> {
+    /// Whether its session is still this member `me`'s as far as it knows:
+    /// it owns it, and the central host did not answer it took it.
+    fn still_mine(&self, taken: &std::collections::HashSet<String>, me: &str) -> bool {
+        self.owner == Some(me) && !taken.contains(self.session)
+    }
+}
+
 /// The frozen chats that go on at wake (X73): those of a session this
 /// member `me` still owns at the `epoch` it had as the Mac slept, and that
 /// the central host did not answer it took (`taken`), even when the news
@@ -42,7 +50,7 @@ pub fn to_thaw(
 ) -> Vec<moonlet_proto::TerminalId> {
     frozen
         .iter()
-        .filter(|f| f.owner == Some(me) && !taken.contains(f.session))
+        .filter(|f| f.still_mine(taken, me))
         .filter(|f| f.slept_at.is_none_or(|e| e == f.epoch))
         .map(|f| f.chat)
         .collect()
@@ -59,7 +67,7 @@ pub fn to_end(
 ) -> Vec<moonlet_proto::TerminalId> {
     frozen
         .iter()
-        .filter(|f| f.owner == Some(me) && !taken.contains(f.session))
+        .filter(|f| f.still_mine(taken, me))
         .filter(|f| f.slept_at.is_some_and(|e| e != f.epoch))
         .map(|f| f.chat)
         .collect()

@@ -51,6 +51,12 @@ struct Asleep {
     sleeping: bool,
 }
 
+/// A session's `epoch` in its account record: 1 for a record from before
+/// X73, which had none (X73).
+fn epoch_of(record: Option<&moonlet_core::account::Record>) -> u64 {
+    record.and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1)
+}
+
 /// What looks for sessions another member now owns keep between them (X73).
 #[derive(Default)]
 struct LettingGo {
@@ -4291,8 +4297,7 @@ impl Daemon {
                     // After a wake a newer sleep overtook, the first sleep's
                     // epochs stay: its agents froze at them.
                     for s in &own {
-                        let epoch = records.get(&s.id).and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1);
-                        asleep.epochs.entry(s.id.clone()).or_insert(epoch);
+                        asleep.epochs.entry(s.id.clone()).or_insert(epoch_of(records.get(&s.id)));
                     }
                     // An agent that starts from now on starts stopped too.
                     self.chats.hold();
@@ -4358,7 +4363,7 @@ impl Daemon {
                 // it gave another member is let go of, not woken. With no
                 // answer, the agents go on, as offline work does (ADR 0014).
                 if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
-                    tracing::info!("the central host did not answer after the wake; agents go on by this Mac's records");
+                    tracing::info!("no word from the central host after the wake; agents go on by this Mac's records");
                 }
                 let (frozen, taken, epochs) = {
                     let mut asleep = self.asleep.lock().unwrap();
@@ -4388,8 +4393,7 @@ impl Daemon {
                         };
                         let record = records.get(&s.id);
                         let owner = record.and_then(|r| r.get("owner")).and_then(Value::as_str);
-                        let epoch = record.and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1);
-                        Some(crate::power::Frozen { chat, session: &s.id, owner, epoch, slept_at: epochs.get(&s.id).copied() })
+                        Some(crate::power::Frozen { chat, session: &s.id, owner, epoch: epoch_of(record), slept_at: epochs.get(&s.id).copied() })
                     })
                     .collect();
                 for t in crate::power::to_thaw(&frozen, &taken, &me) {
