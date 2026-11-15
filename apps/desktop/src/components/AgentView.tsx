@@ -37,7 +37,7 @@ import {
 import { rpc } from "../lib/daemon";
 import { projectFiles } from "../lib/projectFiles";
 import { slashMenu, type SlashRow } from "../lib/sessionDesign";
-import { DEFAULT_MODE, EFFORTS, effortAfter, effortsFor, modelLabel as claudeModelLabel, modelMenu, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode, tuiCommand } from "../lib/agents";
+import { DEFAULT_MODE, EFFORTS, type ModelChoice, agentEfforts, chatModelPatch, claudeModelLabel, modelMenu, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode, tuiCommand } from "../lib/agents";
 import {
   type QuestionPick,
   type SuggestedReply,
@@ -1684,13 +1684,8 @@ export function AgentView({
   const modelLabel = agent === "claude" ? (st?.model ? claudeModelLabel(models, st.model) : "Default") : (st?.model ?? "Default");
   const effortLabel = EFFORTS.find((e) => e.id === st?.effort)?.label;
   const menu = modelMenu(models);
-  // A model that lacks the chat's effort gets High with it (X105).
-  const pickModel = (id: string) => {
-    const effort = effortAfter(models, id, st?.effort ?? null);
-    void call(M.chatSettings, effort && effort !== st?.effort ? { model: id, effort } : { model: id });
-  };
-  const modelItem = (m: { id: string; label: string }): MenuItem => ({ label: m.label, checked: st?.model === m.id, onSelect: () => pickModel(m.id) });
-  const efforts = agent === "claude" ? effortsFor(models, st?.model) : EFFORTS.filter((e) => ["low", "medium", "high"].includes(e.id));
+  const modelItem = (m: ModelChoice): MenuItem => ({ label: m.label, checked: st?.model === m.id, onSelect: () => void call(M.chatSettings, chatModelPatch(models, m.id, st?.effort ?? null)) });
+  const efforts = agentEfforts(agent, models, st?.model);
   const settings: MenuItem[] = [
     ...(agent === "claude"
       ? [

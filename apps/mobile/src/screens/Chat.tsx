@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, ListChecks, Loader2, MessageCircleQuestion, MessageSquareDashed, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChatDraft, turnRunning, useChat, useChatOnScreen } from "@desktop/lib/chat";
-import { CLAUDE_MODES, effortAfter, effortsFor } from "@desktop/lib/agents";
+import { CLAUDE_MODES, agentEfforts, chatModelPatch } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
 import { askerName } from "@desktop/lib/subagents";
@@ -266,6 +266,8 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
   const agents = { id: terminal, st };
   const footer = chatFooter(st);
   const settings = (patch: object) => void rpc(host, M.chatSettings, { id: terminal, ...patch }).catch(console.error);
+  // The efforts of the chat's model, as its Claude lists them (X105).
+  const efforts = agentEfforts("claude", st?.models, st?.model);
 
   return (
     <div className="flex h-full flex-col">
@@ -346,9 +348,7 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
                 models={st.models}
                 current={st.model}
                 onPick={(id) => {
-                  // A model that lacks the chat's effort gets High with it (X105).
-                  const effort = effortAfter(st.models, id, st.effort ?? null);
-                  settings(effort && effort !== st.effort ? { model: id, effort } : { model: id });
+                  settings(chatModelPatch(st.models, id, st.effort ?? null));
                   setPicker(null);
                 }}
               />
@@ -366,10 +366,10 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
                 {o.label}
               </button>
             ))}
-            {picker === "model" && effortsFor(st.models, st.model).length > 0 && (
+            {picker === "model" && efforts.length > 0 && (
               <>
                 <div className="eyebrow px-3 pt-2">Effort</div>
-                {effortsFor(st.models, st.model).map((e) => (
+                {efforts.map((e) => (
                   <button key={e.id} type="button" onClick={() => (settings({ effort: e.id }), setPicker(null))} className={cx("flex min-h-11 items-center rounded-[10px] px-3 text-left text-[15px]", st.effort === e.id && "text-accent")}>
                     {e.label}
                   </button>

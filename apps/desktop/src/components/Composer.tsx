@@ -16,7 +16,7 @@ import { useCloud } from "../lib/cloudStore";
 import type { CloudInfo } from "../lib/protocol";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
-import { EFFORTS, effortAfter, effortsFor, modelLabel as claudeModelLabel, modelMenu, resolveMode } from "../lib/agents";
+import { EFFORTS, type ModelChoice, agentEfforts, claudeModelLabel, effortAfter, modelMenu, resolveMode } from "../lib/agents";
 import { useClaudeModels } from "../lib/claudeModelsStore";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
@@ -240,7 +240,7 @@ function Opt({ checked, onClick, children }: { checked: boolean; onClick: () => 
 /** The older models under More models (X105), opened by hovering or clicking its row. The list
  * opens beside the whole panel, not over the Effort column, so it is not
  * positioned against its row and stays open until the panel closes. */
-function MoreModels({ items, chosen, onPick }: { items: { id: string; label: string }[]; chosen: string | null; onPick: (id: string) => void }) {
+function MoreModels({ items, chosen, onPick }: { items: ModelChoice[]; chosen: string | null; onPick: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -271,7 +271,7 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel, models }: {
     window.addEventListener("mousedown", down, true);
     return () => window.removeEventListener("mousedown", down, true);
   }, [open]);
-  const efforts = choice.agent === "claude" ? effortsFor(models, choice.model) : EFFORTS.filter((e) => ["low", "medium", "high"].includes(e.id));
+  const efforts = agentEfforts(choice.agent, models, choice.model);
   const menu = modelMenu(models);
   const pickModel = (id: string) => onChange({ ...choice, model: id, effort: effortAfter(models, id, choice.effort) });
   return (

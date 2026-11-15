@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReadiness, effortAfter, effortsFor, modelLabel, modelMenu, nextMode, resolveMode, resolvePlanMode, tabAgent , tuiCommand } from "./agents";
+import { agentEfforts, agentReadiness, chatModelPatch, claudeModelLabel, effortAfter, modelMenu, nextMode, resolveMode, resolvePlanMode, tabAgent , tuiCommand } from "./agents";
 import type { ClaudeModel } from "./protocol";
 
 describe("nextMode", () => {
@@ -122,24 +122,26 @@ describe("modelMenu (X105)", () => {
   });
 });
 
-describe("modelLabel (X105)", () => {
+describe("claudeModelLabel (X105)", () => {
   it("labels a model by Claude Code's name, else by its id", () => {
-    expect(modelLabel(CAPTURED, "fable")).toBe("Fable 5.2");
-    expect(modelLabel(CAPTURED, "claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
-    expect(modelLabel(CAPTURED, "claude-opus-4-1[1m]")).toBe("claude-opus-4-1[1m]");
-    expect(modelLabel([], "fable")).toBe("Fable");
-    expect(modelLabel(undefined, "claude-opus-5")).toBe("claude-opus-5");
+    expect(claudeModelLabel(CAPTURED, "fable")).toBe("Fable 5.2");
+    expect(claudeModelLabel(CAPTURED, "claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(claudeModelLabel(CAPTURED, "claude-opus-4-1[1m]")).toBe("claude-opus-4-1[1m]");
+    expect(claudeModelLabel([], "fable")).toBe("Fable");
+    expect(claudeModelLabel(undefined, "claude-opus-5")).toBe("claude-opus-5");
   });
 });
 
-describe("effortsFor (X105)", () => {
+describe("agentEfforts (X105)", () => {
   it("offers the efforts the chosen model supports", () => {
-    expect(effortsFor(CAPTURED, "claude-opus-4-6").map((e) => e.label)).toEqual(["Low", "Medium", "High", "Max"]);
-    expect(effortsFor(CAPTURED, "fable").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor(CAPTURED, "claude-haiku-4-5-20251001")).toEqual([]);
+    expect(agentEfforts("claude", CAPTURED, "claude-opus-4-6").map((e) => e.label)).toEqual(["Low", "Medium", "High", "Max"]);
+    expect(agentEfforts("claude", CAPTURED, "fable").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(agentEfforts("claude", CAPTURED, "claude-haiku-4-5-20251001")).toEqual([]);
     // A model the list does not have, or no list, offers all five.
-    expect(effortsFor(CAPTURED, "claude-opus-4-1").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(effortsFor(undefined, "claude-opus-4-6").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(agentEfforts("claude", CAPTURED, "claude-opus-4-1").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(agentEfforts("claude", undefined, "claude-opus-4-6").map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // Codex has three, whatever Claude offers.
+    expect(agentEfforts("codex", CAPTURED, "gpt-5.1-codex").map((e) => e.id)).toEqual(["low", "medium", "high"]);
   });
 });
 
@@ -151,5 +153,15 @@ describe("effortAfter (X105)", () => {
     expect(effortAfter(CAPTURED, "claude-haiku-4-5-20251001", "high")).toBeNull();
     expect(effortAfter(CAPTURED, "claude-sonnet-4-6", null)).toBe("high");
     expect(effortAfter(undefined, "opus", "xhigh")).toBe("xhigh");
+  });
+});
+
+describe("chatModelPatch (X105)", () => {
+  it("switches a running chat's model, and its effort only when the new model lacks it", () => {
+    expect(chatModelPatch(CAPTURED, "fable", "xhigh")).toEqual({ model: "fable" });
+    expect(chatModelPatch(CAPTURED, "claude-opus-4-6", "xhigh")).toEqual({ model: "claude-opus-4-6", effort: "high" });
+    // A model without efforts leaves the chat's effort as it is.
+    expect(chatModelPatch(CAPTURED, "claude-haiku-4-5-20251001", "xhigh")).toEqual({ model: "claude-haiku-4-5-20251001" });
+    expect(chatModelPatch(CAPTURED, "claude-sonnet-4-6", null)).toEqual({ model: "claude-sonnet-4-6", effort: "high" });
   });
 });

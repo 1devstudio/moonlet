@@ -5,7 +5,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { ArrowRight, Check, ChevronDown, ChevronRight, FileText, GitBranch, GitPullRequest, Mic, Search, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { latestOnly } from "@desktop/lib/prStack";
-import { EFFORTS, effortAfter, effortsFor, modelLabel as claudeModelLabel } from "@desktop/lib/agents";
+import { EFFORTS, agentEfforts, claudeModelLabel, effortAfter } from "@desktop/lib/agents";
 import { useClaudeModels } from "@desktop/lib/claudeModelsStore";
 import { ModelChoices } from "../components/ModelChoices";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
@@ -284,6 +284,7 @@ export function NewSessionScreen() {
 
   const baseName = base ?? choice?.project.base_branch ?? "main";
   const modelLabel = claudeModelLabel(models, model);
+  const efforts = agentEfforts("claude", models, model);
   const effortLabel = EFFORTS.find((e) => e.id === effort)?.label ?? effort;
 
   return (
@@ -419,10 +420,10 @@ export function NewSessionScreen() {
           <div className="px-2">
             <ModelChoices models={models} current={model} onPick={(m) => (setModel(m), setEffort(effortAfter(models, m, effort)))} />
           </div>
-          {effortsFor(models, model).length > 0 && (
+          {efforts.length > 0 && (
             <>
               <div className="eyebrow px-5">Effort</div>
-              <Choices items={effortsFor(models, model)} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
+              <Choices items={efforts} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
             </>
           )}
         </Sheet>
