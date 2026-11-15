@@ -419,6 +419,17 @@ impl Store {
         Ok(done)
     }
 
+    /// **Move to workspace** (X104): one session design, in the worktree or
+    /// kept in moonlet, made a workspace design of `workspace` as archiving
+    /// makes one, then taken out of the session: its folder and its
+    /// comments folder are removed. One that cannot be made stays as it
+    /// was. Gives its slug in the workspace.
+    pub fn adopt_session_design(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
+        let slug = self.adopt_one(at, workspace, now)?;
+        self.remove_design(at)?;
+        Ok(slug)
+    }
+
     /// One session design made a workspace design of `workspace`, its
     /// comments with it; gives its slug there.
     fn adopt_one(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
@@ -427,12 +438,26 @@ impl Store {
             .into_iter()
             .filter(|(rel, _)| rel.starts_with("pages/") || rel.starts_with("assets/"))
             .collect();
+        // Its comments, read before anything is made: none there is none to
+        // keep, but one there that cannot be read refuses it, so none is lost.
+        let comments_file = at.in_side(super::comments::COMMENTS_FILE);
+        let comments = match std::fs::symlink_metadata(at.root.join(&comments_file)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            _ => Some(fsx::read_file_inside(&at.root, &comments_file).context("cannot read its comments")?),
+        };
         let name = config.name.clone();
         let from = super::project::ProjectDesign { config, files };
         let slug = self.create_from_project(workspace, &name, &from, now)?;
-        if let Ok(comments) = fsx::read_file_inside(&at.root, &at.in_side(super::comments::COMMENTS_FILE)) {
+        if let Some(comments) = comments {
             let to = self.workspace_design(workspace, &slug)?;
-            fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments)?;
+            // One whose comments cannot be written is not made at all.
+            if let Err(e) = fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments) {
+                // One left behind is said, so it is never taken for a move.
+                if let Err(left) = self.remove_design(&to) {
+                    return Err(e.context(format!("cannot write its comments, nor remove {} again: {left:#}", to.folder().display())));
+                }
+                return Err(e.context("cannot write its comments"));
+            }
         }
         Ok(slug)
     }
@@ -1346,6 +1371,138 @@ created_at = 1761200000000
         assert_eq!(store.session_dirs().unwrap(), Vec::<String>::new());
         // A session with no folder has nothing to move.
         assert_eq!(store.adopt_session_designs("s2", 4).unwrap().moved, vec![]);
+    }
+
+    /// X104: **Move to workspace** makes one session design, in the
+    /// worktree or kept in moonlet, a workspace design of the session's
+    /// workspace, as archiving does (X101): its pages linking the live
+    /// design system, its labels, viewport, brief, assets and comments; a
+    /// name the workspace has gets a ` 2`. It then leaves the session: its
+    /// folder and its comments folder are gone, and the session's listing
+    /// no longer has it.
+    #[test]
+    fn moving_a_session_design_to_the_workspace_makes_it_a_workspace_design_and_takes_it_out_of_the_session() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let in_wt = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let settings = store.create_session_design("w1", "moonlet-desktop", "s1", &in_wt.root, &in_wt.folder, "Settings page", "Settings", 1).unwrap();
+        let page = "<head><link rel=\"stylesheet\" href=\"../system/styles.css\"></head><body data-mid=\"m1\">Git</body>\n";
+        std::fs::write(wt.join("docs/design/settings-page/pages/index.html"), page).unwrap();
+        std::fs::write(wt.join("docs/design/settings-page/assets/logo.svg"), "<svg/>").unwrap();
+        let toml_file = wt.join("docs/design/settings-page/design.toml");
+        let text = std::fs::read_to_string(&toml_file).unwrap().replace("viewport = \"1440x900\"", "viewport = \"390x844\"");
+        std::fs::write(&toml_file, format!("{text}\n[pages.index]\nlabel = \"rows\"\n")).unwrap();
+        let comments = "[{\"id\":1,\"page\":\"index\",\"mid\":\"m1\",\"text\":\"Bigger\",\"state\":\"open\"}]\n";
+        std::fs::write(wt.join(".moonlet/design/settings-page/comments.json"), comments).unwrap();
+        assert!(store.take_snapshot(&settings, super::super::history::Take::AgentTurn, 1).unwrap().is_some());
+        store.create_session_design("w1", "moonlet-desktop", "s1", &in_wt.root, &in_wt.folder, "Billing", "b", 1).unwrap();
+        // One kept in moonlet, whose name the workspace has already.
+        store.make_session_dir("s1", "w1").unwrap();
+        let mine = store.new_design_shelf("s1", wt, "docs/design", true).unwrap();
+        let onboarding = store.create_session_design("w1", "moonlet-desktop", "s1", &mine.root, &mine.folder, "Onboarding", "b", 1).unwrap();
+        store.create_design("w1", "Onboarding", "moonlet-desktop", "b", 1).unwrap();
+
+        assert_eq!(store.adopt_session_design(&settings, "w1", 2).unwrap(), "settings-page");
+        let moved = home.path().join("design/w1/designs/settings-page");
+        assert_eq!(
+            std::fs::read_to_string(moved.join("pages/index.html")).unwrap(),
+            "<head><link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\"></head><body data-mid=\"m1\">Git</body>\n"
+        );
+        assert_eq!(std::fs::read_to_string(moved.join("assets/logo.svg")).unwrap(), "<svg/>");
+        assert_eq!(std::fs::read_to_string(moved.join("comments.json")).unwrap(), comments);
+        // Its snapshots are not kept.
+        assert!(store.history(&store.workspace_design("w1", "settings-page").unwrap()).unwrap().is_empty());
+        let info = store.designs("w1").unwrap().into_iter().find(|d| d.slug == "settings-page").unwrap();
+        assert_eq!((info.name.as_str(), info.viewport.as_str(), info.brief.as_str(), info.pages[0].label.as_deref()), ("Settings page", "390x844", "Settings", Some("rows")));
+        // Out of the worktree, its comments folder too.
+        assert!(!wt.join("docs/design/settings-page").exists());
+        assert!(!wt.join(".moonlet/design/settings-page").exists());
+
+        assert_eq!(store.adopt_session_design(&onboarding, "w1", 3).unwrap(), "onboarding-2");
+        assert_eq!(store.designs("w1").unwrap().iter().find(|d| d.slug == "onboarding-2").map(|d| d.name.as_str()), Some("Onboarding 2"));
+        assert!(!home.path().join("design/.sessions/s1/designs/onboarding").exists());
+        assert!(!home.path().join("design/.sessions/s1/.moonlet/design/onboarding").exists());
+        assert!(home.path().join("design/.sessions/s1/.moonlet/design").is_dir());
+
+        let left: Vec<String> = store
+            .session_designs_on("s1", &store.session_shelves("s1", wt, "docs/design"), "w1")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.slug)
+            .collect();
+        assert_eq!(left, ["billing"]);
+    }
+
+    /// X104: a session design whose comments are there but cannot be read
+    /// is refused before anything is made, and stays with its comments, so
+    /// none is lost.
+    #[test]
+    fn a_session_design_whose_comments_cannot_be_read_is_not_moved_and_stays() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let at = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Pricing", "b", 1).unwrap();
+        // A folder where the file should be: there, but not readable as one.
+        let _ = std::fs::remove_file(wt.join(".moonlet/design/pricing/comments.json"));
+        std::fs::create_dir_all(wt.join(".moonlet/design/pricing/comments.json")).unwrap();
+
+        assert!(store.adopt_session_design(&at, "w1", 2).is_err());
+        assert!(wt.join("docs/design/pricing/design.toml").is_file());
+        assert!(wt.join(".moonlet/design/pricing/comments.json").is_dir());
+        assert!(!home.path().join("design/w1/designs/pricing").exists());
+    }
+
+    /// X104: a moved design whose comments cannot be written in the
+    /// workspace is not made there: the move is refused, the workspace has
+    /// no design of that name, and the session design stays.
+    #[test]
+    fn a_session_design_whose_comments_cannot_be_written_in_the_workspace_is_not_made_there() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let at = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Pricing", "b", 1).unwrap();
+        std::fs::write(wt.join(".moonlet/design/pricing/comments.json"), "[{\"id\":1}]\n").unwrap();
+        // Making the design writes its empty comments first; the copy is the second write.
+        let target = home.path().join("design/w1/designs/pricing/comments.json");
+        let mut writes = 0;
+        fsx::BEFORE_WRITE.set(Some(Box::new(move |p| {
+            if p == target {
+                writes += 1;
+                if writes == 2 {
+                    bail!("disk full");
+                }
+            }
+            Ok(())
+        })));
+        let moved = store.adopt_session_design(&at, "w1", 2);
+        fsx::BEFORE_WRITE.set(None);
+
+        assert!(moved.is_err());
+        assert!(!home.path().join("design/w1/designs/pricing").exists());
+        assert!(wt.join("docs/design/pricing/design.toml").is_file());
+        assert_eq!(std::fs::read_to_string(wt.join(".moonlet/design/pricing/comments.json")).unwrap(), "[{\"id\":1}]\n");
+    }
+
+    /// X104: a session design whose design system is gone cannot be a
+    /// workspace design, so it is refused and stays in the session.
+    #[test]
+    fn a_session_design_whose_system_is_gone_is_not_moved_and_stays() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let lost = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Lost", "b", 1).unwrap();
+        let toml_file = wt.join("docs/design/lost/design.toml");
+        let text = std::fs::read_to_string(&toml_file).unwrap().replace("system = \"moonlet-desktop\"", "system = \"gone\"");
+        std::fs::write(&toml_file, text).unwrap();
+
+        assert!(store.adopt_session_design(&lost, "w1", 2).is_err());
+        assert!(toml_file.is_file());
+        assert!(wt.join(".moonlet/design/lost").is_dir());
+        assert!(!home.path().join("design/w1/designs/lost").exists());
     }
 
     #[test]

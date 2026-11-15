@@ -4502,6 +4502,142 @@ async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, 
     (ws, project, session)
 }
 
+/// X104: **Move to workspace** from the app makes a session design a
+/// workspace design of its session's workspace and takes it out of the
+/// worktree; `design.list` then gives it as a workspace design and no
+/// longer as the session's. An agent (the CLI) is refused, and so is a
+/// design the session does not have.
+#[tokio::test]
+async fn a_session_design_moved_to_the_workspace_is_listed_there_and_no_longer_in_the_session() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let worktree = std::path::PathBuf::from(&session.path);
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "From the agreed requirements"}),
+        )
+        .await
+        .unwrap();
+    std::fs::write(worktree.join("docs/design/settings-page/pages/index.html"), "<body data-mid=\"m1\">Git</body>\n").unwrap();
+    let at = serde_json::json!({"session": session.id, "slug": "settings-page"});
+
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_ADOPT, at.clone()).await;
+    assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("forbidden")), "{refused:?}");
+
+    let mut app = d.app().await;
+    let missing = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": session.id, "slug": "nothing"})).await;
+    assert!(missing.is_err(), "{missing:?}");
+    let gone = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": "nosession", "slug": "settings-page"})).await;
+    assert!(gone.as_ref().is_err_and(|e| e.to_string().starts_with("invalid_params")), "{gone:?}");
+    let moved: String = app.request(methods::DESIGN_ADOPT, at).await.unwrap();
+    assert_eq!(moved, "settings-page");
+    assert!(!worktree.join("docs/design/settings-page").exists());
+    assert_eq!(
+        std::fs::read_to_string(d.home.path().join(format!(".moonlet/design/{ws}/designs/settings-page/pages/index.html"))).unwrap(),
+        "<body data-mid=\"m1\">Git</body>\n"
+    );
+    let list: serde_json::Value = app.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let listed: Vec<(String, String)> =
+        list.as_array().unwrap().iter().map(|d| (d["slug"].as_str().unwrap().to_string(), d["kind"].as_str().unwrap().to_string())).collect();
+    assert_eq!(listed, [("settings-page".to_string(), "workspace".to_string())]);
+    // Its own agent starts, told its pages are written already.
+    assert!(list[0]["agent"].is_u64(), "{list}");
+    let user = until_contains(
+        {
+            let p = d.home.path().join(format!(".moonlet/design/{ws}/designs/settings-page/claude-user"));
+            move || std::fs::read_to_string(&p).unwrap_or_default()
+        },
+        "moved here from a session",
+    )
+    .await;
+    // Logged as the JSON line it was sent as, its quotes escaped.
+    assert!(user.contains(r#"as the design \"Settings page\": its pages are written already"#) && user.contains("Its brief was: From the agreed requirements"), "{user}");
+}
+
+/// X104: a session design is not moved while its session's agent is in a
+/// turn, at work or asking the user: the agent writes its pages straight in
+/// the folder the move would delete.
+#[tokio::test]
+async fn a_session_design_is_not_moved_while_its_sessions_agent_is_in_a_turn() {
+    let d = fake_claude_daemon(ASKING_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let agent = u64::from(session.terminals[0]);
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    let mut asks = false;
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == agent && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            asks = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(asks, "the session's agent never asked");
+
+    let mut app = d.app().await;
+    let refused = app.request::<_, String>(methods::DESIGN_ADOPT, serde_json::json!({"session": session.id, "slug": "settings-page"})).await;
+    assert_eq!(refused.map_err(|e| e.to_string()).err().as_deref(), Some("busy: Claude is changing the design; move it once it stops"));
+    assert!(std::path::Path::new(&session.path).join("docs/design/settings-page/design.toml").is_file());
+}
+
+/// X104: a move that is refused (its design system is gone) leaves the
+/// session design's edits by hand waiting as they were: they are still
+/// kept as their own snapshot once the edits stop.
+#[tokio::test]
+async fn edits_by_hand_wait_on_after_a_refused_move() {
+    let d = fake_claude_daemon_with(FAKE_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "1500".into())]).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let at = serde_json::json!({"session": session.id, "slug": "settings-page"});
+    let mut app = d.app().await;
+    let _: bool = app.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": ws, "slug": "moonlet-desktop"})).await.unwrap();
+    std::fs::write(std::path::Path::new(&session.path).join("docs/design/settings-page/pages/index.html"), "<body data-mid=\"m1\"></body>\n").unwrap();
+    let mut page = at.clone();
+    page["page"] = serde_json::json!("index");
+    let read: serde_json::Value = app.request(methods::DESIGN_PAGE, page.clone()).await.unwrap();
+    page["html"] = serde_json::json!("<body data-mid=\"m1\">by hand</body>\n");
+    page["base_version"] = read["version"].clone();
+    page["edits"] = serde_json::json!(["Text of m1"]);
+    let _: serde_json::Value = app.request(methods::DESIGN_WRITE_PAGE, page).await.unwrap();
+
+    let refused = app.request::<_, String>(methods::DESIGN_ADOPT, at.clone()).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let mut kinds = Vec::new();
+    for _ in 0..60 {
+        let listed: serde_json::Value = app.request(methods::DESIGN_HISTORY, at.clone()).await.unwrap();
+        kinds = listed.as_array().unwrap().iter().map(|s| (s["type"].as_str().unwrap_or_default().to_string(), s["summary"].as_str().unwrap_or_default().to_string())).collect();
+        if !kinds.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(kinds, [("edits_by_hand".to_string(), "Text of m1".to_string())]);
+}
+
 /// X65 entry 12: `design.create` with a session makes a session design in
 /// that session's worktree, under `docs/design/`, and starts no agent of its
 /// own; the design RPCs reach it by `{session, slug}`, its comments in the

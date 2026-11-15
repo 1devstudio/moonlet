@@ -135,3 +135,27 @@ export function designsIndex(list: Design[], at: IndexNames): IndexGroup[] {
     }),
   })).filter((g) => g.cards.length);
 }
+
+/** What a sidebar row's right-click menu offers (X104), and what it asks
+ *  before doing it. */
+export interface RowMenu {
+  label: "Move to workspace";
+  confirm: { title: string; message: string; action: "Move" };
+}
+
+/** A sidebar row's right-click menu (X104): a session design's has **Move
+ *  to workspace**, asked first; a workspace or shared design's has none.
+ *  `worktree`: its session's, so the question says when its folder is
+ *  deleted there; a design kept in moonlet (X101) is outside it. */
+export function designRowMenu(d: Design, worktree: string | undefined): RowMenu | null {
+  if (d.kind !== "session" || !d.session) return null;
+  const inTree = !!worktree && inWorktree(worktree, d.path) !== d.path;
+  return {
+    label: "Move to workspace",
+    confirm: {
+      title: `Move ${d.name} to the workspace?`,
+      message: inTree ? "It leaves the session: its folder is deleted from the session's worktree, a change you commit with the branch." : "It leaves the session.",
+      action: "Move",
+    },
+  };
+}

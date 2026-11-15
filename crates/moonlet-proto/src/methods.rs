@@ -416,6 +416,10 @@ pub const DESIGN_MOVE: &str = "design.move";
 pub const DESIGN_SHARE: &str = "design.share";
 /// Moves a shared design into one workspace (X95): app only.
 pub const DESIGN_UNSHARE: &str = "design.unshare";
+/// Makes a session design a workspace design of its session's workspace
+/// and takes it out of the session (X104): app only. Its params are a
+/// [`DesignRef`] naming the session; the answer is its slug there.
+pub const DESIGN_ADOPT: &str = "design.adopt";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].

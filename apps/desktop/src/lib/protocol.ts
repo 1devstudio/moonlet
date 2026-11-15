@@ -1659,6 +1659,7 @@ export const M = {
   designMove: "design.move",
   designShare: "design.share",
   designUnshare: "design.unshare",
+  designAdopt: "design.adopt",
 } as const;
 
 export const EV = {
