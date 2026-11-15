@@ -5,7 +5,9 @@ import { type ReactNode, useEffect, useState } from "react";
 import { ArrowRight, Check, ChevronDown, ChevronRight, FileText, GitBranch, GitPullRequest, Mic, Search, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { latestOnly } from "@desktop/lib/prStack";
-import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
+import { EFFORTS, effortAfter, effortsFor, modelLabel as claudeModelLabel } from "@desktop/lib/agents";
+import { useClaudeModels } from "@desktop/lib/claudeModelsStore";
+import { ModelChoices } from "../components/ModelChoices";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { type Attachment, type PickerList, type PickerTab, pickerBranches, pickerHint, pickerSearch } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp, useShownWorkspace } from "../lib/app";
@@ -170,7 +172,7 @@ export function NewSessionScreen() {
   const [branchError, setBranchError] = useState<string | null>(null);
   const [agent, setAgent] = useState("claude");
   const [model, setModel] = useState("opus");
-  const [effort, setEffort] = useState("high");
+  const [effort, setEffort] = useState<string | null>("high");
   const [mode, setMode] = useState("manual");
   const [base, setBase] = useState<string | null>(null);
   const [branches, setBranches] = useState<string[]>([]);
@@ -184,6 +186,8 @@ export function NewSessionScreen() {
   const [prLatest] = useState(latestOnly);
   const { busy, error, run } = useBusy();
   const choice = choices[Math.min(pick, choices.length - 1)];
+  // The models Claude Code offers in the chosen workspace's profile (X105).
+  const models = useClaudeModels(choice?.host, choice?.workspaceId);
   // The task's project on its host is picked once, as the Mac's composer does.
   const presetKey = preset ? `${fromBoard!.key} ${preset.key}` : null;
   useEffect(() => {
@@ -279,7 +283,7 @@ export function NewSessionScreen() {
   };
 
   const baseName = base ?? choice?.project.base_branch ?? "main";
-  const modelLabel = CLAUDE_MODELS.find((m) => m.id === model)?.label ?? model;
+  const modelLabel = claudeModelLabel(models, model);
   const effortLabel = EFFORTS.find((e) => e.id === effort)?.label ?? effort;
 
   return (
@@ -357,7 +361,7 @@ export function NewSessionScreen() {
               )}
               {!fromTask && <RowButton label="Host" value={choice.hostLabel} hint={hosts[choice.host]?.status === "connected" ? "online" : "offline"} onClick={() => setPicker("project")} />}
               <RowButton label="Agent" value={AGENTS.find((a) => a.id === agent)?.label ?? agent} icon={<AgentIcon agent={agent} size={14} />} onClick={() => setPicker("agent")} />
-              {agent === "claude" && <RowButton label="Model" value={modelLabel} hint={`${effortLabel} effort`} onClick={() => setPicker("model")} />}
+              {agent === "claude" && <RowButton label="Model" value={modelLabel} hint={effortLabel ? `${effortLabel} effort` : undefined} onClick={() => setPicker("model")} />}
               {!pr && !picked && !fromTask && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
               {fromTask && agent === "claude" && <RowButton label="Mode" value={MODES.find((m) => m.id === mode)?.label ?? mode} hint={MODES.find((m) => m.id === mode)?.short} onClick={() => setPicker("mode")} />}
             </div>
@@ -412,9 +416,15 @@ export function NewSessionScreen() {
       {picker === "model" && (
         <Sheet label="Model" onClose={() => setPicker(null)}>
           <div className="eyebrow px-5 pt-1">Model</div>
-          <Choices items={CLAUDE_MODELS} current={model} onPick={setModel} />
-          <div className="eyebrow px-5">Effort</div>
-          <Choices items={EFFORTS} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
+          <div className="px-2">
+            <ModelChoices models={models} current={model} onPick={(m) => (setModel(m), setEffort(effortAfter(models, m, effort)))} />
+          </div>
+          {effortsFor(models, model).length > 0 && (
+            <>
+              <div className="eyebrow px-5">Effort</div>
+              <Choices items={effortsFor(models, model)} current={effort} onPick={(e) => (setEffort(e), setPicker(null))} />
+            </>
+          )}
         </Sheet>
       )}
       {picker === "source" && choice && (

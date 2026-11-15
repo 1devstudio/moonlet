@@ -199,6 +199,21 @@ export interface ChatState {
   subagents?: Subagent[];
   /** The transcript has a plan, for the Plan tab while the items are not in memory (X24). */
   has_plan?: boolean;
+  /** The models the agent offers, from Claude Code's answer to `initialize`; empty until then (X105). */
+  models?: ClaudeModel[];
+}
+
+/** A model Claude Code offers (X105). */
+export interface ClaudeModel {
+  /** What `--model` takes: an alias such as `fable`, or a full id. */
+  value: string;
+  /** Claude Code's name for it, such as "Fable 5.2". */
+  label: string;
+  description: string;
+  /** The model the value stands for, such as `claude-fable-5-2`. */
+  resolved: string;
+  /** The effort levels it supports; empty when it has none. */
+  efforts: string[];
 }
 
 /** The agent's context window, from Claude's `get_context_usage` (X34). */
@@ -1504,6 +1519,8 @@ export const M = {
   gitSetSettings: "git.set_settings",
   claudeSettings: "claude.settings",
   claudeSetSettings: "claude.set_settings",
+  /** The models Claude Code offers in a workspace's Claude profile (X105): `{workspace?}` → `ClaudeModel[]`. */
+  claudeModels: "claude.models",
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",
   prCreate: "gh.pr_create",

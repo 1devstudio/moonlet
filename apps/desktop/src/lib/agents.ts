@@ -1,14 +1,41 @@
+import type { ClaudeModel } from "./protocol";
+
 const AGENT_LABEL: Record<string, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor", opencode: "OpenCode" };
 
 /** Display name of an agent ("Claude"), or a neutral fallback. */
 export const agentLabel = (agent?: string | null) => (agent ? (AGENT_LABEL[agent] ?? agent) : "the agent");
 
-export const CLAUDE_MODELS = [
-  { id: "fable", label: "Fable 5.1" },
-  { id: "opus", label: "Opus 5.5" },
-  { id: "sonnet", label: "Sonnet 5.5" },
-  { id: "haiku", label: "Haiku 4.5" },
+export interface ModelChoice {
+  id: string;
+  label: string;
+}
+
+/** The Claude model menu (X105): the newest models, and the rest under More models. */
+export interface ModelMenu {
+  latest: ModelChoice[];
+  more: ModelChoice[];
+}
+
+/** Claude Code's aliases, for a host that has not said which models it offers (X105). */
+const FALLBACK_MODELS: ModelChoice[] = [
+  { id: "opus", label: "Opus" },
+  { id: "fable", label: "Fable" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
 ];
+
+/** An alias such as `fable` stands for the newest of its line; `default` repeats one of them. */
+const isAlias = (value: string) => value !== "default" && !value.startsWith("claude-");
+
+/** The model menu from the models Claude Code offers, in its order (X105). */
+export function modelMenu(models: ClaudeModel[] | undefined | null): ModelMenu {
+  if (!models?.length) return { latest: FALLBACK_MODELS, more: [] };
+  const choice = (m: ClaudeModel): ModelChoice => ({ id: m.value, label: m.label || m.value });
+  return {
+    latest: models.filter((m) => isAlias(m.value)).map(choice),
+    more: models.filter((m) => !isAlias(m.value) && m.value !== "default").map(choice),
+  };
+}
 
 export const EFFORTS = [
   { id: "low", label: "Low" },
@@ -17,6 +44,26 @@ export const EFFORTS = [
   { id: "xhigh", label: "Extra high" },
   { id: "max", label: "Max" },
 ];
+
+/** A model's name in the menus: Claude Code's label, else the id as it is (X105). */
+export function modelLabel(models: ClaudeModel[] | undefined | null, id: string): string {
+  const known = models?.length ? models.map((m) => ({ id: m.value, label: m.label || m.value })) : FALLBACK_MODELS;
+  return known.find((m) => m.id === id)?.label ?? id;
+}
+
+/** The efforts a model supports, as Claude Code lists them; all five for a model it does not list (X105). */
+export function effortsFor(models: ClaudeModel[] | undefined | null, model: string | null | undefined) {
+  const m = models?.find((x) => x.value === model);
+  return m ? EFFORTS.filter((e) => m.efforts.includes(e.id)) : EFFORTS;
+}
+
+/** The effort once `model` is chosen: kept when it supports it, else High; none for a model without efforts (X105). */
+export function effortAfter(models: ClaudeModel[] | undefined | null, model: string, effort: string | null): string | null {
+  const offered = effortsFor(models, model);
+  if (!offered.length) return null;
+  if (effort && offered.some((e) => e.id === effort)) return effort;
+  return offered.find((e) => e.id === "high")?.id ?? offered[0].id;
+}
 
 /** Claude permission modes (X7), in the order the picker lists them and Shift+Tab cycles them. */
 export const CLAUDE_MODES = [

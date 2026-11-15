@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, ListChecks, Loader2, MessageCircleQuestion, MessageSquareDashed, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChatDraft, turnRunning, useChat, useChatOnScreen } from "@desktop/lib/chat";
-import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
+import { CLAUDE_MODES, effortAfter, effortsFor } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
 import { askerName } from "@desktop/lib/subagents";
@@ -17,6 +17,7 @@ import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../
 import { useBusy } from "../lib/busy";
 import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
 import { Markdown } from "../components/Markdown";
+import { ModelChoices } from "../components/ModelChoices";
 import { Sheet } from "../components/Sheet";
 import { Btn, cx } from "../components/ui";
 import { useNow } from "../lib/now";
@@ -340,7 +341,19 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
       {picker && (
         <Sheet label={picker === "model" ? "Model" : "Mode"} onClose={() => setPicker(null)}>
           <div className="scroll flex flex-col px-2 pb-2">
-            {(picker === "model" ? CLAUDE_MODELS.map((m) => ({ id: m.id, label: m.label, patch: { model: m.id } })) : CLAUDE_MODES.map((m) => ({ id: m.id, label: m.label, patch: { mode: m.id } }))).map((o) => (
+            {picker === "model" && (
+              <ModelChoices
+                models={st.models}
+                current={st.model}
+                onPick={(id) => {
+                  // A model that lacks the chat's effort gets High with it (X105).
+                  const effort = effortAfter(st.models, id, st.effort ?? null);
+                  settings(effort && effort !== st.effort ? { model: id, effort } : { model: id });
+                  setPicker(null);
+                }}
+              />
+            )}
+            {(picker === "model" ? [] : CLAUDE_MODES.map((m) => ({ id: m.id, label: m.label, patch: { mode: m.id } }))).map((o) => (
               <button
                 key={o.id}
                 type="button"
@@ -348,15 +361,15 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
                   settings(o.patch);
                   setPicker(null);
                 }}
-                className={cx("flex min-h-12 items-center rounded-[10px] px-3 text-left text-[15px]", (picker === "model" ? st.model : st.mode) === o.id && "text-accent")}
+                className={cx("flex min-h-12 items-center rounded-[10px] px-3 text-left text-[15px]", st.mode === o.id && "text-accent")}
               >
                 {o.label}
               </button>
             ))}
-            {picker === "model" && (
+            {picker === "model" && effortsFor(st.models, st.model).length > 0 && (
               <>
                 <div className="eyebrow px-3 pt-2">Effort</div>
-                {EFFORTS.map((e) => (
+                {effortsFor(st.models, st.model).map((e) => (
                   <button key={e.id} type="button" onClick={() => (settings({ effort: e.id }), setPicker(null))} className={cx("flex min-h-11 items-center rounded-[10px] px-3 text-left text-[15px]", st.effort === e.id && "text-accent")}>
                     {e.label}
                   </button>

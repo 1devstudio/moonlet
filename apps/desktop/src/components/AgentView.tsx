@@ -37,7 +37,7 @@ import {
 import { rpc } from "../lib/daemon";
 import { projectFiles } from "../lib/projectFiles";
 import { slashMenu, type SlashRow } from "../lib/sessionDesign";
-import { CLAUDE_MODELS, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode, tuiCommand } from "../lib/agents";
+import { DEFAULT_MODE, EFFORTS, effortAfter, effortsFor, modelLabel as claudeModelLabel, modelMenu, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode, tuiCommand } from "../lib/agents";
 import {
   type QuestionPick,
   type SuggestedReply,
@@ -1679,18 +1679,36 @@ export function AgentView({
   };
 
   const agent = info?.agent ?? "claude";
-  const modelLabel = agent === "claude" ? (CLAUDE_MODELS.find((m) => m.id === st?.model)?.label ?? st?.model ?? "Default") : (st?.model ?? "Default");
+  // The models this chat's Claude offers (X105).
+  const models = st?.models;
+  const modelLabel = agent === "claude" ? (st?.model ? claudeModelLabel(models, st.model) : "Default") : (st?.model ?? "Default");
   const effortLabel = EFFORTS.find((e) => e.id === st?.effort)?.label;
+  const menu = modelMenu(models);
+  // A model that lacks the chat's effort gets High with it (X105).
+  const pickModel = (id: string) => {
+    const effort = effortAfter(models, id, st?.effort ?? null);
+    void call(M.chatSettings, effort && effort !== st?.effort ? { model: id, effort } : { model: id });
+  };
+  const modelItem = (m: { id: string; label: string }): MenuItem => ({ label: m.label, checked: st?.model === m.id, onSelect: () => pickModel(m.id) });
+  const efforts = agent === "claude" ? effortsFor(models, st?.model) : EFFORTS.filter((e) => ["low", "medium", "high"].includes(e.id));
   const settings: MenuItem[] = [
     ...(agent === "claude"
-      ? [{ kind: "label" as const, label: "Model" }, ...CLAUDE_MODELS.map((m) => ({ label: m.label, checked: st?.model === m.id, onSelect: () => void call(M.chatSettings, { model: m.id }) }))]
+      ? [
+          { kind: "label" as const, label: "Model" },
+          ...menu.latest.map(modelItem),
+          ...(menu.more.length ? [{ kind: "submenu" as const, label: "More models", items: menu.more.map(modelItem) }] : []),
+        ]
       : []),
-    { kind: "label", label: "Effort" },
-    ...EFFORTS.filter((e) => agent === "claude" || ["low", "medium", "high"].includes(e.id)).map((e) => ({
-      label: e.label,
-      checked: st?.effort === e.id,
-      onSelect: () => void call(M.chatSettings, { effort: e.id }),
-    })),
+    ...(efforts.length
+      ? [
+          { kind: "label" as const, label: "Effort" },
+          ...efforts.map((e) => ({
+            label: e.label,
+            checked: st?.effort === e.id,
+            onSelect: () => void call(M.chatSettings, { effort: e.id }),
+          })),
+        ]
+      : []),
   ];
   const modeMenu = useModeMenu(st?.mode ?? DEFAULT_MODE, (m) => void call(M.chatSettings, { mode: m }));
   const more: MenuItem[] = [
