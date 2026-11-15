@@ -910,6 +910,35 @@ async fn a_machine_being_removed_opens_no_copy_over_its_open_connection() {
     );
 }
 
+#[tokio::test]
+async fn a_machine_being_removed_calls_only_worker_methods_over_its_open_connection() {
+    // Its device is forgotten while the retire waits; the connection is still
+    // a cloud machine's.
+    let c = cloud().await;
+    c.ready().await;
+    let mut link = worker_link(&c.addr, &c.machine_token()).await;
+    let pid = nix::unistd::Pid::from_raw(
+        std::fs::read_to_string(c.fake_dirs()[0].join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let m = &c.machines().await["machines"][0];
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let refused = ask_link(&mut link, 2, "session.list", json!({})).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(
+        refused,
+        Some((
+            "forbidden".into(),
+            "a cloud machine only runs heavy commands".into()
+        ))
+    );
+}
+
 /// A connection with `token`, registered as a worker, as a machine's link is.
 async fn worker_link(addr: &str, token: &str) -> tokio::net::TcpStream {
     use moonlet_proto::{read_frame, write_frame};
