@@ -108,6 +108,9 @@ pub enum Out {
     Item(Box<ChatItem>),
     /// Status, pending asks, cost or settings changed.
     State,
+    /// The agent listed the models it offers afresh, in `ChatState::models`
+    /// (X105).
+    Models,
 }
 
 pub trait Adapter: Send {

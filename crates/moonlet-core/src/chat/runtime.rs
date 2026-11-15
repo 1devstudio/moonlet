@@ -82,6 +82,9 @@ struct Inner {
     /// Whether the agent is frozen (SIGSTOP) while the Mac sleeps or its
     /// session moves (X73): it does not rest until it thaws (X84).
     frozen: bool,
+    /// The Claude profile folder the agent runs in, from its environment
+    /// (`None` for the default one): whose models it lists (X105).
+    profile: Option<String>,
 }
 
 struct Chat {
@@ -318,6 +321,7 @@ impl ChatManager {
                 dirty: true,
                 active_at: now_ms(),
                 frozen: false,
+                profile: None,
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
@@ -753,6 +757,7 @@ impl ChatManager {
                 dirty: true,
                 active_at: now_ms(),
                 frozen: false,
+                profile: None,
             }),
         });
         self.chats.lock().unwrap().insert(chat.id, chat.clone());
@@ -1130,7 +1135,9 @@ impl ChatManager {
             (Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
             _ => SessionLaunch::default(),
         };
-        let profile = launch.env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+        let mut env = self.terms.base_env().clone();
+        env.extend(launch.env);
+        let profile = env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
         let known = || -> Option<Vec<ClaudeModel>> {
             if let Some(m) = self.models.lock().unwrap().get(&profile) {
                 return Some(m.clone());
@@ -1146,8 +1153,6 @@ impl ChatManager {
         if let Some(m) = known() {
             return m;
         }
-        let mut env = self.terms.base_env().clone();
-        env.extend(launch.env);
         let models = probe_models(&env).await.unwrap_or_default();
         if models.is_empty() {
             self.models_failed.lock().unwrap().insert(profile, Instant::now());
@@ -1208,6 +1213,7 @@ impl ChatManager {
         cfg.resume = inner.state.agent_session.clone();
         let (program, args) = adapter.command(&cfg);
         let env = self.agent_env(chat.id, inner, launch.env);
+        inner.profile = env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
         require_folder(&cfg.cwd)?;
         let exe = crate::paths::find_program(&program, &env).with_context(|| format!("{program} not found on PATH"))?;
         let mut child = tokio::process::Command::new(&exe)
@@ -1405,17 +1411,15 @@ impl ChatManager {
                     self.terms.emit(Message::event(methods::EV_CHAT_ITEM, ChatItemEvent { id: chat.id, item: *item }));
                 }
                 Out::State => state_changed = true,
+                // A chat's Claude refreshes its profile's models (X105).
+                Out::Models if !inner.state.models.is_empty() => {
+                    self.models.lock().unwrap().insert(inner.profile.clone(), inner.state.models.clone());
+                }
+                Out::Models => {}
             }
         }
         if state_changed {
             inner.dirty = true;
-            // Each chat's Claude refreshes its profile's models (X105).
-            if inner.cfg.agent == "claude" && !inner.state.models.is_empty() {
-                let mut known = self.models.lock().unwrap();
-                if known.get(&inner.cfg.config_dir) != Some(&inner.state.models) {
-                    known.insert(inner.cfg.config_dir.clone(), inner.state.models.clone());
-                }
-            }
             // The mode Claude reports is the one the next start uses (X20).
             if inner.cfg.agent == "claude" && inner.state.mode.is_some() {
                 inner.cfg.mode = inner.state.mode.clone();
@@ -1638,6 +1642,42 @@ done
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("timed out: {:?}", chats.state(id).unwrap());
+    }
+
+    /// X105: a fake `claude` that answers `initialize` with one model named
+    /// after who asked (a chat or the models probe) and its profile.
+    const MODELS_CLAUDE: &str = r#"#!/bin/sh
+case "$*" in *--permission-prompt-tool*) who=Chat ;; *) who=Probe ;; esac
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[],"models":[{"value":"opus","displayName":"%s %s"}]}}}\n' "$id" "$who" "${CLAUDE_CONFIG_DIR:-default}" ;;
+  esac
+done
+"#;
+
+    /// X105: a chat's Claude gives its profile the models it lists, under the
+    /// profile it really runs in, so the Composer needs no probe.
+    #[tokio::test]
+    async fn a_chats_claude_gives_its_profile_the_models_it_lists() {
+        let (dir, _terms, chats) = setup().await;
+        std::fs::write(dir.path().join("bin/claude"), MODELS_CLAUDE).unwrap();
+        let cwd = dir.path().display().to_string();
+        let label = |m: Vec<ClaudeModel>| m.into_iter().map(|m| m.label).collect::<Vec<_>>();
+
+        let plain = chats.create(ChatCreate { cwd: cwd.clone(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, plain.id, |s| !s.models.is_empty()).await;
+        assert_eq!(label(chats.claude_models(None).await), ["Chat default"]);
+
+        // A chat started in another profile through its own environment
+        // leaves the default profile's list as it is.
+        let work = dir.path().join("work").display().to_string();
+        let env = BTreeMap::from([(crate::profiles::CONFIG_DIR_VAR.to_string(), work.clone())]);
+        let other = chats.create(ChatCreate { cwd, agent: "claude".into(), env, ..Default::default() }).unwrap();
+        let st = wait_for(&chats, other.id, |s| !s.models.is_empty()).await;
+        assert_eq!(label(st.models), [format!("Chat {work}")]);
+        assert_eq!(label(chats.claude_models(None).await), ["Chat default"]);
     }
 
     #[tokio::test]

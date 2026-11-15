@@ -612,6 +612,7 @@ impl Adapter for Claude {
                     }
                     st.models = models(r);
                     out.push(Out::State);
+                    out.push(Out::Models);
                     out.push(self.control("context", json!({"subtype": "get_context_usage", "detail": "summary"})));
                 }
             }
