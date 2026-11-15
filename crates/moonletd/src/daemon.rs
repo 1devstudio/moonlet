@@ -1038,9 +1038,7 @@ impl Daemon {
         // A cloud machine reaches only what a worker needs (X63), for the
         // whole life of its connection: its device is forgotten while its
         // machine is being removed, but the connection stays a cloud one.
-        let cloud = conn.cloud.load(Ordering::Relaxed)
-            || conn.phone.as_deref().is_some_and(|d| self.machines.machine_of(d).is_some());
-        if cloud && !CLOUD_METHODS.contains(&method) {
+        if conn.cloud.load(Ordering::Relaxed) && !CLOUD_METHODS.contains(&method) {
             return Err(RpcError::new("forbidden", "a cloud machine only runs heavy commands"));
         }
         let s = &self.terminals;
