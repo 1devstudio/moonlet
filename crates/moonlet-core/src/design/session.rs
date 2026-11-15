@@ -438,12 +438,23 @@ impl Store {
             .into_iter()
             .filter(|(rel, _)| rel.starts_with("pages/") || rel.starts_with("assets/"))
             .collect();
+        // Its comments, read before anything is made: none there is none to
+        // keep, but one there that cannot be read refuses it, so none is lost.
+        let comments_file = at.in_side(super::comments::COMMENTS_FILE);
+        let comments = match std::fs::symlink_metadata(at.root.join(&comments_file)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            _ => Some(fsx::read_file_inside(&at.root, &comments_file).context("cannot read its comments")?),
+        };
         let name = config.name.clone();
         let from = super::project::ProjectDesign { config, files };
         let slug = self.create_from_project(workspace, &name, &from, now)?;
-        if let Ok(comments) = fsx::read_file_inside(&at.root, &at.in_side(super::comments::COMMENTS_FILE)) {
+        if let Some(comments) = comments {
             let to = self.workspace_design(workspace, &slug)?;
-            fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments)?;
+            // One whose comments cannot be written is not made at all.
+            if let Err(e) = fsx::write_inside(&to.root, &to.root.join(to.in_side(super::comments::COMMENTS_FILE)), &comments) {
+                let _ = self.remove_design(&to);
+                return Err(e.context("cannot write its comments"));
+            }
         }
         Ok(slug)
     }
@@ -1418,6 +1429,26 @@ created_at = 1761200000000
             .map(|d| d.slug)
             .collect();
         assert_eq!(left, ["billing"]);
+    }
+
+    /// X104: a session design whose comments are there but cannot be read
+    /// is refused before anything is made, and stays with its comments, so
+    /// none is lost.
+    #[test]
+    fn a_session_design_whose_comments_cannot_be_read_is_not_moved_and_stays() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let shelf = store.new_design_shelf("s1", wt, "docs/design", false).unwrap();
+        let at = store.create_session_design("w1", "moonlet-desktop", "s1", &shelf.root, &shelf.folder, "Pricing", "b", 1).unwrap();
+        // A folder where the file should be: there, but not readable as one.
+        let _ = std::fs::remove_file(wt.join(".moonlet/design/pricing/comments.json"));
+        std::fs::create_dir_all(wt.join(".moonlet/design/pricing/comments.json")).unwrap();
+
+        assert!(store.adopt_session_design(&at, "w1", 2).is_err());
+        assert!(wt.join("docs/design/pricing/design.toml").is_file());
+        assert!(wt.join(".moonlet/design/pricing/comments.json").is_dir());
+        assert!(!home.path().join("design/w1/designs/pricing").exists());
     }
 
     /// X104: a session design whose design system is gone cannot be a
