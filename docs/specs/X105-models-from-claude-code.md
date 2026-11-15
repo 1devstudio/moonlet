@@ -27,6 +27,8 @@ moonlet's Claude model menus came from a list written into the app: Fable 5.1, O
 - [x] A model's label is its Claude Code label; a model id the list does not have shows as it is. (`agents.test.ts` "labels a model by Claude Code's name, else by its id")
 - [x] The Effort menu offers only the efforts the chosen model lists. A model that lists none has no Effort menu. A model the list does not have, or no list, offers all five; Codex keeps its three. (`agents.test.ts` "offers the efforts the chosen model supports")
 - [x] Choosing a model for a new session keeps the chosen effort when the model supports it, else sets High, or none for a model without efforts. (`agents.test.ts` "keeps the effort when the new model supports it, else High")
+- [x] A saved new-session choice whose effort the model turns out not to support gets High once the list arrives, and is saved so. (`models-from-claude-code.e2e.ts` "drops a saved effort the model turns out not to support")
+- [x] A chat's Claude gives its profile the list it answers `initialize` with, under the profile its environment really sets, so `claude.models` needs no probe for it; an older list a chat still holds never replaces it. (`runtime.rs` `a_chats_claude_gives_its_profile_the_models_it_lists`)
 - [x] Choosing a model in a running chat changes its effort only when the new model lacks it; for a model without efforts the effort stays as it is. (`agents.test.ts` "switches a running chat's model, and its effort only when the new model lacks it")
 - [x] The phone's chat footer names the model by the chat's list. (`chatView.test.ts` "names the model by the chat's list (X105)") Its model sheets build their groups with the same `modelMenu`.
 - [x] The Composer shows Claude Code's newest models and the older ones under More models. (`models-from-claude-code.e2e.ts` "lists the newest models, the older ones under More models, and the efforts of the chosen one")
@@ -57,7 +59,7 @@ A model picked from More models shows a check on the More models row too (in the
 
 ## Data and config
 
-The daemon keeps each profile's list in memory, refreshed whenever a chat in that profile starts its Claude. Nothing is written to disk. One Claude at a time is started to ask; it gets 20 seconds to answer, and a host without `claude` answers empty at once. The probe's whole process group is killed when it ends, so nothing it started outlives it.
+The daemon keeps each profile's list in memory, refreshed by each fresh answer to `initialize` from a chat's Claude in that profile. Nothing is written to disk. One Claude at a time is started to ask; it gets 20 seconds to answer, and a host without `claude` answers empty at once. The probe's whole process group is killed when it ends, so nothing it started outlives it.
 
 ## Security considerations
 

@@ -59,5 +59,15 @@ describe("models from Claude Code (X105)", () => {
     await expect($('//button[.//span[normalize-space()="Opus 4.6"]][.//span[normalize-space()="High"]]')).toBeDisplayed();
     await expect($(opt("Extra high"))).not.toBeExisting();
     await expect($(opt("Max"))).toBeDisplayed();
+    await browser.keys("Escape");
+  });
+
+  it("drops a saved effort the model turns out not to support", async () => {
+    await browser.execute((id: string) => localStorage.setItem(`moonlet.composer.${id}`, JSON.stringify({ agent: "claude", model: "claude-opus-4-6", effort: "xhigh" })), projectId(w));
+    await $('button[title="New session"]').click();
+    await fill('//textarea[@placeholder="What do you want to work on?"]', "Saved effort");
+    await expect($('//button[.//span[normalize-space()="Opus 4.6"]][.//span[normalize-space()="High"]]')).toBeDisplayed({ wait: 30_000 });
+    const saved = await browser.execute((id: string) => localStorage.getItem(`moonlet.composer.${id}`), projectId(w));
+    expect(JSON.parse(saved ?? "{}").effort).toBe("high");
   });
 });
