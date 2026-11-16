@@ -77,7 +77,7 @@ function Home() {
   const local = useStore((s) => s.hosts.local);
   return (
     <div className="flex h-full flex-col">
-      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
+      <div data-tauri-drag-region="deep" className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
       <Pane className="flex flex-col items-center justify-center gap-4 text-center">
         <div className="font-mono ui-text-22 tracking-tight">
           <span className="text-accent">❯</span> moonlet

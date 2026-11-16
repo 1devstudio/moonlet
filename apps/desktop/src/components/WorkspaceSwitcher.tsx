@@ -95,8 +95,8 @@ export function WorkspaceSwitcher() {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />
-          <div role="menu" aria-label="Workspaces" className="absolute left-0 top-[34px] z-50 flex w-64 flex-col gap-0.5 rounded-xl border border-border-strong bg-panel-2 p-1.5 shadow-2xl">
+          <div data-tauri-drag-region="false" className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />
+          <div data-tauri-drag-region="false" role="menu" aria-label="Workspaces" className="absolute left-0 top-[34px] z-50 flex w-64 flex-col gap-0.5 rounded-xl border border-border-strong bg-panel-2 p-1.5 shadow-2xl">
             <div className="px-2 pb-1 pt-1.5 ui-text-11.5 text-faint">Workspaces</div>
             {rows.map((r) => {
               const isCur = r === cur;

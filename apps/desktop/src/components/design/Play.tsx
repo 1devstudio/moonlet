@@ -92,7 +92,7 @@ export function Play({
   const url = snapshot === null ? pageUrl(place, slug, page, rev) : snapshotPageUrl(place, slug, snapshot, page);
   return createPortal(
     <div role="dialog" aria-label={`Playing ${name} · ${page}`} className="fixed inset-0 z-[45] flex flex-col bg-bg">
-      <div ref={bar} data-tauri-drag-region className="drag flex h-9 shrink-0 items-center gap-2 border-b border-border pr-3 ui-text-13" style={{ paddingLeft: TRAFFIC_LIGHTS }}>
+      <div ref={bar} data-tauri-drag-region="deep" className="drag flex h-9 shrink-0 items-center gap-2 border-b border-border pr-3 ui-text-13" style={{ paddingLeft: TRAFFIC_LIGHTS }}>
         <IconButton title="Back (Esc)" className="no-drag" onClick={() => onClose(page)}>
           <ArrowLeft size={14} />
         </IconButton>

@@ -59,7 +59,7 @@ export function TaskBar({ host, ws, linked }: { host: string; ws: Session; linke
     <div
       role="region"
       aria-label="Task"
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
       className="drag @container flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
       // Clear of the traffic lights when the sidebar is closed.
       style={{ paddingLeft: sidebarOpen ? 12 : TRAFFIC_LIGHTS }}

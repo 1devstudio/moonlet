@@ -1017,7 +1017,7 @@ export function Sidebar() {
     <TaskLines.Provider value={taskLines}>
     <aside className="flex h-full flex-col bg-window">
       {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
-      <div data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-[86px] pr-2.5">
+      <div data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-[86px] pr-2.5">
         <WorkspaceSwitcher />
         <ModeSwitch />
       </div>

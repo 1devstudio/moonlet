@@ -77,8 +77,8 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
+          <div data-tauri-drag-region="false" className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div data-tauri-drag-region="false" className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
             {offers.openIn && openIn.choices.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, openIn.path, openIn.host).catch(errorToast)))}
             {offers.openIn && <div className="my-1 border-t border-border" />}
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
@@ -124,8 +124,8 @@ function StackMenu({ view, current }: { view: StackView; current: number }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 z-40 mt-1 max-h-[60vh] w-[360px] overflow-y-auto rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
+          <div data-tauri-drag-region="false" className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div data-tauri-drag-region="false" className="absolute left-0 z-40 mt-1 max-h-[60vh] w-[360px] overflow-y-auto rounded-lg border border-border-strong bg-panel-2 py-1 shadow-2xl">
             {view.rows.map((p) => (
               <button
                 key={p.number}
@@ -190,7 +190,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     };
   }, [host, ws.id, ws.path]);
   return (
-    <div data-tauri-drag-region className="drag @container flex h-ui-44 shrink-0 items-center gap-1 px-4">
+    <div data-tauri-drag-region="deep" className="drag @container flex h-ui-44 shrink-0 items-center gap-1 px-4">
       <button
         className={cx(
           "no-drag flex h-8 items-center gap-2 rounded-md bg-raised px-2.5 ui-text-14 hover:bg-hover @max-[340px]:px-2",

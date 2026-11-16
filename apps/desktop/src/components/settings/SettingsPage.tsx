@@ -102,7 +102,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
   return (
     <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col bg-window">
       {/* The traffic lights sit here. */}
-      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" />
+      <div data-tauri-drag-region="deep" className="drag h-ui-44 shrink-0" />
       <div className="flex shrink-0 flex-col gap-2 px-2.5 pb-2.5">
         <button type="button" onClick={closeSettings} className="no-drag flex h-7 items-center gap-2 rounded-md px-2 ui-text-12.5 text-muted hover:bg-hover hover:text-fg">
           <ArrowLeft size={14} />
@@ -350,7 +350,7 @@ export function SettingsPage({ route }: { route: SettingsRoute }) {
     <div ref={root} role="region" aria-label="Settings" data-settings-searching={searching || undefined} className="fixed inset-0 z-40 flex bg-window text-fg">
       <Nav route={route} phones={mobile ? devicesOfKind(mobile, "phone").length : 0} search={search} />
       <main className="flex min-w-0 flex-1 flex-col pb-[6px] pr-[6px]">
-        <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">
+        <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2 pl-12 pr-4 ui-text-12.5 text-faint">
           {crumbs.map((c, i) => (
             <span key={i} className="flex items-center gap-2">
               {i > 0 && <ChevronRight size={12} />}

@@ -144,7 +144,7 @@ export function DesignScreen({ host, workspace, viewedIn = workspace, design, in
     <div className="flex min-h-0 flex-1">
       {chatOpen ? (
         <section ref={chatRef} aria-label={`Design · ${design.name}`} className="mr-[6px] flex w-[360px] shrink-0 flex-col">
-          <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-1.5 pr-2" style={{ paddingLeft: inset + 16 }}>
+          <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-1.5 pr-2" style={{ paddingLeft: inset + 16 }}>
             <div className="min-w-0 flex-1">
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
@@ -719,7 +719,7 @@ export function DesignCanvas({
   return (
     <div ref={own} className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 px-3", session ? "h-10 border-b border-border" : "drag h-ui-44")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
+        <div {...(session ? {} : { "data-tauri-drag-region": "deep" })} className={cx("flex shrink-0 items-center gap-1 px-3", session ? "h-10 border-b border-border" : "drag h-ui-44")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
           <nav aria-label="Pages" className="no-drag flex min-w-0 items-center gap-0.5 overflow-x-auto">
             {(names.length ? names : ["index"]).map((name) => (
               <button
