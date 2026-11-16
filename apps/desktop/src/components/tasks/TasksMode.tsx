@@ -610,7 +610,7 @@ export function TasksMode() {
     <div className="flex h-full min-w-0">
       <div className="flex min-w-0 flex-1 flex-col">
         {/* The board switcher, Find a task, then the Filter and Display options icons (X100). */}
-        <header data-tauri-drag-region className="drag @container flex min-h-ui-44 shrink-0 items-center gap-2.5 px-4 py-1.5">
+        <header data-tauri-drag-region="deep" className="drag @container flex min-h-ui-44 shrink-0 items-center gap-2.5 px-4 py-1.5">
           <BoardSwitcher host={ws.host} workspaceId={ws.id} shown={shown.board} title={header.title} subtitle={header.subtitle} stats={stats} />
           <FindTask
             host={ws.host}
@@ -1009,7 +1009,7 @@ const PRIORITY = ["No priority", "Low", "Medium", "High"];
 function Framed({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full flex-col">
-      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" />
+      <div data-tauri-drag-region="deep" className="drag h-ui-44 shrink-0" />
       <Pane className="flex flex-col">{children}</Pane>
     </div>
   );

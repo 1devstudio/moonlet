@@ -120,7 +120,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
           <CardPage host={host} workspace={workspace} sys={sys} rev={cardRev(revs, card.path)} card={card} agent={agent} inset={inset} />
         ) : (
           <>
-            <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 20 }}>
+            <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 20 }}>
               <div className="min-w-0 flex-1">
                 <h1 className="truncate ui-text-14 font-semibold text-fg">{sys.name}</h1>
                 <p className="truncate ui-text-12 text-muted">
@@ -272,7 +272,7 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
   const label = "mb-2 ui-text-11.5 uppercase tracking-[0.08em] text-faint";
   return (
     <>
-      <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 12 }}>
+      <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2 pr-3" style={{ paddingLeft: inset + 12 }}>
         <button aria-label="Back to the design system" className="no-drag rounded p-1 text-muted hover:bg-panel-2 hover:text-fg" onClick={() => openCard(host, workspace, sys.slug, null)}>
           <ChevronLeft size={15} />
         </button>

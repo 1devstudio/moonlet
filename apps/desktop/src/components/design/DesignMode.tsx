@@ -276,7 +276,7 @@ export function DesignMain() {
   }
   return (
     <div className="flex h-full flex-col">
-      <div data-tauri-drag-region className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
+      <div data-tauri-drag-region="deep" className="drag h-ui-44 shrink-0" style={{ paddingLeft: sidebarOpen ? 0 : TRAFFIC_LIGHTS }} />
       {systems?.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-[10px] bg-bg p-6 text-center">
           <SwatchBook size={18} className="text-muted" />

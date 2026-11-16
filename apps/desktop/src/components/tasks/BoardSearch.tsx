@@ -86,12 +86,17 @@ export function FindTask({ host, workspaceId, views, leftOut, others, shownLabel
       }),
     [],
   );
-  // A click outside closes the dropdown.
+  // A click outside closes the dropdown, and so does a press: no click
+  // follows a press that drags the window by the header (X94).
   useEffect(() => {
     if (!shown) return;
-    const onClick = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("click", onClick, true);
-    return () => document.removeEventListener("click", onClick, true);
+    const onOutside = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", onOutside, true);
+    document.addEventListener("click", onOutside, true);
+    return () => {
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("click", onOutside, true);
+    };
   }, [shown]);
   // The first row is active whenever the dropdown opens or the query changes.
   useEffect(() => setActive(0), [query, shown]);
@@ -170,7 +175,7 @@ export function FindTask({ host, workspaceId, views, leftOut, others, shownLabel
         )}
       </label>
       {shown && (
-        <section id={list} role="listbox" aria-label="Tasks found" className="absolute left-0 top-[38px] z-30 flex w-[520px] flex-col overflow-hidden rounded-xl border border-border-strong bg-raised shadow-[0_20px_50px_rgba(0,0,0,0.6)]">
+        <section id={list} role="listbox" aria-label="Tasks found" data-tauri-drag-region="false" className="absolute left-0 top-[38px] z-30 flex w-[520px] flex-col overflow-hidden rounded-xl border border-border-strong bg-raised shadow-[0_20px_50px_rgba(0,0,0,0.6)]">
           {result.on.length > 0 && (
             <>
               <GroupHead name={`On this board · ${result.on.length}`} hint="selects it on the board" />
@@ -324,7 +329,7 @@ function TaskPreview({ host, workspaceId, row, shownLabel, sessions, onClose }: 
     useStore.setState({ dialog: { kind: "new-session", host, workspace: workspaceId, task: composerTask(host, workspaceId, task) } });
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[110px]" onMouseDown={onClose}>
+    <div data-tauri-drag-region="false" className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[110px]" onMouseDown={onClose}>
       <section ref={panel} role="dialog" aria-labelledby={title} onMouseDown={(e) => e.stopPropagation()} className="flex max-h-[76vh] w-[600px] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel shadow-[0_24px_60px_rgba(0,0,0,0.6)]">
         <div className="flex h-[50px] shrink-0 items-center gap-2 border-b border-border pl-[18px] pr-2.5">
           <BoardTile tracker={trackerOf(task.connection)} />

@@ -75,7 +75,7 @@ export function DesignsIndex({
   const act = (c: IndexCard) => (acts[c.act.kind] as (a: CardAction, key: string) => void)(c.act, c.key);
   return (
     <section aria-label="Designs" className="flex min-h-0 flex-1 flex-col">
-      <header data-tauri-drag-region className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-4" style={{ paddingLeft: inset + 20 }}>
+      <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-4" style={{ paddingLeft: inset + 20 }}>
         <h1 className="ui-text-14 font-semibold text-fg">Designs</h1>
         <span className="truncate ui-text-12.5 text-muted">{name}</span>
         <span className="flex-1" />

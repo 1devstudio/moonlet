@@ -16,7 +16,7 @@ function SessionHeader({ ws }: { ws: Session }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
     <header
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
       aria-label="Session"
       className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-[6px]"
       // Clear of the traffic lights when the sidebar is closed.

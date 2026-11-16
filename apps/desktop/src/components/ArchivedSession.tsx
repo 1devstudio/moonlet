@@ -40,7 +40,7 @@ export function ArchivedSession({ host, ws }: { host: string; ws: Session }) {
   const note = history && historyNote(history);
   return (
     <div role="region" aria-label={`Archived session ${ws.name}`} className="flex h-full w-full flex-col overflow-hidden">
-      <header className="flex h-ui-44 shrink-0 items-center gap-2.5 pr-3 pl-4">
+      <header data-tauri-drag-region="deep" className="drag flex h-ui-44 shrink-0 items-center gap-2.5 pr-3 pl-4">
         <Archive size={14} className="shrink-0 text-faint" />
         <span className="min-w-0 truncate ui-text-13.5 font-medium text-fg">{ws.name}</span>
         <span className="shrink-0 rounded-full border border-border-strong px-2 py-px ui-text-11 text-muted">Archived</span>

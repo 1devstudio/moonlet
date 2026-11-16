@@ -255,6 +255,24 @@ export async function rightClick(xpath: string) {
   }, xpath);
 }
 
+/** Presses the left button on the element at `xpath` and lets go: true when
+ * the press starts a window drag. Tauri's drag script claims such a press by
+ * calling preventDefault() on its mousedown. No click follows, as none
+ * follows a press that drags the window. */
+export async function pressDrags(xpath: string) {
+  return (await browser.execute((xp: string) => {
+    const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
+    if (!el) throw new Error(`no element at ${xp}`);
+    const r = el.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, composed: true, button: 0, detail: 1, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...at, pointerType: "mouse", isPrimary: true }));
+    const claimed = !el.dispatchEvent(new MouseEvent("mousedown", at));
+    el.dispatchEvent(new PointerEvent("pointerup", { ...at, pointerType: "mouse", isPrimary: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", at));
+    return claimed;
+  }, xpath)) as boolean;
+}
+
 export async function fill(xpath: string, text: string) {
   await browser.waitUntil(
     () =>
