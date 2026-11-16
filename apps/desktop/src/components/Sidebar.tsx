@@ -5,7 +5,7 @@ import { M, type Copy, type HostInfo, type Project, type Section, type SectionVi
 import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
-import { clockLines } from "../lib/workspaces";
+import { clockLines, notSyncingLine } from "../lib/workspaces";
 import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
@@ -818,8 +818,17 @@ function CentralOffline() {
 function ClockOffLines() {
   const info = useStore((st) => st.accounts.local);
   const lines = useMemo(() => clockLines(info), [info]);
+  const central = useSync((st) => st.central);
+  const label = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
+  const stalled = notSyncingLine(info, info?.central ?? label ?? "the central host");
   return (
     <>
+      {stalled && (
+        <div className="flex items-start gap-1.5 px-4 pb-1 ui-text-12 text-faint">
+          <CircleAlert size={12} className="mt-0.5 shrink-0 opacity-50" />
+          <span>{stalled}</span>
+        </div>
+      )}
       {lines.map((line) => (
         <div key={line} className="flex items-start gap-1.5 px-4 pb-1 ui-text-12 text-faint">
           <Clock size={12} className="mt-0.5 shrink-0 opacity-50" />

@@ -843,6 +843,10 @@ export interface AccountInfo {
    * host's: on a member, its central host; on a central host, its members.
    * Absent when none is, and from a daemon from before them. */
   clocks?: ClockOff[];
+  /** Why this Mac's account does not sync with its central host now:
+   * `too_large` once what the central host would send does not fit one
+   * message. Absent while it syncs, and from a daemon from before it. */
+  not_syncing?: string;
 }
 
 /** A host whose clock is off from this host's (X68). */

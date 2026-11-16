@@ -1869,8 +1869,7 @@ impl SessionCopies {
     ) -> Result<moonlet_core::account::Record, RpcError> {
         let record = self
             .sessions
-            .session_records()
-            .remove(session)
+            .session_record(session)
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         if record.get("owner").and_then(Value::as_str) != Some(worker) {
             return Err(RpcError::new(

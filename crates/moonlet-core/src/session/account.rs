@@ -106,7 +106,16 @@ pub(super) struct Account {
     listener: Option<Listener>,
     /// Called with the changes taken from other members.
     applied: Vec<Applied>,
+    /// The account's sessions as [`session_view`] worked them out last, and
+    /// the [`Log::rev`] of the log they were worked out from: every
+    /// `session.*` request on a central host reads them, and working them
+    /// out goes through the whole log.
+    view: std::sync::Mutex<Option<(u64, Arc<SessionView>)>>,
 }
+
+/// The account's sessions, and those that ended by a delete that counts
+/// ([`session_view`]).
+type SessionView = (Map<String, Record>, BTreeSet<String>);
 
 /// A log with the changes of one request, written beside the log until the
 /// state that goes with them is saved: a state that cannot be saved leaves
@@ -118,6 +127,20 @@ pub(super) struct Staged {
 }
 
 impl Account {
+    /// The account's sessions in the log now ([`session_view`]), worked out
+    /// again only once the log changed.
+    fn sessions(&self) -> Arc<SessionView> {
+        let mut kept = self.view.lock().unwrap();
+        if let Some((rev, view)) = kept.as_ref()
+            && *rev == self.log.rev()
+        {
+            return view.clone();
+        }
+        let view = Arc::new(session_view(&self.log));
+        *kept = Some((self.log.rev(), view.clone()));
+        view
+    }
+
     /// The changes that turn `old` into `new`, staged.
     pub(super) fn stage(&self, old: &State, new: &State) -> Result<Staged> {
         let mut log = self.log.clone();
@@ -262,6 +285,7 @@ impl SessionManager {
             path,
             listener: None,
             applied: Vec::new(),
+            view: Default::default(),
         });
         Ok(())
     }
@@ -623,7 +647,12 @@ impl SessionManager {
     /// and from the member that owns the session now. No stamp a member
     /// gives its changes decides who made or owns a session.
     pub fn session_records(&self) -> Map<String, Record> {
-        self.with_log(sessions_in)
+        self.with_account(|a| a.sessions().0.clone())
+    }
+
+    /// Session `id`'s record, as [`Self::session_records`] gives it.
+    pub fn session_record(&self, id: &str) -> Option<Record> {
+        self.with_account(|a| a.sessions().0.get(id).cloned())
     }
 
     /// The sessions the account says have ended: those whose record, as
@@ -632,13 +661,14 @@ impl SessionManager {
     /// is not among them: the log may be one made again, or not have heard
     /// from the session's member yet (X72).
     pub fn ended_sessions(&self) -> BTreeSet<String> {
-        self.with_log(|log| {
-            let (records, deleted) = session_view(log);
+        self.with_account(|a| {
+            let view = a.sessions();
+            let (records, deleted) = &*view;
             records
-                .into_iter()
+                .iter()
                 .filter(|(_, r)| r.get("archived").and_then(Value::as_bool).unwrap_or(false))
-                .map(|(id, _)| id)
-                .chain(deleted)
+                .map(|(id, _)| id.clone())
+                .chain(deleted.iter().cloned())
                 .collect()
         })
     }
@@ -655,7 +685,7 @@ impl SessionManager {
             // The record as it is here goes with the move: from then on
             // only the new owner's changes count, so the former owner's
             // fields are kept as this member's.
-            let record = sessions_in(&log).remove(id).unwrap_or_default();
+            let record = a.sessions().0.get(id).cloned().unwrap_or_default();
             let mut changes: Vec<Change> = record
                 .into_iter()
                 .filter(|(field, _)| !OWNERSHIP.contains(&field.as_str()))
@@ -702,14 +732,15 @@ impl SessionManager {
     /// where they run now. One it runs anyway ([`Self::keep_listed`]) stays.
     pub fn listed_sessions(&self) -> Vec<Session> {
         let here = self.kept_listed.lock().unwrap().clone();
-        let given = self.with_log(|log| {
-            let Some(me) = log_owner(log.member()) else {
+        let given = self.with_account(|a| {
+            let Some(me) = log_owner(a.log.member()) else {
                 return BTreeSet::new();
             };
-            sessions_in(log)
-                .into_iter()
+            a.sessions()
+                .0
+                .iter()
                 .filter(|(_, r)| r.get("owner").and_then(Value::as_str).is_some_and(|o| o != me))
-                .map(|(id, _)| id)
+                .map(|(id, _)| id.clone())
                 .collect::<BTreeSet<String>>()
         });
         self.list_sessions()
@@ -793,12 +824,11 @@ impl SessionManager {
     }
 
     fn with_log<T: Default>(&self, f: impl FnOnce(&Log) -> T) -> T {
-        self.account
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|a| f(&a.log))
-            .unwrap_or_default()
+        self.with_account(|a| f(&a.log))
+    }
+
+    fn with_account<T: Default>(&self, f: impl FnOnce(&Account) -> T) -> T {
+        self.account.lock().unwrap().as_ref().map(f).unwrap_or_default()
     }
 
     /// What this member has seen of the account; empty without one.
@@ -809,6 +839,13 @@ impl SessionManager {
     /// The changes a member at `version` lacks.
     pub fn account_changes_for(&self, version: &Version) -> Vec<Change> {
         self.with_log(|log| log.missing_for(version))
+    }
+
+    /// The first of the changes a member at `version` lacks, as many as
+    /// fit `budget` bytes, and whether more are missing
+    /// ([`Log::missing_page`]).
+    pub fn account_page(&self, version: &Version, budget: usize) -> (Vec<Change>, bool) {
+        self.with_log(|log| log.missing_page(version, budget))
     }
 
     /// This member's log: its name, and how many of its own changes it
@@ -1132,12 +1169,7 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
 }
 
 /// The account's sessions in `log`, as [`SessionManager::session_records`]
-/// gives them (X72, X73).
-fn sessions_in(log: &Log) -> Map<String, Record> {
-    session_view(log).0
-}
-
-/// The account's sessions in `log` (see [`sessions_in`]), and the ids of
+/// gives them (X72, X73), and the ids of
 /// those deleted by a member whose delete counts: the referee, or the
 /// member that owns the session now. Another member's delete is left out.
 fn session_view(log: &Log) -> (Map<String, Record>, BTreeSet<String>) {
@@ -1740,6 +1772,7 @@ pub(super) fn lay_onto(st: &mut State, log: &Log) {
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use super::{write_private, log_owner};
     use moonlet_proto::types::{Change, ProjectIdentity};
 
     async fn member(name: &str) -> (tempfile::TempDir, Arc<SessionManager>) {
@@ -3622,5 +3655,111 @@ mod tests {
         book.name_member("Alex's MacBook");
         sync(&book, &mini);
         assert_eq!(made_by(&mini, &acme.id).as_deref(), Some("Alex's MacBook"));
+    }
+
+    /// A generated account log of about `n` changes, as a heavy user's
+    /// would hold: each session 10 changes from its maker and 3 from the
+    /// central host naming it, every fifth moved once (10 more).
+    pub(crate) fn generated_log(maker: &str, central: &str, n: usize) -> Vec<Change> {
+        let mut out = Vec::new();
+        let (mut mine, mut theirs) = (0u64, 0u64);
+        let base = 1_760_000_000_000u64;
+        let mut i = 0u64;
+        while out.len() < n {
+            let id = format!("{:012x}", 0x5e55_0000_0000u64 + i);
+            let at = base + i * 60_000;
+            let fields = [
+                ("name", serde_json::json!(format!("Fix the checkout total rounding {i}"))),
+                ("project", serde_json::json!({"origin": "github.com/acme/shop", "root": "4f1c2a9e0b7d3c5a8e6f1d2b9c0a7e4f3d5b8c1a"})),
+                ("workspace", serde_json::json!("default")),
+                ("branch", serde_json::json!(format!("moonlet/fix-checkout-total-{i}"))),
+                ("owner", serde_json::json!(log_owner(maker).unwrap())),
+                ("epoch", serde_json::json!(1)),
+                ("created_at", serde_json::json!(at)),
+                ("archived", serde_json::json!(false)),
+                ("model", serde_json::json!("opus")),
+                ("effort", serde_json::json!("high")),
+            ];
+            for (k, (f, v)) in fields.iter().enumerate() {
+                mine += 1;
+                out.push(session_change_at(maker, mine, at + k as u64, &id, set_op(f, v.clone())));
+            }
+            let named = [("owner", serde_json::json!(log_owner(maker).unwrap())), ("epoch", serde_json::json!(1)), ("pinned", serde_json::Value::Null)];
+            for (k, (f, v)) in named.iter().enumerate() {
+                theirs += 1;
+                out.push(session_change_at(central, theirs, at + 100 + k as u64, &id, set_op(f, v.clone())));
+            }
+            if i % 5 == 4 {
+                for (k, (f, v)) in fields.iter().enumerate() {
+                    theirs += 1;
+                    out.push(session_change_at(central, theirs, at + 200 + k as u64, &id, set_op(f, v.clone())));
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn session_change_at(member: &str, seq: u64, ms: u64, id: &str, op: moonlet_proto::types::ChangeOp) -> Change {
+        Change { stamp: moonlet_proto::types::Stamp { ms, n: 0, member: member.into() }, seq, kind: "session".into(), id: id.into(), op }
+    }
+
+    #[tokio::test]
+    #[ignore = "measures; run by hand with --nocapture"]
+    async fn measure_account_log_costs() {
+        for n in [1_000usize, 10_000, 100_000, 250_000] {
+            let (home, mini) = member("mini").await;
+            let central = mini.account_names().pop().unwrap();
+            let book = "book.k3x9q2";
+            mini.apply_account(generated_log(book, &central, n));
+            let path = home.path().join("account.json");
+            let bytes = std::fs::metadata(&path).unwrap().len();
+            let count = mini.account_changes_for(&Default::default()).len();
+            let all = mini.account_changes_for(&Default::default());
+            let reply = serde_json::to_vec(&moonlet_proto::methods::AccountSynced { changes: all, version: mini.account_version(), account: None, now_ms: None, more: false }).unwrap();
+            // The first part of the whole log, as the central host answers
+            // a new member.
+            let t = std::time::Instant::now();
+            let (page, more) = mini.account_page(&Default::default(), moonlet_proto::methods::ACCOUNT_PAGE_BYTES);
+            let page_ms = t.elapsed().as_secs_f64() * 1e3;
+            // Load: a fresh manager on a copy of the files.
+            let again = tempfile::tempdir().unwrap();
+            std::fs::copy(&path, again.path().join("account.json")).unwrap();
+            let env: BTreeMap<String, String> = std::env::vars().collect();
+            let terminals = TerminalManager::new(again.path().join("s.sock"), env);
+            let t = std::time::Instant::now();
+            let loaded = SessionManager::load(again.path().join("state.json"), again.path().join("worktrees"), terminals);
+            loaded.attach_account(again.path().join("account.json"), "mini").unwrap();
+            let load_ms = t.elapsed().as_secs_f64() * 1e3;
+            // Apply one change from another member (clone, lay, scan, save).
+            let seq = mini.account_version().get(book).copied().unwrap_or(0) + 1;
+            let one = session_change_at(book, seq, now_ms(), "000000000001", set_op("name", serde_json::json!("renamed")));
+            let t = std::time::Instant::now();
+            mini.apply_account(vec![one]);
+            let apply_ms = t.elapsed().as_secs_f64() * 1e3;
+            // Save alone.
+            let log = mini.account.lock().unwrap().as_ref().unwrap().log.clone();
+            let t = std::time::Instant::now();
+            write_private(&path, &log).unwrap();
+            let save_ms = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let _ = log.clone();
+            let clone_ms = t.elapsed().as_secs_f64() * 1e3;
+            // A local change: the central host names an owner.
+            let t = std::time::Instant::now();
+            mini.set_session_owner("000000000002", "air", 2, None);
+            let own_ms = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let records = mini.session_records();
+            let view_ms = t.elapsed().as_secs_f64() * 1e3;
+            println!(
+                "n={count} file={bytes}B ({:.0} B/change) whole_reply={}B ({:.0} B/change) first_part={} changes, more={more}, in {page_ms:.1}ms load={load_ms:.1}ms apply_one={apply_ms:.1}ms save={save_ms:.1}ms clone={clone_ms:.1}ms own_change={own_ms:.1}ms session_view={view_ms:.1}ms sessions={}",
+                bytes as f64 / count as f64,
+                reply.len(),
+                reply.len() as f64 / count as f64,
+                page.len(),
+                records.len()
+            );
+        }
     }
 }

@@ -117,6 +117,18 @@ pub struct Log {
     former: Vec<String>,
     /// The account it shares, as its central host named it.
     account: Option<String>,
+    /// Which content this log holds: a number no other content of any log
+    /// had, given again whenever its changes or its account change. What
+    /// is worked out from a log can be kept while it stays the same
+    /// ([`Self::rev`]).
+    rev: u64,
+}
+
+/// The last [`Log::rev`] given out.
+static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_rev() -> u64 {
+    REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
 impl Log {
@@ -129,7 +141,15 @@ impl Log {
             changes: BTreeMap::new(),
             former: Vec::new(),
             account: None,
+            rev: next_rev(),
         }
+    }
+
+    /// Which content this log holds: the same number as long as its
+    /// changes and its account stay the same, so a copy of it has the same
+    /// one, and never one any other content had.
+    pub fn rev(&self) -> u64 {
+        self.rev
     }
 
     pub fn from_file(file: LogFile) -> Log {
@@ -147,6 +167,7 @@ impl Log {
 
     pub fn set_account(&mut self, account: Option<String>) {
         self.account = account;
+        self.rev = next_rev();
     }
 
     /// This log's name.
@@ -184,6 +205,7 @@ impl Log {
             self.changes.insert((self.member.clone(), self.seq), mine);
         }
         self.former.push(old.to_string());
+        self.rev = next_rev();
     }
 
     pub fn to_file(&self) -> LogFile {
@@ -210,6 +232,7 @@ impl Log {
                 self.seq = self.seq.max(c.seq);
             }
             slot.insert(c);
+            self.rev = next_rev();
         }
     }
 
@@ -254,6 +277,7 @@ impl Log {
         };
         self.changes
             .insert((self.member.clone(), self.seq), c.clone());
+        self.rev = next_rev();
         c
     }
 
@@ -310,6 +334,7 @@ impl Log {
         };
         self.changes
             .insert((self.member.clone(), self.seq), c.clone());
+        self.rev = next_rev();
         c
     }
 
@@ -377,6 +402,7 @@ impl Log {
         for c in refused {
             let c = Change { stamp: self.next_stamp(now_ms), ..c };
             self.changes.insert((self.member.clone(), c.seq), c.clone());
+            self.rev = next_rev();
             again.push(c);
         }
         again
@@ -404,6 +430,32 @@ impl Log {
             .filter(|((member, seq), _)| *seq > version.get(member).copied().unwrap_or(0))
             .map(|(_, c)| c.clone())
             .collect()
+    }
+
+    /// The first of the changes a member at `version` has not seen
+    /// ([`Self::missing_for`]), in the same order, as many as fit `budget`
+    /// bytes of JSON, and whether more are missing: a log too large for one
+    /// message goes a part at a time. Each member's changes come oldest
+    /// first, so the member asks for the next part from past them
+    /// ([`seen_through`]). A part holds at least one change, however large.
+    pub fn missing_page(&self, version: &Version, budget: usize) -> (Vec<Change>, bool) {
+        let missing = self
+            .changes
+            .iter()
+            .filter(|((member, seq), _)| *seq > version.get(member).copied().unwrap_or(0))
+            .map(|(_, c)| c);
+        let mut page = Vec::new();
+        // The brackets of the list, then each change and its comma.
+        let mut used = 2;
+        for c in missing {
+            let size = json_len(c) + 1;
+            if !page.is_empty() && used + size > budget {
+                return (page, true);
+            }
+            used += size;
+            page.push(c.clone());
+        }
+        (page, false)
     }
 
     /// Whether this log holds change `seq` of log `member`.
@@ -446,12 +498,14 @@ impl Log {
             self.clock = self.clock.max((c.stamp.ms, c.stamp.n));
             self.seq = self.seq.max(c.seq);
             self.changes.insert(key, c);
+            self.rev = next_rev();
         }
         again.sort_by_key(|c| c.seq);
         for c in &mut again {
             self.seq = self.seq.saturating_add(1);
             c.seq = self.seq;
             self.changes.insert((self.member.clone(), self.seq), c.clone());
+            self.rev = next_rev();
         }
         again
     }
@@ -496,14 +550,7 @@ impl Log {
 
     /// The records of `kind` by id, counting only the changes `keep` takes.
     pub fn records_where(&self, kind: RecordKind, keep: impl Fn(&Change) -> bool) -> BTreeMap<String, Record> {
-        let mut own = Log::new(&self.member);
-        own.changes = self
-            .changes
-            .iter()
-            .filter(|(_, c)| c.kind == kind.as_str() && keep(c))
-            .map(|(k, c)| (k.clone(), c.clone()))
-            .collect();
-        own.records(kind)
+        records_of(self.changes_of(kind).filter(|c| keep(c)))
     }
 
     /// The changes to records of `kind`, from every member.
@@ -513,35 +560,63 @@ impl Log {
 
     /// The records of `kind` by id, each field at its latest change.
     pub fn records(&self, kind: RecordKind) -> BTreeMap<String, Record> {
-        let mut latest: BTreeMap<(&str, &str), &Change> = BTreeMap::new();
-        for c in self.changes.values().filter(|c| c.kind == kind.as_str()) {
-            if let ChangeOp::Set { field, .. } = &c.op {
+        records_of(self.changes_of(kind))
+    }
+}
+
+/// The records `changes` make, all of one kind, by id: each field at its
+/// latest change.
+fn records_of<'a>(changes: impl Iterator<Item = &'a Change>) -> BTreeMap<String, Record> {
+    let mut latest: BTreeMap<(&str, &str), &Change> = BTreeMap::new();
+    // A delete is final: nothing brings a deleted record back, so two
+    // members never disagree on whether it exists.
+    let mut deleted: BTreeSet<&str> = BTreeSet::new();
+    for c in changes {
+        match &c.op {
+            ChangeOp::Set { field, .. } => {
                 let slot = latest.entry((c.id.as_str(), field.as_str())).or_insert(c);
                 if c.stamp > slot.stamp {
                     *slot = c;
                 }
             }
-        }
-        // A delete is final: nothing brings a deleted record back, so two
-        // members never disagree on whether it exists.
-        let deleted: BTreeSet<&str> = self
-            .changes
-            .values()
-            .filter(|c| c.kind == kind.as_str() && c.op == ChangeOp::Delete)
-            .map(|c| c.id.as_str())
-            .collect();
-        let mut out: BTreeMap<String, Record> = BTreeMap::new();
-        for ((id, field), c) in latest
-            .into_iter()
-            .filter(|((id, _), _)| !deleted.contains(id))
-        {
-            if let ChangeOp::Set { value, .. } = &c.op {
-                out.entry(id.to_string())
-                    .or_default()
-                    .insert(field.to_string(), value.clone());
+            ChangeOp::Delete => {
+                deleted.insert(c.id.as_str());
             }
         }
-        out
+    }
+    let mut out: BTreeMap<String, Record> = BTreeMap::new();
+    for ((id, field), c) in latest.into_iter().filter(|((id, _), _)| !deleted.contains(id)) {
+        if let ChangeOp::Set { value, .. } = &c.op {
+            out.entry(id.to_string()).or_default().insert(field.to_string(), value.clone());
+        }
+    }
+    out
+}
+
+/// How many bytes `c` takes as JSON.
+fn json_len(c: &Change) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut n = Count(0);
+    let _ = serde_json::to_writer(&mut n, c);
+    n.0
+}
+
+/// Moves `version`, what a member asks from, past the changes of `page`,
+/// what its central host sent of what it lacks: the next page starts after
+/// them, even past a change the central host never got.
+pub fn seen_through(version: &mut Version, page: &[Change]) {
+    for c in page {
+        let seen = version.entry(c.stamp.member.clone()).or_insert(0);
+        *seen = (*seen).max(c.seq);
     }
 }
 
@@ -848,6 +923,75 @@ mod tests {
         assert_eq!(log.get(book, 1), Some(&held));
         assert_eq!(log.get(book, 2).unwrap().stamp.ms, 1_826_359_200_000);
         assert_eq!(log.get(book, 3).unwrap().stamp.ms, 1_794_823_200_000);
+    }
+
+    /// A log of `n` session changes from two members, `mini` and `book`,
+    /// about 170 bytes each as JSON, as a heavy user's log holds.
+    fn big_log(n: u64) -> Log {
+        let mut log = Log::new("mini.a1b2c3");
+        log.apply((1..=n).map(|i| Change {
+            stamp: Stamp { ms: 1_760_000_000_000 + i, n: 0, member: if i % 4 == 0 { "mini.a1b2c3" } else { "book.k3x9q2" }.into() },
+            seq: if i % 4 == 0 { i / 4 } else { i - i / 4 },
+            kind: "session".into(),
+            id: format!("{:012x}", i / 13),
+            op: ChangeOp::Set { field: "branch".into(), value: json!(format!("moonlet/fix-checkout-total-rounding-{i}")) },
+        }));
+        log
+    }
+
+    #[test]
+    fn a_member_catching_up_on_a_log_larger_than_one_frame_gets_all_of_it_in_pages_that_each_fit_one() {
+        let mini = big_log(110_000);
+        let all = serde_json::to_vec(&mini.missing_for(&Version::new())).unwrap().len();
+        assert!(all > moonlet_proto::MAX_FRAME_LEN, "the log is {all} bytes");
+        let mut book = Log::new("book.k3x9q2");
+        let mut asked = Version::new();
+        let mut pages = 0;
+        loop {
+            let (page, more) = mini.missing_page(&asked, moonlet_proto::methods::ACCOUNT_PAGE_BYTES);
+            let reply = moonlet_proto::methods::AccountSynced { changes: page.clone(), version: mini.version(), account: None, now_ms: Some(1), more };
+            let frame = moonlet_proto::encode_frame(&moonlet_proto::Frame::Json(moonlet_proto::Message::ok(7, reply)));
+            assert!(frame.is_ok(), "page {pages} does not fit one frame");
+            pages += 1;
+            seen_through(&mut asked, &page);
+            book.apply(page);
+            if !more {
+                break;
+            }
+        }
+        assert_eq!(pages, 2);
+        assert_eq!(book.version(), mini.version());
+        assert_eq!(book.version(), BTreeMap::from([("book.k3x9q2".to_string(), 82_500), ("mini.a1b2c3".to_string(), 27_500)]));
+    }
+
+    #[test]
+    fn a_page_goes_on_past_a_gap_and_always_holds_a_change_however_large() {
+        let mut mini = Log::new("mini.a1b2c3");
+        let change = |seq: u64, value: &str| Change {
+            stamp: Stamp { ms: 1_000 + seq, n: 0, member: "book.k3x9q2".into() },
+            seq,
+            kind: "workspace".into(),
+            id: "w1".into(),
+            op: ChangeOp::Set { field: "name".into(), value: json!(value) },
+        };
+        // The central host holds the MacBook's 1, 2 and 4: 3 never came.
+        mini.apply([change(1, "a"), change(2, "b"), change(4, "d")]);
+        let mut asked = Version::new();
+        let (page, more) = mini.missing_page(&asked, 1);
+        assert_eq!((page.iter().map(|c| c.seq).collect::<Vec<_>>(), more), (vec![1], true));
+        seen_through(&mut asked, &page);
+        let (page, more) = mini.missing_page(&asked, 1);
+        assert_eq!((page.iter().map(|c| c.seq).collect::<Vec<_>>(), more), (vec![2], true));
+        seen_through(&mut asked, &page);
+        // Past the gap, so the member asks from 4 on, not from 2 again.
+        let (page, more) = mini.missing_page(&asked, 1);
+        assert_eq!((page.iter().map(|c| c.seq).collect::<Vec<_>>(), more), (vec![4], false));
+        seen_through(&mut asked, &page);
+        assert_eq!(asked, BTreeMap::from([("book.k3x9q2".to_string(), 4)]));
+        assert_eq!(mini.missing_page(&asked, 1), (Vec::new(), false));
+        // With room for all, one page.
+        let (page, more) = mini.missing_page(&Version::new(), 1 << 20);
+        assert_eq!((page.len(), more), (3, false));
     }
 
     #[test]

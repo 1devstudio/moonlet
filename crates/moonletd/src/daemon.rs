@@ -2370,11 +2370,16 @@ impl Daemon {
                 if !taken.is_empty() {
                     self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
                 }
+                // A part at a time once all of it would not fit one frame:
+                // a member from before pages takes the part and gets the
+                // rest at its next exchanges.
+                let (changes, more) = self.sessions.account_page(&r.version, m::ACCOUNT_PAGE_BYTES);
                 ok(m::AccountSynced {
-                    changes: self.sessions.account_changes_for(&r.version),
+                    changes,
                     version: self.sessions.account_version(),
                     account: Some(self.link.account_info().account),
                     now_ms: Some(now),
+                    more,
                 })
             }
             m::ACCOUNT_GET => ok(self.link.account_info()),

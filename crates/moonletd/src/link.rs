@@ -384,6 +384,24 @@ fn version_to_send(
     v
 }
 
+/// `changes` in parts of at most `budget` bytes of JSON each, in their
+/// order, so each fits one `account.sync` (X68); one part, empty, for none.
+/// A change larger than `budget` goes alone.
+fn in_parts(changes: Vec<moonlet_proto::types::Change>, budget: usize) -> Vec<Vec<moonlet_proto::types::Change>> {
+    let mut parts = vec![Vec::new()];
+    let mut used = 2;
+    for c in changes {
+        let size = serde_json::to_vec(&c).map_or(0, |b| b.len()) + 1;
+        if parts.last().is_some_and(|p| !p.is_empty()) && used + size > budget {
+            parts.push(Vec::new());
+            used = 2;
+        }
+        used += size;
+        parts.last_mut().unwrap().push(c);
+    }
+    parts
+}
+
 /// The worker side of the link: its settings, its state and, while it
 /// should be open, the connection.
 pub struct WorkerLink {
@@ -405,6 +423,9 @@ pub struct WorkerLink {
     account_loop: AtomicU64,
     /// How far other hosts' clocks are from this one's (X68).
     clocks: Mutex<Clocks>,
+    /// Why the account does not sync with the central host now (X68):
+    /// `too_large` once an exchange could not fit one message.
+    not_syncing: Mutex<Option<String>>,
     /// The copies this Mac keeps, which the link serves (X60).
     sync: std::sync::OnceLock<Weak<crate::sync::LiveCopies>>,
     /// Routed commands this machine runs for its central host (X62).
@@ -442,6 +463,7 @@ impl WorkerLink {
             quiet: AtomicBool::new(false),
             account_loop: AtomicU64::new(0),
             clocks: Mutex::new(Clocks::default()),
+            not_syncing: Mutex::new(None),
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
@@ -461,9 +483,12 @@ impl WorkerLink {
     pub fn account_info(&self) -> m::AccountInfo {
         let info = self.info();
         let central = info.central.map(|c| c.name);
+        // Said while a central host is set, even before it named the
+        // account: one that never answered could not.
+        let not_syncing = self.not_syncing.lock().unwrap().clone().filter(|_| central.is_some());
         let mut out = match self.sessions.central_account().filter(|_| central.is_some()) {
-            Some(account) => m::AccountInfo { account, central: central.clone(), clocks: Vec::new() },
-            None => m::AccountInfo { account: info.worker.id, central: None, clocks: Vec::new() },
+            Some(account) => m::AccountInfo { account, central: central.clone(), clocks: Vec::new(), not_syncing },
+            None => m::AccountInfo { account: info.worker.id, central: None, clocks: Vec::new(), not_syncing },
         };
         let names = self.sessions.member_names();
         let clocks = self.clocks.lock().unwrap();
@@ -498,8 +523,19 @@ impl WorkerLink {
     /// Changes what this host knows of clocks with `f`, and says
     /// `account.info` when what it says of them changes.
     fn clocks_changed(&self, f: impl FnOnce(&mut Clocks)) {
+        self.info_changed(|| f(&mut self.clocks.lock().unwrap()));
+    }
+
+    /// Notes why the account does not sync with the central host now, or
+    /// that it does, and says `account.info` when that changes.
+    fn set_not_syncing(&self, why: Option<&str>) {
+        self.info_changed(|| *self.not_syncing.lock().unwrap() = why.map(String::from));
+    }
+
+    /// Runs `f`, and says `account.info` when what it says changes.
+    fn info_changed(&self, f: impl FnOnce()) {
         let before = self.account_info();
-        f(&mut self.clocks.lock().unwrap());
+        f();
         let after = self.account_info();
         if after != before {
             (self.emit)(Message::event(m::EV_ACCOUNT_INFO, after));
@@ -967,15 +1003,25 @@ impl WorkerLink {
         while self.account_loop.load(Ordering::SeqCst) == generation && self.is_current(&host) {
             let synced = self.sync_account(&host, !checked).await;
             checked |= synced.is_ok();
-            if let Err(e) = synced {
+            match synced {
+                Ok(()) => self.set_not_syncing(None),
                 // A central host from before X68, or one whose account
                 // could not be read, has none to share; one that takes this
                 // machine for no member shares none with it.
-                if e.code == "unknown_method" || e.code == "no_account" || e.code == "forbidden" {
+                Err(e) if e.code == "unknown_method" || e.code == "no_account" || e.code == "forbidden" => {
                     tracing::info!("the central host shares no account: {}", e.message);
                     return;
                 }
-                tracing::warn!("cannot sync the account: {}", e.message);
+                // What it would send does not fit one message: a central
+                // host from before pages, with a log past 16 MiB. Asking
+                // every minute cannot change that; the next link asks
+                // again, as the central host may have been updated by then.
+                Err(e) if e.code == "too_large" => {
+                    tracing::warn!("the account does not sync with the central host until it links again: {}", e.message);
+                    self.set_not_syncing(Some("too_large"));
+                    return;
+                }
+                Err(e) => tracing::warn!("cannot sync the account: {}", e.message),
             }
             tokio::time::sleep(every).await;
         }
@@ -1029,8 +1075,8 @@ impl WorkerLink {
         }
         let mut from = self.sessions.account_version();
         from.insert(name.to_string(), counted);
-        let got = self.exchange(host, from, Vec::new()).await?;
-        let held: Vec<_> = got.changes.into_iter().filter(|c| c.stamp.member == name).collect();
+        let got = self.exchange_all(host, from).await?;
+        let held: Vec<_> = got.into_iter().filter(|c| c.stamp.member == name).collect();
         self.sessions
             .restamp_own(counted, &held)
             .map_err(|e| RpcError::new("internal", format!("cannot stamp this member's account changes again: {e:#}")))?;
@@ -1057,12 +1103,12 @@ impl WorkerLink {
             v.insert(name.to_string(), seq);
             v
         };
-        let got = self.exchange(host, from(last - 1), Vec::new()).await?;
-        if !self.sessions.own_log_differs(&got.changes) {
+        let got = self.exchange_all(host, from(last - 1)).await?;
+        if !self.sessions.own_log_differs(&got) {
             return Ok(());
         }
-        let got = self.exchange(host, from(0), Vec::new()).await?;
-        let own = got.changes.into_iter().filter(|c| c.stamp.member == name).collect();
+        let got = self.exchange_all(host, from(0)).await?;
+        let own = got.into_iter().filter(|c| c.stamp.member == name).collect();
         self.sessions
             .take_back_own(own)
             .map_err(|e| RpcError::new("internal", format!("cannot take back this member's account changes: {e:#}")))?;
@@ -1096,18 +1142,52 @@ impl WorkerLink {
     }
 
     /// Sends `changes` with this member's version, takes in what the central
-    /// host answers, and returns the central host's version.
+    /// host answers, and returns the central host's version. Changes too
+    /// many for one message go a part at a time, and so do those the
+    /// central host answers: each part is taken in as it comes, so the next
+    /// is asked for from past it.
     async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
-        let version = {
-            let c = self.clocks.lock().unwrap();
-            version_to_send(self.sessions.account_version(), c.central_version.as_ref(), c.central)
-        };
-        let got = self.exchange(host, version, changes).await?;
-        self.sessions.apply_account(got.changes);
-        if got.account.is_some() && self.sessions.set_central_account(got.account) {
-            (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
+        let mut parts = in_parts(changes, m::ACCOUNT_PAGE_BYTES).into_iter();
+        let mut send = parts.next().unwrap_or_default();
+        loop {
+            let mut version = {
+                let c = self.clocks.lock().unwrap();
+                version_to_send(self.sessions.account_version(), c.central_version.as_ref(), c.central)
+            };
+            let theirs = loop {
+                let got = self.exchange(host, version.clone(), std::mem::take(&mut send)).await?;
+                // A central host that says more is missing but sends none
+                // would otherwise be asked for ever.
+                let more = got.more && !got.changes.is_empty();
+                moonlet_core::account::seen_through(&mut version, &got.changes);
+                self.sessions.apply_account(got.changes);
+                if got.account.is_some() && self.sessions.set_central_account(got.account) {
+                    (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
+                }
+                if !more {
+                    break got.version;
+                }
+            };
+            match parts.next() {
+                Some(next) => send = next,
+                None => return Ok(theirs),
+            }
         }
-        Ok(got.version)
+    }
+
+    /// Every change the central host holds that a member at `version`
+    /// lacks, asked for a part at a time, not taken in.
+    async fn exchange_all(&self, host: &Arc<Host>, mut version: moonlet_core::account::Version) -> Result<Vec<moonlet_proto::types::Change>, RpcError> {
+        let mut all = Vec::new();
+        loop {
+            let got = self.exchange(host, version.clone(), Vec::new()).await?;
+            let more = got.more && !got.changes.is_empty();
+            moonlet_core::account::seen_through(&mut version, &got.changes);
+            all.extend(got.changes);
+            if !more {
+                return Ok(all);
+            }
+        }
     }
 
     /// Asks the central host now for what of the account this member lacks,
@@ -1665,6 +1745,33 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// A change as the MacBook's log would send it, `value` its branch.
+    fn change(seq: u64, value: &str) -> moonlet_proto::types::Change {
+        moonlet_proto::types::Change {
+            stamp: moonlet_proto::types::Stamp { ms: 1_794_823_200_000 + seq, n: 0, member: "book.k3x9q2".into() },
+            seq,
+            kind: "session".into(),
+            id: "fix-cart".into(),
+            op: moonlet_proto::types::ChangeOp::Set { field: "branch".into(), value: serde_json::json!(value) },
+        }
+    }
+
+    #[test]
+    fn changes_too_many_for_one_message_go_in_parts_that_each_fit_one_in_their_order() {
+        // Each of these is 159 bytes of JSON: two with their brackets and
+        // commas (322) fit 330 bytes, three (482) do not.
+        assert_eq!(serde_json::to_vec(&change(1, "moonlet/fix-cart")).unwrap().len(), 159);
+        let all: Vec<_> = (1..=5).map(|i| change(i, "moonlet/fix-cart")).collect();
+        let parts = in_parts(all, 330);
+        let seqs: Vec<Vec<u64>> = parts.iter().map(|p| p.iter().map(|c| c.seq).collect()).collect();
+        assert_eq!(seqs, [vec![1, 2], vec![3, 4], vec![5]]);
+        // A change larger than a part goes alone; none is one empty part.
+        let big = change(6, &"x".repeat(400));
+        let parts = in_parts(vec![change(1, "a"), big, change(7, "b")], 330);
+        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 1]);
+        assert_eq!(in_parts(Vec::new(), 330), [Vec::new()]);
+    }
 
     #[test]
     fn a_member_whose_clock_is_more_than_a_day_behind_asks_only_for_what_is_new() {
