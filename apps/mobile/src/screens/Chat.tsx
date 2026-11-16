@@ -14,7 +14,8 @@ import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
 import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
-import { useBusy } from "../lib/busy";
+import { errorText, useBusy } from "../lib/busy";
+import { type What, cancelHeld, dismissFailed, heldKey, sendFor, useHeld, useHeldLine } from "../lib/held";
 import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
 import { Markdown } from "../components/Markdown";
 import { ModelChoices } from "../components/ModelChoices";
@@ -24,7 +25,8 @@ import { useNow } from "../lib/now";
 
 function DockedAsk({ host, terminal, ask, asker }: { host: string; terminal: number; ask: PermissionAsk; asker: string | null }) {
   const now = useNow();
-  const { busy, run } = useBusy();
+  const { busy: answering, error, run } = useBusy();
+  const busy = answering || !!useHeld((s) => s.held[heldKey(host, terminal, "answer")]);
   const [telling, setTelling] = useState(false);
   const [message, setMessage] = useState("");
   const answer = (d: "allow" | "always" | "deny", msg?: string) => run(() => answerAsk(host, terminal, ask.id, d, msg));
@@ -68,6 +70,11 @@ function DockedAsk({ host, terminal, ask, asker }: { host: string; terminal: num
           </button>
         </>
       )}
+      {error && (
+        <p role="alert" className="m-0 text-[13px] leading-snug text-error">
+          {error}
+        </p>
+      )}
     </section>
   );
 }
@@ -76,6 +83,8 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
   const qs = askQuestions(ask.input);
   const [picks, setPicks] = useState(() => qs.map(() => ({ labels: [] as string[], other: "" })));
   const answers = questionAnswers(qs, picks);
+  const { busy: answering, error, run } = useBusy();
+  const busy = answering || !!useHeld((s) => s.held[heldKey(host, terminal, "answer")]);
   const toggle = (qi: number, label: string, multi: boolean) =>
     setPicks((p) => p.map((x, i) => (i !== qi ? x : { ...x, labels: multi ? (x.labels.includes(label) ? x.labels.filter((l) => l !== label) : [...x.labels, label]) : [label] })));
   return (
@@ -105,9 +114,14 @@ function DockedQuestion({ host, terminal, ask }: { host: string; terminal: numbe
           />
         </div>
       ))}
-      <Btn tone="primary" disabled={!answers} onClick={() => answers && void answerQuestion(host, terminal, ask.id, answers).catch(console.error)}>
+      <Btn tone="primary" disabled={!answers || busy} onClick={() => answers && void run(() => answerQuestion(host, terminal, ask.id, answers))}>
         Answer
       </Btn>
+      {error && (
+        <p role="alert" className="m-0 text-[13px] leading-snug text-error">
+          {error}
+        </p>
+      )}
     </section>
   );
 }
@@ -177,34 +191,103 @@ function AsideSheet({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: ()
   );
 }
 
+/** A message or an answer held for a session whose member is away (X73):
+ * when it goes, and Take back while it is not being sent. */
+function HeldLine({ host, terminal, what, onTakeBack }: { host: string; terminal: number; what: What; onTakeBack: (text: string) => void }) {
+  const held = useHeldLine(host, terminal, what);
+  const params = useHeld((s) => s.held[heldKey(host, terminal, what)]?.params);
+  if (!held) return null;
+  return (
+    <div role="status" className="flex items-center gap-3 border-t border-border bg-panel px-4 py-2 text-[13px] text-muted">
+      <Loader2 size={14} className="flex-none animate-spin text-accent" />
+      <span className="min-w-0 flex-1 leading-snug">
+        {held.line}
+        {what === "message" && typeof params?.text === "string" && <span className="mt-0.5 block truncate text-faint">“{params.text}”</span>}
+      </span>
+      <button
+        type="button"
+        disabled={held.sending}
+        onClick={() => {
+          const h = cancelHeld(host, terminal, what);
+          if (h) onTakeBack(typeof h.params.text === "string" ? h.params.text : "");
+        }}
+        className="h-8 flex-none rounded-[8px] border border-border-strong px-2.5 text-[13px] text-fg disabled:opacity-40"
+      >
+        Take back
+      </button>
+    </div>
+  );
+}
+
+/** A held answer the central host then refused for good, with why (X73):
+ * the ask, if still open, can be answered again. */
+function FailedAnswer({ host, terminal }: { host: string; terminal: number }) {
+  const key = heldKey(host, terminal, "answer");
+  const failed = useHeld((s) => s.failed[key]);
+  if (!failed) return null;
+  return (
+    <button type="button" role="alert" aria-label={`${failed.line} Dismiss`} onClick={() => dismissFailed(key)} className="border-t border-border bg-panel px-4 py-2 text-left text-[13px] leading-snug text-error">
+      {failed.line}
+    </button>
+  );
+}
+
 function Composer({ host, terminal, running }: { host: string; terminal: number; running: boolean }) {
   const [text, setTextState] = useState(() => chatDraft(host, terminal));
+  const [error, setError] = useState<string | null>(null);
   const setText = (t: string) => {
     setTextState(t);
     saveChatDraft(host, terminal, t);
   };
+  const key = heldKey(host, terminal, "message");
+  const held = useHeld((s) => !!s.held[key]);
+  const failed = useHeld((s) => s.failed[key]);
+  // A held message the central host then refused for good comes back to
+  // the box, with why (X73).
+  useEffect(() => {
+    if (!failed) return;
+    dismissFailed(key);
+    setError(failed.line);
+    const t = typeof failed.params.text === "string" ? failed.params.text : "";
+    setTextState((cur) => {
+      const back = cur.trim() ? `${t}\n\n${cur}` : t;
+      saveChatDraft(host, terminal, back);
+      return back;
+    });
+  }, [failed]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = async () => {
     const t = text.trim();
-    if (!t) return;
+    if (!t || held) return;
     setText("");
-    await rpc(host, M.chatSend, { id: terminal, text: t, images: [] }).catch((e) => {
-      console.error(e);
+    setError(null);
+    try {
+      await sendFor(host, terminal, M.chatSend, { id: terminal, text: t, images: [] }, "message");
+    } catch (e) {
       setText(t);
-    });
+      setError(errorText(e));
+    }
   };
   return (
-    <div className="flex items-end gap-2 border-t border-border px-3 pt-2 pb-1">
-      <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder={running ? "Queue a message…" : "Message Claude…"} className="max-h-32 min-h-10 flex-1 resize-none rounded-[20px] border border-border-strong bg-panel px-3.5 py-2 text-[15px] outline-none" />
-      {running && !text.trim() ? (
-        <button type="button" aria-label="Stop" onClick={() => void rpc(host, M.chatInterrupt, { id: terminal }).catch(console.error)} className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-raised">
-          <Square size={14} fill="currentColor" />
-        </button>
-      ) : (
-        <button type="button" aria-label="Send" disabled={!text.trim()} onClick={() => void send()} className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-fg text-bg disabled:opacity-30">
-          <ArrowUp size={18} />
-        </button>
+    <>
+      <HeldLine host={host} terminal={terminal} what="message" onTakeBack={(t) => setText(text.trim() ? `${t}\n\n${text}` : t)} />
+      {error && (
+        <p role="alert" className="m-0 border-t border-border bg-panel px-4 py-2 text-[13px] leading-snug text-error">
+          {error}
+        </p>
       )}
-    </div>
+      <div className="flex items-end gap-2 border-t border-border px-3 pt-2 pb-1">
+        <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder={running ? "Queue a message…" : "Message Claude…"} className="max-h-32 min-h-10 flex-1 resize-none rounded-[20px] border border-border-strong bg-panel px-3.5 py-2 text-[15px] outline-none" />
+        {running && !text.trim() ? (
+          <button type="button" aria-label="Stop" onClick={() => void rpc(host, M.chatInterrupt, { id: terminal }).catch(console.error)} className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-raised">
+            <Square size={14} fill="currentColor" />
+          </button>
+        ) : (
+          <button type="button" aria-label="Send" disabled={!text.trim() || held} onClick={() => void send()} className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-fg text-bg disabled:opacity-30">
+            <ArrowUp size={18} />
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -294,6 +377,8 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         {queueNote && <div className="self-end text-[12.5px] text-muted">{queueNote}</div>}
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
       </main>
+      {ask && <HeldLine host={host} terminal={terminal} what="answer" onTakeBack={() => {}} />}
+      <FailedAnswer host={host} terminal={terminal} />
       {ask &&
         (ask.tool === "ExitPlanMode" ? (
           <section className="flex items-center gap-3 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 py-3">
@@ -329,7 +414,7 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         <AsideSheet
           aside={aside}
           onRequeue={() => {
-            void rpc(host, M.chatSend, { id: terminal, text: aside.question, images: [] }).catch(console.error);
+            void sendFor(host, terminal, M.chatSend, { id: terminal, text: aside.question, images: [] }, "message").catch((e) => setQueueNote(errorText(e)));
             setAside(null);
           }}
           onClose={() => setAside(null)}

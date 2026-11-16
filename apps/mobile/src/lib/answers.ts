@@ -7,6 +7,7 @@ import { M } from "@desktop/lib/protocol";
 import { changeSetupCommand, dropSetup, refreshSetups, useApp } from "./app";
 import { setupAnswer, setupError } from "./setups";
 import { needsFaceId } from "./cards";
+import { sendFor } from "./held";
 import { confirmWithFaceId, tap } from "./native";
 
 async function gate(answer: Parameters<typeof needsFaceId>[0], reason: string): Promise<boolean> {
@@ -24,18 +25,22 @@ async function answer(kind: Parameters<typeof needsFaceId>[0], reason: string, s
 
 /** Allow, Always or Deny a tool; `message` tells the agent why on Deny. */
 export const answerAsk = (host: string, terminal: number, ask: string, decision: "allow" | "always" | "deny", message?: string) =>
-  answer(decision, "Allow the agent to use this tool", () => rpc(host, M.chatPermission, { id: terminal, ask, decision, ...(message ? { message } : {}) }), decision === "deny" ? "warning" : "success");
+  answer(decision, "Allow the agent to use this tool", () => permit(host, terminal, { id: terminal, ask, decision, ...(message ? { message } : {}) }), decision === "deny" ? "warning" : "success");
+
+/** Answers an ask of chat `terminal`: held and sent again when the central
+ * host refuses it unsent for a session whose member is away (X73). */
+const permit = (host: string, terminal: number, params: Record<string, unknown>) => sendFor(host, terminal, M.chatPermission, params, "answer");
 
 /** A plan choice (X20, X24). Feedback must not be empty. */
 export async function answerPlan(host: string, terminal: number, ask: string, choice: PlanChoice, feedback = ""): Promise<boolean> {
   const params = planAnswer(choice, feedback, "auto");
   if (!params) return false;
-  return answer(choice === "keepPlanning" ? "feedback" : "approve", "Start the agent on its plan", () => rpc(host, M.chatPermission, { id: terminal, ask, ...params }), "success");
+  return answer(choice === "keepPlanning" ? "feedback" : "approve", "Start the agent on its plan", () => permit(host, terminal, { id: terminal, ask, ...params }), "success");
 }
 
 /** Answers Claude's questions (`AskUserQuestion`); the answers steer it, so they wait for Face ID too. */
 export const answerQuestion = (host: string, terminal: number, ask: string, answers: Record<string, string>) =>
-  answer("question", "Answer the agent's question", () => rpc(host, M.chatPermission, { id: terminal, ask, decision: "allow", answers }), "success");
+  answer("question", "Answer the agent's question", () => permit(host, terminal, { id: terminal, ask, decision: "allow", answers }), "success");
 
 /** Answers an agent's request to read a terminal (X31). */
 export const answerRead = (host: string, requestId: number, allow: boolean) =>
