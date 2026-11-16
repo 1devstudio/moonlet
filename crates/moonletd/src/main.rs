@@ -20,6 +20,7 @@ mod launch;
 mod link;
 mod machines;
 mod mobile;
+mod moves;
 mod notify;
 mod peer;
 mod relay;

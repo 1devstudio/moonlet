@@ -1440,11 +1440,17 @@ pub struct SessionBrought {
     pub kept_on: Option<String>,
 }
 
-/// `session.yield {sessions}`, member → central host (X73): the member is
-/// going to sleep. Answers the sessions the central host took.
+/// `session.yield {sessions, epochs}`, member → central host (X73): the
+/// member is going to sleep. Answers the sessions the central host took.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionYield {
     pub sessions: Vec<String>,
+    /// The ownership number each session had as the member handed it
+    /// over: the central host takes it only at that number. Beside the ids
+    /// rather than in them, so a central host from before reads them as
+    /// before; none from a member from before, which it takes as before.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub epochs: std::collections::BTreeMap<String, u64>,
     /// Why, by name: `moved` (Move to…), else going to sleep. The central
     /// host words the note itself.
     #[serde(default)]
@@ -4280,6 +4286,26 @@ pub struct CloudTypes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X73: a hand-over names each session's ownership number beside the
+    /// ids, which stay a list of ids for a central host from before; a
+    /// member from before sends ids alone.
+    #[test]
+    fn a_sleep_hand_over_names_each_sessions_epoch_beside_ids_a_central_host_from_before_reads() {
+        let new = SessionYield {
+            sessions: vec!["fix-cart".into()],
+            epochs: [("fix-cart".to_string(), 3)].into(),
+            why: None,
+            pin: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&new).unwrap(),
+            serde_json::json!({ "sessions": ["fix-cart"], "epochs": { "fix-cart": 3 }, "why": null, "pin": false })
+        );
+        let old: SessionYield = serde_json::from_str(r#"{"sessions":["fix-cart","docs"]}"#).unwrap();
+        assert_eq!(old.sessions, vec!["fix-cart".to_string(), "docs".to_string()]);
+        assert!(old.epochs.is_empty());
+    }
 
     /// X65 entry 12: a design call names a workspace design as it always
     /// did, `{workspace, slug}`, or a session design as `{session, slug}`,

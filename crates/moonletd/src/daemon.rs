@@ -31,6 +31,11 @@ use crate::server::Conn;
 /// How often a member looks again for sessions to bring back (X73).
 const BRING_BACK_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long a wake waits for the central host to answer a hand-over sent
+/// again, its agents stopped meanwhile (X73): it takes each session in one
+/// after another.
+const RESEND_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// How many times a session waiting to come back is tried (X73): about
 /// ten minutes at [`BRING_BACK_EVERY`].
 const BRING_BACK_TRIES: u32 = 120;
@@ -127,6 +132,17 @@ pub struct Daemon {
     signins_relayed: crate::signin::Started,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
+    /// Sessions handed to the central host before a sleep and not
+    /// answered yet, in `moves.json` (X73).
+    moves: crate::moves::Moves,
+    /// One sending of [`Self::moves`] again at a time (X73).
+    handing_over: tokio::sync::Mutex<()>,
+    /// On the central host: how many hand-overs each member sent, so an
+    /// older one leaves what it has not taken yet to a newer one (X73).
+    yields: Mutex<HashMap<String, u64>>,
+    /// On the central host: one hand-over of each member taken in at a
+    /// time (X73).
+    yielding: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -723,6 +739,10 @@ impl Daemon {
             signins_here: Default::default(),
             signins_relayed: Default::default(),
             asleep: Default::default(),
+            moves: crate::moves::Moves::open(&moonlet_core::paths::home()),
+            handing_over: Default::default(),
+            yields: Default::default(),
+            yielding: Default::default(),
             heavy,
             cloud,
             machines,
@@ -1319,8 +1339,13 @@ impl Daemon {
                     return Err(RpcError::new("unknown_method", "power.simulate is for tests"));
                 }
                 let r: m::PowerSimulate = params(p)?;
-                let event = if r.event == "sleep" { crate::power::Power::Sleep } else { crate::power::Power::Wake };
-                self.power(event).await;
+                if r.event == "sleep" {
+                    // Held as the Mac's sleep is: what is not done by then
+                    // is cut off.
+                    let _ = tokio::time::timeout(crate::power::test_hold(), self.power(crate::power::Power::Sleep)).await;
+                } else {
+                    self.power(crate::power::Power::Wake).await;
+                }
                 ok(true)
             }
             m::SESSION_MOVE => {
@@ -1395,18 +1420,42 @@ impl Daemon {
                     ok(true)
                 } else if method == m::SESSION_YIELD {
                     let r: m::SessionYield = params(p)?;
+                    // A newer hand-over from this member ends what an older
+                    // one has not taken yet, as its link made again does.
+                    let seq = {
+                        let mut all = self.yields.lock().unwrap();
+                        let n = all.entry(worker.clone()).or_insert(0);
+                        *n += 1;
+                        *n
+                    };
+                    let one = self.yielding.lock().unwrap().entry(worker.clone()).or_default().clone();
+                    let _one = one.lock().await;
+                    let here = self.link.info().worker.id;
                     let mut taken = Vec::new();
                     for id in r.sessions {
-                        // Only what the member owns, and nothing pinned; a
-                        // move (Move to…) also takes one pinned to it.
-                        let rec = self.sessions.session_records().remove(&id);
-                        let ok_to_take = rec.as_ref().is_some_and(|rec| {
-                            let pinned = rec.get("pinned").and_then(Value::as_str);
-                            rec.get("owner").and_then(Value::as_str) == Some(worker.as_str())
-                                && (pinned.is_none() || (r.pin && pinned == Some(worker.as_str())))
-                        });
-                        if !ok_to_take {
-                            continue;
+                        // Only what the member owns, at the ownership number
+                        // it named, and nothing pinned; a move (Move to…)
+                        // also takes one pinned to it.
+                        let Some(rec) = self.sessions.session_records().remove(&id) else { continue };
+                        let superseded = self.yields.lock().unwrap().get(&worker) != Some(&seq)
+                            || self.workers.conn(&worker).is_some_and(|c| c.id != conn.id);
+                        let yielded = crate::power::Yielded {
+                            owner: rec.get("owner").and_then(Value::as_str),
+                            epoch: epoch_of(Some(&rec)),
+                            pinned: rec.get("pinned").and_then(Value::as_str),
+                            from: &worker,
+                            here: &here,
+                            named: r.epochs.get(&id).copied(),
+                            moving: r.pin,
+                            superseded,
+                        };
+                        match crate::power::on_yield(&yielded) {
+                            crate::power::OnYield::Take => {}
+                            crate::power::OnYield::Taken => {
+                                taken.push(id);
+                                continue;
+                            }
+                            crate::power::OnYield::Leave => continue,
                         }
                         // A reason by name, in this host's own words: never
                         // the member's text in the agent's note.
@@ -4312,44 +4361,34 @@ impl Daemon {
                     }
                 }
                 self.asleep.lock().unwrap().frozen.extend(frozen);
-                // A session the central host would continue from an older
-                // copy stays here, as when the hand-over cannot be sent.
-                let unsent = self.session_copies.send_now().await;
                 // Only one at work or waiting on something: an idle one
                 // stays, so a short idle sleep moves nothing.
-                let at_work = |s: &moonlet_proto::types::Session| {
-                    let states: Vec<_> = s
-                        .terminals
-                        .iter()
-                        .filter(|t| self.chats.is_chat(**t))
-                        .filter_map(|t| self.chats.state(*t).ok())
-                        .collect();
-                    crate::power::hand_over_at_sleep(&states)
-                };
-                let handed: Vec<String> = own
+                let at_work = |s: &moonlet_proto::types::Session| crate::power::hand_over_at_sleep(&self.chat_states(s));
+                let busy: Vec<(String, u64)> = own
                     .iter()
-                    .filter(|s| !unsent.contains(&s.id))
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("pinned")).is_none_or(Value::is_null))
                     .filter(|s| at_work(s))
-                    .map(|s| s.id.clone())
+                    .map(|s| (s.id.clone(), epoch_of(records.get(&s.id))))
                     .collect();
+                // Written down before anything is sent: a hand-over cut off
+                // by the end of the hold, or by the daemon stopping, is sent
+                // again. This sleep decides afresh what of this Mac's own
+                // goes; one an earlier hand-over named that is not this
+                // Mac's any more stays noted, to come back.
+                let earlier = self.moves.pending();
+                self.moves.remove(earlier.keys().map(String::as_str).filter(|id| own.iter().any(|s| s.id == *id)));
+                self.moves.add(&busy);
+                // A session the central host would continue from an older
+                // copy stays here for now, as when the hand-over cannot be
+                // sent: it goes at the next wake.
+                let unsent = self.session_copies.send_now().await;
+                let handed: Vec<(String, u64)> = busy.into_iter().filter(|(id, _)| !unsent.contains(id)).collect();
                 if handed.is_empty() {
                     return;
                 }
-                let Some(host) = self.link.host() else { return };
-                match host.request(m::SESSION_YIELD, serde_json::json!({ "sessions": handed })).await {
-                    Ok(taken) => {
-                        let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
-                        tracing::info!("handed {taken:?} to the central host before sleep");
-                        // Each comes back once idle there and untouched.
-                        let epochs: Vec<(String, u64)> = taken
-                            .iter()
-                            .map(|id| (id.clone(), records.get(id).and_then(|r| r.get("epoch")).and_then(Value::as_u64).unwrap_or(1)))
-                            .collect();
-                        self.session_copies.add_returning(&epochs);
-                        self.asleep.lock().unwrap().taken.extend(taken);
-                    }
-                    Err(e) => tracing::warn!("cannot hand sessions over before sleep: {}", e.message),
+                if let Some(taken) = self.yield_sessions(&handed).await {
+                    tracing::info!("handed {taken:?} to the central host before sleep");
+                    self.asleep.lock().unwrap().taken.extend(taken);
                 }
             }
             Power::Wake => {
@@ -4362,10 +4401,12 @@ impl Daemon {
                 // before the sleep, when it may have taken a session. What
                 // it gave another member is let go of, not woken. With no
                 // answer, the agents go on, as offline work does (ADR 0014).
-                if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
+                let heard = self.link.sync_now(std::time::Duration::from_secs(5)).await;
+                if !heard {
                     tracing::info!("no word from the central host after the wake; agents go on by this Mac's records");
                 }
-                let (frozen, taken, epochs) = {
+                let _one = self.handing_over.lock().await;
+                let (frozen, mut taken, epochs) = {
                     let mut asleep = self.asleep.lock().unwrap();
                     if asleep.sleeps != sleeps {
                         return;
@@ -4374,15 +4415,23 @@ impl Daemon {
                     asleep.frozen.extend(self.chats.release());
                     (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken), std::mem::take(&mut asleep.epochs))
                 };
-                // What the central host took for this sleep comes back once
-                // idle there and untouched.
-                let d = self.clone();
-                tokio::spawn(async move { d.bring_back().await });
-                if frozen.is_empty() {
-                    return;
-                }
+                // The hand-over not answered yet: one the central host took
+                // meanwhile comes back as any; the rest is sent again, its
+                // agents stopped until the central host answers. With no
+                // word from it, there is no answer to wait for: they go on
+                // with the rest, and the next sleep hands over afresh.
+                let again = if heard {
+                    let (took, again) = self.settle_moves(&me);
+                    taken.extend(took);
+                    again
+                } else {
+                    let all = self.moves.pending();
+                    self.moves.withdraw(all.keys().map(String::as_str));
+                    Vec::new()
+                };
                 let records = self.sessions.session_records();
                 let sessions = self.sessions.list_sessions();
+                let mut waiting = Vec::new();
                 let frozen: Vec<_> = frozen
                     .into_iter()
                     .filter_map(|chat| {
@@ -4391,6 +4440,10 @@ impl Daemon {
                             self.chats.freeze(chat, false);
                             return None;
                         };
+                        if again.iter().any(|(id, _)| *id == s.id) {
+                            waiting.push((chat, s.id.clone()));
+                            return None;
+                        }
                         let record = records.get(&s.id);
                         let owner = record.and_then(|r| r.get("owner")).and_then(Value::as_str);
                         Some(crate::power::Frozen { chat, session: &s.id, owner, epoch: epoch_of(record), slept_at: epochs.get(&s.id).copied() })
@@ -4404,7 +4457,144 @@ impl Daemon {
                 for t in crate::power::to_end(&frozen, &taken, &me) {
                     self.chats.stop(t, false);
                 }
+                if !again.is_empty() {
+                    let unsent = self.session_copies.send_now().await;
+                    let (send, kept): (Vec<_>, Vec<_>) = again.into_iter().partition(|(id, _)| !unsent.contains(id));
+                    // What cannot be sent now stays here, awake.
+                    self.moves.remove(kept.iter().map(|(id, _)| id.as_str()));
+                    let answer = tokio::time::timeout(RESEND_WAIT, self.yield_sessions(&send)).await.ok().flatten();
+                    let took = answer.unwrap_or_else(|| {
+                        tracing::info!("no answer to the hand-over sent again; its agents go on here");
+                        if self.asleep.lock().unwrap().sleeps == sleeps {
+                            self.moves.withdraw(send.iter().map(|(id, _)| id.as_str()));
+                        }
+                        // An empty hand-over ends what the central host has
+                        // not taken yet of the one sent (a central host from
+                        // before takes nothing for it).
+                        if let Some(host) = self.link.host() {
+                            let none = serde_json::json!({ "sessions": [] });
+                            tokio::spawn(async move { host.request(m::SESSION_YIELD, none).await });
+                        }
+                        Vec::new()
+                    });
+                    let mut asleep = self.asleep.lock().unwrap();
+                    for (chat, session) in waiting {
+                        if took.contains(&session) {
+                            // Ended as the session is let go of.
+                            continue;
+                        }
+                        if asleep.sleeps != sleeps {
+                            // Asleep again meanwhile: that sleep's wake decides.
+                            asleep.frozen.push(chat);
+                        } else {
+                            self.chats.freeze(chat, false);
+                        }
+                    }
+                }
+                // What the central host took for this sleep comes back once
+                // idle there and untouched.
+                let d = self.clone();
+                tokio::spawn(async move { d.bring_back().await });
             }
+        }
+    }
+
+    /// Asks the central host to take `sessions` (X73), each at the
+    /// ownership number given, for this Mac's sleep. Once it answers, the
+    /// hand-over is no longer noted in `moves.json`, and what it took
+    /// comes back once idle there and untouched. None with no answer: the
+    /// hand-over stays noted.
+    async fn yield_sessions(&self, sessions: &[(String, u64)]) -> Option<Vec<String>> {
+        if sessions.is_empty() {
+            return Some(Vec::new());
+        }
+        let host = self.link.host()?;
+        let ask = m::SessionYield {
+            sessions: sessions.iter().map(|(id, _)| id.clone()).collect(),
+            epochs: sessions.iter().cloned().collect(),
+            why: None,
+            pin: false,
+        };
+        let sleeps = self.asleep.lock().unwrap().sleeps;
+        match host.request(m::SESSION_YIELD, serde_json::to_value(ask).ok()?).await {
+            Ok(taken) => {
+                let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
+                // A sleep that began meanwhile noted its own hand-over of
+                // what was not taken: it stays noted for that sleep.
+                let newer = self.asleep.lock().unwrap().sleeps != sleeps;
+                self.moves.remove(sessions.iter().map(|(id, _)| id.as_str()).filter(|id| !newer || taken.iter().any(|t| t == id)));
+                let back: Vec<(String, u64)> = sessions.iter().filter(|(id, _)| taken.contains(id)).cloned().collect();
+                self.session_copies.add_returning(&back);
+                Some(taken)
+            }
+            Err(e) => {
+                tracing::warn!("cannot hand sessions over for sleep: {}", e.message);
+                None
+            }
+        }
+    }
+
+    /// The states of session `s`'s structured chats on this Mac.
+    fn chat_states(&self, s: &moonlet_proto::types::Session) -> Vec<moonlet_proto::types::ChatState> {
+        s.terminals.iter().filter(|t| self.chats.is_chat(**t)).filter_map(|t| self.chats.state(*t).ok()).collect()
+    }
+
+    /// Sorts the hand-overs not answered yet by this member's records
+    /// (X73): one the account gives another member was taken while this
+    /// Mac slept, and comes back once idle there and untouched; one still
+    /// this member's at the number it was handed over at is given, to send
+    /// again; the rest is no longer noted. Gives the sessions taken, and
+    /// those to send again.
+    fn settle_moves(&self, me: &str) -> (Vec<String>, Vec<(String, u64)>) {
+        let records = self.sessions.session_records();
+        let known = |id: &str| {
+            records.get(id).map(|r| crate::power::Known {
+                owner: r.get("owner").and_then(Value::as_str),
+                epoch: epoch_of(Some(r)),
+                pinned: r.get("pinned").is_some_and(|p| !p.is_null()),
+                archived: r.get("archived").and_then(Value::as_bool).unwrap_or(false),
+            })
+        };
+        let settled = crate::power::settle(&self.moves.pending(), &self.moves.withdrawn(), known, me);
+        self.session_copies.add_returning(&settled.taken);
+        self.moves.remove(settled.taken.iter().map(|(id, _)| id.as_str()).chain(settled.dropped.iter().map(String::as_str)));
+        (settled.taken.into_iter().map(|(id, _)| id).collect(), settled.again)
+    }
+
+    /// Settles a hand-over for sleep that this daemon noted and never heard
+    /// answered (X73), once linked and awake, by the central host's word
+    /// then: after the daemon started again, or after one withdrawn with
+    /// no answer. One it took comes back as any. One still this Mac's goes
+    /// again only while something in it still waits, an ask open or a
+    /// message queued; one whose turn the stop cut off is idle here now,
+    /// and stays.
+    async fn hand_over_left(self: &Arc<Self>) {
+        if (self.moves.pending().is_empty() && self.moves.withdrawn().is_empty()) || self.asleep.lock().unwrap().sleeping {
+            return;
+        }
+        let info = self.link.info();
+        if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() || !matches!(info.state, m::LinkState::Connected { .. }) {
+            return;
+        }
+        // The wake settles it itself.
+        let Ok(_one) = self.handing_over.try_lock() else { return };
+        // Records from before the stop do not say whether it was taken.
+        if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
+            return;
+        }
+        let (_, again) = self.settle_moves(&info.worker.id);
+        let sessions = self.sessions.list_sessions();
+        let waits = |id: &str| sessions.iter().filter(|s| s.id == id).any(|s| crate::power::still_waits(&self.chat_states(s)));
+        let (again, idle): (Vec<_>, Vec<_>) = again.into_iter().partition(|(id, _)| waits(id));
+        self.moves.remove(idle.iter().map(|(id, _)| id.as_str()));
+        if again.is_empty() {
+            return;
+        }
+        // What cannot be sent now waits for the next look.
+        let unsent = self.session_copies.send_now().await;
+        let send: Vec<_> = again.into_iter().filter(|(id, _)| !unsent.contains(id)).collect();
+        if let Some(taken) = self.yield_sessions(&send).await {
+            tracing::info!("handed {taken:?} to the central host, a hand-over from before this daemon started");
         }
     }
 
@@ -4463,7 +4653,12 @@ impl Daemon {
                 let taken = host
                     .request(
                         m::SESSION_YIELD,
-                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved".into()), pin: true })
+                        serde_json::to_value(m::SessionYield {
+                            sessions: vec![r.session.clone()],
+                            epochs: [(r.session.clone(), epoch_of(Some(&record)))].into(),
+                            why: Some("moved".into()),
+                            pin: true,
+                        })
                             .map_err(internal)?,
                     )
                     .await?;
@@ -4934,6 +5129,9 @@ impl Daemon {
                     _ => None,
                 };
                 let waiting = !d.session_copies.returning().is_empty();
+                if since.is_some() {
+                    d.hand_over_left().await;
+                }
                 if since.is_some() && (since != looked || waiting) {
                     d.bring_back().await;
                 }
