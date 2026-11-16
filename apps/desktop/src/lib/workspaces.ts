@@ -151,6 +151,34 @@ export function sharedNotice(info: AccountInfo, seen: string[]): string | null {
   return info.central && !seen.includes(info.account) ? `Workspaces are now shared with ${info.central}` : null;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "1 year", "8 days": how far a clock is off, for one off by a day or more. */
+function farOff(ms: number): string {
+  const years = Math.round(ms / (365 * DAY_MS));
+  if (years >= 1) return years === 1 ? "1 year" : `${years} years`;
+  const days = Math.max(1, Math.round(ms / DAY_MS));
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/** What this Mac's sidebar says of clocks that are off (X68), from its
+ * daemon's `account.get`: members refuse changes stamped more than a day
+ * past their clock, so only a clock off by more than a day is named. On a
+ * member, its own clock against its central host's; on a central host,
+ * each member's against its own. A Mac ahead has its changes wait, and
+ * sends them once its clock is right. */
+export function clockLines(info: AccountInfo | undefined): string[] {
+  return (info?.clocks ?? [])
+    .filter((c) => Math.abs(c.ahead_ms) > DAY_MS)
+    .map((c) => {
+      const by = farOff(Math.abs(c.ahead_ms));
+      if (info?.central && c.worker === info.account) {
+        return c.ahead_ms < 0 ? `This Mac's clock is ${by} ahead of ${c.name}'s: changes made here wait until it is right` : `This Mac's clock is ${by} behind ${c.name}'s`;
+      }
+      return c.ahead_ms > 0 ? `${c.name}'s clock is ${by} ahead of this Mac's: its changes wait until it is right` : `${c.name}'s clock is ${by} behind this Mac's`;
+    });
+}
+
 /** Where the sidebar is: a workspace of a host, and the account it belongs
  * to, which shows it on every member of that account (X68). */
 export interface WorkspaceRef {
