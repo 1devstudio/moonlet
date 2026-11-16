@@ -4083,8 +4083,10 @@ impl Daemon {
             }
         }
         if running {
+            // An ask kept from an earlier move has no turn to cut off: it
+            // moves on open (X73).
             for t in &chats {
-                let _ = self.chats.interrupt(*t);
+                let _ = self.chats.cut_off(*t);
             }
         }
         let states: Vec<m::SessionCopyChat> = chats

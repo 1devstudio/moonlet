@@ -51,6 +51,12 @@ struct Saved {
     #[serde(default)]
     env: BTreeMap<String, String>,
     state: ChatState,
+    /// The queued messages a moved chat holds, and the move's note kept
+    /// for an ask's answer (X73), so a restart keeps them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    held: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preface: Option<String>,
 }
 
 struct Inner {
@@ -406,16 +412,21 @@ impl ChatManager {
     /// Sends a user message, starting or restarting the agent first when
     /// needed. A moved chat's note and the messages it held go first (X73).
     fn deliver(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
+        self.go_on_held(chat, inner)?;
+        self.write(chat, inner, text, images)
+    }
+
+    /// The agent goes on, with no answer to the asks kept: they are moot.
+    /// A moved chat's note and the messages it held go to it first (X73).
+    fn go_on_held(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
         // A message: the agent is not idle (X84).
         inner.active_at = now_ms();
-        // A new message instead of an answer: the kept asks are moot.
         let kept = inner.kept.clone();
         self.close_kept(chat, inner, &kept, "error", None);
         if let Some(note) = inner.preface.take() {
             self.write(chat, inner, &note, &[])?;
         }
-        self.send_held(chat, inner)?;
-        self.write(chat, inner, text, images)
+        self.send_held(chat, inner)
     }
 
     /// Starts the agent, or starts it again for new settings, unless it
@@ -573,6 +584,16 @@ impl ChatManager {
         Ok(())
     }
 
+    /// Cuts the running turn off for a move (X73). An ask kept from an
+    /// earlier move or a restart has no turn running here: it moves on
+    /// open, with the messages held, and no agent starts for it.
+    pub fn cut_off(&self, id: TerminalId) -> Result<()> {
+        if !self.get(id)?.inner.lock().unwrap().kept.is_empty() {
+            return Ok(());
+        }
+        self.interrupt(id)
+    }
+
     pub fn interrupt(&self, id: TerminalId) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
@@ -583,10 +604,7 @@ impl ChatManager {
             // Queued messages run as the next turn once a stopped one ends
             // (X49), those a moved chat held too (X73).
             if !inner.held.is_empty() {
-                if let Some(note) = inner.preface.take() {
-                    self.write(&chat, &mut inner, &note, &[])?;
-                }
-                self.send_held(&chat, &mut inner)?;
+                self.go_on_held(&chat, &mut inner)?;
             }
             return Ok(());
         }
@@ -602,17 +620,12 @@ impl ChatManager {
     pub fn send_now(&self, id: TerminalId, message: Option<&str>) -> Result<()> {
         {
             // Messages a moved chat holds go to its agent here now, in
-            // order, in place of a kept ask's answer (X73).
+            // place of a kept ask's answer (X73): all of them, as the ones
+            // before a message go first.
             let chat = self.get(id)?;
             let mut inner = chat.inner.lock().unwrap();
             if message.map_or(!inner.held.is_empty(), |m| inner.held.iter().any(|h| h == m)) {
-                inner.active_at = now_ms();
-                let kept = inner.kept.clone();
-                self.close_kept(&chat, &mut inner, &kept, "error", None);
-                if let Some(note) = inner.preface.take() {
-                    self.write(&chat, &mut inner, &note, &[])?;
-                }
-                return self.send_held(&chat, &mut inner);
+                return self.go_on_held(&chat, &mut inner);
             }
         }
         self.with_queued(id, message, |a, m, st| a.send_now(m, st))
@@ -865,6 +878,7 @@ impl ChatManager {
                 t.status = "error".into();
             }
         }
+        let held: Vec<String> = saved.held.into_iter().filter(|h| state.queued.iter().any(|q| q.id == *h)).collect();
         let mut info = saved.info;
         info.pid = None;
         info.agent_state = agent_state(&state.status);
@@ -884,8 +898,8 @@ impl ChatManager {
                 generation: 0,
                 restart: false,
                 kept,
-                held: Vec::new(),
-                preface: None,
+                held,
+                preface: saved.preface,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -900,7 +914,13 @@ impl ChatManager {
             let id = super::local_id("system");
             upsert(&mut inner.state, item(id, "system", "Interrupted by a daemon restart"));
         }
+        // Only the messages a moved chat holds wait on (X73): the others
+        // never reached the agent that stopped.
+        let held = inner.held.clone();
+        let (waiting, gone) = std::mem::take(&mut inner.state.queued).into_iter().partition(|q| held.contains(&q.id));
+        inner.state.queued = gone;
         super::undeliver(&mut inner.state);
+        inner.state.queued = waiting;
         self.save(&chat, &mut inner);
         // Saved under its id now: a file kept elsewhere (X86), or under an
         // id another chat took meanwhile, goes.
@@ -996,7 +1016,7 @@ impl ChatManager {
         if let Some(t) = self.terms.get(chat.id) {
             inner.info = t.info();
         }
-        let saved = Saved { info: inner.info.clone(), cfg: inner.cfg.clone(), env: inner.env.clone(), state: inner.state.clone() };
+        let saved = Saved { info: inner.info.clone(), cfg: inner.cfg.clone(), env: inner.env.clone(), state: inner.state.clone(), held: inner.held.clone(), preface: inner.preface.clone() };
         let write = || -> Result<()> {
             crate::paths::ensure_private_dir(&self.dir)?;
             let tmp = self.dir.join(format!(".{}.tmp", chat.id));
@@ -2733,6 +2753,143 @@ done
         assert_eq!(last_user_text(&st), "This session moved.");
         assert_eq!(st.queued.iter().map(|q| q.id.clone()).collect::<Vec<_>>(), ids);
         assert!(!st.items.iter().any(|i| i.text == NOT_DELIVERED));
+        here.shutdown().await;
+    }
+
+    /// A chat continued here from another member's (X73), blocked on a
+    /// plan with "queue this" and "queue this too" queued, after the move's
+    /// note; and how many messages the fake agent was sent before.
+    async fn moved_with_a_plan_and_two_queued(dir: &Path) -> (Arc<ChatManager>, TerminalId, usize) {
+        let terms = TerminalManager::new(dir.join("sock"), fake_claude_env(dir));
+        let there = ChatManager::new(terms.clone(), dir.join("chats"));
+        let id = blocked_chat(dir, &there, Some("plan"), "propose a plan").await;
+        there.send(id, "queue this", &[]).unwrap();
+        there.send(id, "queue this too", &[]).unwrap();
+        let moved = wait_for(&there, id, |s| s.queued.len() == 2).await;
+        there.shutdown().await;
+        let before = sent_to_agent(dir, 0).len();
+        let here = elsewhere(dir, &terms);
+        let cwd = dir.display().to_string();
+        let id = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }, moved).unwrap().id;
+        here.go_on(id, Some("This session moved.")).unwrap();
+        (here, id, before)
+    }
+
+    /// X73: Send now sends what a moved chat holds at once, after the
+    /// move's note, in place of the plan's answer; a held message taken
+    /// out of the queue never reaches the agent.
+    #[tokio::test]
+    async fn send_now_sends_what_a_moved_chat_holds_and_a_held_message_taken_out_never_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, id, before) = moved_with_a_plan_and_two_queued(dir.path()).await;
+        let second = here.state(id).unwrap().queued[1].id.clone();
+        here.unqueue(id, &second).unwrap();
+        assert_eq!(here.state(id).unwrap().queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["queue this"]);
+
+        here.send_now(id, None).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 2).await, ["This session moved.", "queue this"]);
+        let st = here.state(id).unwrap();
+        assert!(st.pending.is_empty());
+        assert_eq!(tool_status(&st, "ExitPlanMode"), "error");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(sent_to_agent(dir.path(), before).len(), 2, "the message taken out went too");
+        here.shutdown().await;
+    }
+
+    /// X73: Stop on a plan kept from the member it moved from ends it, and
+    /// the messages held run as the next turn, after the move's note, as
+    /// queued messages do after a stop (X49).
+    #[tokio::test]
+    async fn stop_on_a_moved_plan_ends_it_and_the_held_messages_run_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, id, before) = moved_with_a_plan_and_two_queued(dir.path()).await;
+        here.interrupt(id).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 3).await, ["This session moved.", "queue this", "queue this too"]);
+        let st = here.state(id).unwrap();
+        assert!(st.pending.is_empty());
+        assert!(st.items.iter().any(|i| i.text == "Interrupted"));
+        here.shutdown().await;
+    }
+
+    /// X73: a message typed instead of the plan's answer drops the plan;
+    /// the move's note and the held messages go before it.
+    #[tokio::test]
+    async fn a_message_typed_on_a_moved_plan_goes_after_the_note_and_the_held_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, id, before) = moved_with_a_plan_and_two_queued(dir.path()).await;
+        here.send(id, "do it differently", &[]).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 4).await, ["This session moved.", "queue this", "queue this too", "do it differently"]);
+        assert!(here.state(id).unwrap().pending.is_empty());
+        here.shutdown().await;
+    }
+
+    /// X73: a daemon restart on the member a session moved to keeps a plan
+    /// kept from the move, its note and the messages held: the approval
+    /// still goes with the note, then the held messages, none of them
+    /// marked not delivered.
+    #[tokio::test]
+    async fn a_restart_after_a_move_keeps_the_plan_its_note_and_the_held_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, id, before) = moved_with_a_plan_and_two_queued(dir.path()).await;
+        here.shutdown().await;
+        let terms = TerminalManager::new(dir.path().join("sock-again"), fake_claude_env(dir.path()));
+        let again = ChatManager::new(terms, dir.path().join("chats-elsewhere"));
+        again.restore();
+        let st = again.state(id).unwrap();
+        assert_eq!(st.status, "blocked");
+        assert_eq!(st.pending.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["queue this", "queue this too"]);
+        assert!(!st.items.iter().any(|i| i.text == NOT_DELIVERED));
+
+        again.permission(id, "p1", "allow", None, None, None).unwrap();
+        assert_eq!(
+            sent_within(dir.path(), before, 3).await,
+            ["This session moved.\n\nI approve your plan. Go ahead with it.", "queue this", "queue this too"]
+        );
+        again.shutdown().await;
+    }
+
+    /// X73: Move now cuts a running turn off; a plan kept from an earlier
+    /// move has no turn running, so it moves on still open, with its
+    /// messages held, and no agent starts for it here.
+    #[tokio::test]
+    async fn move_now_leaves_a_plan_kept_from_a_move_open_to_move_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, id, before) = moved_with_a_plan_and_two_queued(dir.path()).await;
+        let starts = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count();
+        here.cut_off(id).unwrap();
+        let st = here.state(id).unwrap();
+        assert_eq!(st.status, "blocked");
+        assert_eq!(st.pending.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert_eq!(st.queued.len(), 2);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(sent_to_agent(dir.path(), before), Vec::<String>::new());
+        assert_eq!(std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count(), starts);
+        here.shutdown().await;
+    }
+
+    /// X73: a chat brought back with messages queued, and no note (typing
+    /// or Move now brings it, no sleep cut it off), sends them first, in
+    /// order, then the message typed.
+    #[tokio::test]
+    async fn a_brought_chat_sends_its_queued_messages_before_the_one_typed() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "run a long command", &[]).unwrap();
+        chats.send(info.id, "queue this", &[]).unwrap();
+        chats.send(info.id, "queue this too", &[]).unwrap();
+        let moved = wait_for(&chats, info.id, |s| s.queued.len() == 2).await;
+        chats.shutdown().await;
+        let before = sent_to_agent(dir.path(), 0).len();
+
+        let here = elsewhere(dir.path(), &terms);
+        let cwd = dir.path().display().to_string();
+        let id = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }, moved).unwrap().id;
+        here.go_on(id, None).unwrap();
+        here.send(id, "and the docs", &[]).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 3).await, ["queue this", "queue this too", "and the docs"]);
+        assert!(!here.state(id).unwrap().items.iter().any(|i| i.text == NOT_DELIVERED));
         here.shutdown().await;
     }
 
