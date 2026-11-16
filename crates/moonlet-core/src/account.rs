@@ -297,6 +297,41 @@ impl Log {
         self.changes.contains_key(&(member.to_string(), seq))
     }
 
+    /// Change `seq` of log `member`, when this log holds it.
+    pub fn get(&self, member: &str, seq: u64) -> Option<&Change> {
+        self.changes.get(&(member.to_string(), seq))
+    }
+
+    /// Takes back this log's own changes from `theirs`, what another member
+    /// holds of them, after this log went back in time (restored from a
+    /// backup, or a write lost): every member takes only the first change
+    /// under a number, so the changes this log made since, under numbers
+    /// its lost changes had, never got anywhere. The lost changes come
+    /// back under their numbers, and those made since go again under new
+    /// numbers after every one: returned, to send on. Their stamps stay,
+    /// so they still win or give way as they did.
+    pub fn take_back(&mut self, theirs: Vec<Change>) -> Vec<Change> {
+        let mut again = Vec::new();
+        for c in theirs.into_iter().filter(|c| c.stamp.member == self.member) {
+            let key = (self.member.clone(), c.seq);
+            match self.changes.get(&key) {
+                Some(mine) if *mine == c => continue,
+                Some(mine) => again.push(mine.clone()),
+                None => {}
+            }
+            self.clock = self.clock.max((c.stamp.ms, c.stamp.n));
+            self.seq = self.seq.max(c.seq);
+            self.changes.insert(key, c);
+        }
+        again.sort_by_key(|c| c.seq);
+        for c in &mut again {
+            self.seq = self.seq.saturating_add(1);
+            c.seq = self.seq;
+            self.changes.insert((self.member.clone(), self.seq), c.clone());
+        }
+        again
+    }
+
     /// The earliest change to record `id` of `kind`: the one that made it.
     pub fn first_change(&self, kind: RecordKind, id: &str) -> Option<&Change> {
         self.changes
@@ -663,6 +698,44 @@ mod tests {
             log.records(RecordKind::Workspace)["w1"]["name"],
             json!("Personal")
         );
+    }
+
+    #[test]
+    fn a_log_that_went_back_takes_back_its_lost_changes_and_numbers_its_new_ones_after_them() {
+        let book = "book.k3x9q2";
+        let home = set(1_000, book, 1, "w1", "name", json!("Home"));
+        let work = set(2_000, book, 2, "w1", "name", json!("Work"));
+        let color = set(2_001, book, 3, "w1", "color", json!("green"));
+        // Restored from a backup that has only "Home", the MacBook renames
+        // the workspace again: under number 2, which "Work" had.
+        let mut log = Log::new(book);
+        log.apply(vec![home.clone()]);
+        let studio = log.set(3_000, RecordKind::Workspace, "w1", "name", json!("Studio"));
+        assert_eq!(studio.seq, 2);
+
+        // Its central host holds what it lost.
+        let again = log.take_back(vec![home.clone(), work.clone(), color.clone()]);
+        assert_eq!(
+            again,
+            vec![set(3_000, book, 4, "w1", "name", json!("Studio"))]
+        );
+        assert_eq!(log.version(), Version::from([(book.to_string(), 4)]));
+        assert_eq!(
+            log.records(RecordKind::Workspace)["w1"],
+            Record::from([
+                ("name".into(), json!("Studio")),
+                ("color".into(), json!("green"))
+            ])
+        );
+        // What the central host holds and what the log sends again are the
+        // log's whole history: they meet anywhere at the same record.
+        let mut central = Log::new("mini.a1b2c3");
+        central.apply(vec![home, work, color]);
+        central.apply(again);
+        assert_eq!(central.missing_for(&Version::new()), log.missing_for(&Version::new()));
+        // A log that lost nothing has nothing to send again.
+        let mut whole = log.clone();
+        assert_eq!(whole.take_back(central.missing_for(&Version::new())), vec![]);
     }
 
     #[test]

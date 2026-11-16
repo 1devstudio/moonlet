@@ -294,6 +294,43 @@ async fn a_member_that_missed_a_change_has_it_at_its_next_exchange() {
 }
 
 #[tokio::test]
+async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() {
+    let (mut mini, addr) = central().await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].clone();
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    rename(&book, &books.id, "Home").await;
+    within(Duration::from_secs(10), "Home on studio-mini", || async {
+        mini.names().await == ["Home", "Personal"]
+    })
+    .await;
+    // The MacBook's log as a backup has it, before its next change.
+    let log = book.home.path().join("account.json");
+    let backup = std::fs::read(&log).unwrap();
+    rename(&book, &books.id, "Work").await;
+    within(Duration::from_secs(10), "Work on studio-mini", || async {
+        mini.names().await == ["Personal", "Work"]
+    })
+    .await;
+
+    // The MacBook comes back from the backup while studio-mini is away, and
+    // makes a change under the number its lost change had.
+    mini.stop();
+    book.stop();
+    std::fs::write(&log, &backup).unwrap();
+    book.restart().await;
+    rename(&book, &books.id, "Studio").await;
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(20), "Studio on both", || async {
+            d.names().await == ["Personal", "Studio"]
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn a_phone_never_hears_the_accounts_changes() {
     use moonlet_proto::read_frame;
     let (mini, addr) = central().await;

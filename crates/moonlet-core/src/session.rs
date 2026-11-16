@@ -532,9 +532,10 @@ impl SessionManager {
         if let Some(dir) = self.file.parent() {
             crate::paths::ensure_private_dir(dir)?;
         }
+        // Whole or not at all, even after a power cut: the account's log
+        // is made again from it when it cannot be read.
         let tmp = self.file.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(state)?)?;
-        std::fs::rename(&tmp, &self.file)?;
+        crate::paths::write_whole(&self.file, &tmp, &serde_json::to_vec_pretty(state)?, 0o666)?;
         Ok(())
     }
 

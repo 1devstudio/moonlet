@@ -872,8 +872,14 @@ impl WorkerLink {
         }
         let generation = self.account_loop.fetch_add(1, Ordering::SeqCst) + 1;
         let every = account_resync_interval();
+        // Whether this member's log was checked against the central host's
+        // copy of it, once per link: a log goes back in time only while
+        // the daemon is down.
+        let mut checked = false;
         while self.account_loop.load(Ordering::SeqCst) == generation && self.is_current(&host) {
-            if let Err(e) = self.sync_account(&host).await {
+            let synced = self.sync_account(&host, !checked).await;
+            checked |= synced.is_ok();
+            if let Err(e) = synced {
                 // A central host from before X68, or one whose account
                 // could not be read, has none to share; one that takes this
                 // machine for no member shares none with it.
@@ -900,9 +906,14 @@ impl WorkerLink {
     }
 
     /// One exchange: what this member lacks first, then what the central
-    /// host lacks, by the version it gave.
-    async fn sync_account(&self, host: &Arc<Host>) -> Result<(), RpcError> {
+    /// host lacks, by the version it gave. With `check`, this member's log
+    /// is checked against the central host's copy of it first.
+    async fn sync_account(&self, host: &Arc<Host>, check: bool) -> Result<(), RpcError> {
+        let before = self.sessions.own_log();
         let version = self.send_account(host, Vec::new()).await?;
+        if check && let Some((name, count)) = before {
+            self.check_own_log(host, &name, count, &version).await?;
+        }
         // Only this machine's own changes: the central host takes no other
         // member's from it.
         let own = self.info().worker.id;
@@ -914,14 +925,50 @@ impl WorkerLink {
         Ok(())
     }
 
-    /// Sends `changes` with this member's version, takes in what the central
-    /// host answers, and returns the central host's version.
-    async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
-        let send = m::AccountSync { version: self.sessions.account_version(), changes };
+    /// Whether this member's log `name`, holding `count` of its changes,
+    /// went back in time (restored from a backup, or a write lost) since the
+    /// central host, at `theirs`, took its changes. Its changes made since
+    /// then have numbers its lost ones had, which the central host already
+    /// holds and takes no other change under. The last change both hold
+    /// tells: it differs once the log went back, since every change has a
+    /// stamp of its own. One that went back takes its lost changes back,
+    /// and sends again those it made since under new numbers.
+    async fn check_own_log(&self, host: &Arc<Host>, name: &str, count: u64, theirs: &moonlet_core::account::Version) -> Result<(), RpcError> {
+        let last = count.min(theirs.get(name).copied().unwrap_or(0));
+        if last == 0 {
+            return Ok(());
+        }
+        let from = |seq: u64| {
+            let mut v = self.sessions.account_version();
+            v.insert(name.to_string(), seq);
+            v
+        };
+        let got = self.exchange(host, from(last - 1), Vec::new()).await?;
+        let held = got.changes.into_iter().find(|c| c.stamp.member == name && c.seq == last);
+        if held.is_none() || held == self.sessions.own_change(last) {
+            return Ok(());
+        }
+        let got = self.exchange(host, from(0), Vec::new()).await?;
+        let own = got.changes.into_iter().filter(|c| c.stamp.member == name).collect();
+        self.sessions.take_back_own(own);
+        Ok(())
+    }
+
+    /// One `account.sync` with the central host, from `version`: what it
+    /// answers, not taken in yet.
+    async fn exchange(&self, host: &Arc<Host>, version: moonlet_core::account::Version, changes: Vec<moonlet_proto::types::Change>) -> Result<m::AccountSynced, RpcError> {
+        let send = m::AccountSync { version, changes };
         let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(send).unwrap()).await?)?;
         if !self.is_current(host) {
             return Err(RpcError::new("gone", "the central host changed meanwhile"));
         }
+        Ok(got)
+    }
+
+    /// Sends `changes` with this member's version, takes in what the central
+    /// host answers, and returns the central host's version.
+    async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
+        let got = self.exchange(host, self.sessions.account_version(), changes).await?;
         self.sessions.apply_account(got.changes);
         if got.account.is_some() && self.sessions.set_central_account(got.account) {
             (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
