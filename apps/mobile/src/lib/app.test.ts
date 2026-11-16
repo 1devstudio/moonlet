@@ -84,4 +84,14 @@ describe("a session open on the phone as its owner changes (X73)", () => {
     await vi.waitFor(() => expect(useApp.getState().screen).toEqual({ kind: "session", host: "studio#copy:5e7f9a1b3c5d", id: "5e7f9a1b3c5d", tab: "chat" }));
     expect(useApp.getState().data["studio#copy:5e7f9a1b3c5d"].sessions[0].owner).toEqual({ worker: "w-book", name: "MacBook", reachable: true });
   });
+
+  it("keeps a diff of the session open, from the central host once it was handed over there", async () => {
+    const { showScreen } = await import("./app");
+    sessionList = [fixCart({ worker: "w-book", name: "MacBook", reachable: false, unreachable_since: 1790000000000 })];
+    await load("studio");
+    showScreen({ kind: "diff", host: "studio#copy:5e7f9a1b3c5d", id: "5e7f9a1b3c5d", path: "src/cart.ts", against: "base" });
+    sessionList = [fixCart()];
+    await load("studio");
+    await vi.waitFor(() => expect(useApp.getState().screen).toEqual({ kind: "diff", host: "studio", id: "5e7f9a1b3c5d", path: "src/cart.ts", against: "base" }));
+  });
 });

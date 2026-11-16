@@ -194,12 +194,12 @@ export async function loadCopy(id: string) {
   if (d) patchData(id, d);
 }
 
-/** The open session goes on showing from where it runs now (X73): the
- * central host once it runs it, the copy host once its Mac does again.
- * A copy host's data loads before the screen moves to it. */
+/** The open session, or a diff of it, goes on showing from where it runs
+ * now (X73): the central host once it runs it, the copy host once its Mac
+ * does again. A copy host's data loads before the screen moves to it. */
 async function followOpenSession() {
   const shown = get().screen;
-  if (shown?.kind !== "session") return;
+  if (shown?.kind !== "session" && shown?.kind !== "diff") return;
   const to = followedHost(shown.host, shown.id, get().data);
   if (!to) return;
   if (parseCopyHost(to)) await loadCopy(to).catch(() => {});

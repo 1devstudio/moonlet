@@ -22,11 +22,17 @@ export { continueFailed, continueOffer, continueWait, readOnlyLine } from "@desk
  * once another member runs it (brought back to its Mac). Null to stay:
  * the central host's list is not loaded or no longer has the session. */
 export function followedHost(host: string, id: string, data: Record<string, HostData>): string | null {
-  const central = parseCopyHost(host)?.host ?? host;
-  const session = data[central]?.sessions.find((s) => s.id === id);
+  const lister = parseCopyHost(host)?.host ?? host;
+  const session = data[lister]?.sessions.find((s) => s.id === id);
   if (!session) return null;
-  const now = session.owner ? copyHostId(central, id) : central;
-  return now === host ? null : now;
+  const target = sessionHost(lister, session);
+  return target === host ? null : target;
+}
+
+/** The host a session listed by `host` opens under: its copy host while
+ * another member owns it (X72), else `host` itself. */
+export function sessionHost(host: string, session: Session): string {
+  return session.owner ? copyHostId(host, session.id) : host;
 }
 
 /** What the phone shows of copy host session `id`: the central host's
