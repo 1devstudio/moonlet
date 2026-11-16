@@ -249,6 +249,16 @@ impl Workers {
         self.list.lock().unwrap().get(id).map(|e| e.conn.clone())
     }
 
+    /// Whether the worker on `conn` answers a ping now, within 3 s (a
+    /// second in tests' short pings): a message or an answer for one of
+    /// its sessions goes to it only then, so a link gone silent, as a lid
+    /// closing leaves it, never holds one for the minute a request waits,
+    /// nor gets it later (X73).
+    pub async fn answers(&self, conn: &Conn) -> bool {
+        let wait = self.ping_every.clamp(Duration::from_secs(1), Duration::from_secs(3));
+        conn.request(m::WORKER_PING, serde_json::json!({}), wait).await.is_ok()
+    }
+
     /// Since when worker `id` has not been linked (ms, X73); none while it
     /// is.
     pub fn unreachable_since(&self, id: &str) -> Option<u64> {

@@ -758,7 +758,11 @@ async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it()
 /// `HOLD` starts a tool call that never ends; one with `PLAN` asks for its
 /// plan to be approved, and one with `QUEUE` starts a tool call that never
 /// ends: after either, messages wait in its queue, as Claude Code's do
-/// until the running step ends, and are only noted (X73).
+/// until the running step ends, and are only noted (X73). One with `ASK`
+/// asks permission to run a command; so does the note of a turn cut off,
+/// when `$HOME/ask-again` is there, as Claude Code asks again for the step
+/// it was cut off in. The answers to permissions go to
+/// `$HOME/claude-control`.
 const TOOL_CLAUDE: &str = r#"#!/bin/sh
 ID=0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d
 DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
@@ -766,12 +770,35 @@ mkdir -p "$DIR/$ID/tool-results"
 T="$DIR/$ID.jsonl"
 echo "$@" >> "$HOME/claude-args"
 WAIT=
+turn() {
+  echo '{"type":"user","message":{"role":"user","content":"Fix the cart"},"sessionId":"'$ID'"}' >> "$T"
+  USE='{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"printf b > src/cart.ts"}}]},"session_id":"'$ID'"}'
+  echo "$USE"; echo "$USE" >> "$T"
+  printf 'b\n' > src/cart.ts
+  printf 'full output\n' > "$DIR/$ID/tool-results/toolu_01.txt"
+  RESULT='{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"done"}]},"session_id":"'$ID'"}'
+  echo "$RESULT"; echo "$RESULT" >> "$T"
+  SAID='{"type":"assistant","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Fixed."}]},"session_id":"'$ID'"}'
+  echo "$SAID"; echo "$SAID" >> "$T"
+  echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'
+}
 while IFS= read -r line; do
   if [ -n "$WAIT" ]; then
     case "$line" in *'"type":"user"'*) printf '%s\n' "$line" >> "$HOME/claude-user"; continue ;; esac
   fi
   case "$line" in
+    *'"type":"control_response"'*) printf '%s\n' "$line" >> "$HOME/claude-control" ;;
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"'$ID'","model":"fake"}' ;;
+    *'"type":"user"'*ASK*|*'"type":"user"'*'was cut off'*)
+      printf '%s\n' "$line" >> "$HOME/claude-user"
+      case "$line" in *ASK*) N=p2 ;; *) N=p3; [ -f "$HOME/ask-again" ] || N= ;; esac
+      if [ -n "$N" ]; then
+        USE='{"type":"assistant","message":{"id":"m6","role":"assistant","content":[{"type":"tool_use","id":"toolu_06","name":"Bash","input":{"command":"printf c > src/cart.ts"}}]},"session_id":"'$ID'"}'
+        echo "$USE"; echo "$USE" >> "$T"
+        echo '{"type":"control_request","request_id":"'$N'","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_06","input":{"command":"printf c > src/cart.ts"}}}'
+      else
+        turn
+      fi ;;
     *'"type":"user"'*PLAN*)
       printf '%s\n' "$line" >> "$HOME/claude-user"
       USE='{"type":"assistant","message":{"id":"m8","role":"assistant","content":[{"type":"tool_use","id":"toolu_08","name":"ExitPlanMode","input":{"plan":"Fix the cart"}}]},"session_id":"'$ID'"}'
@@ -789,16 +816,7 @@ while IFS= read -r line; do
       echo "$USE"; echo "$USE" >> "$T" ;;
     *'"type":"user"'*)
       printf '%s\n' "$line" >> "$HOME/claude-user"
-      echo '{"type":"user","message":{"role":"user","content":"Fix the cart"},"sessionId":"'$ID'"}' >> "$T"
-      USE='{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"printf b > src/cart.ts"}}]},"session_id":"'$ID'"}'
-      echo "$USE"; echo "$USE" >> "$T"
-      printf 'b\n' > src/cart.ts
-      printf 'full output\n' > "$DIR/$ID/tool-results/toolu_01.txt"
-      RESULT='{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"done"}]},"session_id":"'$ID'"}'
-      echo "$RESULT"; echo "$RESULT" >> "$T"
-      SAID='{"type":"assistant","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Fixed."}]},"session_id":"'$ID'"}'
-      echo "$SAID"; echo "$SAID" >> "$T"
-      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+      turn ;;
   esac
 done
 "#;
@@ -897,12 +915,29 @@ async fn agents_not_linked(origin: &Origin, clone_rule: bool) -> (Daemon, String
     agents_not_linked_holding(origin, clone_rule, None).await
 }
 
+/// [`agents_not_linked`] without a clone rule, studio-mini with `extra` in
+/// its environment.
+async fn agents_not_linked_with(origin: &Origin, extra: &[(&str, &str)]) -> (Daemon, String, Daemon) {
+    agents_not_linked_as(origin, false, None, extra).await
+}
+
 /// [`agents_not_linked`]; with `hold_ms`, the MacBook holds a sleep for
 /// at most that long.
 async fn agents_not_linked_holding(
     origin: &Origin,
     clone_rule: bool,
     hold_ms: Option<&str>,
+) -> (Daemon, String, Daemon) {
+    agents_not_linked_as(origin, clone_rule, hold_ms, &[]).await
+}
+
+/// [`agents_not_linked_holding`], studio-mini with `extra` in its
+/// environment.
+async fn agents_not_linked_as(
+    origin: &Origin,
+    clone_rule: bool,
+    hold_ms: Option<&str>,
+    extra: &[(&str, &str)],
 ) -> (Daemon, String, Daemon) {
     let scratch = tempfile::tempdir().unwrap();
     let mini_home = scratch.path().join("mini");
@@ -914,10 +949,11 @@ async fn agents_not_linked_holding(
     if let Some(ms) = hold_ms {
         book_env.push(("MOONLET_TEST_HOLD_MS".to_string(), ms.to_string()));
     }
-    let m: Vec<(&str, &str)> = mini_env
+    let mut m: Vec<(&str, &str)> = mini_env
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
+    m.extend_from_slice(extra);
     let b: Vec<(&str, &str)> = book_env
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -948,6 +984,9 @@ struct Network {
     /// What studio-mini sent that never reached the MacBook, the network
     /// down.
     dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    /// Goes down as studio-mini sends this, which never reaches the
+    /// MacBook, as a lid closing just as a request leaves would make it.
+    before: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
 
 impl Network {
@@ -961,19 +1000,21 @@ impl Network {
             after: Default::default(),
             lose: Default::default(),
             dropped: Default::default(),
+            before: Default::default(),
         };
-        let (addr, cut, which, after, lose, dropped) = (
+        let (addr, cut, which, after, lose, dropped, before) = (
             addr.to_string(),
             network.cut.clone(),
             network.which.clone(),
             network.after.clone(),
             network.lose.clone(),
             network.dropped.clone(),
+            network.before.clone(),
         );
         tokio::spawn(async move {
             while let Ok((member, _)) = listener.accept().await {
                 if let Ok(central) = tokio::net::TcpStream::connect(&addr).await {
-                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone(), lose.clone(), dropped.clone()));
+                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone(), lose.clone(), dropped.clone(), before.clone()));
                 }
             }
         });
@@ -988,6 +1029,12 @@ impl Network {
     /// reaches studio-mini; its answer does not reach the MacBook.
     fn cut_after(&self, what: &str) {
         *self.after.lock().unwrap() = Some(what.as_bytes().to_vec());
+    }
+
+    /// Goes down as studio-mini sends `what`, which never reaches the
+    /// MacBook.
+    fn cut_before(&self, what: &str) {
+        *self.before.lock().unwrap() = Some(what.as_bytes().to_vec());
     }
 
     /// Drops the connection the MacBook sends `what` on, before it reaches
@@ -1025,6 +1072,7 @@ async fn carry(
     after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     lose: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    before: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 ) {
     use std::sync::atomic::Ordering::SeqCst;
     let has = |bytes: &[u8], w: &[u8]| bytes.windows(w.len()).any(|x| x == w);
@@ -1062,6 +1110,13 @@ async fn carry(
             }
             n = from_central.read(&mut b), if !central_closed => match n {
                 Ok(n) if n > 0 => {
+                    {
+                        let mut before = before.lock().unwrap();
+                        if before.as_ref().is_some_and(|w| has(&b[..n], w)) {
+                            *before = None;
+                            cut.store(true, SeqCst);
+                        }
+                    }
                     if down() {
                         let mut dropped = dropped.lock().unwrap();
                         // The latest only: enough to find an answer in.
@@ -1357,14 +1412,11 @@ async fn with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it(
         status["branch"],
         json!(format!("moonlet-copy/{}", made["id"].as_str().unwrap()))
     );
-    let waits = forward(
-        &mini,
-        &made,
-        "chat.send",
-        json!({ "id": agent, "text": "Again" }),
-    )
-    .await
-    .unwrap_err();
+    // A message or an answer continues the session (below); anything
+    // else waits for the member.
+    let waits = forward(&mini, &made, "chat.interrupt", json!({ "id": agent }))
+        .await
+        .unwrap_err();
     assert!(waits.starts_with("owner_offline"), "{waits}");
     assert!(waits.contains("MacBook"), "{waits}");
 }
@@ -1908,6 +1960,247 @@ async fn a_session_whose_member_went_away_less_than_30_s_ago_is_not_continued_ye
     assert!(refused.starts_with("not_yet"), "{refused}");
     let own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+// --- A message or an answer for a session whose member is away (X73) -----
+
+/// `d`'s scratch HOME.
+fn home_of(d: &Daemon) -> PathBuf {
+    let env: std::collections::HashMap<_, _> = d.env.iter().cloned().collect();
+    PathBuf::from(&env["HOME"])
+}
+
+/// Waits until studio-mini holds a checkpoint of `session`'s copy, so it
+/// could continue it.
+async fn checkpointed(mini: &Daemon, session: &Value) {
+    copy_of(mini, session).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": session["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+}
+
+/// The ask the copy of `session`'s first chat waits on, once it shows one
+/// for `tool`.
+async fn copied_ask(mini: &Daemon, session: &Value, tool: &str) -> String {
+    within_value(Duration::from_secs(30), "the ask on studio-mini", || async {
+        let info = mini
+            .try_call("session.copy", json!({ "session": session["id"] }))
+            .await
+            .ok()?;
+        let ask = &info["chats"][0]["state"]["pending"][0];
+        (ask["tool"] == json!(tool)).then(|| ask["id"].as_str().unwrap().to_string())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_message_for_a_session_whose_member_is_away_continues_it_on_the_central_host_and_runs_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    checkpointed(&mini, &made).await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    // The phone sends it to the MacBook's session, as it always does.
+    let sent = forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap();
+    assert_eq!(sent["continued_on"], json!("studio-mini"), "{sent}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    within(Duration::from_secs(30), "the message on studio-mini's agent", || async {
+        agent_log(&mini, "claude-user").contains("Again")
+    })
+    .await;
+    // A phone that has not heard of the move yet sends the next one the
+    // same way: it reaches the chat here.
+    forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "And more" }))
+        .await
+        .unwrap();
+    within(Duration::from_secs(30), "the next message on studio-mini's agent", || async {
+        agent_log(&mini, "claude-user").contains("And more")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_answer_to_a_plan_for_a_session_whose_member_is_away_continues_it_and_reaches_the_agent() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    checkpointed(&mini, &made).await;
+    let _: Value = book.call("chat.send", json!({ "id": agent, "text": "PLAN it" })).await;
+    let ask = copied_ask(&mini, &made, "ExitPlanMode").await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let sent = forward(
+        &mini,
+        &made,
+        "chat.permission",
+        json!({ "id": agent, "ask": ask, "decision": "allow" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent["continued_on"], json!("studio-mini"), "{sent}");
+    within(Duration::from_secs(30), "the approval on studio-mini's agent", || async {
+        agent_log(&mini, "claude-user").contains("I approve your plan. Go ahead with it.")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_answer_to_a_tool_ask_for_a_session_whose_member_is_away_answers_it_when_asked_again() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    checkpointed(&mini, &made).await;
+    let _: Value = book.call("chat.send", json!({ "id": agent, "text": "ASK first" })).await;
+    let ask = copied_ask(&mini, &made, "Bash").await;
+    // On studio-mini, the agent cut off asks again for the same command.
+    std::fs::write(home_of(&mini).join("ask-again"), "").unwrap();
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let sent = forward(
+        &mini,
+        &made,
+        "chat.permission",
+        json!({ "id": agent, "ask": ask, "decision": "allow" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent["continued_on"], json!("studio-mini"), "{sent}");
+    within(Duration::from_secs(30), "the permission given on studio-mini", || async {
+        let answers = agent_log(&mini, "claude-control");
+        answers.contains(r#""request_id":"p3""#) && answers.contains(r#""behavior":"allow""#)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_message_for_a_session_whose_member_went_away_less_than_30_s_ago_is_refused_unsent() {
+    let origin = Origin::new();
+    // No shorter wait for tests here: the real 30 s.
+    let (mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let refused = forward(&mini, &made, "chat.send", json!({ "id": 1, "text": "Again" }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("not_yet"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
+async fn a_message_for_a_pinned_session_whose_member_is_away_is_refused_and_never_taken_over() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    checkpointed(&mini, &made).await;
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": BOOK }))
+        .await;
+    within(Duration::from_secs(30), "kept on the MacBook", || async {
+        with_copies(&mini)
+            .await
+            .iter()
+            .any(|s| s["id"] == made["id"] && s["pinned"] == json!(BOOK))
+    })
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let refused = forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("pinned"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
+async fn a_message_for_a_member_that_stopped_answering_is_refused_at_once_and_never_sent() {
+    let origin = Origin::new();
+    // Pings every 5 s, so the MacBook stays linked, silent, for 15 s.
+    let (mini, addr, book) = agents_not_linked_with(&origin, &[("MOONLET_WORKER_PING_MS", "5000")]).await;
+    let network = Network::to(&addr).await;
+    link_through(&book, &mini, &addr, &network.addr).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+
+    // The lid closes: the link goes silent, open.
+    network.cut(true);
+    let asked = std::time::Instant::now();
+    let refused = forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("owner_not_responding"), "{refused}");
+    assert!(refused.contains("MacBook"), "{refused}");
+    assert!(asked.elapsed() < Duration::from_secs(10), "refused after {:?}", asked.elapsed());
+
+    // Back: the message was never sent, so it can be sent again, once.
+    network.cut_back();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!agent_log(&book, "claude-user").contains("Again"));
+    within(Duration::from_secs(30), "the message on the MacBook", || async {
+        forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+            .await
+            .is_ok()
+    })
+    .await;
+    within(Duration::from_secs(30), "the MacBook's agent got it", || async {
+        agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
+    assert_eq!(agent_log(&book, "claude-user").matches("Again").count(), 1);
+}
+
+#[tokio::test]
+async fn a_message_whose_member_goes_quiet_before_it_answers_is_said_to_be_maybe_not_got() {
+    let origin = Origin::new();
+    let (mini, book, network) = pair_with_agents_through_a_network(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+
+    // The lid closes as the message leaves studio-mini.
+    network.cut_before("Again");
+    let lost = forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap_err();
+    assert!(lost.starts_with("owner_lost"), "{lost}");
+    assert!(lost.contains("MacBook stopped answering"), "{lost}");
 }
 
 #[tokio::test]

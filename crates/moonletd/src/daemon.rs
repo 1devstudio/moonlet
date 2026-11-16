@@ -92,6 +92,13 @@ pub struct Daemon {
     /// it took the session in (X73), so only one typed here since counts
     /// as using it.
     took_with: Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// The chats and asks of each session this host took in from a copy
+    /// (X73), by the ids its member gave them, so a message or an answer
+    /// sent for the member's session still reaches it here.
+    took_chats: Mutex<HashMap<String, TookChats>>,
+    /// One take-over for a message or an answer of a session at a time
+    /// (X73): the next one finds it taken and delivers here.
+    continuing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The copied files of this member's checkouts (X74).
     checkouts: crate::copied_files::Checkouts,
     /// Where the user was last active (X75).
@@ -574,6 +581,22 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
 
 /// The lock of `key` in `locks`, made when there is none. Locks nobody
 /// holds or waits for are dropped as it goes, so the map stays small.
+/// The chats a session taken in from a copy goes on with here (X73): each
+/// chat's id here by the id its member gave it, and the asks they were
+/// waiting on there, by id, with that chat's member id.
+#[derive(Default)]
+struct TookChats {
+    chats: HashMap<moonlet_proto::TerminalId, moonlet_proto::TerminalId>,
+    asks: HashMap<String, (moonlet_proto::TerminalId, moonlet_proto::types::PermissionAsk)>,
+}
+
+/// The requests through the central host that take a session over when its
+/// member is away, and are refused unsent while it is silent (X73): a
+/// message and an answer to an ask.
+fn takes_over(method: &str) -> bool {
+    method == m::CHAT_SEND || method == m::CHAT_PERMISSION
+}
+
 fn lock_of(locks: &Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>, key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = locks.lock().unwrap();
     locks.retain(|k, l| k == key || Arc::strong_count(l) > 1);
@@ -765,6 +788,8 @@ impl Daemon {
             bringing_back: Default::default(),
             bring_tries: Mutex::new(HashMap::new()),
             took_with: Mutex::new(HashMap::new()),
+            took_chats: Mutex::new(HashMap::new()),
+            continuing: Default::default(),
             checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             presence: Mutex::new(Presence::default()),
             waiting_shows: Default::default(),
@@ -3847,6 +3872,19 @@ impl Daemon {
 
     /// [`Self::continue_here`]; with `pin`, the session is kept here after.
     async fn continue_here_as(self: &Arc<Self>, session: &str, why: &str, only_unreachable: bool, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
+        let record = self.continuable(session, only_unreachable, pin)?;
+        let info = self.session_copies.copy_info(session)?;
+        if info.path.is_empty() {
+            return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
+        }
+        self.take_in(session, &record, info.chats, Some(why), only_unreachable, pin).await
+    }
+
+    /// The record of another member's session this host may continue
+    /// (X73), as [`Self::continue_here_as`] asks: with `only_unreachable`,
+    /// only once its member has been away for 30 s; with `pin`, even when
+    /// it is kept on its member.
+    fn continuable(&self, session: &str, only_unreachable: bool, pin: bool) -> Result<moonlet_core::account::Record, RpcError> {
         let me = self.link.info().worker;
         let record = self
             .sessions
@@ -3879,11 +3917,7 @@ impl Daemon {
         if self.sessions.session(session).is_ok() {
             return Err(RpcError::new("invalid_params", "this host already has that session"));
         }
-        let info = self.session_copies.copy_info(session)?;
-        if info.path.is_empty() {
-            return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
-        }
-        self.take_in(session, &record, info.chats, Some(why), only_unreachable, pin).await
+        Ok(record)
     }
 
     /// `session.give_back` from member `worker` (X73): the session this
@@ -3984,7 +4018,9 @@ impl Daemon {
         };
         self.session_copies.forget_copy(session, &taken).await;
         let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
+        let mut took = TookChats::default();
         for mut chat in chats {
+            let (was, asks) = (chat.terminal, chat.state.pending.clone());
             let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
             // Folders it was given inside the member's worktree are the
             // same ones in the copy.
@@ -3997,6 +4033,8 @@ impl Daemon {
                     continue;
                 }
             };
+            took.chats.insert(was, started.id);
+            took.asks.extend(asks.into_iter().map(|a| (a.id.clone(), (was, a))));
             // The cut-off turn goes on with a note, then the messages it
             // had queued; an ask kept open waits for its answer instead.
             let note = why
@@ -4006,6 +4044,7 @@ impl Daemon {
                 tracing::warn!(%session, "cannot go on with a continued chat: {e:#}");
             }
         }
+        self.took_chats.lock().unwrap().insert(session.to_string(), took);
         let s = self.sessions.session(session).map_err(internal)?;
         // What its chats hold now never counts as typed here (X73), the
         // messages queued as it moved included: each keeps its id.
@@ -4929,18 +4968,37 @@ impl Daemon {
             .remove(&r.session)
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let owner = record.get("owner").and_then(Value::as_str).unwrap_or_default().to_string();
-        if owner.is_empty() || owner == self.link.info().worker.id {
+        let me = self.link.info().worker.id;
+        // Taken over here for a message (X73), and sent to again by a
+        // client that has not heard of it yet: it goes on here.
+        if owner == me && takes_over(&r.method) && self.took_chats.lock().unwrap().contains_key(&r.session) {
+            return Box::pin(self.deliver_here(conn, r)).await;
+        }
+        if owner.is_empty() || owner == me {
             return Err(RpcError::new("invalid_params", "that session is this host's own"));
         }
+        let name = || self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
         if let Some(member) = self.workers.conn(&owner) {
-            return member
+            // A message or an answer goes only to a member that answers
+            // now. One whose link went silent never gets it, so the client
+            // can send it again, once, without a minute's wait (X73).
+            if takes_over(&r.method) && !self.workers.answers(&member).await {
+                return Err(RpcError::new("owner_not_responding", format!("{} is not responding", name())));
+            }
+            let writes = takes_over(&r.method);
+            return match member
                 .request(m::SESSION_FORWARD, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(60))
-                .await;
+                .await
+            {
+                // Sent, and the link went before the answer came: whether
+                // the member got it is not known, so it is not sent again.
+                Err(e) if writes && matches!(e.code.as_str(), "disconnected" | "timeout") => {
+                    Err(RpcError::new("owner_lost", format!("{} stopped answering before it said whether it got this", name())))
+                }
+                answer => answer,
+            };
         }
-        let offline = || {
-            let name = self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
-            RpcError::new("owner_offline", format!("{name} is not reachable"))
-        };
+        let offline = || RpcError::new("owner_offline", format!("{} is not reachable", name()));
         match r.method.as_str() {
             m::CHAT_STATE => {
                 let id = r.params.get("id").and_then(Value::as_u64).ok_or_else(|| RpcError::new("invalid_params", "a chat's id"))?;
@@ -4964,8 +5022,72 @@ impl Daemon {
                 let p = scope(&r.method, r.params, &r.session, &path, "", &[])?;
                 Box::pin(self.handle(conn, &r.method, p)).await
             }
+            // A message or an answer continues the session here first, as
+            // Continue here does (X73).
+            method if takes_over(method) => Box::pin(self.continue_for(conn, r)).await,
             _ => Err(offline()),
         }
+    }
+
+    /// A message or an answer `r` for a session whose member is away (X73):
+    /// this host takes the session over as `session.continue_here` does,
+    /// by the same rules (30 s away, never one kept on its member), and
+    /// delivers it here. Answers `{continued_on}`, this host's name.
+    async fn continue_for(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward) -> HandlerResult {
+        let one = lock_of(&self.continuing, &r.session);
+        let _one = one.lock().await;
+        let me = self.link.info().worker;
+        let ours = |d: &Self| {
+            d.sessions.session_records().get(&r.session).and_then(|rec| rec.get("owner")).and_then(Value::as_str) == Some(me.id.as_str())
+                && d.took_chats.lock().unwrap().contains_key(&r.session)
+        };
+        // The message before this one took it over meanwhile.
+        if ours(self) {
+            return Box::pin(self.deliver_here(conn, r)).await;
+        }
+        self.continuable(&r.session, true, false)?;
+        // Only a chat of the session's, before anything moves.
+        let chat = r.params.get("id").and_then(Value::as_u64);
+        let info = self.session_copies.copy_info(&r.session)?;
+        if !info.chats.iter().any(|c| Some(u64::from(c.terminal)) == chat) {
+            return Err(RpcError::new("forbidden", "that chat is not the session's"));
+        }
+        if let Err(e) = self.continue_here(&r.session, "could not be reached", true).await {
+            // Continued here meanwhile by Continue here.
+            if !ours(self) {
+                return Err(e);
+            }
+        }
+        Box::pin(self.deliver_here(conn, r)).await?;
+        ok(serde_json::json!({ "continued_on": me.name }))
+    }
+
+    /// Delivers message or answer `r`, sent for the chats of a session
+    /// this host took in from a copy (X73), to those chats here. An answer
+    /// to a tool's ask, which the agent here asks again as its turn goes
+    /// on, is given when it does.
+    async fn deliver_here(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward) -> HandlerResult {
+        let was = r.params.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
+        let (chat, asked) = {
+            let took = self.took_chats.lock().unwrap();
+            let took = took.get(&r.session).ok_or_else(|| RpcError::new("not_found", "that session was not taken in here"))?;
+            let ask = r.params.get("ask").and_then(Value::as_str).unwrap_or_default();
+            let chat = was.and_then(|w| took.chats.get(&w).copied()).ok_or_else(|| RpcError::new("not_found", "that chat did not go on here"))?;
+            let asked = took.asks.get(ask).filter(|(c, _)| Some(*c) == was).map(|(_, a)| a.clone());
+            (chat, asked)
+        };
+        let mut params = r.params;
+        params["id"] = serde_json::json!(chat);
+        if r.method == m::CHAT_PERMISSION {
+            let ask: m::ChatPermission = serde_json::from_value(params.clone()).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+            let open = self.chats.state(chat).is_ok_and(|st| st.pending.iter().any(|p| p.id == ask.ask));
+            if !open {
+                let asked = asked.ok_or_else(|| RpcError::new("not_found", "that ask is not open"))?;
+                self.chats.answer_when_asked(chat, &asked, &ask.decision, ask.message.as_deref()).map_err(|e| RpcError::new("not_found", format!("{e:#}")))?;
+                return ok(true);
+            }
+        }
+        Box::pin(self.handle(conn, &r.method, params)).await
     }
 
     /// `session.relay` from the central host (X72): attaches to a terminal

@@ -85,6 +85,9 @@ struct Inner {
     /// The move's note to the agent, kept while an ask waits (X73): it goes
     /// before the next message, as one with the answer.
     preface: Option<String>,
+    /// The user's answer to an ask of the member a moved session ran on,
+    /// given for when the agent here asks the same again (X73).
+    answer_again: Option<AnswerAgain>,
     stderr: Vec<String>,
     saved_at: Instant,
     dirty: bool,
@@ -99,6 +102,14 @@ struct Inner {
     /// The Claude profile folder the agent runs in, from its environment
     /// (`None` for the default one): whose models it lists (X105).
     profile: Option<String>,
+}
+
+/// An answer [`ChatManager::answer_when_asked`] keeps for an ask to come.
+struct AnswerAgain {
+    tool: String,
+    input: serde_json::Value,
+    decision: String,
+    message: Option<String>,
 }
 
 struct Chat {
@@ -351,6 +362,7 @@ impl ChatManager {
                 kept,
                 held,
                 preface: None,
+                answer_again: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -582,6 +594,41 @@ impl ChatManager {
         let outs = adapter.as_mut().context("agent not running")?.permission(ask, decision, message, answers, mode, state);
         self.apply(&chat, &mut inner, outs);
         Ok(())
+    }
+
+    /// Answers `asked`, the ask the agent of a moved session was waiting on
+    /// on the member it ran on (X73), with `decision` and `message`, once
+    /// the agent here, whose turn goes on after the cut-off, asks the same
+    /// again: the same tool with the same input. At once when it is asked
+    /// already. It is dropped, and the agent's ask shown as any, when
+    /// another ask comes first or the turn ends; an error when no turn
+    /// runs.
+    pub fn answer_when_asked(&self, id: TerminalId, asked: &PermissionAsk, decision: &str, message: Option<&str>) -> Result<()> {
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if !(inner.state.status == "working" || inner.state.pending.iter().any(|p| same_ask(p, asked))) {
+            bail!("no turn runs to ask that again");
+        }
+        inner.active_at = now_ms();
+        inner.answer_again = Some(AnswerAgain { tool: asked.tool.clone(), input: asked.input.clone(), decision: decision.to_string(), message: message.map(String::from) });
+        self.answer_if_asked_again(&chat, &mut inner);
+        Ok(())
+    }
+
+    /// Gives the answer kept for an ask to come once it is asked, or drops
+    /// it once another ask came or the turn ended (X73).
+    fn answer_if_asked_again(&self, chat: &Chat, inner: &mut Inner) {
+        let Some(again) = inner.answer_again.take() else { return };
+        let asked = inner.state.pending.iter().find(|p| p.agent.is_none() && p.tool == again.tool && p.input == again.input).map(|p| p.id.clone());
+        match asked {
+            Some(ask) => {
+                let Inner { adapter, state, .. } = &mut *inner;
+                let outs = adapter.as_mut().map(|a| a.permission(&ask, &again.decision, again.message.as_deref(), None, None, state)).unwrap_or_default();
+                self.apply(chat, inner, outs);
+            }
+            None if inner.state.pending.is_empty() && inner.state.status == "working" => inner.answer_again = Some(again),
+            None => {}
+        }
     }
 
     /// Cuts the running turn off for a move (X73). An ask kept from an
@@ -900,6 +947,7 @@ impl ChatManager {
                 kept,
                 held,
                 preface: saved.preface,
+                answer_again: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -1601,7 +1649,15 @@ impl ChatManager {
         if inner.dirty && (state_changed || inner.saved_at.elapsed() > Duration::from_secs(2)) {
             self.save(chat, inner);
         }
+        if state_changed {
+            self.answer_if_asked_again(chat, inner);
+        }
     }
+}
+
+/// Whether `a` asks what `b` asked: the same tool with the same input.
+fn same_ask(a: &PermissionAsk, b: &PermissionAsk) -> bool {
+    a.agent.is_none() && a.tool == b.tool && a.input == b.input
 }
 
 /// The chats directory under a moonlet home.
