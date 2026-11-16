@@ -46,6 +46,14 @@ describe("events", () => {
     expect(eventChanges("fs.changed", {})).toEqual([]);
   });
 
+  it("ask for a reload when a member's link to the central host drops or comes back (X73)", () => {
+    // The central host's list of linked members after the MacBook went
+    // away: its sessions now say it is unreachable, and since when.
+    const linked = [{ worker: { id: "w-studio", name: "studio-mini" }, connected_since: 1790000000000, rtt_ms: 4, load: 0.5, used: 1, running: [] }];
+    expect(eventChanges("workers.changed", linked)).toBe("reload");
+    expect(eventChanges("workers.changed", [])).toBe("reload");
+  });
+
   it("keep the host's Git settings as the daemon reports them (X55)", () => {
     expect(start().git).toBeNull();
     const settings = {

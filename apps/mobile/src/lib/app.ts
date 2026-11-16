@@ -35,7 +35,7 @@ import { hostWorkspaces, shownWorkspace } from "./workspaceChoices";
 import { withSetupCommand } from "./setups";
 import { type Change, accountAfterError, applyChanges, eventChanges, gitAfterError } from "./events";
 import { parseCopyHost } from "@desktop/lib/copyHost";
-import { copyData } from "./copies";
+import { copyData, followedHost } from "./copies";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -194,6 +194,19 @@ export async function loadCopy(id: string) {
   if (d) patchData(id, d);
 }
 
+/** The open session, or a diff of it, goes on showing from where it runs
+ * now (X73): the central host once it runs it, the copy host once its Mac
+ * does again. A copy host's data loads before the screen moves to it. */
+async function followOpenSession() {
+  const shown = get().screen;
+  if (shown?.kind !== "session" && shown?.kind !== "diff") return;
+  const to = followedHost(shown.host, shown.id, get().data);
+  if (!to) return;
+  if (parseCopyHost(to)) await loadCopy(to).catch(() => {});
+  // A reload while the copy host loaded may have moved the session again.
+  if (get().screen === shown && followedHost(shown.host, shown.id, get().data) === to) set({ screen: { ...shown, host: to } });
+}
+
 function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Partial<HostData>)) {
   set((s) => {
     const cur = s.data[host] ?? emptyData();
@@ -265,6 +278,7 @@ export async function loadHost(host: string) {
     for (const id of Object.keys(useApp.getState().data)) {
       if (parseCopyHost(id)?.host === host) void loadCopy(id).catch(() => {});
     }
+    void followOpenSession();
   } finally {
     if (loads.get(host) === during) loads.delete(host);
   }

@@ -2,6 +2,7 @@
 // paired with (X72). The phone opens one under its copy host
 // (@desktop/lib/copyHost), so its calls go through the central host.
 
+import { copyHostId, parseCopyHost } from "@desktop/lib/copyHost";
 import type { ChatState, Session, TerminalInfo } from "@desktop/lib/protocol";
 import type { ChatSummary, HostData } from "./app";
 
@@ -14,6 +15,25 @@ export function ownerLine(s: Session): string | null {
 
 // The read-only line and Continue on <central> are the desktop's too (X88).
 export { continueFailed, continueOffer, continueWait, readOnlyLine } from "@desktop/lib/centralCopies";
+
+/** Where a session open on the phone under `host` shows from now (X73),
+ * as its row would open it: under the central host once the central host
+ * runs it (handed over at sleep, or continued there), under its copy host
+ * once another member runs it (brought back to its Mac). Null to stay:
+ * the central host's list is not loaded or no longer has the session. */
+export function followedHost(host: string, id: string, data: Record<string, HostData>): string | null {
+  const lister = parseCopyHost(host)?.host ?? host;
+  const session = data[lister]?.sessions.find((s) => s.id === id);
+  if (!session) return null;
+  const target = sessionHost(lister, session);
+  return target === host ? null : target;
+}
+
+/** The host a session listed by `host` opens under: its copy host while
+ * another member owns it (X72), else `host` itself. */
+export function sessionHost(host: string, session: Session): string {
+  return session.owner ? copyHostId(host, session.id) : host;
+}
 
 /** What the phone shows of copy host session `id`: the central host's
  * data, with the session holding the terminals and chats its member gave

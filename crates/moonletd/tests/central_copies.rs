@@ -305,6 +305,42 @@ async fn a_session_whose_member_is_gone_says_since_when() {
 }
 
 #[tokio::test]
+async fn a_member_that_stops_answering_pings_is_unreachable_since_its_last_answer() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    let project = shop(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    within(Duration::from_secs(5), "fix-cart on studio-mini", || async {
+        with_copies(&mini).await.iter().any(|s| s["id"] == made["id"])
+    })
+    .await;
+    // Pings answered for a while: the link is up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // A closed lid: the process stops, its connection stays open, and
+    // the central host drops it after three missed pings (200 ms here).
+    let pid = nix::unistd::Pid::from_raw(book.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let stopped = epoch_ms();
+    let owner = within_value(Duration::from_secs(5), "MacBook unreachable", || async {
+        with_copies(&mini)
+            .await
+            .into_iter()
+            .find(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(false))
+            .map(|s| s["owner"].clone())
+    })
+    .await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    // Since its last answered ping, before the lid closed, not since it
+    // was dropped three missed pings (600 ms or more) later: the phone's
+    // 30 s count-down starts when the MacBook went away.
+    let since = owner["unreachable_since"].as_u64().unwrap_or_else(|| panic!("{owner}"));
+    assert!(since < stopped + 300, "unreachable since {since}, {} ms after it stopped", since.saturating_sub(stopped));
+    assert!(since + 2_000 > stopped, "unreachable since {since}, {} ms before it stopped", stopped - since);
+}
+
+#[tokio::test]
 async fn sessions_made_before_the_member_shared_its_account_reach_the_central_host() {
     let (mini, addr) = central().await;
     let book = mac(BOOK, "MacBook").await;
