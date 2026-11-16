@@ -73,6 +73,8 @@ export interface HostData {
 export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [], tasks: {}, macOpen: false });
 
 export type Tab = "inbox" | "sessions" | "tasks" | "new" | "hosts";
+/** The tab bar, left to right: New in the middle (X40). */
+export const TABS: Tab[] = ["inbox", "sessions", "new", "tasks", "hosts"];
 export type SessionTab = "chat" | "terminal" | "changes" | "pr" | "jobs";
 
 /** A screen over the tabs. */

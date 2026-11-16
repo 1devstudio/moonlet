@@ -34,7 +34,7 @@ User decisions: the desktop shares its boards through the daemon, and every trac
 
 ### The tab bar
 
-- [x] The tab bar is **Inbox · Sessions · Tasks · New · Hosts**. Inbox keeps its badge. Tasks carries the number of cards out of sync on the board it shows, when there are any. (`board.test.ts` counts the board's out-of-sync cards for the Tasks badge; the Inbox badge: `inbox.test.ts` lists every ask across hosts, newest first)
+- [x] The tab bar is **Inbox · Sessions · Tasks · New · Hosts**; X40 has since moved New to the middle (**Inbox · Sessions · New · Tasks · Hosts**). Inbox keeps its badge. Tasks carries the number of cards out of sync on the board it shows, when there are any. (`board.test.ts` counts the board's out-of-sync cards for the Tasks badge; the Inbox badge: `inbox.test.ts` lists every ask across hosts, newest first)
 
 ### The board
 

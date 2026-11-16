@@ -21,7 +21,7 @@ vi.mock("@desktop/lib/daemon", async (real) => ({
   },
 }));
 
-const { dropSetup, loadHost, refreshSetups, useApp } = await import("./app");
+const { TABS, dropSetup, loadHost, refreshSetups, useApp } = await import("./app");
 
 describe("loadHost (X68)", () => {
   it("keeps the newer load's account when an older load answers last", async () => {
@@ -116,5 +116,11 @@ describe("a session open on the phone as its owner changes (X73)", () => {
     for (const reply of copyReplies.splice(0)) reply([]);
     await new Promise((r) => setTimeout(r, 50));
     expect(useApp.getState().screen).toEqual({ kind: "session", host: "studio", id: "5e7f9a1b3c5d", tab: "chat" });
+  });
+});
+
+describe("the tab bar", () => {
+  it("puts New in the middle of the five tabs", () => {
+    expect(TABS).toEqual(["inbox", "sessions", "new", "tasks", "hosts"]);
   });
 });
