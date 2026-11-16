@@ -3078,7 +3078,9 @@ mod tests {
     }
 
     /// X73: what the member's agent had running when it went away is over
-    /// in the chat that goes on here, as after a daemon restart.
+    /// in the chat that goes on here, as after a daemon restart. A message
+    /// it had queued stays queued, for the agent here (2026-11-16; until
+    /// then it was marked not delivered).
     #[tokio::test]
     async fn a_continued_chat_closes_what_its_member_had_running() {
         let (repo, _home, mgr, chats) = structured().await;
@@ -3102,9 +3104,9 @@ mod tests {
         assert!(!st.items[0].partial);
         assert_eq!(st.items[1].tool.as_ref().unwrap().status, "error");
         assert_eq!(st.subagents[0].status, "stopped");
-        assert!(st.queued.is_empty());
-        let texts: Vec<&str> = st.items[2..].iter().map(|i| i.text.as_str()).collect();
-        assert_eq!(texts, ["Also fix the header", "Not delivered: Claude stopped before reading this message."]);
+        assert_eq!(st.status, "idle");
+        assert_eq!(st.queued.iter().map(|q| (q.id.as_str(), q.text.as_str())).collect::<Vec<_>>(), [("q1", "Also fix the header")]);
+        assert_eq!(st.items.len(), 2);
     }
 
     /// X73: a permission mode this host does not know, from another

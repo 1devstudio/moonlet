@@ -11,7 +11,7 @@ pub mod runtime;
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{ChatImage, ChatItem, ChatState, McpServer, ToolCall, TurnTime};
+use moonlet_proto::types::{ChatImage, ChatItem, ChatState, McpServer, QueuedMessage, ToolCall, TurnTime};
 
 use crate::paths::now_ms;
 
@@ -122,6 +122,12 @@ pub trait Adapter: Send {
     fn on_line(&mut self, line: &str, st: &mut ChatState) -> Vec<Out>;
     /// The user sends a message, with images after its text (X29).
     fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out>;
+    /// Sends a message queued for another agent of this chat, one on the
+    /// member a moved session ran on, as the same message (X73). Agents
+    /// that queue nothing send it as a new one.
+    fn resend(&mut self, queued: &QueuedMessage, st: &mut ChatState) -> Vec<Out> {
+        self.send(&queued.text, &[], st)
+    }
     /// The user answers a permission request: `allow`, `always` or `deny`.
     /// `answers` carries the user's answers to a question tool; `mode` is
     /// the permission mode an approved plan switches to.

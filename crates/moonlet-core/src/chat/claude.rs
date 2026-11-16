@@ -39,6 +39,23 @@ impl Claude {
         Out::Write(json!({"type": "control_request", "request_id": id, "request": request}).to_string())
     }
 
+    /// Sends a message as `uuid`, shown as item `item_id` when it starts a
+    /// turn.
+    fn send_as(&mut self, uuid: &str, item_id: &str, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out> {
+        let line = Out::Write(Self::user_line(uuid, text, images));
+        // During a turn Claude reads the message only when the running step
+        // ends: it waits in the queue until Claude says it started.
+        if super::busy(st) {
+            st.queued.push(QueuedMessage { id: uuid.to_string(), text: user_text(text, images), sending: false });
+            return vec![line, Out::State];
+        }
+        let mut out = vec![upsert(st, item(item_id, "user", user_text(text, images))), line];
+        st.turn_started_at = Some(now_ms());
+        st.status = "working".into();
+        out.push(Out::State);
+        out
+    }
+
     fn user_line(uuid: &str, text: &str, images: &[ChatImage]) -> String {
         let mut content: Vec<Value> = if text.is_empty() { vec![] } else { vec![json!({"type": "text", "text": text})] };
         content.extend(images.iter().map(|i| json!({"type": "image", "source": {"type": "base64", "media_type": i.media_type, "data": i.data}})));
@@ -709,18 +726,12 @@ impl Adapter for Claude {
     fn send(&mut self, text: &str, images: &[ChatImage], st: &mut ChatState) -> Vec<Out> {
         // The uuid makes Claude report when it reads the message (X49).
         let uuid = uuid::Uuid::new_v4().to_string();
-        let line = Out::Write(Self::user_line(&uuid, text, images));
-        // During a turn Claude reads the message only when the running step
-        // ends: it waits in the queue until Claude says it started.
-        if super::busy(st) {
-            st.queued.push(QueuedMessage { id: uuid, text: user_text(text, images), sending: false });
-            return vec![line, Out::State];
-        }
-        let mut out = vec![upsert(st, item(super::local_id("user"), "user", user_text(text, images))), line];
-        st.turn_started_at = Some(now_ms());
-        st.status = "working".into();
-        out.push(Out::State);
-        out
+        self.send_as(&uuid, &super::local_id("user"), text, images, st)
+    }
+
+    fn resend(&mut self, queued: &QueuedMessage, st: &mut ChatState) -> Vec<Out> {
+        // Its id stays the message's, in the queue and the transcript.
+        self.send_as(&queued.id, &queued.id, &queued.text, &[], st)
     }
 
     fn permission(&mut self, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>, st: &mut ChatState) -> Vec<Out> {

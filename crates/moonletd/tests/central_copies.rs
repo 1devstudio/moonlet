@@ -718,22 +718,41 @@ async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it()
 /// A fake `claude` speaking stream-json: its conversation id is fixed, and
 /// for each message it runs one tool, which writes `src/cart.ts`, and
 /// answers. It keeps its transcript where Claude Code does, in
-/// `$CLAUDE_CONFIG_DIR/projects/<folder>/<id>.jsonl`.
+/// `$CLAUDE_CONFIG_DIR/projects/<folder>/<id>.jsonl`. A message with
+/// `HOLD` starts a tool call that never ends; one with `PLAN` asks for its
+/// plan to be approved, and one with `QUEUE` starts a tool call that never
+/// ends: after either, messages wait in its queue, as Claude Code's do
+/// until the running step ends, and are only noted (X73).
 const TOOL_CLAUDE: &str = r#"#!/bin/sh
 ID=0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d
 DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$DIR/$ID/tool-results"
 T="$DIR/$ID.jsonl"
 echo "$@" >> "$HOME/claude-args"
+WAIT=
 while IFS= read -r line; do
+  if [ -n "$WAIT" ]; then
+    case "$line" in *'"type":"user"'*) printf '%s\n' "$line" >> "$HOME/claude-user"; continue ;; esac
+  fi
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"'$ID'","model":"fake"}' ;;
+    *'"type":"user"'*PLAN*)
+      printf '%s\n' "$line" >> "$HOME/claude-user"
+      USE='{"type":"assistant","message":{"id":"m8","role":"assistant","content":[{"type":"tool_use","id":"toolu_08","name":"ExitPlanMode","input":{"plan":"Fix the cart"}}]},"session_id":"'$ID'"}'
+      echo "$USE"; echo "$USE" >> "$T"
+      echo '{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","tool_use_id":"toolu_08","input":{"plan":"Fix the cart"}}}'
+      WAIT=1 ;;
+    *'"type":"user"'*QUEUE*)
+      printf '%s\n' "$line" >> "$HOME/claude-user"
+      USE='{"type":"assistant","message":{"id":"m7","role":"assistant","content":[{"type":"tool_use","id":"toolu_07","name":"Bash","input":{"command":"sleep 600"}}]},"session_id":"'$ID'"}'
+      echo "$USE"; echo "$USE" >> "$T"
+      WAIT=1 ;;
     *'"type":"user"'*HOLD*)
-      echo "$line" >> "$HOME/claude-user"
+      printf '%s\n' "$line" >> "$HOME/claude-user"
       USE='{"type":"assistant","message":{"id":"m9","role":"assistant","content":[{"type":"tool_use","id":"toolu_09","name":"Bash","input":{"command":"sleep 600"}}]},"session_id":"'$ID'"}'
       echo "$USE"; echo "$USE" >> "$T" ;;
     *'"type":"user"'*)
-      echo "$line" >> "$HOME/claude-user"
+      printf '%s\n' "$line" >> "$HOME/claude-user"
       echo '{"type":"user","message":{"role":"user","content":"Fix the cart"},"sessionId":"'$ID'"}' >> "$T"
       USE='{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"printf b > src/cart.ts"}}]},"session_id":"'$ID'"}'
       echo "$USE"; echo "$USE" >> "$T"
@@ -2971,6 +2990,129 @@ async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host()
             && theirs.iter().all(|s| s["id"] != made["id"])
     })
     .await;
+}
+
+/// The MacBook's chat in `made`, its turn started with `text`, and
+/// `queued` sent during it, once studio-mini's copy of it shows both.
+async fn waiting_with_a_queued_message(
+    mini: &Daemon,
+    book: &Daemon,
+    made: &Value,
+    text: &str,
+    status: &str,
+    queued: &str,
+) {
+    let agent = made["terminals"][0].clone();
+    let _: Value = book.call("chat.send", json!({ "id": agent, "text": text })).await;
+    within(Duration::from_secs(30), "the turn on the MacBook", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!(status)
+    })
+    .await;
+    let _: Value = book.call("chat.send", json!({ "id": agent, "text": queued })).await;
+    within(
+        Duration::from_secs(30),
+        "the queued message in studio-mini's copy",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| {
+                    let st = &i["chats"][0]["state"];
+                    st["status"] == json!(status) && st["queued"][0]["text"] == json!(queued)
+                })
+        },
+    )
+    .await;
+}
+
+/// The chat studio-mini continues session `made` with, once it runs it.
+async fn continued_chat(mini: &Daemon, made: &Value) -> Value {
+    within_value(Duration::from_secs(30), "studio-mini running it", || async {
+        let own: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().find(|s| s["id"] == made["id"]).map(|s| s["terminals"][0].clone())
+    })
+    .await
+}
+
+/// The texts of the messages `d`'s agents were sent, in order.
+fn sent_to_agents(d: &Daemon) -> Vec<String> {
+    agent_log(d, "claude-user")
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .map(|v| v["message"]["content"][0]["text"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+const NOT_DELIVERED: &str = "Not delivered: Claude stopped before reading this message.";
+
+/// How the central host's note begins for a turn a sleep cut off.
+const NOTE: &str = "This session moved from MacBook to studio-mini because MacBook went to sleep, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again.";
+
+#[tokio::test]
+async fn a_plan_open_as_the_mac_sleeps_is_open_on_the_central_host_and_its_approval_goes_on_there() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    waiting_with_a_queued_message(&mini, &book, &made, "PLAN it", "blocked", "And the tests").await;
+
+    // The lid closes while the plan waits for approval.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let chat = continued_chat(&mini, &made).await;
+    // The plan is open there, the message still queued, and no agent runs
+    // until the plan is answered.
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert_eq!(st["status"], json!("blocked"));
+    assert_eq!(st["pending"][0]["tool"], json!("ExitPlanMode"));
+    assert_eq!(st["queued"][0]["text"], json!("And the tests"));
+    assert!(st["items"].as_array().unwrap().iter().all(|i| i["text"] != json!(NOT_DELIVERED)));
+    assert_eq!(agent_log(&mini, "claude-args"), "", "an agent started before the answer");
+
+    // Approved from the phone, through studio-mini.
+    let ask = st["pending"][0]["id"].clone();
+    let _: Value = mini
+        .call("chat.permission", json!({ "id": chat, "ask": ask, "decision": "allow" }))
+        .await;
+    within(Duration::from_secs(30), "the approval, then the queued message", || async {
+        sent_to_agents(&mini).len() >= 2
+    })
+    .await;
+    let sent = sent_to_agents(&mini);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].starts_with(NOTE), "{sent:?}");
+    assert!(sent[0].ends_with(".\n\nI approve your plan. Go ahead with it."), "{sent:?}");
+    assert_eq!(sent[1], "And the tests");
+    assert!(agent_log(&mini, "claude-args").contains(&format!("--resume {CONVERSATION}")));
+}
+
+#[tokio::test]
+async fn a_message_queued_as_the_mac_sleeps_goes_to_the_agent_on_the_central_host_after_the_note() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    waiting_with_a_queued_message(&mini, &book, &made, "QUEUE on", "working", "And the tests").await;
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let chat = continued_chat(&mini, &made).await;
+    within(Duration::from_secs(30), "the note, then the queued message", || async {
+        sent_to_agents(&mini).len() >= 2
+    })
+    .await;
+    let sent = sent_to_agents(&mini);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].starts_with(NOTE), "{sent:?}");
+    assert_eq!(sent[1], "And the tests");
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert!(st["items"].as_array().unwrap().iter().all(|i| i["text"] != json!(NOT_DELIVERED)));
 }
 
 #[tokio::test]

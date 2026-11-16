@@ -84,11 +84,17 @@ pub fn to_end(
 
 /// Whether a session whose chats are in `states` goes to the central host
 /// as the Mac goes to sleep (X73): only while one of them is at work or
-/// waits on something, a turn running, an ask open, a message queued or a
-/// subagent running. An idle session stays, so a short idle sleep with the
-/// lid open moves nothing.
+/// waits on something, a turn running, an ask open or a message queued.
+/// An idle session stays, so a short idle sleep with the lid open moves
+/// nothing. So does one whose only work is a subagent, running or asking:
+/// it would end on the way, as Claude Code does not start it again on
+/// `--resume`, and here it goes on at the wake.
 pub fn hand_over_at_sleep(states: &[moonlet_proto::types::ChatState]) -> bool {
-    states.iter().any(moonlet_core::chat::at_work)
+    states.iter().any(|st| {
+        let subagents_ask = !st.pending.is_empty() && st.pending.iter().all(|p| p.agent.is_some());
+        let turn = st.status == "working" || st.turn_started_at.is_some() || (st.status == "blocked" && !subagents_ask);
+        turn || st.pending.iter().any(|p| p.agent.is_none()) || !st.queued.is_empty()
+    })
 }
 
 /// A session's record as a member knows it: its owner, ownership number,
@@ -536,12 +542,51 @@ mod tests {
             (std::slice::from_ref(&blocked), true),
             (std::slice::from_ref(&asking), true),
             (std::slice::from_ref(&queued), true),
-            (std::slice::from_ref(&subagent), true),
+            // A subagent alone keeps it here: see below.
+            (std::slice::from_ref(&subagent), false),
             // One chat at work is enough.
             (&[done.clone(), working.clone()], true),
         ];
         for (states, goes) in cases {
             assert_eq!(hand_over_at_sleep(states), goes, "{states:?}");
+        }
+    }
+
+    /// A subagent cannot go on elsewhere: Claude Code does not start it
+    /// again on `--resume`. A session whose only work is a running subagent,
+    /// or a subagent's ask, stays and goes on here at the wake, where the
+    /// subagent was frozen; one whose main turn runs too goes (X73).
+    #[test]
+    fn a_session_whose_only_work_is_a_subagent_stays_on_the_mac_at_sleep() {
+        let state = |v: serde_json::Value| -> moonlet_proto::types::ChatState { serde_json::from_value(v).unwrap() };
+        let running = serde_json::json!([{ "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "running", "started_at": 1794576000000_u64 }]);
+        let subagent = state(serde_json::json!({ "status": "done", "subagents": running }));
+        let subagent_asks = state(serde_json::json!({
+            "status": "blocked",
+            "subagents": running,
+            "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+        }));
+        let turn_and_subagent = state(serde_json::json!({ "status": "working", "turn_started_at": 1794576000000_u64, "subagents": running }));
+        let turn_waits_on_subagent = state(serde_json::json!({
+            "status": "blocked",
+            "turn_started_at": 1794576000000_u64,
+            "subagents": running,
+            "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+        }));
+        let main_asks = state(serde_json::json!({
+            "status": "blocked",
+            "subagents": running,
+            "pending": [{ "id": "p1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }]
+        }));
+        let cases = [
+            (&subagent, false),
+            (&subagent_asks, false),
+            (&turn_and_subagent, true),
+            (&turn_waits_on_subagent, true),
+            (&main_asks, true),
+        ];
+        for (st, goes) in cases {
+            assert_eq!(hand_over_at_sleep(std::slice::from_ref(st)), goes, "{st:?}");
         }
     }
 }
