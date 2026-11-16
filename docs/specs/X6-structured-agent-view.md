@@ -91,6 +91,7 @@ Claude asks the user multiple-choice questions through the `AskUserQuestion` too
   - Skip sends its message ("The user declined to answer the questions.").
   - Sending a new message instead drops the card. So does Stop, which adds an "Interrupted" note.
   - Tool permissions and subagents' asks are not kept: the agent asks again when it continues.
+- A question or plan open as its session moves to another member (X73) waits there the same way, and its answer goes to the agent there with the move's note before it in one message ([X73](X73-sessions-follow-you.md), When the owner goes to sleep).
 - A live daemon upgrade hands chats over by restarting them with resume. The transcript is kept, but a running turn is interrupted. Pipe handoff is a possible later improvement.
 - Restored chats keep their terminal id. The agent process is only started by the next message, so a restart costs nothing until the user continues.
 - A restored chat whose folder was removed (a deleted worktree) does not start its agent: the next message, or Ask aside, ends with the error `This session's folder no longer exists: <path>`.
