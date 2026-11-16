@@ -1164,7 +1164,12 @@ impl SessionCopies {
         let tmp = self.file.with_extension("tmp");
         match moonlet_core::paths::write_whole(&self.file, &tmp, &bytes, 0o666) {
             Ok(()) => *written = m,
-            Err(e) => tracing::warn!("cannot save {}: {e}", self.file.display()),
+            Err(e) => {
+                tracing::warn!("cannot save {}: {e}", self.file.display());
+                // The next save waiting, or the next one made, tries it
+                // again, unless a later one is already on its way.
+                self.saves.pending.lock().unwrap().get_or_insert((m, bytes));
+            }
         }
     }
 

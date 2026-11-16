@@ -293,8 +293,11 @@ async fn a_member_that_missed_a_change_has_it_at_its_next_exchange() {
     .await;
 }
 
-#[tokio::test]
-async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() {
+/// The MacBook renames its workspace "Home", is backed up, renames it to
+/// each of `lost` (which studio-mini takes), comes back from the backup
+/// while studio-mini is away, and renames it "Studio": under the number
+/// its first lost change had. Both end with "Studio".
+async fn a_log_that_went_back_after(lost: &[&str]) {
     let (mut mini, addr) = central().await;
     let mut book = mac(BOOK, "Alex's MacBook Pro").await;
     let books = book.workspaces().await[0].clone();
@@ -304,17 +307,16 @@ async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() 
         mini.names().await == ["Home", "Personal"]
     })
     .await;
-    // The MacBook's log as a backup has it, before its next change.
     let log = book.home.path().join("account.json");
     let backup = std::fs::read(&log).unwrap();
-    rename(&book, &books.id, "Work").await;
-    within(Duration::from_secs(10), "Work on studio-mini", || async {
-        mini.names().await == ["Personal", "Work"]
-    })
-    .await;
+    for name in lost {
+        rename(&book, &books.id, name).await;
+        within(Duration::from_secs(10), "the rename on studio-mini", || async {
+            mini.names().await.contains(&name.to_string())
+        })
+        .await;
+    }
 
-    // The MacBook comes back from the backup while studio-mini is away, and
-    // makes a change under the number its lost change had.
     mini.stop();
     book.stop();
     std::fs::write(&log, &backup).unwrap();
@@ -328,6 +330,16 @@ async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() 
         })
         .await;
     }
+}
+
+#[tokio::test]
+async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() {
+    a_log_that_went_back_after(&["Work"]).await;
+}
+
+#[tokio::test]
+async fn a_change_made_after_a_member_lost_more_changes_than_it_made_since_reaches_the_central_host() {
+    a_log_that_went_back_after(&["Work", "Office"]).await;
 }
 
 #[tokio::test]
