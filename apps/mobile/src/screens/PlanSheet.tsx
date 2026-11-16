@@ -8,6 +8,7 @@ import { type Screen, showScreen, useApp } from "../lib/app";
 import { answerPlan } from "../lib/answers";
 import { ageText } from "../lib/cards";
 import { useBusy } from "../lib/busy";
+import { heldKey, useHeld } from "../lib/held";
 import { Markdown } from "../components/Markdown";
 import { AgentIcon, Btn } from "../components/ui";
 import { useNow } from "../lib/now";
@@ -18,7 +19,9 @@ export function PlanSheet({ host, terminal, ask: askId, from }: { host: string; 
   const now = useNow();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const { busy, run } = useBusy();
+  const { busy: answering, error, run } = useBusy();
+  // An answer held for a session whose member is away waits to go (X73).
+  const busy = answering || !!useHeld((s) => s.held[heldKey(host, terminal, "answer")]);
   const ask = d?.chats[terminal]?.pending.find((a) => a.id === askId);
   const plan = ask && planOf(ask);
   const session = d?.sessions.find((s) => s.id === d.terminals[terminal]?.session_id) ?? null;
@@ -51,6 +54,11 @@ export function PlanSheet({ host, terminal, ask: askId, from }: { host: string; 
             {[project, hostLabel, ask?.asked_at ? `waiting ${ageText(ask.asked_at, now)}` : null].filter(Boolean).join(" · ")}
           </span>
         </div>
+        {error && (
+          <p role="alert" className="m-0 px-4 pb-2 text-[13px] leading-snug text-error">
+            {error}
+          </p>
+        )}
         <div className="scroll min-h-0 flex-1 border-y border-border px-4 py-3">
           {plan ? <Markdown text={plan.plan} /> : <p className="text-muted">This plan was answered.</p>}
           {plan?.file && <div className="mt-3 font-mono text-[11.5px] text-faint">{plan.file}</div>}

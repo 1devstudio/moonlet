@@ -1,7 +1,7 @@
 // A session (X40): its header and the Chat, Terminal, Changes and PR tabs.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { Archive, ChevronLeft, Link2, MoreHorizontal } from "lucide-react";
+import { Archive, ChevronLeft, Link2, MoreHorizontal, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type PullRequest, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
@@ -19,6 +19,7 @@ import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
 import { continueFailed, continueOffer, continueWait, readOnlyLine } from "../lib/copies";
+import { dismissNote, useHeld } from "../lib/held";
 import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
@@ -155,6 +156,8 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   // Continue on <central> (X73): in progress, and why it failed.
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
+  // Continued on the central host for a message or an answer (X73).
+  const continuedNote = useHeld((s) => s.notes[id]);
   // Seconds until Continue can be pressed, counted down once a second.
   const [ticks, tick] = useState(0);
   const wait = session ? continueWait(session, Date.now()) : 0;
@@ -268,6 +271,12 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
             </Btn>
           )}
         </div>
+      )}
+      {continuedNote && (
+        <button type="button" role="status" aria-label={`${continuedNote} Dismiss`} onClick={() => dismissNote(id)} className="flex flex-none items-center gap-3 border-b border-border bg-panel px-4 py-2 text-left text-[13px] text-muted">
+          <span className="min-w-0 flex-1">{continuedNote}</span>
+          <X size={15} className="flex-none text-faint" />
+        </button>
       )}
       {continueError && (
         <p role="alert" className="m-0 flex-none border-b border-border bg-panel px-4 py-2 text-[13px] leading-snug text-error">
