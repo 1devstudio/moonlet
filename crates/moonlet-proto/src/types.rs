@@ -603,6 +603,12 @@ pub struct HeavyConfig {
     /// (X63). Read-only in the app: `heavy.set` keeps it as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_setup: Option<String>,
+    /// Command prefixes moonlet may run again on the session's host when
+    /// the machine running one goes away mid-run. None by default: a run
+    /// given up on may have run in part, so it is not run again. Read-only
+    /// in the app, as `machine_setup`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rerun: Vec<String>,
 }
 
 /// Which workers may take a project's heavy commands (X62).

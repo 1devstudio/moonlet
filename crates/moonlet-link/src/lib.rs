@@ -163,6 +163,10 @@ pub struct Host {
     /// How many times the link connected: a run that started on one
     /// connection is lost when another one replaced it (X89).
     connections: AtomicU64,
+    /// When the daemon last sent anything on the link. A central host pings
+    /// its workers every 10 s, so a long silence means it is gone even
+    /// while the connection looks open (X89).
+    heard: Mutex<std::time::Instant>,
     batch: Mutex<Vec<u8>>,
     stop: watch::Sender<bool>,
     /// Kicks the reconnect loop to retry immediately.
@@ -229,6 +233,7 @@ impl Host {
             packs: Mutex::new(PackAssembler::default()),
             next_transfer: AtomicU32::new(1),
             connections: AtomicU64::new(0),
+            heard: Mutex::new(std::time::Instant::now()),
             batch: Mutex::new(Vec::new()),
             stop,
             retry: tokio::sync::Notify::new(),
@@ -286,6 +291,11 @@ impl Host {
     /// connects again (X89).
     pub fn connection(&self) -> u64 {
         self.connections.load(Ordering::SeqCst)
+    }
+
+    /// How long since the daemon last sent anything on the link.
+    pub fn silent_for(&self) -> Duration {
+        self.heard.lock().unwrap().elapsed()
     }
 
     /// What answers the daemon's requests from now on (X41).
@@ -613,6 +623,7 @@ async fn run_link(
     // A pack cut off by the last link will never be whole.
     *host.packs.lock().unwrap() = PackAssembler::default();
     *host.link.lock().unwrap() = Some(Link { tx, urgent });
+    *host.heard.lock().unwrap() = std::time::Instant::now();
     host.connections.fetch_add(1, Ordering::SeqCst);
     // Fetch home for path display; ignore failures.
     let h2 = host.clone();
@@ -644,6 +655,7 @@ async fn run_link(
                 if n == 0 {
                     break Ok(());
                 }
+                *host.heard.lock().unwrap() = std::time::Instant::now();
                 decoder.push(&buf[..n]);
             }
             _ = stop.changed() => break Ok(()),

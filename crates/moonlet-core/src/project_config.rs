@@ -91,8 +91,9 @@ pub fn set_heavy(repo: &Path, heavy: &HeavyConfig) -> Result<()> {
         os: heavy.os,
         env: trim(&heavy.env),
         outputs: heavy.outputs.iter().map(|s| s.trim().to_string()).collect(),
-        // Not written here: the file's own stays.
+        // Not written here: the file's own stay.
         machine_setup: None,
+        rerun: Vec::new(),
     };
     crate::heavy::check(&heavy).map_err(anyhow::Error::msg)?;
     let lock = lock_for(&repo.join(".moonlet/config.toml"));
@@ -425,11 +426,12 @@ fn apply_heavy(doc: &mut DocumentMut, h: &HeavyConfig) {
     if let Some(inline) = doc.get("heavy").and_then(|i| i.as_inline_table()).cloned() {
         doc.insert("heavy", Item::Table(inline.into_table()));
     }
-    // `machine_setup` (X63) is the file's own: it keeps the table.
+    // `machine_setup` (X63) and `rerun` are the file's own: they keep the
+    // table.
     let keeps = doc
         .get("heavy")
         .and_then(|i| i.as_table())
-        .is_some_and(|t| t.contains_key("machine_setup"));
+        .is_some_and(|t| t.contains_key("machine_setup") || t.contains_key("rerun"));
     if empty && !keeps {
         doc.remove("heavy");
         return;
@@ -574,6 +576,7 @@ mod tests {
             env: vec!["CI".into()],
             outputs: vec!["coverage".into()],
             machine_setup: None,
+            rerun: Vec::new(),
         };
         set_heavy(dir.path(), &heavy).unwrap();
         assert_eq!(
@@ -615,6 +618,19 @@ mod tests {
         assert_eq!(read(&dir), "[heavy]\ncommands = [\"pnpm build\"]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
         set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
         assert_eq!(read(&dir), "[heavy]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
+    }
+
+    #[test]
+    fn heavy_set_keeps_the_commands_marked_safe_to_run_again() {
+        use moonlet_proto::types::HeavyConfig;
+        // Read-only in the app, as machine_setup: heavy.set never writes
+        // nor drops it.
+        let dir = repo_with(Some("[heavy]\ncommands = [\"pnpm test\", \"pnpm deploy\"]\nrerun = [\"pnpm test\"]\n"));
+        assert_eq!(load(dir.path(), "main".into()).config.heavy.rerun, ["pnpm test"]);
+        set_heavy(dir.path(), &HeavyConfig { commands: vec!["pnpm build".into()], ..HeavyConfig::default() }).unwrap();
+        assert_eq!(read(&dir), "[heavy]\ncommands = [\"pnpm build\"]\nrerun = [\"pnpm test\"]\n");
+        set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
+        assert_eq!(read(&dir), "[heavy]\nrerun = [\"pnpm test\"]\n");
     }
 
     #[test]

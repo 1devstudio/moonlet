@@ -14,7 +14,10 @@ export function dur(ms: number): string {
 export const took = (ms: number): string => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : dur(ms));
 
 const ran = (j: Job, now: number) => (j.ended_at ?? now) - j.started_at;
-const reran = (j: Job) => j.timeline.some((e) => e.text.endsWith(" went away"));
+/** Its worker went away mid-run. */
+const wentAway = (j: Job) => j.timeline.some((e) => e.text.endsWith(" went away"));
+/** It then ran again where its session is: only a command the project marked safe to. */
+const reran = (j: Job) => j.timeline.some((e) => e.text.startsWith("Ran again on "));
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Whether a job waits, runs or brings its changes back. */
@@ -60,6 +63,7 @@ export function jobRowLine(j: Job, now: number): { tone: JobTone; icon: JobIcon;
       return { tone: "error", icon: icon(j), text: "Lost" };
     case "done": {
       if (reran(j)) return { tone: "blocked", icon: "rerun", text: `Ran again on ${where} · exit ${s.exit}` };
+      if (wentAway(j)) return { tone: "error", icon: icon(j), text: `${where} went away · not run again · exit ${s.exit}` };
       if (s.exit !== 0) return { tone: "error", icon: icon(j), text: [where, `exit ${s.exit}`, j.summary].filter(Boolean).join(" · ") };
       const left = j.leftovers.length ? ` · ${plural(j.leftovers.length, "leftover")}` : "";
       return { tone: "muted", icon: icon(j), text: `${where} · exit 0${left}` };
@@ -106,12 +110,12 @@ const hms = (ms: number) => {
   return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
 };
 
-/** A job's steps: its phases, or after a rerun what happened when. */
+/** A job's steps: its phases, or once its worker went away what happened when. */
 export function phaseList(j: Job, now: number): PhaseRow[] {
   // Waiting for a cloud machine (X63): what comes once it is ready.
   if (j.state.kind === "waiting")
     return ["Copy matches the session", "Running", "Bring changes back"].map((name) => ({ name, state: "pending", took: null, detail: null }));
-  if (reran(j))
+  if (wentAway(j))
     return j.timeline.map((e) => ({ name: e.text, state: e.text.endsWith(" went away") ? "warn" : "done", took: hms(e.at), detail: e.detail ?? null }));
   const rows: PhaseRow[] = j.phases.map((p) => ({
     name: p.name,

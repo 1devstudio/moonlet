@@ -33,6 +33,14 @@ pub fn listed(words: &[String], entries: &[String]) -> bool {
         .any(|e| split(e).is_some_and(|e| !e.is_empty() && words.starts_with(&e)))
 }
 
+/// Whether a routed run of `argv` may run again on the session's host when
+/// the machine running it goes away mid-run: only when the project lists it
+/// under `[heavy] rerun`. A run given up on may have run in part, or still
+/// be going, so by default it is not run again.
+pub fn runs_again(argv: &[String], heavy: &HeavyConfig) -> bool {
+    listed(argv, &heavy.rerun)
+}
+
 /// Why a line is not routed, in words for the agent and the Jobs tab.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refusal(pub String);
@@ -956,6 +964,11 @@ pub fn check(heavy: &HeavyConfig) -> Result<(), String> {
             return Err(format!("commands: `{c}` is not a plain command"));
         }
     }
+    for c in &heavy.rerun {
+        if split(c).is_none_or(|w| w.is_empty()) {
+            return Err(format!("rerun: `{c}` is not a plain command"));
+        }
+    }
     for name in &heavy.env {
         let ok = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -1170,6 +1183,7 @@ mod tests {
                 env: vec!["CI".into(), "NPM_TOKEN".into()],
                 outputs: vec!["coverage".into()],
                 machine_setup: None,
+                rerun: Vec::new(),
             }
         );
         // No table reads as no heavy commands, on any system.
@@ -1463,6 +1477,26 @@ mod tests {
             outputs: outputs.iter().map(|s| s.to_string()).collect(),
             ..HeavyConfig::default()
         }
+    }
+
+    #[test]
+    fn a_lost_run_runs_again_only_when_rerun_lists_it() {
+        let words = |c: &str| split(c).unwrap();
+        let config = |rerun: &[&str]| HeavyConfig {
+            commands: vec!["pnpm test".into(), "pnpm deploy".into()],
+            rerun: rerun.iter().map(|s| s.to_string()).collect(),
+            ..HeavyConfig::default()
+        };
+        // None by default: a test run as much as a deploy.
+        assert!(!runs_again(&words("pnpm test"), &config(&[])));
+        assert!(!runs_again(&words("pnpm deploy"), &config(&[])));
+        let marked = config(&["pnpm test"]);
+        assert!(runs_again(&words("pnpm test"), &marked));
+        assert!(runs_again(&words("pnpm test src/cart.test.ts --run"), &marked));
+        assert!(!runs_again(&words("pnpm deploy"), &marked));
+        assert!(!runs_again(&words("pnpm"), &marked));
+        assert_eq!(check(&config(&["pnpm test"])), Ok(()));
+        assert_eq!(check(&config(&["pnpm test; rm -rf ."])), Err("rerun: `pnpm test; rm -rf .` is not a plain command".into()));
     }
 
     #[test]

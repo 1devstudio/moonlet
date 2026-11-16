@@ -1982,6 +1982,7 @@ impl Daemon {
                     os: checked.os,
                     outputs: checked.outputs,
                     setup: checked.setup,
+                    rerun: checked.rerun,
                     identity: session
                         .as_ref()
                         .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))

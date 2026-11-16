@@ -460,6 +460,8 @@ export interface HeavyConfig {
   outputs: string[];
   /** A script run as root on each new cloud machine (X63); kept when the page saves the rest. */
   machine_setup?: string | null;
+  /** Commands safe to run again when their machine goes away mid-run; kept when the page saves the rest. */
+  rerun?: string[];
 }
 
 /** What the user approved of a project's heavy commands: both lists, together. */
