@@ -104,7 +104,7 @@ impl Moves {
 /// Writes `bytes` to `path` whole or not at all: into a file beside it,
 /// flushed to the disk, then renamed over it. A crash leaves the old file
 /// or the new one, never half of one.
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("json.tmp");
     let mut f = std::fs::File::create(&tmp)?;
