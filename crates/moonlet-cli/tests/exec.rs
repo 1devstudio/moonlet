@@ -567,32 +567,36 @@ async fn the_hook_tells_the_agent_once_why_a_line_with_a_heavy_command_stays_her
 async fn a_routed_command_whose_reader_has_gone_ends_as_it_would_here() {
     let s = approved_shop().await;
     // `head` exits after a line: the command here dies of SIGPIPE (141);
-    // routed, it is stopped the same way rather than running on.
-    let line = format!(
-        "'{}' exec -- sh -c 'while :; do echo y; done' | head -n 1",
-        env!("CARGO_BIN_EXE_moonlet")
-    );
-    let mut child = Command::new("bash")
-        .args(["-o", "pipefail", "-c", &line])
-        .current_dir(&s.worktree)
-        .env("MOONLET_SOCK", &s.socket)
-        .env("MOONLET_SESSION", &s.session)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if started.elapsed() > Duration::from_secs(15) {
-            let _ = child.kill();
-            panic!("the routed command ran on after its reader had gone");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let mut out = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
-    assert_eq!((out.as_str(), status.code()), ("y\n", Some(141)));
+    // routed, it is stopped the same way rather than running on, also
+    // when moonlet's own lines go to the same reader.
+    for merge in ["", " 2>&1"] {
+        let line = format!(
+            "'{}' exec -- sh -c 'while :; do echo y; done'{merge} | head -n 1",
+            env!("CARGO_BIN_EXE_moonlet")
+        );
+        let mut child = Command::new("bash")
+            .args(["-o", "pipefail", "-c", &line])
+            .current_dir(&s.worktree)
+            .env("MOONLET_SOCK", &s.socket)
+            .env("MOONLET_SESSION", &s.session)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if started.elapsed() > Duration::from_secs(15) {
+                let _ = child.kill();
+                panic!("the routed command ran on after its reader had gone ({merge:?})");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+        let first = if merge.is_empty() { "y\n" } else { "moonlet: running on studio-mini\n" };
+        assert_eq!((out.as_str(), status.code()), (first, Some(141)), "{merge:?}");
+    }
 }

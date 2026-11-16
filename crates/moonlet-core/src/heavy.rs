@@ -537,7 +537,10 @@ fn filter(part: Vec<Item>) -> Result<Filter, Refusal> {
             Item::Redirect(r) => redirects.push(r),
         }
     }
-    let ok = match words[0].as_str() {
+    let Some(name) = words.first() else {
+        return refuse("a `|` has no command after it");
+    };
+    let ok = match name.as_str() {
         "tail" => count_ok(&words[1..], true),
         "head" => count_ok(&words[1..], false),
         "grep" => grep_ok(&words[1..]),
@@ -1277,7 +1280,7 @@ mod tests {
     fn lines_beyond_the_routed_forms_are_refused_with_why() {
         let no = |s: &str| Err::<String, String>(s.to_string());
         let second = "it runs a second command";
-        let rows: [(&str, Result<String, String>); 34] = [
+        let rows: [(&str, Result<String, String>); 35] = [
             ("pnpm test && git status", no(second)),
             ("pnpm test; git status", no(second)),
             ("pnpm test || true", no(second)),
@@ -1300,6 +1303,7 @@ mod tests {
             ("pnpm test 2>&-", no("it has a redirection moonlet does not route")),
             ("pnpm test >| out.txt", no("it has a redirection moonlet does not route")),
             ("pnpm test |& tail", no("it has a redirection moonlet does not route")),
+            ("pnpm test | > out.txt", no("a `|` has no command after it")),
             ("pnpm test | sh", no("`sh` is not a filter moonlet runs after a command: use tail, head or grep")),
             ("pnpm test | xargs rm", no("`xargs` is not a filter moonlet runs after a command: use tail, head or grep")),
             ("pnpm test | tail -f", no("`tail -f` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep")),

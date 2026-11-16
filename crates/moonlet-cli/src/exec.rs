@@ -81,15 +81,16 @@ pub async fn routed(
                 {
                     // Claude Code may cut a long output short: the agent
                     // reads the rest from the job's log (X90).
+                    // Its reader may be gone (`2>&1 | head`): never a panic.
                     if let Some(log) = &e.log {
-                        eprintln!("moonlet: full output in {}", tilde(log));
+                        let _ = writeln!(std::io::stderr(), "moonlet: full output in {}", tilde(log));
                     }
                     return Some(cancelled.unwrap_or(e.status));
                 }
             }
             Some(_) => {}
             None => {
-                eprintln!("moonlet: lost {}'s daemon during the run", started.host);
+                let _ = writeln!(std::io::stderr(), "moonlet: lost {}'s daemon during the run", started.host);
                 return Some(125);
             }
         }
