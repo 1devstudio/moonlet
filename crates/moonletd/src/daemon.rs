@@ -145,9 +145,13 @@ pub struct Daemon {
     bringing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// One settling of [`Self::takes`] at a time (X73).
     settling_takes: tokio::sync::Mutex<()>,
-    /// On the central host: one give or hand-back of a session at a time
-    /// (X73).
-    giving: tokio::sync::Mutex<()>,
+    /// On the central host: one give or hand-back of each session at a
+    /// time (X73).
+    giving: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Hand-backs of sessions the account gives this member that the
+    /// central host refused, each at its ownership number, or tried too
+    /// often: not sent again until the daemon starts again (X73).
+    backs_refused: Mutex<HashMap<(String, u64), u32>>,
     /// On the central host: how many hand-overs each member sent, so an
     /// older one leaves what it has not taken yet to a newer one (X73).
     yields: Mutex<HashMap<String, u64>>,
@@ -568,12 +572,30 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", format!("{e:#}"))
 }
 
+/// The lock of `key` in `locks`, made when there is none. Locks nobody
+/// holds or waits for are dropped as it goes, so the map stays small.
+fn lock_of(locks: &Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = locks.lock().unwrap();
+    locks.retain(|k, l| k == key || Arc::strong_count(l) > 1);
+    locks.entry(key.to_string()).or_default().clone()
+}
+
+/// Stops the daemon at `stage` of a give, once, as a crash would there
+/// (X73): for tests, when the file `MOONLET_TEST_STOP_IN_GIVE` names holds
+/// `stage`.
+fn stop_in_give(stage: &str) {
+    let Some(stop) = std::env::var_os("MOONLET_TEST_STOP_IN_GIVE").map(std::path::PathBuf::from) else { return };
+    if std::fs::read_to_string(&stop).is_ok_and(|s| s.trim() == stage) && std::fs::remove_file(&stop).is_ok() {
+        std::process::exit(9);
+    }
+}
+
 /// Puts session `s`'s worktree back on the session's own branch when a
 /// give cut off half way (X73) left it on the copy's (`moonlet-copy/<id>`)
 /// and no branch of the session's name is left.
 async fn own_branch_back(s: &moonlet_proto::types::Session) {
     let path = Path::new(&s.path);
-    let copy_branch = format!("moonlet-copy/{}", s.id);
+    let copy_branch = crate::session_copies::copy_branch(&s.id);
     if s.branch.is_empty() || s.branch == copy_branch {
         return;
     }
@@ -774,6 +796,7 @@ impl Daemon {
             bringing: Default::default(),
             settling_takes: Default::default(),
             giving: Default::default(),
+            backs_refused: Default::default(),
             yields: Default::default(),
             yielding: Default::default(),
             heavy,
@@ -3872,7 +3895,8 @@ impl Daemon {
     /// it gave the session up, leaves it here: this host is its owner
     /// again.
     async fn take_back(self: &Arc<Self>, worker: &str, r: m::SessionGiveBack) -> Result<moonlet_proto::types::Session, RpcError> {
-        let _one = self.giving.lock().await;
+        let one = lock_of(&self.giving, &r.session);
+        let _one = one.lock().await;
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -3880,7 +3904,7 @@ impl Daemon {
             .remove(&r.session)
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let owner = record.get("owner").and_then(Value::as_str);
-        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        let epoch = epoch_of(Some(&record));
         if owner == Some(me.as_str())
             && epoch == r.epoch + 1
             && let Ok(s) = self.sessions.session(&r.session)
@@ -3895,6 +3919,7 @@ impl Daemon {
         }
         if let Ok(s) = self.sessions.session(&r.session) {
             own_branch_back(&s).await;
+            self.session_copies.forget_given(&r.session, worker);
             if !self.sessions.set_session_owner(&r.session, &me, epoch + 1, None) {
                 return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
             }
@@ -3934,7 +3959,7 @@ impl Daemon {
         // The copy's branch becomes the session's own, unless this host has
         // a branch of that name of its own: that one is never touched.
         let copy_path = Path::new(&info.path);
-        let copy_branch = format!("moonlet-copy/{session}");
+        let copy_branch = crate::session_copies::copy_branch(session);
         let rename = !branch.is_empty() && branch != copy_branch;
         if rename {
             // The name comes from the member: only one git takes as a branch.
@@ -4080,7 +4105,8 @@ impl Daemon {
     async fn give(self: &Arc<Self>, worker: &str, r: m::SessionTake) -> Result<m::SessionTaken, RpcError> {
         // One at a time: of two takes at once, the second finds the
         // session moved, and the same take sent again changes nothing.
-        let _one = self.giving.lock().await;
+        let one = lock_of(&self.giving, &r.session);
+        let _one = one.lock().await;
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -4157,7 +4183,7 @@ impl Daemon {
         // Its worktree is the member's copy from now on, on the copy's own
         // branch, so no branch of the session's name stays checked out here.
         let path = Path::new(&s.path);
-        let copy_branch = format!("moonlet-copy/{}", r.session);
+        let copy_branch = crate::session_copies::copy_branch(&r.session);
         moonlet_core::git::git(path, &["branch", "-m", &s.branch, &copy_branch]).await.map_err(internal)?;
         let back = || async {
             if let Err(e) = moonlet_core::git::git(path, &["branch", "-m", &copy_branch, &s.branch]).await {
@@ -4184,15 +4210,14 @@ impl Daemon {
             back().await;
             return Err(RpcError::new("internal", "cannot record the session's new owner"));
         }
-        // Tests stop the daemon here once, as a crash would.
-        if let Some(stop) = std::env::var_os("MOONLET_TEST_STOP_IN_GIVE").map(std::path::PathBuf::from)
-            && std::fs::remove_file(&stop).is_ok()
-        {
-            std::process::exit(9);
-        }
+        stop_in_give("");
+        // Its copy is kept before the session is given up: cut off between
+        // the two, the session is still here, and the member's hand-back
+        // keeps it here.
+        self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name, states.clone());
+        stop_in_give("half-given");
         self.sessions.give_up_session(&r.session).map_err(internal)?;
         self.took_with.lock().unwrap().remove(&r.session);
-        self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name, states.clone());
         Ok(m::SessionTaken { epoch: epoch + 1, chats: states, transcripts })
     }
 
@@ -4244,7 +4269,7 @@ impl Daemon {
         // stops it while the central host gives it up.
         let held = if returning { self.sync.hold(&r.session).await? } else { self.sync.hold_or_make(&r.session).await? };
         let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
-        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        let epoch = epoch_of(Some(&record));
         let ask = serde_json::to_value(m::SessionTake { session: r.session.clone(), epoch, now: r.now, pin, forced: false, returning })
             .map_err(internal)?;
         // Written down before it is sent: a take whose answer is lost, or
@@ -4254,8 +4279,10 @@ impl Daemon {
         let taken = match host.request(m::SESSION_TAKE, ask).await {
             Ok(taken) => taken,
             Err(e) => {
-                // Refused before the central host gave anything up: over.
-                // Anything else may have given it up all the same.
+                // Refused while the session was still the central host's
+                // at that number: over. Anything else may have given it up
+                // all the same, to this take or an earlier one of this
+                // Mac's (`stale`): `settle_takes` looks.
                 if crate::takes::refused(&e.code) {
                     self.takes.remove(&r.session);
                 }
@@ -4653,14 +4680,7 @@ impl Daemon {
     /// those to send again.
     fn settle_moves(&self, me: &str) -> (Vec<String>, Vec<(String, u64)>) {
         let records = self.sessions.session_records();
-        let known = |id: &str| {
-            records.get(id).map(|r| crate::power::Known {
-                owner: r.get("owner").and_then(Value::as_str),
-                epoch: epoch_of(Some(r)),
-                pinned: r.get("pinned").is_some_and(|p| !p.is_null()),
-                archived: r.get("archived").and_then(Value::as_bool).unwrap_or(false),
-            })
-        };
+        let known = |id: &str| records.get(id).map(crate::power::Known::of);
         let settled = crate::power::settle(&self.moves.pending(), &self.moves.withdrawn(), known, me);
         self.session_copies.add_returning(&settled.taken);
         self.moves.remove(settled.taken.iter().map(|(id, _)| id.as_str()).chain(settled.dropped.iter().map(String::as_str)));
@@ -5111,17 +5131,19 @@ impl Daemon {
 
     /// The lock one bring of session `session` holds (X73).
     fn bring_lock(&self, session: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.bringing.lock().unwrap().entry(session.to_string()).or_default().clone()
+        lock_of(&self.bringing, session)
     }
 
     /// Settles each bring cut off half way (X73), by the central host's
     /// word: one the central host gave up and this Mac did not take in is
     /// handed back (`session.give_back`), so it goes on there with its
-    /// chats as they were; one it did not give up is forgotten. With
-    /// `look_all`, as the link comes up, every session the account names
-    /// this Mac the owner of and that it does not run is handed back too,
-    /// as one an older version left so.
-    async fn settle_takes(self: &Arc<Self>, look_all: bool) {
+    /// chats as they were; one it did not give up is forgotten. Every
+    /// other session the account names this Mac the owner of and that it
+    /// does not run is handed back too, as one an older version left so,
+    /// or one given after its take's note was forgotten. A hand-back the
+    /// central host refuses, or that fails [`crate::takes::BACK_TRIES`]
+    /// times, is not sent again until the daemon starts again.
+    async fn settle_takes(self: &Arc<Self>) {
         let info = self.link.info();
         if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() || !matches!(info.state, m::LinkState::Connected { .. }) {
             return;
@@ -5131,21 +5153,24 @@ impl Daemon {
         }
         let Ok(_one) = self.settling_takes.try_lock() else { return };
         let me = info.worker.id;
-        let forced = self.session_copies.forced();
+        let given_up = |id: &str, epoch: u64| {
+            self.backs_refused.lock().unwrap().get(&(id.to_string(), epoch)).is_some_and(|n| *n >= crate::takes::BACK_TRIES)
+        };
         let ids = |records: &std::collections::BTreeMap<String, moonlet_core::account::Record>| -> std::collections::BTreeSet<String> {
+            let forced = self.session_copies.forced();
             let mut ids: std::collections::BTreeSet<String> = self.takes.pending().into_keys().collect();
-            if look_all {
-                ids.extend(
-                    records
-                        .iter()
-                        .filter(|(_, r)| r.get("owner").and_then(Value::as_str) == Some(me.as_str()))
-                        .filter(|(_, r)| !r.get("archived").and_then(Value::as_bool).unwrap_or(false))
-                        .map(|(id, _)| id.clone())
-                        .filter(|id| self.sessions.session(id).is_err() && !forced.contains_key(id)),
-                );
-            }
+            ids.extend(
+                records
+                    .iter()
+                    .filter(|(_, r)| r.get("owner").and_then(Value::as_str) == Some(me.as_str()))
+                    .filter(|(_, r)| !r.get("archived").and_then(Value::as_bool).unwrap_or(false))
+                    .filter(|(id, r)| !given_up(id, epoch_of(Some(r))))
+                    .map(|(id, _)| id.clone())
+                    .filter(|id| self.sessions.session(id).is_err() && !forced.contains_key(id)),
+            );
             ids
         };
+        // Nothing to look at, by this Mac's records: no network.
         if ids(&self.sessions.session_records()).is_empty() {
             return;
         }
@@ -5159,37 +5184,47 @@ impl Daemon {
             // A bring of it under way settles it itself.
             let one = self.bring_lock(&id);
             let Ok(_bringing) = one.try_lock() else { continue };
-            if forced.contains_key(&id) {
+            if self.session_copies.forced().contains_key(&id) {
                 continue;
             }
-            let record = records.get(&id);
-            let known = record.map(|r| crate::power::Known {
-                owner: r.get("owner").and_then(Value::as_str),
-                epoch: epoch_of(Some(r)),
-                pinned: r.get("pinned").is_some_and(|p| !p.is_null()),
-                archived: r.get("archived").and_then(Value::as_bool).unwrap_or(false),
-            });
+            let known = records.get(&id).map(crate::power::Known::of);
             let take = self.takes.pending().get(&id).copied();
             let held = self.sessions.session(&id).is_ok();
-            match crate::takes::settle(take.as_ref(), known.as_ref(), held, &me, moonlet_core::paths::now_ms()) {
-                crate::takes::Settle::Done => self.takes.remove(&id),
-                crate::takes::Settle::Wait => {}
-                crate::takes::Settle::GiveBack(epoch) => {
-                    let back = serde_json::json!(m::SessionGiveBack { session: id.clone(), epoch });
-                    match host.request(m::SESSION_GIVE_BACK, back).await {
-                        Ok(_) => {
-                            tracing::info!(session = %id, epoch, "handed back a session given to this Mac that it never took in");
-                            self.takes.remove(&id);
-                        }
-                        // Not heard: again at the next look.
-                        Err(e) if matches!(e.code.as_str(), "disconnected" | "timeout" | "unreachable") => {
-                            tracing::info!(session = %id, "cannot hand the session back yet: {}", e.message);
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::warn!(session = %id, epoch, "the central host refused the session handed back: {}", e.message);
-                            self.takes.remove(&id);
-                        }
+            let epoch = match crate::takes::settle(take.as_ref(), known.as_ref(), held, &me, moonlet_core::paths::now_ms()) {
+                crate::takes::Settle::Done => {
+                    self.takes.remove(&id);
+                    continue;
+                }
+                crate::takes::Settle::Wait => continue,
+                crate::takes::Settle::GiveBack(epoch) if given_up(&id, epoch) => {
+                    self.takes.remove(&id);
+                    continue;
+                }
+                crate::takes::Settle::GiveBack(epoch) => epoch,
+            };
+            let back = serde_json::json!(m::SessionGiveBack { session: id.clone(), epoch });
+            match host.request(m::SESSION_GIVE_BACK, back).await {
+                Ok(_) => {
+                    tracing::info!(session = %id, epoch, "handed back a session given to this Mac that it never took in");
+                    self.takes.remove(&id);
+                }
+                // Not heard: again at the next look.
+                Err(e) if crate::takes::unheard(&e.code) => {
+                    tracing::info!(session = %id, "cannot hand the session back yet: {}", e.message);
+                    return;
+                }
+                Err(e) => {
+                    let tries = {
+                        let mut all = self.backs_refused.lock().unwrap();
+                        let n = all.entry((id.clone(), epoch)).or_insert(0);
+                        *n = if crate::takes::back_refused(&e.code) { crate::takes::BACK_TRIES } else { *n + 1 };
+                        *n
+                    };
+                    if tries >= crate::takes::BACK_TRIES {
+                        tracing::warn!(session = %id, epoch, "the central host does not take the session back: {}", e.message);
+                        self.takes.remove(&id);
+                    } else {
+                        tracing::info!(session = %id, epoch, "the central host could not take the session back yet: {}", e.message);
                     }
                 }
             }
@@ -5287,6 +5322,16 @@ impl Daemon {
     /// Sends this member's sessions to the central host, and keeps the
     /// central host's copies to the sessions that are still live (X72).
     pub fn keep_session_copies(self: &Arc<Self>) {
+        // A give the central host stopped in the middle of may have left a
+        // worktree on the copy's branch (X73): on the session's own again.
+        if self.sessions.has_account() && self.link.info().central.is_none() {
+            let d = self.clone();
+            tokio::spawn(async move {
+                for s in d.sessions.list_sessions().into_iter().filter(|s| !s.archived) {
+                    own_branch_back(&s).await;
+                }
+            });
+        }
         let copies = Arc::downgrade(&self.session_copies);
         self.sessions.on_account_applied(move |changes| {
             if let Some(c) = copies.upgrade()
@@ -5324,10 +5369,9 @@ impl Daemon {
                 let waiting = !d.session_copies.returning().is_empty();
                 if since.is_some() {
                     d.hand_over_left().await;
-                    // A bring cut off half way, each time; a session the
-                    // account gives this Mac and it does not run, each time
-                    // the link comes up, the daemon's start included.
-                    d.settle_takes(since != looked).await;
+                    // A bring cut off half way, or a session the account
+                    // gives this Mac that it does not run.
+                    d.settle_takes().await;
                 }
                 if since.is_some() && (since != looked || waiting) {
                     d.bring_back().await;

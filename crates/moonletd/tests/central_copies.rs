@@ -4515,8 +4515,7 @@ async fn a_takeover_from_a_member_that_never_lost_the_central_host_is_not_forced
 
 const PRO: &str = "5a7c9e1b-3d5f-4a8c-9e0b-2d4f6a8c0e1a";
 
-/// The ownership number of session `made` on studio-mini `mini`, which
-/// continued it from the MacBook at 1: 2, and each move since raises it.
+/// Session `made` as studio-mini `mini` runs it; null when it does not.
 async fn session_on(mini: &Daemon, made: &Value) -> Value {
     let own: Vec<Value> = mini.call("session.list", json!({})).await;
     own.into_iter().find(|s| s["id"] == made["id"]).unwrap_or(Value::Null)
@@ -4599,6 +4598,11 @@ async fn a_give_cut_off_after_its_branch_moved_leaves_the_central_host_able_to_g
     git_in(&worktree, &["branch", "-m", "moonlet/fix-cart", &copy_branch]);
     let before: Value = book.call("link.get", json!({})).await;
     mini.restart().await;
+    // Back on the session's own branch as it starts, before any give.
+    within(Duration::from_secs(30), "the worktree on moonlet/fix-cart", || async {
+        git_out(&worktree, &["branch", "--show-current"]) == "moonlet/fix-cart"
+    })
+    .await;
     within(Duration::from_secs(60), "studio-mini's again, the MacBook linked to it again", || async {
         let link: Value = book.call("link.get", json!({})).await;
         !session_on(&mini, &made).await.is_null()
@@ -4612,12 +4616,23 @@ async fn a_give_cut_off_after_its_branch_moved_leaves_the_central_host_able_to_g
 
 #[tokio::test]
 async fn a_give_cut_off_after_it_named_the_new_owner_ends_with_one_host_running_the_session() {
+    give_cut_off_at("").await;
+}
+
+#[tokio::test]
+async fn a_give_cut_off_half_way_through_giving_the_session_up_ends_with_one_host_running_it() {
+    give_cut_off_at("half-given").await;
+}
+
+/// studio-mini stops in the middle of giving the session to the MacBook,
+/// at `stage`: none once the account names the MacBook the owner, or
+/// `half-given` between the two things it keeps of the give, the session
+/// given up and its worktree kept as the MacBook's copy.
+async fn give_cut_off_at(stage: &str) {
     let origin = Origin::new();
     let (mut mini, book, made) = continued_and_back(&origin).await;
-    // studio-mini stops once the account names the MacBook the owner,
-    // before it gave the session up.
     let home: std::collections::HashMap<_, _> = mini.env.iter().cloned().collect();
-    std::fs::write(PathBuf::from(&home["HOME"]).join("stop-in-give"), "").unwrap();
+    std::fs::write(PathBuf::from(&home["HOME"]).join("stop-in-give"), stage).unwrap();
     let refused = book
         .try_call("session.bring", json!({ "session": made["id"] }))
         .await

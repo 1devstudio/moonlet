@@ -485,7 +485,7 @@ fn which(name: &str, path: &str) -> bool {
 
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
-fn copy_branch(session: &str) -> String {
+pub(crate) fn copy_branch(session: &str) -> String {
     format!("moonlet-copy/{}", segment(session))
 }
 
@@ -2554,6 +2554,17 @@ impl SessionCopies {
             },
         );
         self.save(&data);
+    }
+
+    /// Stops keeping `session`'s worktree as `owner`'s copy, kept by a give
+    /// that was cut off before it gave the session up (X73): the session
+    /// never left this host.
+    pub fn forget_given(&self, session: &str, owner: &str) {
+        let mut data = self.data.lock().unwrap();
+        if data.held.get(session).is_some_and(|h| h.owner == owner && h.given.is_some()) {
+            data.held.remove(session);
+            self.save(&data);
+        }
     }
 
     /// The chats of `session` as this host gave them to `owner` (X73),

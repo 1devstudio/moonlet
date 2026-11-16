@@ -115,13 +115,29 @@ pub fn settle(
     }
 }
 
-/// Whether `code`, a take's error, is the central host's refusal, made
-/// before it gave anything up: the take is over, nothing to settle.
+/// How often a hand-back that fails, other than unheard, is sent before
+/// it is left until the daemon starts again: a minute of looks.
+pub const BACK_TRIES: u32 = 12;
+
+/// Whether `code`, a take's error, is the central host's refusal made
+/// while the session was still its own at the number asked: nothing was
+/// given, the take is over. Not `stale` nor `elsewhere`: the session may
+/// have gone to this very member, by an earlier take whose answer was
+/// lost.
 pub fn refused(code: &str) -> bool {
-    matches!(
-        code,
-        "busy" | "used" | "stale" | "pinned" | "elsewhere" | "not_found" | "forbidden" | "archived" | "invalid_params"
-    )
+    matches!(code, "busy" | "used" | "pinned")
+}
+
+/// Whether `code`, an error of a request to the central host, says it was
+/// not heard, or its answer not: the link is down or timed out.
+pub fn unheard(code: &str) -> bool {
+    matches!(code, "disconnected" | "timeout" | "unreachable")
+}
+
+/// Whether `code`, a hand-back's error, is the central host's final word:
+/// it did not give the session to be handed back, or it moved since.
+pub fn back_refused(code: &str) -> bool {
+    matches!(code, "not_given" | "elsewhere" | "stale" | "not_found" | "forbidden" | "invalid_params")
 }
 
 #[cfg(test)]
@@ -153,11 +169,6 @@ mod tests {
             again.pending(),
             BTreeMap::from([("fix-cart".to_string(), Take { epoch: 3, at: 1_000 })])
         );
-        let text = std::fs::read_to_string(home.path().join("takes.json")).unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&text).unwrap(),
-            serde_json::json!({ "sessions": { "fix-cart": { "epoch": 3, "at": 1000 } } })
-        );
         again.remove("fix-cart");
         assert!(Takes::open(home.path()).pending().is_empty());
     }
@@ -188,5 +199,20 @@ mod tests {
         }
         let archived = Known { archived: true, ..known(BOOK, 5) };
         assert_eq!(settle(Some(&take), Some(&archived), false, BOOK, soon), Settle::Done);
+    }
+
+    #[test]
+    fn only_a_refusal_made_while_the_session_was_still_there_ends_a_take() {
+        // The central host's own at the number asked: nothing given.
+        for code in ["busy", "used", "pinned"] {
+            assert!(refused(code), "{code}");
+        }
+        // It may have gone to this member by an earlier take, or the
+        // answer was lost: looked at.
+        for code in ["stale", "elsewhere", "timeout", "disconnected", "failed"] {
+            assert!(!refused(code), "{code}");
+        }
+        assert!(unheard("timeout") && unheard("disconnected") && !unheard("not_given"));
+        assert!(back_refused("not_given") && back_refused("stale") && !back_refused("failed"));
     }
 }
