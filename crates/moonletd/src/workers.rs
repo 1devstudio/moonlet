@@ -37,8 +37,9 @@ pub struct Workers {
     /// Where `owners` is saved.
     owners_file: std::path::PathBuf,
     /// Connections dropped because their worker stopped answering pings,
-    /// so a job can say why its worker went away (X62).
-    missed: Mutex<std::collections::HashSet<u64>>,
+    /// so a job can say why its worker went away (X62), each with when its
+    /// worker last answered one (ms): it has been away since then (X73).
+    missed: Mutex<HashMap<u64, u64>>,
     /// When each worker that is not linked now last went away (ms), so the
     /// central host waits before it continues its sessions (X73).
     gone_since: Mutex<HashMap<String, u64>>,
@@ -221,8 +222,10 @@ impl Workers {
             list.retain(|_, e| e.conn.id != conn);
             gone
         };
-        let now = now_ms();
-        self.gone_since.lock().unwrap().extend(removed.iter().map(|id| (id.clone(), now)));
+        // A worker that stopped answering went away at its last answer,
+        // not three missed pings later (X73).
+        let since = self.missed.lock().unwrap().get(&conn).copied().unwrap_or_else(now_ms);
+        self.gone_since.lock().unwrap().extend(removed.iter().map(|id| (id.clone(), since)));
         if !removed.is_empty() {
             self.changed();
         }
@@ -264,7 +267,7 @@ impl Workers {
 
     /// Whether connection `conn` was dropped for missed pings.
     pub fn missed_pings(&self, conn: u64) -> bool {
-        self.missed.lock().unwrap().contains(&conn)
+        self.missed.lock().unwrap().contains_key(&conn)
     }
 
     /// The id of the worker linked on connection `conn` (X60).
@@ -291,6 +294,8 @@ impl Workers {
 /// in a row close its connection.
 async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn>) {
     let mut missed = 0;
+    // When the worker last answered a ping (ms); its link counts from now.
+    let mut answered = now_ms();
     loop {
         let Some(w) = workers.upgrade() else { return };
         if !w.current(&id, conn.id) {
@@ -305,6 +310,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
         {
             Ok(answer) => {
                 missed = 0;
+                answered = now_ms();
                 let rtt = sent.elapsed().as_millis() as u64;
                 if let Some(w) = workers.upgrade()
                     && let Some(e) = w.list.lock().unwrap().get_mut(&id)
@@ -322,7 +328,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                 if missed >= MISSES {
                     tracing::info!(worker = %id, "the worker stopped answering; dropping it");
                     if let Some(w) = workers.upgrade() {
-                        w.missed.lock().unwrap().insert(conn.id);
+                        w.missed.lock().unwrap().insert(conn.id, answered);
                     }
                     conn.close();
                     if let Some(w) = workers.upgrade() {
