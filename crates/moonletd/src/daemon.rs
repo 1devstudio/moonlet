@@ -4275,7 +4275,9 @@ impl Daemon {
         // Written down before it is sent: a take whose answer is lost, or
         // cut off by a sleep or the daemon stopping, is finished or handed
         // back once the central host is heard from (`settle_takes`).
-        self.takes.add(&r.session, epoch, moonlet_core::paths::now_ms());
+        self.takes
+            .add(&r.session, epoch, moonlet_core::paths::now_ms())
+            .map_err(|e| RpcError::new("failed", format!("cannot note the take before sending it: {e}")))?;
         let taken = match host.request(m::SESSION_TAKE, ask).await {
             Ok(taken) => taken,
             Err(e) => {

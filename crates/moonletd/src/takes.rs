@@ -55,11 +55,21 @@ impl Takes {
     }
 
     /// Notes the take of `session` at ownership number `epoch`, sent at
-    /// `at`, before it is sent.
-    pub fn add(&self, session: &str, epoch: u64, at: u64) {
+    /// `at`, before it is sent. A note that cannot be written is not kept:
+    /// the take must not go.
+    pub fn add(&self, session: &str, epoch: u64, at: u64) -> std::io::Result<()> {
         let mut data = self.data.lock().unwrap();
-        data.sessions.insert(session.to_string(), Take { epoch, at });
-        self.save(&data);
+        let before = data.sessions.insert(session.to_string(), Take { epoch, at });
+        let written = serde_json::to_vec_pretty(&*data)
+            .map_err(std::io::Error::other)
+            .and_then(|b| crate::moves::write_whole(&self.file, &b));
+        if written.is_err() {
+            match before {
+                Some(t) => data.sessions.insert(session.to_string(), t),
+                None => data.sessions.remove(session),
+            };
+        }
+        written
     }
 
     /// Forgets the take of `session`: taken in, handed back, or refused.
@@ -161,7 +171,7 @@ mod tests {
     fn a_take_is_kept_across_a_restart_until_it_is_settled() {
         let home = tempfile::tempdir().unwrap();
         let takes = Takes::open(home.path());
-        takes.add("fix-cart", 3, 1_000);
+        takes.add("fix-cart", 3, 1_000).unwrap();
         drop(takes);
 
         let again = Takes::open(home.path());
@@ -176,14 +186,17 @@ mod tests {
     #[test]
     fn a_bring_cut_off_half_way_is_handed_back_waited_on_or_dropped() {
         let take = Take { epoch: 4, at: 10_000 };
-        let soon = 10_000 + 5_000;
-        let late = 10_000 + LATE_MS;
-        let cases: [(&str, Option<&Take>, Option<Known>, bool, u64, Settle); 9] = [
+        let soon = 15_000;
+        // Two minutes after it was sent, and not a moment before.
+        let nearly = 129_999;
+        let late = 130_000;
+        let cases: [(&str, Option<&Take>, Option<Known>, bool, u64, Settle); 10] = [
             // The central host gave it up, and this Mac never took it in.
             ("given, not here", Some(&take), Some(known(BOOK, 5)), false, soon, Settle::GiveBack(5)),
             ("given, taken in", Some(&take), Some(known(BOOK, 5)), true, soon, Settle::Done),
             // Its answer may still come: it waits, for a while.
             ("not given yet", Some(&take), Some(known(MINI, 4)), false, soon, Settle::Wait),
+            ("not given, nearly 2 min", Some(&take), Some(known(MINI, 4)), false, nearly, Settle::Wait),
             ("not given in time", Some(&take), Some(known(MINI, 4)), false, late, Settle::Done),
             // Handed back, or moved on, meanwhile.
             ("handed back", Some(&take), Some(known(MINI, 6)), false, soon, Settle::Done),

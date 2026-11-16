@@ -909,6 +909,9 @@ struct Network {
     /// Drops the connection as the MacBook sends this, which never reaches
     /// studio-mini; the next connection carries everything again.
     lose: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    /// What studio-mini sent that never reached the MacBook, the network
+    /// down.
+    dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
 impl Network {
@@ -921,18 +924,20 @@ impl Network {
             which: Default::default(),
             after: Default::default(),
             lose: Default::default(),
+            dropped: Default::default(),
         };
-        let (addr, cut, which, after, lose) = (
+        let (addr, cut, which, after, lose, dropped) = (
             addr.to_string(),
             network.cut.clone(),
             network.which.clone(),
             network.after.clone(),
             network.lose.clone(),
+            network.dropped.clone(),
         );
         tokio::spawn(async move {
             while let Ok((member, _)) = listener.accept().await {
                 if let Ok(central) = tokio::net::TcpStream::connect(&addr).await {
-                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone(), lose.clone()));
+                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone(), lose.clone(), dropped.clone()));
                 }
             }
         });
@@ -953,6 +958,13 @@ impl Network {
     /// studio-mini, as a link that fails just then; the MacBook links again.
     fn lose(&self, what: &str) {
         *self.lose.lock().unwrap() = Some(what.as_bytes().to_vec());
+    }
+
+    /// Whether something studio-mini sent with `what` in it was dropped,
+    /// the network down.
+    fn dropped(&self, what: &str) -> bool {
+        let dropped = self.dropped.lock().unwrap();
+        dropped.windows(what.len()).any(|x| x == what.as_bytes())
     }
 
     /// Back up, the same network.
@@ -976,6 +988,7 @@ async fn carry(
     which: std::sync::Arc<std::sync::atomic::AtomicU64>,
     after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     lose: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 ) {
     use std::sync::atomic::Ordering::SeqCst;
     let has = |bytes: &[u8], w: &[u8]| bytes.windows(w.len()).any(|x| x == w);
@@ -1013,7 +1026,14 @@ async fn carry(
             }
             n = from_central.read(&mut b), if !central_closed => match n {
                 Ok(n) if n > 0 => {
-                    if !down() && to_member.write_all(&b[..n]).await.is_err() {
+                    if down() {
+                        let mut dropped = dropped.lock().unwrap();
+                        // The latest only: enough to find an answer in.
+                        if dropped.len() > 1 << 20 {
+                            dropped.clear();
+                        }
+                        dropped.extend_from_slice(&b[..n]);
+                    } else if to_member.write_all(&b[..n]).await.is_err() {
                         return;
                     }
                 }
@@ -2943,9 +2963,9 @@ async fn a_bring_whose_answer_is_lost_ends_with_one_host_running_the_session() {
     let (brought, _) = tokio::join!(
         book.try_call("session.bring", json!({ "session": made["id"], "message": "Back here" })),
         async {
-            within(Duration::from_secs(30), "studio-mini giving fix-cart up", || async {
+            within(Duration::from_secs(30), "studio-mini giving fix-cart up, its answer dropped", || async {
                 let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
-                theirs.iter().all(|s| s["id"] != made["id"])
+                theirs.iter().all(|s| s["id"] != made["id"]) && network.dropped("\"transcripts\"")
             })
             .await;
             network.cut_back();
@@ -2960,6 +2980,25 @@ async fn a_bring_whose_answer_is_lost_ends_with_one_host_running_the_session() {
     if !book.call::<Vec<Value>>("session.list", json!({})).await.iter().any(|s| s["id"] == made["id"]) {
         brought_here(&mini, &book, &made).await;
     }
+}
+
+#[tokio::test]
+async fn a_bring_that_cannot_note_its_take_never_sends_it() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // The MacBook cannot write down the take: a folder is where it writes
+    // it first.
+    let blocked = book.home.path().join("takes.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("cannot note the take"), "{refused}");
+    // studio-mini never heard of it: it runs the session as before.
+    assert!(!session_on(&mini, &made).await.is_null());
+    assert_eq!(owner_on(&book, &made).await, json!(MINI));
+    std::fs::remove_dir_all(&blocked).unwrap();
 }
 
 #[tokio::test]
