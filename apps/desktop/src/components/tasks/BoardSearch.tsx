@@ -86,12 +86,17 @@ export function FindTask({ host, workspaceId, views, leftOut, others, shownLabel
       }),
     [],
   );
-  // A click outside closes the dropdown.
+  // A click outside closes the dropdown, and so does a press: no click
+  // follows a press that drags the window by the header (X94).
   useEffect(() => {
     if (!shown) return;
-    const onClick = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("click", onClick, true);
-    return () => document.removeEventListener("click", onClick, true);
+    const onOutside = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", onOutside, true);
+    document.addEventListener("click", onOutside, true);
+    return () => {
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("click", onOutside, true);
+    };
   }, [shown]);
   // The first row is active whenever the dropdown opens or the query changes.
   useEffect(() => setActive(0), [query, shown]);

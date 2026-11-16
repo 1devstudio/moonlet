@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { choose, closeSettings, fill, openSettings, PROJECT, projectId, rpc, sel, SESSION, world } from "../fixtures";
+import { choose, closeSettings, fill, openSettings, PROJECT, pressDrags, projectId, rpc, sel, SESSION, world } from "../fixtures";
 
 interface Session {
   id: string;
@@ -960,9 +960,18 @@ describe("Tasks mode", () => {
     await expect($(row)).toBeDisplayed({ wait: 15_000 });
     await expect($(`${list}//span[normalize-space()="Not on this board · 1"]`)).toBeDisplayed();
     await expect($(`${row}//span[normalize-space()="GitHub · Closed"]`)).toBeDisplayed();
+    // The results don't move the window; a press on the header beside them does, and closes them (X94).
+    expect(await pressDrags(`${list}//span[normalize-space()="Not on this board · 1"]`)).toBe(false);
+    await expect($(list)).toBeDisplayed();
+    expect(await pressDrags('//header[.//input[@aria-label="Find a task"]]')).toBe(true);
+    await expect($(list)).not.toBeExisting();
+    await $(field).click();
+    await expect($(row)).toBeDisplayed({ wait: 10_000 });
     await browser.keys("Enter");
     const preview = '//section[@role="dialog"][.//h2[normalize-space()="Coupon field at checkout"]]';
     await expect($(preview)).toBeDisplayed({ wait: 10_000 });
+    // Nor does the preview, though it opens from the header (X94).
+    expect(await pressDrags(`${preview}//h2`)).toBe(false);
     await expect($(`${preview}//span[normalize-space()="This task is Closed in GitHub, so the board doesn’t show it."]`)).toBeDisplayed();
     await expect($(`${preview}//a[@href="https://github.com/acme/storefront/issues/8"]`)).toBeDisplayed();
     await expect($(`${preview}//button[normalize-space()="Reopen in GitHub"]`)).toBeDisplayed();

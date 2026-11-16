@@ -1,29 +1,15 @@
-// Title bars move the window: a press anywhere in a column's header bar that
-// is not a control (its title, its text, its empty space) starts a window
-// drag, while its buttons and links keep their clicks.
-//
-// Tauri's drag script claims a press it turns into a window drag: it calls
-// preventDefault() on the mousedown, so dispatchEvent() returns false.
+// Title bars move the window (X94): a press anywhere in a column's header bar
+// that is not a control (its title, its text, its empty space) starts a
+// window drag, while its buttons and links keep their clicks.
 
-import { $, browser, expect } from "@wdio/globals";
-import { SESSION, closeSettings, openSettings, sel } from "../fixtures";
+import { $, expect } from "@wdio/globals";
+import { SESSION, closeSettings, openSettings, pressDrags, projectId, rpc, sel, world } from "../fixtures";
+
+const w = world();
 
 const sessionHeader = '//header[@aria-label="Session"]';
 const rightHeader = '//button[normalize-space()="Run"]/parent::div';
 const settingsHeader = '//div[@role="region"][@aria-label="Settings"]//main/header';
-
-/** Presses the left button on the element at `xpath`'s centre: true when the
- *  press starts a window drag. */
-const pressDrags = (xpath: string) =>
-  browser.execute((x: string) => {
-    const e = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
-    if (!e) throw new Error(`no element at ${x}`);
-    const r = e.getBoundingClientRect();
-    const at = { bubbles: true, cancelable: true, composed: true, button: 0, detail: 1, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
-    const claimed = !e.dispatchEvent(new MouseEvent("mousedown", at));
-    e.dispatchEvent(new MouseEvent("mouseup", at));
-    return claimed;
-  }, xpath) as Promise<boolean>;
 
 describe("title bars move the window", () => {
   before(async () => {
@@ -58,6 +44,21 @@ describe("title bars move the window", () => {
     expect(await pressDrags(`${menu}/div[1]`)).toBe(false);
     expect(await pressDrags(`${menu}/preceding-sibling::div[1]`)).toBe(false);
     await expect($(menu)).not.toBeExisting();
+  });
+
+  it("drags the window from an archived session's name, not from its Restore button", async () => {
+    const id = rpc<{ id: string }>(w, "session.create", { project_id: projectId(w), name: "Dragged away", branch: "dragged-away", agent: "none" }).id;
+    rpc(w, "session.archive", { id });
+    await $('//button[normalize-space()="History"]').click();
+    await $('//button[normalize-space()="Dragged away"]').click();
+    const header = '//div[@role="region"][@aria-label="Archived session Dragged away"]/header';
+    await expect($(header)).toBeDisplayed({ wait: 10_000 });
+    expect(await pressDrags(`${header}/span[normalize-space()="Dragged away"]`)).toBe(true);
+    expect(await pressDrags(`${header}//button[contains(normalize-space(), "Restore")]`)).toBe(false);
+    // Back from History to the session list.
+    if (!(await $(sel.sessionRow(SESSION)).isExisting())) await $('//button[normalize-space()="History"]').click();
+    await $(sel.sessionRow(SESSION)).waitForClickable({ timeout: 10_000 });
+    await $(sel.sessionRow(SESSION)).click();
   });
 
   it("drags the window from the settings page's breadcrumb, not from its close button", async () => {
