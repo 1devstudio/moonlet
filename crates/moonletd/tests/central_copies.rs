@@ -809,7 +809,17 @@ async fn pair_with_agents_as(origin: &Origin, clone_rule: bool) -> (Daemon, Daem
 /// [`pair_with_agents_as`] without `clone_rule`, the MacBook's link going
 /// through a [`Network`] the test can cut.
 async fn pair_with_agents_through_a_network(origin: &Origin) -> (Daemon, Daemon, Network) {
-    let (mini, addr, book) = agents_not_linked(origin, false).await;
+    pair_with_agents_through_a_network_holding(origin, None).await
+}
+
+/// [`pair_with_agents_through_a_network`]; with `hold_ms`, the MacBook
+/// holds a sleep for at most that long, as it would macOS's sleep for 25 s
+/// (X73).
+async fn pair_with_agents_through_a_network_holding(
+    origin: &Origin,
+    hold_ms: Option<&str>,
+) -> (Daemon, Daemon, Network) {
+    let (mini, addr, book) = agents_not_linked_holding(origin, false, hold_ms).await;
     let network = Network::to(&addr).await;
     link_through(&book, &mini, &addr, &network.addr).await;
     within(Duration::from_secs(30), "the MacBook linked", || async {
@@ -823,13 +833,26 @@ async fn pair_with_agents_through_a_network(origin: &Origin) -> (Daemon, Daemon,
 /// studio-mini, at the address it gives, and the MacBook, not linked yet,
 /// both with [`TOOL_CLAUDE`] for an agent.
 async fn agents_not_linked(origin: &Origin, clone_rule: bool) -> (Daemon, String, Daemon) {
+    agents_not_linked_holding(origin, clone_rule, None).await
+}
+
+/// [`agents_not_linked`]; with `hold_ms`, the MacBook holds a sleep for
+/// at most that long.
+async fn agents_not_linked_holding(
+    origin: &Origin,
+    clone_rule: bool,
+    hold_ms: Option<&str>,
+) -> (Daemon, String, Daemon) {
     let scratch = tempfile::tempdir().unwrap();
     let mini_home = scratch.path().join("mini");
     let book_home = scratch.path().join("book");
     std::fs::create_dir_all(&mini_home).unwrap();
     std::fs::create_dir_all(&book_home).unwrap();
     let mini_env = agent_env(&mini_home, clone_rule.then_some(origin));
-    let book_env = agent_env(&book_home, None);
+    let mut book_env = agent_env(&book_home, None);
+    if let Some(ms) = hold_ms {
+        book_env.push(("MOONLET_TEST_HOLD_MS".to_string(), ms.to_string()));
+    }
     let m: Vec<(&str, &str)> = mini_env
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -855,6 +878,9 @@ struct Network {
     cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Which network it is: a connection made on an earlier one is dead.
     which: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Goes down once the MacBook has sent this, as a lid closing right
+    /// after a request leaves would make it.
+    after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
 
 impl Network {
@@ -865,12 +891,18 @@ impl Network {
             addr: listener.local_addr().unwrap().to_string(),
             cut: Default::default(),
             which: Default::default(),
+            after: Default::default(),
         };
-        let (addr, cut, which) = (addr.to_string(), network.cut.clone(), network.which.clone());
+        let (addr, cut, which, after) = (
+            addr.to_string(),
+            network.cut.clone(),
+            network.which.clone(),
+            network.after.clone(),
+        );
         tokio::spawn(async move {
             while let Ok((member, _)) = listener.accept().await {
                 if let Ok(central) = tokio::net::TcpStream::connect(&addr).await {
-                    tokio::spawn(carry(member, central, cut.clone(), which.clone()));
+                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone()));
                 }
             }
         });
@@ -879,6 +911,12 @@ impl Network {
 
     fn cut(&self, down: bool) {
         self.cut.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Goes down as soon as the MacBook has sent `what`, which still
+    /// reaches studio-mini; its answer does not reach the MacBook.
+    fn cut_after(&self, what: &str) {
+        *self.after.lock().unwrap() = Some(what.as_bytes().to_vec());
     }
 
     /// Back up, the same network.
@@ -900,6 +938,7 @@ async fn carry(
     central: tokio::net::TcpStream,
     cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
     which: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 ) {
     use std::sync::atomic::Ordering::SeqCst;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -920,6 +959,11 @@ async fn carry(
                 }
                 if !down() && to_central.write_all(&a[..n]).await.is_err() {
                     return;
+                }
+                let mut after = after.lock().unwrap();
+                if after.as_ref().is_some_and(|w| a[..n].windows(w.len()).any(|x| x == w.as_slice())) {
+                    *after = None;
+                    cut.store(true, SeqCst);
                 }
             }
             n = from_central.read(&mut b), if !central_closed => match n {
@@ -3259,6 +3303,170 @@ async fn taken_while_asleep_then_woken(back: fn(&Network)) {
     .await;
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().all(|s| s["id"] != made["id"]), "still the MacBook's own");
+}
+
+/// A busy session of the MacBook's, its turn running on the MacBook and
+/// in studio-mini's copy.
+async fn busy_session(mini: &Daemon, book: &Daemon, project: &str) -> Value {
+    let made = session_with_a_turn(book, project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+    made
+}
+
+/// Waits until session `made` is back on the MacBook `book`, in its own
+/// worktree, and no longer on studio-mini.
+async fn back_on_the_mac(mini: &Daemon, book: &Daemon, made: &Value) {
+    within(Duration::from_secs(90), "fix-cart back on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        own.iter().any(|s| s["id"] == made["id"] && s["path"] == made["path"])
+            && theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_taken_for_a_sleep_whose_answer_never_came_comes_back_after_the_wake() {
+    let origin = Origin::new();
+    let (mini, book, network) = pair_with_agents_through_a_network_holding(&origin, Some("4000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = busy_session(&mini, &book, &project).await;
+
+    // The lid closes: the hand-over reaches studio-mini, and the network
+    // goes down before its answer reaches the MacBook, which sleeps once
+    // its hold runs out.
+    network.cut_after("session.yield");
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    within(Duration::from_secs(30), "studio-mini running fix-cart", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        theirs.iter().any(|s| s["id"] == made["id"])
+    })
+    .await;
+
+    // The MacBook wakes with the network back: once the turn ends on
+    // studio-mini, nobody having typed there, the session comes back.
+    network.cut_back();
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    back_on_the_mac(&mini, &book, &made).await;
+}
+
+/// Waits until studio-mini `mini` runs session `made`, continued with the
+/// note that the MacBook went to sleep.
+async fn continued_for_the_sleep(mini: &Daemon, made: &Value) {
+    within(Duration::from_secs(60), "studio-mini continuing fix-cart", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        theirs.iter().any(|s| s["id"] == made["id"])
+            && agent_log(mini, "claude-user").contains("because MacBook went to sleep")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_hand_over_that_could_not_be_sent_before_the_sleep_is_sent_at_the_wake() {
+    let origin = Origin::new();
+    let (mini, book, network) = pair_with_agents_through_a_network_holding(&origin, Some("3000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = busy_session(&mini, &book, &project).await;
+
+    // The lid closes with no network: nothing reaches studio-mini.
+    network.cut(true);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().all(|s| s["id"] != made["id"]), "studio-mini runs it already");
+
+    // A wake with the network, as a dark wake in a bag: the hand-over goes
+    // now, and the session comes back once its turn there ends.
+    network.cut_back();
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    continued_for_the_sleep(&mini, &made).await;
+    back_on_the_mac(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_session_taken_for_a_sleep_whose_answer_the_daemon_never_heard_comes_back_after_its_start() {
+    let origin = Origin::new();
+    let (mini, mut book, network) = pair_with_agents_through_a_network_holding(&origin, Some("4000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = busy_session(&mini, &book, &project).await;
+    network.cut_after("session.yield");
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    continued_for_the_sleep(&mini, &made).await;
+
+    // The daemon stops before the wake, its agent with it, and starts
+    // again with the network back: the session comes back once its turn
+    // there ends.
+    for (pid, _) in agent_processes(&book) {
+        let _ = std::process::Command::new("kill").args(["-9", &pid]).status();
+    }
+    book.restart().await;
+    network.cut_back();
+    back_on_the_mac(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_hand_over_still_unsent_when_the_mac_wakes_without_the_central_host_is_dropped_and_its_agent_goes_on() {
+    let origin = Origin::new();
+    let (mini, book, network) = pair_with_agents_through_a_network_holding(&origin, Some("3000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = busy_session(&mini, &book, &project).await;
+    network.cut(true);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+
+    // The Mac wakes with no network: no answer to wait for, so its agent
+    // goes on, as offline work does.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    let agents = agent_processes(&book);
+    assert!(!agents.is_empty() && agents.iter().all(|(_, stat)| !stat.starts_with('T')), "{agents:?}");
+
+    // The network comes back while the user works here: the session is
+    // this Mac's again, and the old hand-over never goes.
+    network.cut_back();
+    within(Duration::from_secs(30), "the MacBook linked again", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    assert!(
+        !agent_log(&mini, "claude-user").contains("because MacBook went to sleep"),
+        "handed over after the user went on here"
+    );
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().all(|s| s["id"] != made["id"]), "studio-mini runs it");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "no longer the MacBook's own");
 }
 
 // --- Move to…, pins and Take over anyway (X73) ---------------------------

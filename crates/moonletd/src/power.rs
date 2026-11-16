@@ -11,6 +11,15 @@ use crate::daemon::Daemon;
 /// How long the daemon holds sleep at most: inside macOS's 30 s.
 pub const HOLD: Duration = Duration::from_secs(25);
 
+/// [`HOLD`], or what a test sets in `MOONLET_TEST_HOLD_MS` for
+/// `power.simulate`.
+pub fn test_hold() -> Duration {
+    std::env::var("MOONLET_TEST_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(HOLD, Duration::from_millis)
+}
+
 /// What the Mac is about to do, or did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
@@ -80,6 +89,95 @@ pub fn to_end(
 /// lid open moves nothing.
 pub fn hand_over_at_sleep(states: &[moonlet_proto::types::ChatState]) -> bool {
     states.iter().any(moonlet_core::chat::at_work)
+}
+
+/// A session's record as a member knows it: its owner, ownership number,
+/// and whether it is pinned or archived.
+pub struct Known<'a> {
+    pub owner: Option<&'a str>,
+    pub epoch: u64,
+    pub pinned: bool,
+    pub archived: bool,
+}
+
+/// The hand-overs a member `me` has not heard answered (X73), sorted by its
+/// records once the central host was heard from.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Settled {
+    /// The account gives them another member: taken while the Mac slept,
+    /// each with the ownership number it was handed over at, to come back.
+    pub taken: Vec<(String, u64)>,
+    /// Still the member's at the number they were handed over at: sent
+    /// again.
+    pub again: Vec<(String, u64)>,
+    /// Neither, any more: dropped.
+    pub dropped: Vec<String>,
+}
+
+/// Sorts `pending`, each session with the ownership number it was handed
+/// over at, by what `known` says of each now (X73).
+pub fn settle<'a>(
+    pending: &std::collections::BTreeMap<String, u64>,
+    known: impl Fn(&str) -> Option<Known<'a>>,
+    me: &str,
+) -> Settled {
+    let mut out = Settled::default();
+    for (id, &at) in pending {
+        match known(id) {
+            Some(k) if !k.archived && k.owner.is_some_and(|o| o != me) => out.taken.push((id.clone(), at)),
+            Some(k) if !k.archived && !k.pinned && k.owner == Some(me) && k.epoch == at => out.again.push((id.clone(), at)),
+            _ => out.dropped.push(id.clone()),
+        }
+    }
+    out
+}
+
+/// One session a member hands the central host (X73), as the central host
+/// sees it when it comes to it.
+pub struct Yielded<'a> {
+    /// Its record's owner, ownership number and pin.
+    pub owner: Option<&'a str>,
+    pub epoch: u64,
+    pub pinned: Option<&'a str>,
+    /// The member handing it over, and the central host.
+    pub from: &'a str,
+    pub here: &'a str,
+    /// The ownership number the member named; none from a member from
+    /// before, which named ids alone.
+    pub named: Option<u64>,
+    /// Move to… (pin): one kept on its member goes too.
+    pub moving: bool,
+    /// The member linked again or sent a newer hand-over since this one
+    /// came: it is awake, and says itself what it still hands over.
+    pub superseded: bool,
+}
+
+/// What the central host does with a session handed to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnYield {
+    /// Takes it: continues it here.
+    Take,
+    /// Answers it took it: it did, at a later ownership number than the
+    /// member named, by this hand-over sent before or as the member slept.
+    Taken,
+    /// Leaves it where it is.
+    Leave,
+}
+
+/// Whether the central host takes session `y` a member hands it (X73):
+/// only the member's own, at the ownership number it named, not pinned,
+/// and while the member has not linked again or sent a newer hand-over
+/// since. A hand-over sent again after an answer was lost answers that
+/// the central host took it.
+pub fn on_yield(y: &Yielded) -> OnYield {
+    if y.named.is_some_and(|e| y.epoch > e) && y.owner == Some(y.here) {
+        return OnYield::Taken;
+    }
+    let pinned_ok = y.pinned.is_none() || (y.moving && y.pinned == Some(y.from));
+    if y.owner != Some(y.from) || !pinned_ok || y.named.is_some_and(|e| e != y.epoch) || y.superseded {
+        return OnYield::Leave;
+    }
+    OnYield::Take
 }
 
 /// Listens for the Mac's sleep and wake, for the daemon's life.
@@ -271,6 +369,94 @@ mod tests {
         ];
         assert_eq!(to_thaw(&frozen, &Default::default(), "macbook"), vec![1, 3]);
         assert_eq!(to_end(&frozen, &Default::default(), "macbook"), vec![2]);
+    }
+
+    #[test]
+    fn a_hand_over_not_answered_is_sent_again_while_still_this_members_at_its_epoch_and_one_taken_comes_back() {
+        let pending: std::collections::BTreeMap<String, u64> = [
+            ("fix-cart", 3),
+            ("big-refactor", 1),
+            ("docs", 2),
+            ("pinned", 1),
+            ("gone", 1),
+            ("archived", 1),
+            ("elsewhere", 4),
+        ]
+        .into_iter()
+        .map(|(id, e)| (id.to_string(), e))
+        .collect();
+        let known = |id: &str| {
+            let k = |owner, epoch, pinned, archived| Some(Known { owner: Some(owner), epoch, pinned, archived });
+            match id {
+                // Still the MacBook's, as it was handed over.
+                "fix-cart" => k("macbook", 3, false, false),
+                // studio-mini took it; its answer never came.
+                "big-refactor" => k("studio-mini", 2, false, false),
+                // The MacBook's again, from a later move.
+                "docs" => k("macbook", 4, false, false),
+                "pinned" => k("macbook", 1, true, false),
+                "archived" => k("studio-mini", 2, false, true),
+                // Given to another member meanwhile.
+                "elsewhere" => k("macbook-air", 6, false, false),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            settle(&pending, known, "macbook"),
+            Settled {
+                taken: vec![("big-refactor".into(), 1), ("elsewhere".into(), 4)],
+                again: vec![("fix-cart".into(), 3)],
+                dropped: vec!["archived".into(), "docs".into(), "gone".into(), "pinned".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn the_central_host_takes_a_handed_over_session_only_at_the_epoch_named_while_its_member_has_not_woken() {
+        let y = |owner: &'static str, epoch: u64, pinned: Option<&'static str>, named: Option<u64>, moving: bool, superseded: bool| Yielded {
+            owner: Some(owner),
+            epoch,
+            pinned,
+            from: "macbook",
+            here: "studio-mini",
+            named,
+            moving,
+            superseded,
+        };
+        let cases = [
+            // Named at the number its record has: taken.
+            (y("macbook", 3, None, Some(3), false, false), OnYield::Take),
+            // A member from before names no number: taken as before.
+            (y("macbook", 3, None, None, false, false), OnYield::Take),
+            // Its number moved on since the member handed it over: the
+            // session moved away and back meanwhile.
+            (y("macbook", 5, None, Some(3), false, false), OnYield::Leave),
+            // The member woke and linked again, or sent a newer hand-over.
+            (y("macbook", 3, None, Some(3), false, true), OnYield::Leave),
+            // Taken already, its answer lost: sent again, it says so.
+            (y("studio-mini", 4, None, Some(3), false, false), OnYield::Taken),
+            (y("studio-mini", 4, None, Some(3), false, true), OnYield::Taken),
+            // Without a number, one the central host runs is not the
+            // member's to hand over, as before.
+            (y("studio-mini", 4, None, None, false, false), OnYield::Leave),
+            // Another member's.
+            (y("macbook-air", 3, None, Some(3), false, false), OnYield::Leave),
+            (y("macbook-air", 4, None, Some(3), false, false), OnYield::Leave),
+            // Kept on its member: only Move to… takes it.
+            (y("macbook", 3, Some("macbook"), Some(3), false, false), OnYield::Leave),
+            (y("macbook", 3, Some("macbook"), Some(3), true, false), OnYield::Take),
+        ];
+        for (case, then) in cases {
+            assert_eq!(
+                on_yield(&case),
+                then,
+                "{:?} at {} named {:?}, superseded {}",
+                case.owner,
+                case.epoch,
+                case.named,
+                case.superseded
+            );
+        }
     }
 
     #[test]
