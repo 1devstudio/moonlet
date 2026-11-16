@@ -570,6 +570,23 @@ struct Data {
     looked_back: bool,
 }
 
+/// A sleep sending what it must first (X73), for as long as it lives:
+/// rounds stop at their next session meanwhile.
+struct Hurry<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> Hurry<'a> {
+    fn new(count: &'a std::sync::atomic::AtomicUsize) -> Hurry<'a> {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Hurry(count)
+    }
+}
+
+impl Drop for Hurry<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub struct SessionCopies {
     home: PathBuf,
     file: PathBuf,
@@ -603,6 +620,12 @@ pub struct SessionCopies {
     /// One round at a time on a member; one offer at a time on the
     /// central host.
     round: tokio::sync::Mutex<()>,
+    /// On a member: one send of a session at a time, by session id, so a
+    /// sleep's sends (X73) need not wait for a round at another session.
+    sending: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// On a member: sleeps sending what they must first (X73). A round
+    /// stops at its next session meanwhile.
+    hurry: std::sync::atomic::AtomicUsize,
     apply: tokio::sync::Mutex<()>,
     /// One clone of a project at a time, on the central host.
     cloning: tokio::sync::Mutex<()>,
@@ -655,15 +678,17 @@ impl SessionCopies {
                 stale: Mutex::new(std::collections::HashSet::new()),
                 links: std::sync::atomic::AtomicU64::new(0),
                 round: tokio::sync::Mutex::new(()),
+                sending: Mutex::new(BTreeMap::new()),
+                hurry: std::sync::atomic::AtomicUsize::new(0),
                 apply: tokio::sync::Mutex::new(()),
                 cloning: tokio::sync::Mutex::new(()),
             }
         })
     }
 
-    /// Sends what is new of every session now, as the Mac goes to sleep
-    /// (X73): its files, chats, transcripts and checkpoints. Gives the
-    /// sessions of which some could not be sent.
+    /// Sends what is new of every session now, as before a hand-over sent
+    /// again at a wake (X73): its files, chats, transcripts and
+    /// checkpoints. Gives the sessions of which some could not be sent.
     pub async fn send_now(&self) -> std::collections::HashSet<String> {
         self.round().await
     }
@@ -1093,52 +1118,156 @@ impl SessionCopies {
     /// or branch changed since the central host last took them is sent.
     /// Gives the sessions of which some part could not be sent.
     async fn round(&self) -> std::collections::HashSet<String> {
+        self.round_but(&std::collections::HashSet::new(), false).await
+    }
+
+    /// [`Self::round`] over every live session but `except`. A round that
+    /// is not a sleep's own stops at its next session while a sleep sends
+    /// what it must first (X73); the sessions it did not reach count as not
+    /// sent.
+    async fn round_but(
+        &self,
+        except: &std::collections::HashSet<String>,
+        sleeping: bool,
+    ) -> std::collections::HashSet<String> {
         let mut failed = std::collections::HashSet::new();
-        let info = self.link.info();
-        if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() {
+        if !self.may_send() {
             return failed;
         }
         let _one = self.round.lock().await;
-        // Not one the account gives another member now (X73): the central
-        // host refuses it, and letting go of it waits for this round.
-        let live: Vec<_> = self
-            .sessions
-            .listed_sessions()
-            .into_iter()
-            .filter(|s| s.owner.is_none() && !s.archived && Path::new(&s.path).is_dir())
-            .collect();
+        let live = self.live();
         self.watch_only(live.iter().map(|s| PathBuf::from(&s.path)).collect());
         let Some(host) = self.link.host() else {
             return failed;
         };
-        for s in live {
-            // The transcript goes first: the files sent after it are at
-            // least as far along, so a checkpoint never names a transcript
-            // ahead of its files.
-            let said = match self.send_talk(&host, &s).await {
-                Ok(said) => said,
-                Err(e) => {
-                    tracing::debug!(session = %s.id, "cannot send the chats: {e:#}");
-                    failed.insert(s.id.clone());
-                    Vec::new()
-                }
-            };
-            if let Err(e) = self.send(&host, &s).await {
-                tracing::debug!(session = %s.id, "cannot send to the central host: {e:#}");
-                failed.insert(s.id.clone());
-                continue;
+        let mut live = live.into_iter().filter(|s| !except.contains(&s.id));
+        while let Some(s) = live.next() {
+            if !sleeping && self.hurry.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                failed.insert(s.id);
+                failed.extend(live.map(|s| s.id));
+                break;
             }
-            if let Err(e) = self.send_files(&host, &s).await {
-                tracing::debug!(session = %s.id, "cannot send the copied files: {e:#}");
-            }
-            for point in said {
-                if let Err(e) = self.checkpoint(&host, &s, point).await {
-                    tracing::debug!(session = %s.id, "cannot send a checkpoint: {e:#}");
-                    failed.insert(s.id.clone());
-                }
+            if !self.send_session(&host, &s).await {
+                failed.insert(s.id);
             }
         }
         failed
+    }
+
+    /// Whether this member sends its sessions to a central host.
+    fn may_send(&self) -> bool {
+        let info = self.link.info();
+        info.central.is_some() && !info.worker.cloud && self.sessions.has_account()
+    }
+
+    /// This member's live sessions: not one the account gives another
+    /// member now (X73), as the central host refuses it, and letting go of
+    /// it waits for its send.
+    fn live(&self) -> Vec<moonlet_proto::types::Session> {
+        self.sessions
+            .listed_sessions()
+            .into_iter()
+            .filter(|s| s.owner.is_none() && !s.archived && Path::new(&s.path).is_dir())
+            .collect()
+    }
+
+    /// The lock that keeps one send of session `id` at a time.
+    fn session_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.sending.lock().unwrap().entry(id.to_string()).or_default().clone()
+    }
+
+    /// Sends what is new of session `s`: its chats and transcripts, its
+    /// files and commit, its copied files and its checkpoints. True when
+    /// all of it that counts was sent.
+    async fn send_session(&self, host: &moonlet_link::Host, s: &moonlet_proto::types::Session) -> bool {
+        let lock = self.session_lock(&s.id);
+        let _one = lock.lock().await;
+        let mut sent = true;
+        // The transcript goes first: the files sent after it are at least
+        // as far along, so a checkpoint never names a transcript ahead of
+        // its files.
+        let said = match self.send_talk(host, s).await {
+            Ok(said) => said,
+            Err(e) => {
+                tracing::debug!(session = %s.id, "cannot send the chats: {e:#}");
+                sent = false;
+                Vec::new()
+            }
+        };
+        if let Err(e) = self.send(host, s).await {
+            tracing::debug!(session = %s.id, "cannot send to the central host: {e:#}");
+            return false;
+        }
+        if let Err(e) = self.send_files(host, s).await {
+            tracing::debug!(session = %s.id, "cannot send the copied files: {e:#}");
+        }
+        for point in said {
+            if let Err(e) = self.checkpoint(host, s, point).await {
+                tracing::debug!(session = %s.id, "cannot send a checkpoint: {e:#}");
+                sent = false;
+            }
+        }
+        sent
+    }
+
+    /// As the Mac goes to sleep (X73): sends the last changes of sessions
+    /// `first` before anything else, each on its own, so one slow or
+    /// failing never holds back another. Each whose last changes were all
+    /// sent goes to `hand_over` as soon as they were: one call at a time,
+    /// the next with those done meanwhile. One not all sent never does,
+    /// so the central host never continues a session from a copy short of
+    /// its last changes. The other sessions are sent after that, as far as
+    /// the time left allows; a round under way stops at its next session
+    /// meanwhile. Gives the sessions of `first` not handed over.
+    pub async fn send_for_sleep<F, Fut>(self: &Arc<Self>, first: &[String], mut hand_over: F) -> std::collections::HashSet<String>
+    where
+        F: FnMut(Vec<String>) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut unsent: std::collections::HashSet<String> = first.iter().cloned().collect();
+        if !self.may_send() {
+            return unsent;
+        }
+        let Some(host) = self.link.host() else {
+            return unsent;
+        };
+        let _hurry = Hurry::new(&self.hurry);
+        // Each in a task of its own; cut off with the hold, they all end.
+        let mut sending = tokio::task::JoinSet::new();
+        let live: Vec<_> = self.live().into_iter().filter(|s| unsent.contains(&s.id)).collect();
+        // One with no worktree here has nothing to send, as in a round.
+        let mut ready: Vec<String> = unsent.iter().filter(|id| live.iter().all(|s| &s.id != *id)).cloned().collect();
+        for id in &ready {
+            unsent.remove(id);
+        }
+        for s in live {
+            let (me, host) = (self.clone(), host.clone());
+            sending.spawn(async move {
+                let sent = me.send_session(&host, &s).await;
+                (s.id, sent)
+            });
+        }
+        let mut handing: Option<std::pin::Pin<Box<Fut>>> = None;
+        loop {
+            if handing.is_none() && !ready.is_empty() {
+                handing = Some(Box::pin(hand_over(std::mem::take(&mut ready))));
+            }
+            tokio::select! {
+                Some(done) = sending.join_next(), if !sending.is_empty() => {
+                    if let Ok((id, true)) = done {
+                        unsent.remove(&id);
+                        ready.push(id);
+                    }
+                }
+                () = async { handing.as_mut().expect("a hand-over under way").await }, if handing.is_some() => {
+                    handing = None;
+                }
+                else => break,
+            }
+        }
+        let except: std::collections::HashSet<String> = first.iter().cloned().collect();
+        self.round_but(&except, true).await;
+        unsent
     }
 
     /// Watches exactly `paths`.
@@ -2223,9 +2352,10 @@ impl SessionCopies {
     /// lines past what was sent are kept as a fork beside it. Gives the
     /// leftovers folder, when there was anything to keep.
     pub async fn keep_gap(&self, s: &moonlet_proto::types::Session) -> Result<Option<PathBuf>> {
-        // Never while a round snapshots the same worktree: both use its
+        // Never while a send snapshots the same worktree: both use its
         // snapshot index, and one would find the other's lock.
-        let _one = self.round.lock().await;
+        let lock = self.session_lock(&s.id);
+        let _one = lock.lock().await;
         let dir = Path::new(&s.path);
         let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();
         // The snapshot first, which a busy worktree can refuse: then nothing
