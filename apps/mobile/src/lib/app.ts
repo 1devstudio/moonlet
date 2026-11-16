@@ -203,7 +203,8 @@ async function followOpenSession() {
   const to = followedHost(shown.host, shown.id, get().data);
   if (!to) return;
   if (parseCopyHost(to)) await loadCopy(to).catch(() => {});
-  if (get().screen === shown) set({ screen: { ...shown, host: to } });
+  // A reload while the copy host loaded may have moved the session again.
+  if (get().screen === shown && followedHost(shown.host, shown.id, get().data) === to) set({ screen: { ...shown, host: to } });
 }
 
 function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Partial<HostData>)) {
