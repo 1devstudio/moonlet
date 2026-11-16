@@ -925,14 +925,16 @@ impl WorkerLink {
         Ok(())
     }
 
-    /// Whether this member's log `name`, holding `count` of its changes,
-    /// went back in time (restored from a backup, or a write lost) since the
-    /// central host, at `theirs`, took its changes. Its changes made since
-    /// then have numbers its lost ones had, which the central host already
-    /// holds and takes no other change under. The last change both hold
-    /// tells: it differs once the log went back, since every change has a
-    /// stamp of its own. One that went back takes its lost changes back,
-    /// and sends again those it made since under new numbers.
+    /// Whether this member's log `name`, holding `count` of its changes
+    /// before this exchange, went back in time (restored from a backup, or
+    /// a write lost) since the central host, at `theirs`, took its changes.
+    /// Its changes made since then have numbers its lost ones had, which
+    /// the central host already holds and takes no other change under. The
+    /// changes both hold tell, from the last one this member held before
+    /// the exchange on: one differs once the log went back, since every
+    /// change has a stamp of its own. Those made here during the exchange
+    /// are among them. One that went back takes its lost changes back, and
+    /// sends again those it made since under new numbers.
     async fn check_own_log(&self, host: &Arc<Host>, name: &str, count: u64, theirs: &moonlet_core::account::Version) -> Result<(), RpcError> {
         let last = count.min(theirs.get(name).copied().unwrap_or(0));
         if last == 0 {
@@ -944,13 +946,14 @@ impl WorkerLink {
             v
         };
         let got = self.exchange(host, from(last - 1), Vec::new()).await?;
-        let held = got.changes.into_iter().find(|c| c.stamp.member == name && c.seq == last);
-        if held.is_none() || held == self.sessions.own_change(last) {
+        if !self.sessions.own_log_differs(&got.changes) {
             return Ok(());
         }
         let got = self.exchange(host, from(0), Vec::new()).await?;
         let own = got.changes.into_iter().filter(|c| c.stamp.member == name).collect();
-        self.sessions.take_back_own(own);
+        self.sessions
+            .take_back_own(own)
+            .map_err(|e| RpcError::new("internal", format!("cannot take back this member's account changes: {e:#}")))?;
         Ok(())
     }
 

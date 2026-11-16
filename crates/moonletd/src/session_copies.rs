@@ -584,6 +584,38 @@ struct Saves {
     written: Mutex<u64>,
 }
 
+impl Saves {
+    /// Queues `bytes` as the latest save, while the data it comes from is
+    /// held, and gives its number.
+    fn queue(&self, bytes: Vec<u8>) -> u64 {
+        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        *self.pending.lock().unwrap() = Some((n, bytes));
+        n
+    }
+
+    /// Writes to `file` the latest save queued, unless save `n` or a later
+    /// one is on the disk already. A write that fails is said in the log
+    /// and left for the next save to try again, unless a later one is
+    /// already queued.
+    fn flush(&self, n: u64, file: &Path) {
+        let mut written = self.written.lock().unwrap();
+        if *written >= n {
+            return;
+        }
+        let Some((latest, bytes)) = self.pending.lock().unwrap().take() else {
+            return;
+        };
+        let tmp = file.with_extension("tmp");
+        match moonlet_core::paths::write_whole(file, &tmp, &bytes, 0o666) {
+            Ok(()) => *written = latest,
+            Err(e) => {
+                tracing::warn!("cannot save {}: {e}", file.display());
+                self.pending.lock().unwrap().get_or_insert((latest, bytes));
+            }
+        }
+    }
+}
+
 /// What `file` holds. One that cannot be read is moved aside, never
 /// written over, and said in the log: it names the copies this host holds,
 /// takeovers not answered yet and sessions to bring back (X73).
@@ -1151,26 +1183,9 @@ impl SessionCopies {
             }
         };
         // Numbered while `data` is held, so a later number is later data.
-        let n = self.saves.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        *self.saves.pending.lock().unwrap() = Some((n, bytes));
+        let n = self.saves.queue(bytes);
         drop(data);
-        let mut written = self.saves.written.lock().unwrap();
-        if *written >= n {
-            return;
-        }
-        let Some((m, bytes)) = self.saves.pending.lock().unwrap().take() else {
-            return;
-        };
-        let tmp = self.file.with_extension("tmp");
-        match moonlet_core::paths::write_whole(&self.file, &tmp, &bytes, 0o666) {
-            Ok(()) => *written = m,
-            Err(e) => {
-                tracing::warn!("cannot save {}: {e}", self.file.display());
-                // The next save waiting, or the next one made, tries it
-                // again, unless a later one is already on its way.
-                self.saves.pending.lock().unwrap().get_or_insert((m, bytes));
-            }
-        }
+        self.saves.flush(n, &self.file);
     }
 
     /// Where the central host keeps its copy of `session`, once made.
@@ -2888,6 +2903,31 @@ impl SessionCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_queued_while_one_is_written_go_to_the_disk_as_the_latest_and_a_failed_one_is_tried_again() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("session-copies.json");
+        let saves = Saves::default();
+        let first = saves.queue(b"{\"held\":{}}".to_vec());
+        let second = saves.queue(b"{\"held\":{\"fix-cart\":{}}}".to_vec());
+        // The first to write writes the latest; the other has nothing left.
+        saves.flush(first, &file);
+        assert_eq!(std::fs::read(&file).unwrap(), b"{\"held\":{\"fix-cart\":{}}}");
+        std::fs::remove_file(&file).unwrap();
+        saves.flush(second, &file);
+        assert!(!file.exists());
+
+        // A folder in the way: the save stays queued for the next one.
+        let tmp = home.path().join("session-copies.tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        let third = saves.queue(b"{\"forced\":{\"fix-cart\":2}}".to_vec());
+        saves.flush(third, &file);
+        assert!(!file.exists());
+        std::fs::remove_dir(&tmp).unwrap();
+        saves.flush(third, &file);
+        assert_eq!(std::fs::read(&file).unwrap(), b"{\"forced\":{\"fix-cart\":2}}");
+    }
 
     #[test]
     fn a_transcript_file_made_again_here_counts_as_unsent() {

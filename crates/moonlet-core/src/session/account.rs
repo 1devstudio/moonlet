@@ -825,9 +825,11 @@ impl SessionManager {
         Some((log.member().to_string(), count))
     }
 
-    /// Change `seq` of this member's own log, when it holds it.
-    pub fn own_change(&self, seq: u64) -> Option<Change> {
-        self.with_log(|log| log.get(log.member(), seq).cloned())
+    /// Whether any of this member's own changes in `theirs`, what another
+    /// member holds of them, differs from the one this member holds under
+    /// that number: its log went back in time ([`Self::take_back_own`]).
+    pub fn own_log_differs(&self, theirs: &[Change]) -> bool {
+        self.with_log(|log| log.differs_from(theirs))
     }
 
     /// After this member's log went back in time (restored from a backup,
@@ -835,12 +837,13 @@ impl SessionManager {
     /// holds of this log, the changes it lost, and sends again under new
     /// numbers the changes it made since under their numbers, which no
     /// other member took ([`crate::account::Log::take_back`]). Gives how
-    /// many it sent again.
-    pub fn take_back_own(&self, theirs: Vec<Change>) -> usize {
+    /// many it sent again; an error when the log or the state could not be
+    /// saved, leaving both as they were.
+    pub fn take_back_own(&self, theirs: Vec<Change>) -> Result<usize> {
         let (taken, again) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
-            let Some(a) = account.as_mut() else { return 0 };
+            let Some(a) = account.as_mut() else { return Ok(0) };
             let mut log = a.log.clone();
             let me = log.member().to_string();
             let taken: Vec<Change> = theirs
@@ -849,15 +852,12 @@ impl SessionManager {
                 .cloned()
                 .collect();
             if taken.is_empty() {
-                return 0;
+                return Ok(0);
             }
             let again = log.take_back(theirs);
             let mut next = st.clone();
             lay_onto(&mut next, &log);
-            if let Err(e) = write_private(&a.path, &log).and_then(|()| self.save(&next)) {
-                tracing::warn!("cannot save the account's changes taken back: {e:#}");
-                return 0;
-            }
+            write_private(&a.path, &log).and_then(|()| self.save(&next))?;
             a.log = log;
             *st = next;
             (taken, again)
@@ -876,7 +876,7 @@ impl SessionManager {
         for f in applied {
             f(&taken);
         }
-        sent
+        Ok(sent)
     }
 
     /// Takes in changes from other members, and shows what they change.

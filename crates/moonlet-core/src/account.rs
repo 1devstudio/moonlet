@@ -302,6 +302,16 @@ impl Log {
         self.changes.get(&(member.to_string(), seq))
     }
 
+    /// Whether any of this log's own changes in `theirs`, what another
+    /// member holds, differs from the one this log holds under that number:
+    /// this log went back in time ([`Self::take_back`]).
+    pub fn differs_from(&self, theirs: &[Change]) -> bool {
+        theirs
+            .iter()
+            .filter(|c| c.stamp.member == self.member)
+            .any(|c| self.get(&self.member, c.seq).is_some_and(|mine| mine != c))
+    }
+
     /// Takes back this log's own changes from `theirs`, what another member
     /// holds of them, after this log went back in time (restored from a
     /// backup, or a write lost): every member takes only the first change
@@ -713,7 +723,10 @@ mod tests {
         let studio = log.set(3_000, RecordKind::Workspace, "w1", "name", json!("Studio"));
         assert_eq!(studio.seq, 2);
 
-        // Its central host holds what it lost.
+        // Its central host holds what it lost: "Work" differs from
+        // "Studio", and "Home" is the same on both.
+        assert!(log.differs_from(&[home.clone(), work.clone()]));
+        assert!(!log.differs_from(&[home.clone(), color.clone()]));
         let again = log.take_back(vec![home.clone(), work.clone(), color.clone()]);
         assert_eq!(
             again,
@@ -734,6 +747,7 @@ mod tests {
         central.apply(again);
         assert_eq!(central.missing_for(&Version::new()), log.missing_for(&Version::new()));
         // A log that lost nothing has nothing to send again.
+        assert!(!log.differs_from(&central.missing_for(&Version::new())));
         let mut whole = log.clone();
         assert_eq!(whole.take_back(central.missing_for(&Version::new())), vec![]);
     }
