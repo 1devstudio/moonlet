@@ -2326,6 +2326,10 @@ impl Daemon {
                     return Err(RpcError::new("no_account", "this host shares no account"));
                 }
                 let mut r: m::AccountSync = params(p)?;
+                let now = moonlet_core::account::now_ms();
+                if let Some(theirs) = r.now_ms {
+                    self.link.member_clock(&worker, theirs, now);
+                }
                 // A member sends the changes it made, whose logs are named
                 // after its worker id: never another member's, whose numbers
                 // it could otherwise take first. A central host that lost its
@@ -2353,6 +2357,7 @@ impl Daemon {
                     changes: self.sessions.account_changes_for(&r.version),
                     version: self.sessions.account_version(),
                     account: Some(self.link.account_info().account),
+                    now_ms: Some(now),
                 })
             }
             m::ACCOUNT_GET => ok(self.link.account_info()),

@@ -342,6 +342,25 @@ pub fn computer_name() -> String {
     named.unwrap_or_else(crate::mobile::host_label)
 }
 
+/// How far other hosts' clocks are from this one's, to the minute (X68).
+#[derive(Default)]
+struct Clocks {
+    /// The central host's, from the last exchange with it.
+    central: Option<i64>,
+    /// Each member's by worker id, from its last `account.sync` here, and
+    /// when that was.
+    members: std::collections::HashMap<String, (i64, std::time::Instant)>,
+}
+
+/// How long a member's clock is said after its last `account.sync`: a
+/// linked member sends one every minute.
+const MEMBER_CLOCK_KEPT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// `ms` to the nearest minute, so a round trip's jitter says nothing new.
+fn to_minute(ms: i64) -> i64 {
+    (ms as f64 / 60_000.0).round() as i64 * 60_000
+}
+
 /// The worker side of the link: its settings, its state and, while it
 /// should be open, the connection.
 pub struct WorkerLink {
@@ -361,6 +380,8 @@ pub struct WorkerLink {
     /// and registers again by itself, and each registration starts a new
     /// loop that ends the one before (X68).
     account_loop: AtomicU64,
+    /// How far other hosts' clocks are from this one's (X68).
+    clocks: Mutex<Clocks>,
     /// The copies this Mac keeps, which the link serves (X60).
     sync: std::sync::OnceLock<Weak<crate::sync::LiveCopies>>,
     /// Routed commands this machine runs for its central host (X62).
@@ -397,6 +418,7 @@ impl WorkerLink {
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
             account_loop: AtomicU64::new(0),
+            clocks: Mutex::new(Clocks::default()),
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
@@ -416,9 +438,53 @@ impl WorkerLink {
     pub fn account_info(&self) -> m::AccountInfo {
         let info = self.info();
         let central = info.central.map(|c| c.name);
-        match self.sessions.central_account().filter(|_| central.is_some()) {
-            Some(account) => m::AccountInfo { account, central },
-            None => m::AccountInfo { account: info.worker.id, central: None },
+        let mut out = match self.sessions.central_account().filter(|_| central.is_some()) {
+            Some(account) => m::AccountInfo { account, central: central.clone(), clocks: Vec::new() },
+            None => m::AccountInfo { account: info.worker.id, central: None, clocks: Vec::new() },
+        };
+        let names = self.sessions.member_names();
+        let clocks = self.clocks.lock().unwrap();
+        if let (Some(name), Some(ahead)) = (central, clocks.central) {
+            out.clocks.push(m::ClockOff { worker: out.account.clone(), name, ahead_ms: ahead });
+        }
+        let fresh = std::time::Instant::now() - MEMBER_CLOCK_KEPT;
+        for (worker, (ahead, at)) in &clocks.members {
+            if *at >= fresh {
+                let name = names.get(worker).cloned().unwrap_or_else(|| worker.clone());
+                out.clocks.push(m::ClockOff { worker: worker.clone(), name, ahead_ms: *ahead });
+            }
+        }
+        out.clocks.retain(|c| c.ahead_ms != 0);
+        out
+    }
+
+    /// Notes that member `worker`'s clock said `their_ms` when this host's
+    /// said `now_ms`, in its `account.sync` (X68). Says `account.info` when
+    /// what this host says of clocks changes.
+    pub fn member_clock(&self, worker: &str, their_ms: u64, now_ms: u64) {
+        let before = self.account_info();
+        self.clocks
+            .lock()
+            .unwrap()
+            .members
+            .insert(worker.to_string(), (to_minute(their_ms as i64 - now_ms as i64), std::time::Instant::now()));
+        let after = self.account_info();
+        if after != before {
+            (self.emit)(Message::event(m::EV_ACCOUNT_INFO, after));
+        }
+    }
+
+    /// Notes how far the central host's clock is from this one's, from an
+    /// exchange (none from a central host from before X68's clocks): this
+    /// member then takes changes up to a day past the central host's clock
+    /// when it is ahead.
+    fn central_clock(&self, ahead_ms: Option<i64>) {
+        self.sessions.set_central_ahead(ahead_ms.unwrap_or(0).max(0) as u64);
+        let before = self.account_info();
+        self.clocks.lock().unwrap().central = ahead_ms.map(to_minute);
+        let after = self.account_info();
+        if after != before {
+            (self.emit)(Message::event(m::EV_ACCOUNT_INFO, after));
         }
     }
 
@@ -513,6 +579,8 @@ impl WorkerLink {
             // A new central host, or new addresses or token: link again,
             // and share its account once it says which (X68).
             self.close();
+            self.sessions.set_central_ahead(0);
+            self.clocks.lock().unwrap().central = None;
             if self.sessions.set_central_account(None) {
                 (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
             }
@@ -910,9 +978,9 @@ impl WorkerLink {
     /// is checked against the central host's copy of it first.
     async fn sync_account(&self, host: &Arc<Host>, check: bool) -> Result<(), RpcError> {
         let before = self.sessions.own_log();
-        let version = self.send_account(host, Vec::new()).await?;
-        if check && let Some((name, count)) = before {
-            self.check_own_log(host, &name, count, &version).await?;
+        let mut version = self.send_account(host, Vec::new()).await?;
+        if check && let Some((name, count)) = &before {
+            self.check_own_log(host, name, *count, &version).await?;
         }
         // Only this machine's own changes: the central host takes no other
         // member's from it.
@@ -920,8 +988,31 @@ impl WorkerLink {
         let mut lacks = self.sessions.account_changes_for(&version);
         lacks.retain(|c| moonlet_core::account::log_owner(&c.stamp.member) == Some(own.as_str()));
         if !lacks.is_empty() {
-            self.send_account(host, lacks).await?;
+            version = self.send_account(host, lacks).await?;
         }
+        if let Some((name, _)) = before {
+            self.restamp_own(host, &name, &version).await?;
+        }
+        Ok(())
+    }
+
+    /// Stamps again, by this Mac's clock, its own changes the central host
+    /// (at `theirs`) refused for a stamp more than a day ahead: made while
+    /// this Mac's clock was wrong (X68). Nothing while it still is. The
+    /// central host's copies of this log's changes past the gap tell which
+    /// it holds: one extra `account.sync` from the count it gave.
+    async fn restamp_own(&self, host: &Arc<Host>, name: &str, theirs: &moonlet_core::account::Version) -> Result<(), RpcError> {
+        let counted = theirs.get(name).copied().unwrap_or(0);
+        if !self.sessions.own_changes_ahead(counted) {
+            return Ok(());
+        }
+        let mut from = self.sessions.account_version();
+        from.insert(name.to_string(), counted);
+        let got = self.exchange(host, from, Vec::new()).await?;
+        let held: Vec<_> = got.changes.into_iter().filter(|c| c.stamp.member == name).collect();
+        self.sessions
+            .restamp_own(counted, &held)
+            .map_err(|e| RpcError::new("internal", format!("cannot stamp this member's account changes again: {e:#}")))?;
         Ok(())
     }
 
@@ -960,11 +1051,17 @@ impl WorkerLink {
     /// One `account.sync` with the central host, from `version`: what it
     /// answers, not taken in yet.
     async fn exchange(&self, host: &Arc<Host>, version: moonlet_core::account::Version, changes: Vec<moonlet_proto::types::Change>) -> Result<m::AccountSynced, RpcError> {
-        let send = m::AccountSync { version, changes };
+        let sent = moonlet_core::account::now_ms();
+        let send = m::AccountSync { version, changes, now_ms: Some(sent) };
         let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(send).unwrap()).await?)?;
         if !self.is_current(host) {
             return Err(RpcError::new("gone", "the central host changed meanwhile"));
         }
+        // The central host's clock against this one's halfway through the
+        // round trip.
+        let back = moonlet_core::account::now_ms();
+        let mid = sent / 2 + back / 2;
+        self.central_clock(got.now_ms.map(|t| t as i64 - mid as i64));
         Ok(got)
     }
 

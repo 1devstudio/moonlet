@@ -1124,3 +1124,95 @@ async fn a_central_host_that_lost_its_design_store_gets_every_tree_again_when_th
     })
     .await;
 }
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How far ahead of `d`'s clock `d` says host `name`'s clock is, in days,
+/// from `account.get`'s `clocks`.
+async fn clock_days(d: &Daemon, name: &str) -> Option<i64> {
+    let info = account(d).await;
+    let entry = info["clocks"].as_array()?.iter().find(|c| c["name"] == name)?.clone();
+    Some((entry["ahead_ms"].as_i64()? as f64 / DAY_MS as f64).round() as i64)
+}
+
+async fn section_names(d: &Daemon) -> Vec<String> {
+    d.call::<Vec<Section>>("section.list", json!({}))
+        .await
+        .into_iter()
+        .map(|s| s.name)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_member_whose_clock_was_a_year_ahead_has_its_changes_taken_once_it_is_right() {
+    let (mini, addr) = central().await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].clone();
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(10), "both Personal on both", || async {
+            d.names().await == ["Personal", "Personal"]
+        })
+        .await;
+    }
+    // Its clock a year ahead for a while, the MacBook renames its
+    // workspace: studio-mini refuses the change, and both say whose clock
+    // looks wrong.
+    book.stop();
+    book.env.push(("MOONLET_TEST_ACCOUNT_CLOCK_MS".into(), (365 * DAY_MS).to_string()));
+    book.restart().await;
+    rename(&book, &books.id, "Future").await;
+    within(Duration::from_secs(10), "each says the other's clock is a year off", || async {
+        clock_days(&book, "studio-mini").await == Some(-365)
+            && clock_days(&mini, "Alex's MacBook Pro").await == Some(365)
+    })
+    .await;
+    assert_eq!(mini.names().await, ["Personal", "Personal"]);
+
+    // Its clock is right again, and it adds a section.
+    book.stop();
+    book.env.retain(|(k, _)| k != "MOONLET_TEST_ACCOUNT_CLOCK_MS");
+    book.restart().await;
+    let _: Section = book
+        .call("section.create", json!({ "workspace_id": books.id, "name": "Later" }))
+        .await;
+    within(Duration::from_secs(20), "both changes on studio-mini", || async {
+        mini.names().await == ["Future", "Personal"] && section_names(&mini).await.contains(&"Later".to_string())
+    })
+    .await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(10), "no clock said to be wrong", || async {
+            account(d).await.get("clocks").is_none()
+        })
+        .await;
+    }
+    // The field it wrote a year ahead changes again, from studio-mini.
+    rename(&mini, &books.id, "Studio").await;
+    within(Duration::from_secs(10), "studio-mini's rename on the MacBook", || async {
+        book.names().await == ["Personal", "Studio"]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_member_whose_clock_is_a_week_behind_takes_the_others_changes_and_says_so() {
+    let (mini, addr) = central().await;
+    let behind = (-8 * DAY_MS).to_string();
+    let book = mac_with(BOOK, "Alex's MacBook Pro", &[("MOONLET_TEST_ACCOUNT_CLOCK_MS", &behind)]).await;
+    let minis = mini.workspaces().await[0].id.clone();
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    // studio-mini's "Personal" was made eight days after the MacBook's clock.
+    for d in [&mini, &book] {
+        within(Duration::from_secs(10), "both Personal on both", || async {
+            d.names().await == ["Personal", "Personal"]
+        })
+        .await;
+    }
+    rename(&mini, &minis, "Studio").await;
+    within(Duration::from_secs(5), "studio-mini's rename on the MacBook", || async {
+        book.names().await == ["Personal", "Studio"]
+    })
+    .await;
+    assert_eq!(clock_days(&book, "studio-mini").await, Some(8));
+    assert_eq!(clock_days(&mini, "Alex's MacBook Pro").await, Some(-8));
+}

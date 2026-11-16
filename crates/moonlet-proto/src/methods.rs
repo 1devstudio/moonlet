@@ -3219,6 +3219,11 @@ pub struct AccountSync {
     pub version: BTreeMap<String, u64>,
     #[serde(default)]
     pub changes: Vec<crate::types::Change>,
+    /// The member's clock when it sent this, in ms, so the central host can
+    /// say whose clock looks wrong. A member from before this field sends
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_ms: Option<u64>,
 }
 
 /// `account.sync`'s reply: the changes the member lacks, and what the
@@ -3230,6 +3235,11 @@ pub struct AccountSynced {
     /// The account the central host shares, which its members share too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// The central host's clock when it answered, in ms: a member takes
+    /// changes up to a day past it, and says when its own clock is far off
+    /// from it. A central host from before this field sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_ms: Option<u64>,
 }
 
 /// `account.get` (X68): the account this host shares, named after the
@@ -3239,6 +3249,25 @@ pub struct AccountSynced {
 pub struct AccountInfo {
     pub account: String,
     pub central: Option<String>,
+    /// Hosts of the account whose clock is a minute or more off from this
+    /// host's, by their last `account.sync`: on a member, its central host;
+    /// on a central host, its members. Absent when none is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clocks: Vec<ClockOff>,
+}
+
+/// A host whose clock is off from this host's (X68): changes stamped more
+/// than a day past a member's clock are refused, so a clock that far off
+/// keeps changes from reaching the others.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockOff {
+    /// Its worker id.
+    pub worker: String,
+    /// Its name, as the account knows it.
+    pub name: String,
+    /// How far its clock is ahead of this host's, to the minute; negative
+    /// when it is behind.
+    pub ahead_ms: i64,
 }
 
 /// `account.changed` (X68).
