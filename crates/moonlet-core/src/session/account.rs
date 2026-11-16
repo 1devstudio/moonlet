@@ -3357,6 +3357,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_session_read_before_a_change_reads_changed_after_it() {
+        let (_h, mini) = member("mini").await;
+        let book = "book.k3x9q2";
+        let owner = set_op("owner", serde_json::json!("book"));
+        mini.apply_account(vec![
+            session_change(book, 1, 0, "fix-cart", owner),
+            session_change(book, 2, 1, "fix-cart", set_op("name", serde_json::json!("Fix the cart"))),
+        ]);
+        // Read once, so what follows reads after it.
+        assert_eq!(mini.session_record("fix-cart").unwrap()["name"], serde_json::json!("Fix the cart"));
+        assert!(mini.ended_sessions().is_empty());
+        mini.apply_account(vec![
+            session_change(book, 3, 2, "fix-cart", set_op("name", serde_json::json!("Round the cart total"))),
+            session_change(book, 4, 3, "fix-cart", set_op("archived", serde_json::json!(true))),
+        ]);
+        assert_eq!(mini.session_record("fix-cart").unwrap()["name"], serde_json::json!("Round the cart total"));
+        assert_eq!(mini.session_records()["fix-cart"]["archived"], serde_json::json!(true));
+        assert_eq!(mini.ended_sessions(), std::collections::BTreeSet::from(["fix-cart".to_string()]));
+        // A session this member names an owner of reads so at once too.
+        assert!(mini.set_session_owner("fix-cart", "air", 2, None));
+        assert_eq!(mini.session_record("fix-cart").unwrap()["owner"], serde_json::json!("air"));
+    }
+
+    #[tokio::test]
     async fn only_an_archived_or_deleted_session_has_ended() {
         let (_h, mini) = member("mini").await;
         let book = "book.k3x9q2";
@@ -3660,7 +3684,7 @@ mod tests {
     /// A generated account log of about `n` changes, as a heavy user's
     /// would hold: each session 10 changes from its maker and 3 from the
     /// central host naming it, every fifth moved once (10 more).
-    pub(crate) fn generated_log(maker: &str, central: &str, n: usize) -> Vec<Change> {
+    fn generated_log(maker: &str, central: &str, n: usize) -> Vec<Change> {
         let mut out = Vec::new();
         let (mut mine, mut theirs) = (0u64, 0u64);
         let base = 1_760_000_000_000u64;

@@ -1376,8 +1376,9 @@ async fn an_older_member_syncs_a_small_log_in_one_reply_as_before() {
 
 /// A central host from before pages, played by hand on 127.0.0.1: it
 /// answers `account.sync` with `answer`, given the request's params, in one
-/// frame and in the shape it had then, registers every worker, and knows no
-/// other method. It keeps every `account.sync` it gets.
+/// frame and in the shape it had then, registers every worker, answers
+/// `daemon.info`, and knows no other method. It keeps every `account.sync`
+/// it gets.
 struct OlderCentral {
     addr: String,
     syncs: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
@@ -1408,6 +1409,7 @@ impl OlderCentral {
                         let Frame::Json(Message::Request { id, method, params }) = f else { continue };
                         let reply = match method.as_str() {
                             "worker.register" => Message::ok(id, true),
+                            "daemon.info" => Message::ok(id, json!({})),
                             "account.sync" => {
                                 kept.lock().unwrap().push(params.clone());
                                 match answer(&params) {
@@ -1493,12 +1495,18 @@ async fn a_newer_member_syncs_a_small_log_with_a_central_host_from_before_pages(
 #[tokio::test]
 async fn a_log_too_large_for_a_central_host_from_before_pages_is_said_and_asked_again_only_on_the_next_link() {
     // A central host from before pages, with a log past one frame, answers
-    // every `account.sync` so.
-    let central = OlderCentral::start(std::sync::Arc::new(|_: &Value| {
-        Err(moonlet_proto::RpcError::new("too_large", "frame of 17301504 bytes exceeds the maximum"))
+    // every `account.sync` so, until it answers that it has no account.
+    let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gone = lost.clone();
+    let central = OlderCentral::start(std::sync::Arc::new(move |_: &Value| {
+        Err(if gone.load(std::sync::atomic::Ordering::SeqCst) {
+            moonlet_proto::RpcError::new("no_account", "this host shares no account")
+        } else {
+            moonlet_proto::RpcError::new("too_large", "frame of 17301504 bytes exceeds the maximum")
+        })
     }))
     .await;
-    let book = mac_linked_to(&central, &[("MOONLET_ACCOUNT_RESYNC_MS", "100")]).await;
+    let book = mac_linked_to(&central, &[("MOONLET_ACCOUNT_RESYNC_MS", "100"), ("MOONLET_TEST_POWER", "1")]).await;
     within(Duration::from_secs(20), "the MacBook asks", || async { !central.syncs().is_empty() }).await;
     within(Duration::from_secs(5), "the MacBook says the account is not syncing", || async {
         account(&book).await["not_syncing"] == json!("too_large")
@@ -1510,4 +1518,14 @@ async fn a_log_too_large_for_a_central_host_from_before_pages_is_said_and_asked_
     // On the next link it asks again, in case the central host was updated.
     central.drop_links();
     within(Duration::from_secs(20), "the MacBook asks again on its next link", || async { central.syncs().len() == 2 }).await;
+    // A wake asks once, not again and again while it waits for an answer.
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+    let _: Value = book.call("power.simulate", json!({ "event": "wake" })).await;
+    assert_eq!(central.syncs().len(), 3);
+    assert_eq!(account(&book).await["not_syncing"], json!("too_large"));
+    // A central host that has no account to share any more says nothing of
+    // its size: the line goes.
+    lost.store(true, std::sync::atomic::Ordering::SeqCst);
+    central.drop_links();
+    within(Duration::from_secs(20), "the line gone", || async { account(&book).await.get("not_syncing").is_none() }).await;
 }

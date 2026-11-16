@@ -384,24 +384,6 @@ fn version_to_send(
     v
 }
 
-/// `changes` in parts of at most `budget` bytes of JSON each, in their
-/// order, so each fits one `account.sync` (X68); one part, empty, for none.
-/// A change larger than `budget` goes alone.
-fn in_parts(changes: Vec<moonlet_proto::types::Change>, budget: usize) -> Vec<Vec<moonlet_proto::types::Change>> {
-    let mut parts = vec![Vec::new()];
-    let mut used = 2;
-    for c in changes {
-        let size = serde_json::to_vec(&c).map_or(0, |b| b.len()) + 1;
-        if parts.last().is_some_and(|p| !p.is_empty()) && used + size > budget {
-            parts.push(Vec::new());
-            used = 2;
-        }
-        used += size;
-        parts.last_mut().unwrap().push(c);
-    }
-    parts
-}
-
 /// The worker side of the link: its settings, its state and, while it
 /// should be open, the connection.
 pub struct WorkerLink {
@@ -1010,6 +992,8 @@ impl WorkerLink {
                 // machine for no member shares none with it.
                 Err(e) if e.code == "unknown_method" || e.code == "no_account" || e.code == "forbidden" => {
                     tracing::info!("the central host shares no account: {}", e.message);
+                    // Nor does it say anything of the account's size now.
+                    self.set_not_syncing(None);
                     return;
                 }
                 // What it would send does not fit one message: a central
@@ -1147,7 +1131,7 @@ impl WorkerLink {
     /// central host answers: each part is taken in as it comes, so the next
     /// is asked for from past it.
     async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
-        let mut parts = in_parts(changes, m::ACCOUNT_PAGE_BYTES).into_iter();
+        let mut parts = moonlet_core::account::in_parts(changes, m::ACCOUNT_PAGE_BYTES).into_iter();
         let mut send = parts.next().unwrap_or_default();
         loop {
             let mut version = {
@@ -1219,6 +1203,13 @@ impl WorkerLink {
                             Ok(Ok(_)) => return true,
                             // A central host that shares no account has none to say.
                             Ok(Err(e)) if e.code == "unknown_method" || e.code == "no_account" => return false,
+                            // Nor can one whose answer does not fit one
+                            // message: asking again makes it build that
+                            // answer again, for nothing.
+                            Ok(Err(e)) if e.code == "too_large" => {
+                                self.set_not_syncing(Some("too_large"));
+                                return false;
+                            }
                             // Lost, or not registered yet on a new link: again.
                             Ok(Err(_)) => {}
                             Err(_) => return false,
@@ -1745,33 +1736,6 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-
-    /// A change as the MacBook's log would send it, `value` its branch.
-    fn change(seq: u64, value: &str) -> moonlet_proto::types::Change {
-        moonlet_proto::types::Change {
-            stamp: moonlet_proto::types::Stamp { ms: 1_794_823_200_000 + seq, n: 0, member: "book.k3x9q2".into() },
-            seq,
-            kind: "session".into(),
-            id: "fix-cart".into(),
-            op: moonlet_proto::types::ChangeOp::Set { field: "branch".into(), value: serde_json::json!(value) },
-        }
-    }
-
-    #[test]
-    fn changes_too_many_for_one_message_go_in_parts_that_each_fit_one_in_their_order() {
-        // Each of these is 159 bytes of JSON: two with their brackets and
-        // commas (322) fit 330 bytes, three (482) do not.
-        assert_eq!(serde_json::to_vec(&change(1, "moonlet/fix-cart")).unwrap().len(), 159);
-        let all: Vec<_> = (1..=5).map(|i| change(i, "moonlet/fix-cart")).collect();
-        let parts = in_parts(all, 330);
-        let seqs: Vec<Vec<u64>> = parts.iter().map(|p| p.iter().map(|c| c.seq).collect()).collect();
-        assert_eq!(seqs, [vec![1, 2], vec![3, 4], vec![5]]);
-        // A change larger than a part goes alone; none is one empty part.
-        let big = change(6, &"x".repeat(400));
-        let parts = in_parts(vec![change(1, "a"), big, change(7, "b")], 330);
-        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 1]);
-        assert_eq!(in_parts(Vec::new(), 330), [Vec::new()]);
-    }
 
     #[test]
     fn a_member_whose_clock_is_more_than_a_day_behind_asks_only_for_what_is_new() {

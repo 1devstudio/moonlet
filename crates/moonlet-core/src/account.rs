@@ -145,6 +145,13 @@ impl Log {
         }
     }
 
+    /// Puts change `c` under `key`: every change but [`Self::apply`]'s goes
+    /// in here, so the log's [`Self::rev`] moves on with it.
+    fn put(&mut self, key: (String, u64), c: Change) {
+        self.changes.insert(key, c);
+        self.rev = next_rev();
+    }
+
     /// Which content this log holds: the same number as long as its
     /// changes and its account stay the same, so a copy of it has the same
     /// one, and never one any other content had.
@@ -202,10 +209,9 @@ impl Log {
                 seq: self.seq,
                 ..c
             };
-            self.changes.insert((self.member.clone(), self.seq), mine);
+            self.put((self.member.clone(), self.seq), mine);
         }
         self.former.push(old.to_string());
-        self.rev = next_rev();
     }
 
     pub fn to_file(&self) -> LogFile {
@@ -232,6 +238,7 @@ impl Log {
                 self.seq = self.seq.max(c.seq);
             }
             slot.insert(c);
+            // Not through `put`, as the slot is already taken.
             self.rev = next_rev();
         }
     }
@@ -275,9 +282,7 @@ impl Log {
                 value,
             },
         };
-        self.changes
-            .insert((self.member.clone(), self.seq), c.clone());
-        self.rev = next_rev();
+        self.put((self.member.clone(), self.seq), c.clone());
         c
     }
 
@@ -332,9 +337,7 @@ impl Log {
             id: id.into(),
             op,
         };
-        self.changes
-            .insert((self.member.clone(), self.seq), c.clone());
-        self.rev = next_rev();
+        self.put((self.member.clone(), self.seq), c.clone());
         c
     }
 
@@ -401,8 +404,7 @@ impl Log {
         let mut again = Vec::new();
         for c in refused {
             let c = Change { stamp: self.next_stamp(now_ms), ..c };
-            self.changes.insert((self.member.clone(), c.seq), c.clone());
-            self.rev = next_rev();
+            self.put((self.member.clone(), c.seq), c.clone());
             again.push(c);
         }
         again
@@ -488,8 +490,9 @@ impl Log {
     /// so they still win or give way as they did.
     pub fn take_back(&mut self, theirs: Vec<Change>) -> Vec<Change> {
         let mut again = Vec::new();
-        for c in theirs.into_iter().filter(|c| c.stamp.member == self.member) {
-            let key = (self.member.clone(), c.seq);
+        let me = self.member.clone();
+        for c in theirs.into_iter().filter(|c| c.stamp.member == me) {
+            let key = (me.clone(), c.seq);
             match self.changes.get(&key) {
                 Some(mine) if *mine == c => continue,
                 Some(mine) => again.push(mine.clone()),
@@ -497,15 +500,13 @@ impl Log {
             }
             self.clock = self.clock.max((c.stamp.ms, c.stamp.n));
             self.seq = self.seq.max(c.seq);
-            self.changes.insert(key, c);
-            self.rev = next_rev();
+            self.put(key, c);
         }
         again.sort_by_key(|c| c.seq);
         for c in &mut again {
             self.seq = self.seq.saturating_add(1);
             c.seq = self.seq;
-            self.changes.insert((self.member.clone(), self.seq), c.clone());
-            self.rev = next_rev();
+            self.put((self.member.clone(), self.seq), c.clone());
         }
         again
     }
@@ -608,6 +609,25 @@ fn json_len(c: &Change) -> usize {
     let mut n = Count(0);
     let _ = serde_json::to_writer(&mut n, c);
     n.0
+}
+
+/// `changes` in parts of at most `budget` bytes of JSON each, counted as
+/// [`Log::missing_page`] counts them, in their order, so each fits one
+/// `account.sync`; one part, empty, for none. A change larger than
+/// `budget` goes alone.
+pub fn in_parts(changes: Vec<Change>, budget: usize) -> Vec<Vec<Change>> {
+    let mut parts = vec![Vec::new()];
+    let mut used = 2;
+    for c in changes {
+        let size = json_len(&c) + 1;
+        if parts.last().is_some_and(|p| !p.is_empty()) && used + size > budget {
+            parts.push(Vec::new());
+            used = 2;
+        }
+        used += size;
+        parts.last_mut().unwrap().push(c);
+    }
+    parts
 }
 
 /// Moves `version`, what a member asks from, past the changes of `page`,
@@ -992,6 +1012,33 @@ mod tests {
         // With room for all, one page.
         let (page, more) = mini.missing_page(&Version::new(), 1 << 20);
         assert_eq!((page.len(), more), (3, false));
+    }
+
+    /// A change as the MacBook's log would send it, `value` its branch.
+    fn change(seq: u64, value: &str) -> Change {
+        Change {
+            stamp: Stamp { ms: 1_794_823_200_000 + seq, n: 0, member: "book.k3x9q2".into() },
+            seq,
+            kind: "session".into(),
+            id: "fix-cart".into(),
+            op: ChangeOp::Set { field: "branch".into(), value: json!(value) },
+        }
+    }
+
+    #[test]
+    fn changes_too_many_for_one_message_go_in_parts_that_each_fit_one_in_their_order() {
+        // Each of these is 159 bytes of JSON: two with their brackets and
+        // commas (322) fit 330 bytes, three (482) do not.
+        assert_eq!(serde_json::to_vec(&change(1, "moonlet/fix-cart")).unwrap().len(), 159);
+        let all: Vec<_> = (1..=5).map(|i| change(i, "moonlet/fix-cart")).collect();
+        let parts = in_parts(all, 330);
+        let seqs: Vec<Vec<u64>> = parts.iter().map(|p| p.iter().map(|c| c.seq).collect()).collect();
+        assert_eq!(seqs, [vec![1, 2], vec![3, 4], vec![5]]);
+        // A change larger than a part goes alone; none is one empty part.
+        let big = change(6, &"x".repeat(400));
+        let parts = in_parts(vec![change(1, "a"), big, change(7, "b")], 330);
+        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 1]);
+        assert_eq!(in_parts(Vec::new(), 330), [Vec::new()]);
     }
 
     #[test]

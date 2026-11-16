@@ -813,14 +813,16 @@ function CentralOffline() {
   );
 }
 
-/** "studio-mini's clock is 1 year ahead of this Mac's…": a clock off by
- * more than a day, so account changes between the two wait (X68). */
-function ClockOffLines() {
+/** What the sidebar says of the account's sync (X68): that it does not sync
+ * with the central host, and "studio-mini's clock is 1 year ahead of this
+ * Mac's…", a clock off by more than a day, so account changes between the
+ * two wait. */
+function AccountLines() {
   const info = useStore((st) => st.accounts.local);
   const lines = useMemo(() => clockLines(info), [info]);
   const central = useSync((st) => st.central);
   const label = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
-  const stalled = notSyncingLine(info, info?.central ?? label ?? "the central host");
+  const stalled = notSyncingLine(info, label);
   return (
     <>
       {stalled && (
@@ -1037,7 +1039,7 @@ export function Sidebar() {
       ) : (
       <>
       <CentralOffline />
-      <ClockOffLines />
+      <AccountLines />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />

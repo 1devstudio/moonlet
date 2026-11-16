@@ -398,6 +398,10 @@ describe("notSyncingLine (X68)", () => {
     expect(notSyncingLine({ account: "7d3f1c2a", central: null, not_syncing: "too_large" }, "Studio Mini")).toBe(
       "Account changes are not syncing with Studio Mini: the account is too large for the moonlet it runs. Updating moonlet on Studio Mini fixes it",
     );
+    // With no name for it at all.
+    expect(notSyncingLine({ account: "7d3f1c2a", central: null, not_syncing: "too_large" }, null)).toBe(
+      "Account changes are not syncing with the central host: the account is too large for the moonlet it runs. Updating moonlet on the central host fixes it",
+    );
   });
 
   it("says nothing while it syncs, or from a daemon from before it said so", () => {

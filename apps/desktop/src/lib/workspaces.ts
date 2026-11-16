@@ -176,10 +176,12 @@ export function clockLines(info: AccountInfo | undefined): string[] {
 /** What this Mac's sidebar says while its account does not sync with its
  * central host (X68), from its daemon's `account.get`: `too_large` once
  * what the central host would send does not fit one message, as from a
- * central host whose moonlet sends its log in one message only. `central`
- * is the central host's name as this Mac shows it. */
-export function notSyncingLine(info: AccountInfo | undefined, central: string): string | null {
+ * central host whose moonlet sends its log in one message only. The
+ * central host goes by the name the account gives it, else `label`, the
+ * one this Mac shows for it. */
+export function notSyncingLine(info: AccountInfo | undefined, label: string | null): string | null {
   if (info?.not_syncing !== "too_large") return null;
+  const central = info.central ?? label ?? "the central host";
   return `Account changes are not syncing with ${central}: the account is too large for the moonlet it runs. Updating moonlet on ${central} fixes it`;
 }
 
