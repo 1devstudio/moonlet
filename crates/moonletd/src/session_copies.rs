@@ -570,6 +570,14 @@ struct Data {
     looked_back: bool,
 }
 
+/// Who asked for a round: the background loop, which gives way to a
+/// sleep's sends (X73), or a caller that waits for every session's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Round {
+    Background,
+    Asked,
+}
+
 /// A sleep sending what it must first (X73), for as long as it lives:
 /// rounds stop at their next session meanwhile.
 struct Hurry<'a>(&'a std::sync::atomic::AtomicUsize);
@@ -686,9 +694,9 @@ impl SessionCopies {
         })
     }
 
-    /// Sends what is new of every session now, as before a hand-over sent
-    /// again at a wake (X73): its files, chats, transcripts and
-    /// checkpoints. Gives the sessions of which some could not be sent.
+    /// Sends what is new of every session now, as before a session is
+    /// handed over (X73): its files, chats, transcripts and checkpoints.
+    /// Gives the sessions of which some could not be sent.
     pub async fn send_now(&self) -> std::collections::HashSet<String> {
         self.round().await
     }
@@ -709,7 +717,7 @@ impl SessionCopies {
         let me = self.clone();
         tokio::spawn(async move {
             loop {
-                me.round().await;
+                me.round_but(&std::collections::HashSet::new(), Round::Background).await;
                 // A round that sent something goes again soon: what it sent
                 // can let the central host take what it could not before,
                 // such as a transcript once its copy is made.
@@ -1118,17 +1126,17 @@ impl SessionCopies {
     /// or branch changed since the central host last took them is sent.
     /// Gives the sessions of which some part could not be sent.
     async fn round(&self) -> std::collections::HashSet<String> {
-        self.round_but(&std::collections::HashSet::new(), false).await
+        self.round_but(&std::collections::HashSet::new(), Round::Asked).await
     }
 
-    /// [`Self::round`] over every live session but `except`. A round that
-    /// is not a sleep's own stops at its next session while a sleep sends
-    /// what it must first (X73); the sessions it did not reach count as not
+    /// [`Self::round`] over every live session but `except`. The
+    /// background round stops at its next session while a sleep sends what
+    /// it must first (X73); the sessions it did not reach count as not
     /// sent.
     async fn round_but(
         &self,
         except: &std::collections::HashSet<String>,
-        sleeping: bool,
+        kind: Round,
     ) -> std::collections::HashSet<String> {
         let mut failed = std::collections::HashSet::new();
         if !self.may_send() {
@@ -1142,7 +1150,7 @@ impl SessionCopies {
         };
         let mut live = live.into_iter().filter(|s| !except.contains(&s.id));
         while let Some(s) = live.next() {
-            if !sleeping && self.hurry.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            if kind == Round::Background && self.hurry.load(std::sync::atomic::Ordering::SeqCst) > 0 {
                 failed.insert(s.id);
                 failed.extend(live.map(|s| s.id));
                 break;
@@ -1173,7 +1181,11 @@ impl SessionCopies {
 
     /// The lock that keeps one send of session `id` at a time.
     fn session_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.sending.lock().unwrap().entry(id.to_string()).or_default().clone()
+        let mut sending = self.sending.lock().unwrap();
+        // Only those in use stay: a session's lock is made again when next
+        // needed.
+        sending.retain(|_, lock| Arc::strong_count(lock) > 1);
+        sending.entry(id.to_string()).or_default().clone()
     }
 
     /// Sends what is new of session `s`: its chats and transcripts, its
@@ -1218,7 +1230,8 @@ impl SessionCopies {
     /// so the central host never continues a session from a copy short of
     /// its last changes. The other sessions are sent after that, as far as
     /// the time left allows; a round under way stops at its next session
-    /// meanwhile. Gives the sessions of `first` not handed over.
+    /// meanwhile. Gives the sessions of `first` whose last changes were
+    /// not all sent.
     pub async fn send_for_sleep<F, Fut>(self: &Arc<Self>, first: &[String], mut hand_over: F) -> std::collections::HashSet<String>
     where
         F: FnMut(Vec<String>) -> Fut,
@@ -1266,7 +1279,7 @@ impl SessionCopies {
             }
         }
         let except: std::collections::HashSet<String> = first.iter().cloned().collect();
-        self.round_but(&except, true).await;
+        self.round_but(&except, Round::Asked).await;
         unsent
     }
 
