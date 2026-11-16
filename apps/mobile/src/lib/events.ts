@@ -70,6 +70,9 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
     case EV.projectsChanged:
     case EV.workspacesChanged:
     case EV.sectionsChanged:
+    // A member's link to the central host dropped or came back (X73): the
+    // sessions it owns say whether it is reachable, and since when.
+    case EV.workersChanged:
       return "reload";
     default:
       return [];
