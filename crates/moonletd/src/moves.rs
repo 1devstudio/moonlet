@@ -3,7 +3,9 @@
 //! the ownership number it had as it was handed over. Written down before
 //! the hand-over is sent, and cleared once the central host answers it, so
 //! a hand-over cut off by the end of the sleep's hold, or by the daemon
-//! stopping, is sent again at the next wake or start.
+//! stopping, is sent again at the next wake or start. One whose agents went
+//! on here with no answer is withdrawn: never sent again, but looked at
+//! once the central host is heard from, in case it took it all the same.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,6 +15,8 @@ use std::sync::Mutex;
 struct Data {
     #[serde(default)]
     sessions: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    withdrawn: BTreeMap<String, u64>,
 }
 
 pub struct Moves {
@@ -41,21 +45,48 @@ impl Moves {
         self.data.lock().unwrap().sessions.clone()
     }
 
+    /// The hand-overs withdrawn with no answer, each with its ownership
+    /// number as it was handed over.
+    pub fn withdrawn(&self) -> BTreeMap<String, u64> {
+        self.data.lock().unwrap().withdrawn.clone()
+    }
+
     /// Notes `sessions` as handed over, before the hand-over is sent.
     pub fn add(&self, sessions: &[(String, u64)]) {
         let mut data = self.data.lock().unwrap();
-        data.sessions.extend(sessions.iter().cloned());
+        for (id, epoch) in sessions {
+            data.withdrawn.remove(id);
+            data.sessions.insert(id.clone(), *epoch);
+        }
         self.save(&data);
     }
 
-    /// Forgets the hand-over of `sessions`: answered, or dropped.
+    /// Withdraws the hand-over of `sessions`, not answered: their agents go
+    /// on here. It is never sent again.
+    pub fn withdraw<'a>(&self, sessions: impl IntoIterator<Item = &'a str>) {
+        let mut data = self.data.lock().unwrap();
+        let mut changed = false;
+        for id in sessions {
+            if let Some(epoch) = data.sessions.remove(id) {
+                data.withdrawn.insert(id.to_string(), epoch);
+                changed = true;
+            }
+        }
+        if changed {
+            self.save(&data);
+        }
+    }
+
+    /// Forgets the hand-over of `sessions`, withdrawn or not: answered, or
+    /// settled.
     pub fn remove<'a>(&self, sessions: impl IntoIterator<Item = &'a str>) {
         let mut data = self.data.lock().unwrap();
-        let before = data.sessions.len();
+        let before = data.sessions.len() + data.withdrawn.len();
         for id in sessions {
             data.sessions.remove(id);
+            data.withdrawn.remove(id);
         }
-        if data.sessions.len() != before {
+        if data.sessions.len() + data.withdrawn.len() != before {
             self.save(&data);
         }
     }
@@ -109,11 +140,22 @@ mod tests {
             Moves::open(home.path()).pending(),
             BTreeMap::from([("big-refactor".to_string(), 1)])
         );
+        // Its agents went on here with no answer: never sent again, but
+        // still looked at.
+        again.withdraw(["big-refactor"]);
+        let after = Moves::open(home.path());
+        assert!(after.pending().is_empty());
+        assert_eq!(
+            after.withdrawn(),
+            BTreeMap::from([("big-refactor".to_string(), 1)])
+        );
         let text = std::fs::read_to_string(home.path().join("moves.json")).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&text).unwrap(),
-            serde_json::json!({ "sessions": { "big-refactor": 1 } })
+            serde_json::json!({ "sessions": {}, "withdrawn": { "big-refactor": 1 } })
         );
+        after.remove(["big-refactor"]);
+        assert!(Moves::open(home.path()).withdrawn().is_empty());
     }
 
     #[test]
@@ -134,7 +176,6 @@ mod tests {
             BTreeMap::from([("fix-cart".to_string(), 2)])
         );
         moves.add(&[("docs".into(), 1)]);
-        assert!(!home.path().join("moves.json.tmp").exists());
         assert_eq!(
             Moves::open(home.path()).pending(),
             BTreeMap::from([("docs".to_string(), 1), ("fix-cart".to_string(), 2)])

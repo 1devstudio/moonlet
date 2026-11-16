@@ -3469,6 +3469,37 @@ async fn a_hand_over_still_unsent_when_the_mac_wakes_without_the_central_host_is
     assert!(own.iter().any(|s| s["id"] == made["id"]), "no longer the MacBook's own");
 }
 
+#[tokio::test]
+async fn a_hand_over_whose_turn_a_restart_cut_off_stays_on_the_mac() {
+    let origin = Origin::new();
+    let (mini, mut book, network) = pair_with_agents_through_a_network_holding(&origin, Some("3000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = busy_session(&mini, &book, &project).await;
+    network.cut(true);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+
+    // The daemon stops with the hand-over unsent, cutting the turn off, and
+    // starts again with the network back: nothing waits in the session now.
+    for (pid, _) in agent_processes(&book) {
+        let _ = std::process::Command::new("kill").args(["-9", &pid]).status();
+    }
+    book.restart().await;
+    network.cut_back();
+    within(Duration::from_secs(30), "the MacBook linked again", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().all(|s| s["id"] != made["id"]), "handed over though idle here");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "no longer the MacBook's own");
+}
+
 // --- Move to…, pins and Take over anyway (X73) ---------------------------
 
 #[allow(dead_code)]

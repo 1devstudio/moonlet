@@ -114,22 +114,34 @@ pub struct Settled {
     pub dropped: Vec<String>,
 }
 
-/// Sorts `pending`, each session with the ownership number it was handed
-/// over at, by what `known` says of each now (X73).
+/// Sorts `pending` and `withdrawn`, each session with the ownership number
+/// it was handed over at, by what `known` says of each now (X73). A
+/// withdrawn one, whose agents went on here with no answer, is never sent
+/// again: taken, it comes back; else it is dropped.
 pub fn settle<'a>(
     pending: &std::collections::BTreeMap<String, u64>,
+    withdrawn: &std::collections::BTreeMap<String, u64>,
     known: impl Fn(&str) -> Option<Known<'a>>,
     me: &str,
 ) -> Settled {
     let mut out = Settled::default();
-    for (id, &at) in pending {
+    let all = pending.iter().map(|(id, at)| (id, *at, false)).chain(withdrawn.iter().map(|(id, at)| (id, *at, true)));
+    for (id, at, withdrawn) in all {
         match known(id) {
             Some(k) if !k.archived && k.owner.is_some_and(|o| o != me) => out.taken.push((id.clone(), at)),
-            Some(k) if !k.archived && !k.pinned && k.owner == Some(me) && k.epoch == at => out.again.push((id.clone(), at)),
+            Some(k) if !withdrawn && !k.archived && !k.pinned && k.owner == Some(me) && k.epoch == at => out.again.push((id.clone(), at)),
             _ => out.dropped.push(id.clone()),
         }
     }
     out
+}
+
+/// Whether a session whose chats are in `states` still waits on something
+/// after the daemon started again (X73): an ask open or a message queued.
+/// A turn or subagent running then is one started since, the user at work
+/// here.
+pub fn still_waits(states: &[moonlet_proto::types::ChatState]) -> bool {
+    states.iter().any(|st| st.status != "working" && (!st.pending.is_empty() || !st.queued.is_empty()))
 }
 
 /// One session a member hands the central host (X73), as the central host
@@ -402,13 +414,49 @@ mod tests {
             }
         };
         assert_eq!(
-            settle(&pending, known, "macbook"),
+            settle(&pending, &Default::default(), known, "macbook"),
             Settled {
                 taken: vec![("big-refactor".into(), 1), ("elsewhere".into(), 4)],
                 again: vec![("fix-cart".into(), 3)],
                 dropped: vec!["archived".into(), "docs".into(), "gone".into(), "pinned".into()],
             }
         );
+        // Withdrawn, its agents gone on here with no answer: never sent
+        // again, but one studio-mini took all the same comes back.
+        let withdrawn = pending.clone();
+        assert_eq!(
+            settle(&Default::default(), &withdrawn, known, "macbook"),
+            Settled {
+                taken: vec![("big-refactor".into(), 1), ("elsewhere".into(), 4)],
+                again: vec![],
+                dropped: vec!["archived".into(), "docs".into(), "fix-cart".into(), "gone".into(), "pinned".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn after_a_restart_a_session_is_handed_over_again_only_while_an_ask_or_a_message_still_waits() {
+        let state = |v: serde_json::Value| -> moonlet_proto::types::ChatState { serde_json::from_value(v).unwrap() };
+        let cut_off = state(serde_json::json!({ "status": "idle" }));
+        let asking = state(serde_json::json!({
+            "status": "blocked",
+            "pending": [{ "id": "a1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }]
+        }));
+        let queued = state(serde_json::json!({ "status": "idle", "queued": [{ "id": "q1", "text": "and the tests" }] }));
+        let working = state(serde_json::json!({ "status": "working" }));
+        let working_with_queue = state(serde_json::json!({ "status": "working", "queued": [{ "id": "q1", "text": "and the tests" }] }));
+        let cases: [(&[moonlet_proto::types::ChatState], bool); 6] = [
+            (&[], false),
+            (std::slice::from_ref(&cut_off), false),
+            (std::slice::from_ref(&asking), true),
+            (std::slice::from_ref(&queued), true),
+            // Started since the restart: the user is at work here.
+            (std::slice::from_ref(&working), false),
+            (std::slice::from_ref(&working_with_queue), false),
+        ];
+        for (states, waits) in cases {
+            assert_eq!(still_waits(states), waits, "{states:?}");
+        }
     }
 
     #[test]
