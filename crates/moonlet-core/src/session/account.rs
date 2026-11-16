@@ -130,8 +130,10 @@ impl Account {
         let file = if changes.is_empty() {
             None
         } else {
+            // Flushed, but for its folder: [`Self::commit`] moves it into
+            // place and flushes the folder then.
             let staged = self.path.with_extension("json.staged");
-            write_private(&staged, &log)?;
+            write_log(&staged, &log, false)?;
             Some(staged)
         };
         Ok(Staged { log, changes, file })
@@ -142,7 +144,7 @@ impl Account {
     /// in memory, so the next save writes it.
     pub(super) fn commit(&mut self, staged: Staged) -> Vec<Change> {
         if let Some(file) = &staged.file
-            && let Err(e) = std::fs::rename(file, &self.path)
+            && let Err(e) = std::fs::rename(file, &self.path).and_then(|()| crate::paths::sync_dir(&self.path))
         {
             tracing::warn!("cannot save the account's changes: {e}");
         }
@@ -164,23 +166,27 @@ impl Staged {
     }
 }
 
-/// Writes `log` to `path` through a temporary file, readable only by the
-/// user, as it names the user's projects and the machines they work on.
+/// Writes `log` to `path` whole or not at all ([`crate::paths::write_whole`]),
+/// readable only by the user, as it names the user's projects and the
+/// machines they work on. A power cut while it is written must never leave
+/// a log that cannot be read: one made again knows no other member's
+/// sessions.
 fn write_private(path: &Path, log: &Log) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    write_log(path, log, true)
+}
+
+/// [`write_private`], flushing the folder only when `whole`.
+fn write_log(path: &Path, log: &Log, whole: bool) -> Result<()> {
     if let Some(dir) = path.parent() {
         crate::paths::ensure_private_dir(dir)?;
     }
     let tmp = path.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    f.write_all(&serde_json::to_vec(&log.to_file())?)?;
-    std::fs::rename(&tmp, path)?;
+    let bytes = serde_json::to_vec(&log.to_file())?;
+    if whole {
+        crate::paths::write_whole(path, &tmp, &bytes, 0o600)?;
+    } else {
+        crate::paths::write_flushed(path, &tmp, &bytes, 0o600)?;
+    }
     Ok(())
 }
 
@@ -198,23 +204,12 @@ impl SessionManager {
                 Ok(f) => Some(f),
                 Err(e) => {
                     // Never over an earlier one, even from the same millisecond.
-                    let ms = now_ms();
-                    let bad = (1..)
-                        .map(|n| {
-                            path.with_extension(if n == 1 {
-                                format!("json.{ms}.bad")
-                            } else {
-                                format!("json.{ms}-{n}.bad")
-                            })
-                        })
-                        .find(|p| !p.exists())
-                        .unwrap();
+                    let bad = crate::paths::keep_aside(&path)?;
                     tracing::warn!(
                         "cannot read {} ({e}); kept it as {}",
                         path.display(),
                         bad.display()
                     );
-                    std::fs::rename(&path, &bad)?;
                     lost = true;
                     None
                 }
@@ -636,6 +631,23 @@ impl SessionManager {
         self.with_log(sessions_in)
     }
 
+    /// The sessions the account says have ended: those whose record, as
+    /// [`Self::session_records`] counts it, is archived, and those deleted
+    /// by a member whose delete counts. A session the log has no record of
+    /// is not among them: the log may be one made again, or not have heard
+    /// from the session's member yet (X72).
+    pub fn ended_sessions(&self) -> BTreeSet<String> {
+        self.with_log(|log| {
+            let (records, deleted) = session_view(log);
+            records
+                .into_iter()
+                .filter(|(_, r)| r.get("archived").and_then(Value::as_bool).unwrap_or(false))
+                .map(|(id, _)| id)
+                .chain(deleted)
+                .collect()
+        })
+    }
+
     /// Makes `owner` the owner of session `id` with ownership number
     /// `epoch`, as this member's changes: the central host, the referee
     /// (X73). False without an account.
@@ -804,6 +816,69 @@ impl SessionManager {
         self.with_log(|log| log.missing_for(version))
     }
 
+    /// This member's log: its name, and how many of its own changes it
+    /// holds counted from the first. None without an account.
+    pub fn own_log(&self) -> Option<(String, u64)> {
+        let account = self.account.lock().unwrap();
+        let log = &account.as_ref()?.log;
+        let count = log.version().get(log.member()).copied().unwrap_or(0);
+        Some((log.member().to_string(), count))
+    }
+
+    /// Whether any of this member's own changes in `theirs`, what another
+    /// member holds of them, differs from the one this member holds under
+    /// that number: its log went back in time ([`Self::take_back_own`]).
+    pub fn own_log_differs(&self, theirs: &[Change]) -> bool {
+        self.with_log(|log| log.differs_from(theirs))
+    }
+
+    /// After this member's log went back in time (restored from a backup,
+    /// or a write lost), takes back from `theirs`, what its central host
+    /// holds of this log, the changes it lost, and sends again under new
+    /// numbers the changes it made since under their numbers, which no
+    /// other member took ([`crate::account::Log::take_back`]). Gives how
+    /// many it sent again; an error when the log or the state could not be
+    /// saved, leaving both as they were.
+    pub fn take_back_own(&self, theirs: Vec<Change>) -> Result<usize> {
+        let (taken, again) = {
+            let mut st = self.state.lock().unwrap();
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return Ok(0) };
+            let mut log = a.log.clone();
+            let me = log.member().to_string();
+            let taken: Vec<Change> = theirs
+                .iter()
+                .filter(|c| c.stamp.member == me && a.log.get(&me, c.seq) != Some(*c))
+                .cloned()
+                .collect();
+            if taken.is_empty() {
+                return Ok(0);
+            }
+            let again = log.take_back(theirs);
+            let mut next = st.clone();
+            lay_onto(&mut next, &log);
+            write_private(&a.path, &log).and_then(|()| self.save(&next))?;
+            a.log = log;
+            *st = next;
+            (taken, again)
+        };
+        tracing::warn!(
+            "this member's account log went back in time (restored from a backup, or a write lost): took back {} of its changes from the central host, and sends {} made since again under new numbers",
+            taken.len(),
+            again.len()
+        );
+        let sent = again.len();
+        if !again.is_empty() {
+            self.account_changed(again);
+        }
+        self.emit_all();
+        let applied = self.account.lock().unwrap().as_ref().map(|a| a.applied.clone()).unwrap_or_default();
+        for f in applied {
+            f(&taken);
+        }
+        Ok(sent)
+    }
+
     /// Takes in changes from other members, and shows what they change.
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
@@ -820,6 +895,22 @@ impl SessionManager {
                 return Vec::new();
             };
             let mut log = a.log.clone();
+            // A change under a number already held with other content: its
+            // member's log went back in time and numbers new changes as it
+            // did lost ones. Only the first counts, so this one is dropped;
+            // that member takes its lost changes back and sends this one
+            // again under a new number once it links.
+            let reused: Vec<&Change> = changes
+                .iter()
+                .filter(|c| log.get(&c.stamp.member, c.seq).is_some_and(|held| held != *c))
+                .collect();
+            if let Some(c) = reused.first() {
+                tracing::warn!(
+                    member = %c.stamp.member,
+                    "dropped {} account changes under numbers already used for others: that member's log went back in time",
+                    reused.len()
+                );
+            }
             // Only the first of two changes under one number counts, as in
             // the log, so the others are never handed the second.
             let mut seen = std::collections::HashSet::new();
@@ -3178,6 +3269,38 @@ mod tests {
 
     fn set_op(field: &str, value: serde_json::Value) -> moonlet_proto::types::ChangeOp {
         moonlet_proto::types::ChangeOp::Set { field: field.into(), value }
+    }
+
+    #[tokio::test]
+    async fn only_an_archived_or_deleted_session_has_ended() {
+        let (_h, mini) = member("mini").await;
+        let book = "book.k3x9q2";
+        let owner = || set_op("owner", serde_json::json!("book"));
+        let archived = |yes: bool| set_op("archived", serde_json::json!(yes));
+        mini.apply_account(vec![
+            session_change(book, 1, 0, "fix-cart", owner()),
+            session_change(book, 2, 1, "fix-cart", archived(false)),
+            session_change(book, 3, 2, "old-menu", owner()),
+            session_change(book, 4, 3, "old-menu", archived(true)),
+            session_change(book, 5, 4, "spike", owner()),
+            session_change(book, 6, 5, "spike", moonlet_proto::types::ChangeOp::Delete),
+            // studio-air's delete of the MacBook's session does not count.
+            session_change(book, 7, 6, "checkout", owner()),
+            session_change("air.p7d2m4", 1, 7, "checkout", moonlet_proto::types::ChangeOp::Delete),
+        ]);
+        assert_eq!(
+            mini.ended_sessions(),
+            std::collections::BTreeSet::from(["old-menu".to_string(), "spike".to_string()])
+        );
+        // A member without an account knows of no session, ended or not.
+        let home = tempfile::tempdir().unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let alone = SessionManager::load(
+            home.path().join("state.json"),
+            home.path().join("worktrees"),
+            TerminalManager::new(home.path().join("s.sock"), env),
+        );
+        assert!(alone.ended_sessions().is_empty());
     }
 
     #[tokio::test]

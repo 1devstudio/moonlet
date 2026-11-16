@@ -101,22 +101,10 @@ impl Moves {
     }
 }
 
-/// Writes `bytes` to `path` whole or not at all: into a file beside it,
-/// flushed to the disk, then renamed over it. A crash leaves the old file
-/// or the new one, never half of one.
+/// Writes `bytes` to `path` whole or not at all, through `<path>.json.tmp`
+/// ([`moonlet_core::paths::write_whole`]).
 pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = path.with_extension("json.tmp");
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, path)?;
-    // The rename itself reaches the disk with its folder.
-    if let Some(dir) = path.parent() {
-        std::fs::File::open(dir)?.sync_all()?;
-    }
-    Ok(())
+    moonlet_core::paths::write_whole(path, &path.with_extension("json.tmp"), bytes, 0o666)
 }
 
 #[cfg(test)]

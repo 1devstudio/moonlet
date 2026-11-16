@@ -164,6 +164,59 @@ pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Writes `bytes` to `path` whole or not at all: into `tmp` (created at
+/// `mode`, less the umask), flushed to the disk, renamed over `path`, and
+/// the folder flushed too, so the rename itself is on the disk. A crash or
+/// a power cut leaves the old file or the new one, never half of one.
+pub fn write_whole(path: &Path, tmp: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    write_flushed(path, tmp, bytes, mode)?;
+    sync_dir(path)
+}
+
+/// [`write_whole`] but for the folder: for a file that is moved again
+/// before anything relies on it, whose last move flushes the folder.
+pub fn write_flushed(path: &Path, tmp: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(tmp, path)
+}
+
+/// Flushes the folder `path` is in, so a rename into it is on the disk.
+pub fn sync_dir(path: &Path) -> std::io::Result<()> {
+    match path.parent() {
+        Some(dir) => std::fs::File::open(dir)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
+/// Moves `path`, a file that cannot be read, aside to
+/// `<path>.<ms>.bad`, never over an earlier one, and gives where it went.
+pub fn keep_aside(path: &Path) -> std::io::Result<PathBuf> {
+    let ms = now_ms();
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let bad = (1..)
+        .map(|n| {
+            path.with_file_name(if n == 1 {
+                format!("{name}.{ms}.bad")
+            } else {
+                format!("{name}.{ms}-{n}.bad")
+            })
+        })
+        .find(|p| !p.exists())
+        .unwrap();
+    std::fs::rename(path, &bad)?;
+    Ok(bad)
+}
+
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -193,6 +246,39 @@ pub fn find_program(program: &str, env: &BTreeMap<String, String>) -> Option<Pat
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_written_whole_replaces_the_old_one_and_one_that_cannot_be_written_leaves_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let file = t.path().join("account.json");
+        let tmp = t.path().join("account.tmp");
+        std::fs::write(&file, "old").unwrap();
+        super::write_whole(&file, &tmp, b"{\"member\":\"book.k3x9q2\"}", 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"member\":\"book.k3x9q2\"}");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!tmp.exists());
+        // A folder in the way of the temporary file: the old file stays whole.
+        std::fs::create_dir(&tmp).unwrap();
+        assert!(super::write_whole(&file, &tmp, b"new", 0o600).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"member\":\"book.k3x9q2\"}");
+    }
+
+    #[test]
+    fn an_unreadable_file_is_kept_aside_never_over_an_earlier_one() {
+        let t = tempfile::tempdir().unwrap();
+        let file = t.path().join("session-copies.json");
+        std::fs::write(&file, "{\"held\": tru").unwrap();
+        let first = super::keep_aside(&file).unwrap();
+        std::fs::write(&file, "{").unwrap();
+        let second = super::keep_aside(&file).unwrap();
+        assert_ne!(first, second);
+        assert!(!file.exists());
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "{\"held\": tru");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "{");
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("session-copies.json.") && name.ends_with(".bad"), "{name}");
+    }
+
     #[test]
     fn private_dirs_refuse_symlinks_and_tighten_modes() {
         use std::os::unix::fs::PermissionsExt;

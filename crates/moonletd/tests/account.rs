@@ -293,6 +293,55 @@ async fn a_member_that_missed_a_change_has_it_at_its_next_exchange() {
     .await;
 }
 
+/// The MacBook renames its workspace "Home", is backed up, renames it to
+/// each of `lost` (which studio-mini takes), comes back from the backup
+/// while studio-mini is away, and renames it "Studio": under the number
+/// its first lost change had. Both end with "Studio".
+async fn a_log_that_went_back_after(lost: &[&str]) {
+    let (mut mini, addr) = central().await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].clone();
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    rename(&book, &books.id, "Home").await;
+    within(Duration::from_secs(10), "Home on studio-mini", || async {
+        mini.names().await == ["Home", "Personal"]
+    })
+    .await;
+    let log = book.home.path().join("account.json");
+    let backup = std::fs::read(&log).unwrap();
+    for name in lost {
+        rename(&book, &books.id, name).await;
+        within(Duration::from_secs(10), "the rename on studio-mini", || async {
+            mini.names().await.contains(&name.to_string())
+        })
+        .await;
+    }
+
+    mini.stop();
+    book.stop();
+    std::fs::write(&log, &backup).unwrap();
+    book.restart().await;
+    rename(&book, &books.id, "Studio").await;
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(20), "Studio on both", || async {
+            d.names().await == ["Personal", "Studio"]
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn a_change_made_after_a_members_log_went_back_reaches_the_central_host() {
+    a_log_that_went_back_after(&["Work"]).await;
+}
+
+#[tokio::test]
+async fn a_change_made_after_a_member_lost_more_changes_than_it_made_since_reaches_the_central_host() {
+    a_log_that_went_back_after(&["Work", "Office"]).await;
+}
+
 #[tokio::test]
 async fn a_phone_never_hears_the_accounts_changes() {
     use moonlet_proto::read_frame;

@@ -570,6 +570,80 @@ struct Data {
     looked_back: bool,
 }
 
+/// `session-copies.json`'s saves on their way to the disk. A save flushes
+/// the file and its folder (about 10 ms on a Mac), and the central host
+/// saves at every offer, transcript and checkpoint of every session it
+/// holds: the saves made while one is written go to the disk as one.
+#[derive(Default)]
+struct Saves {
+    /// The number of the latest save.
+    next: std::sync::atomic::AtomicU64,
+    /// The latest save not written yet, by number.
+    pending: Mutex<Option<(u64, Vec<u8>)>>,
+    /// Held while writing: the number of the latest save on the disk.
+    written: Mutex<u64>,
+}
+
+impl Saves {
+    /// Queues `bytes` as the latest save, while the data it comes from is
+    /// held, and gives its number.
+    fn queue(&self, bytes: Vec<u8>) -> u64 {
+        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        *self.pending.lock().unwrap() = Some((n, bytes));
+        n
+    }
+
+    /// Writes to `file` the latest save queued, unless save `n` or a later
+    /// one is on the disk already. A write that fails is said in the log
+    /// and left for the next save to try again, unless a later one is
+    /// already queued.
+    fn flush(&self, n: u64, file: &Path) {
+        let mut written = self.written.lock().unwrap();
+        if *written >= n {
+            return;
+        }
+        let Some((latest, bytes)) = self.pending.lock().unwrap().take() else {
+            return;
+        };
+        let tmp = file.with_extension("tmp");
+        match moonlet_core::paths::write_whole(file, &tmp, &bytes, 0o666) {
+            Ok(()) => *written = latest,
+            Err(e) => {
+                tracing::warn!("cannot save {}: {e}", file.display());
+                self.pending.lock().unwrap().get_or_insert((latest, bytes));
+            }
+        }
+    }
+}
+
+/// What `file` holds. One that cannot be read is moved aside, never
+/// written over, and said in the log: it names the copies this host holds,
+/// takeovers not answered yet and sessions to bring back (X73).
+fn load(file: &Path) -> Data {
+    let read = match std::fs::read(file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Data::default(),
+        Err(e) => Err(e.to_string()),
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| e.to_string()),
+    };
+    match read {
+        Ok(d) => d,
+        Err(e) => {
+            match moonlet_core::paths::keep_aside(file) {
+                Ok(bad) => tracing::warn!(
+                    "cannot read {} ({e}); kept it as {}",
+                    file.display(),
+                    bad.display()
+                ),
+                Err(moved) => tracing::warn!(
+                    "cannot read {} ({e}), nor move it aside: {moved}",
+                    file.display()
+                ),
+            }
+            Data::default()
+        }
+    }
+}
+
 /// Who asked for a round: the background loop, which gives way to a
 /// sleep's sends (X73), or a caller that waits for every session's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -603,6 +677,8 @@ pub struct SessionCopies {
     watchers: Arc<Watchers>,
     watched: Mutex<Vec<PathBuf>>,
     data: Mutex<Data>,
+    /// The saves of `data` on their way to the disk.
+    saves: Saves,
     chats: Arc<ChatManager>,
     terminals: Arc<moonlet_core::terminal::TerminalManager>,
     /// On the central host: the terminals it relays to its clients, by
@@ -649,10 +725,7 @@ impl SessionCopies {
         terminals: Arc<moonlet_core::terminal::TerminalManager>,
     ) -> Arc<SessionCopies> {
         let file = home.join("session-copies.json");
-        let data: Data = std::fs::read(&file)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let data = load(&file);
         // Takeovers the central host has not answered yet: still this Mac's.
         for session in data.forced.keys() {
             sessions.keep_listed(session, true);
@@ -681,6 +754,7 @@ impl SessionCopies {
                 watchers,
                 watched: Mutex::new(Vec::new()),
                 data: Mutex::new(data),
+                saves: Saves::default(),
                 kick: Notify::new(),
                 sent_any: std::sync::atomic::AtomicBool::new(false),
                 stale: Mutex::new(std::collections::HashSet::new()),
@@ -1097,16 +1171,21 @@ impl SessionCopies {
         serde_json::from_slice(&std::fs::read(file).ok()?).ok()
     }
 
-    fn save(&self, data: &Data) {
-        let write = || -> Result<()> {
-            let tmp = self.file.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
-            std::fs::rename(&tmp, &self.file)?;
-            Ok(())
+    /// Saves `data`, whole or not at all, and lets go of it before the
+    /// disk is flushed. Saves made meanwhile go to the disk as one: each
+    /// returns once its own, or a later one, is there.
+    fn save(&self, data: std::sync::MutexGuard<'_, Data>) {
+        let bytes = match serde_json::to_vec_pretty(&*data) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("cannot save {}: {e}", self.file.display());
+                return;
+            }
         };
-        if let Err(e) = write() {
-            tracing::warn!("cannot save {}: {e:#}", self.file.display());
-        }
+        // Numbered while `data` is held, so a later number is later data.
+        let n = self.saves.queue(bytes);
+        drop(data);
+        self.saves.flush(n, &self.file);
     }
 
     /// Where the central host keeps its copy of `session`, once made.
@@ -1337,7 +1416,7 @@ impl SessionCopies {
                 // opens the copy again and sends what it says it lacks.
                 let mut data = self.data.lock().unwrap();
                 data.sent.remove(&s.id);
-                self.save(&data);
+                self.save(data);
                 anyhow::bail!("{}: {}", e.code, e.message)
             }
         }
@@ -1353,7 +1432,7 @@ impl SessionCopies {
         data.sent.insert(s.id.clone(), now);
         self.sent_any
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.save(&data);
+        self.save(data);
         Ok(())
     }
 
@@ -1399,7 +1478,7 @@ impl SessionCopies {
         }
         let mut data = self.data.lock().unwrap();
         data.files.insert(s.id.clone(), agreed);
-        self.save(&data);
+        self.save(data);
         Ok(())
     }
 
@@ -1413,7 +1492,7 @@ impl SessionCopies {
         {
             let mut data = self.data.lock().unwrap();
             if data.files.remove(&s.id).is_some() {
-                self.save(&data);
+                self.save(data);
             }
         }
         let project = self
@@ -1837,7 +1916,7 @@ impl SessionCopies {
             h.project = r.project;
             // The owner took it in: there is nothing to hand back.
             h.given = None;
-            self.save(&data);
+            self.save(data);
         }
         Ok(m::SessionOpened {
             have: git_sync::have(&repo).await,
@@ -1965,7 +2044,7 @@ impl SessionCopies {
         held.branch = r.branch.clone();
         let mut data = self.data.lock().unwrap();
         data.held.insert(r.session.clone(), held);
-        self.save(&data);
+        self.save(data);
         Ok(m::SessionOffered {
             tree: r.tree,
             head: r.head,
@@ -2248,7 +2327,7 @@ impl SessionCopies {
                 !(format!("{}.jsonl", c.agent_session) == r.file && c.len > written)
             });
         }
-        self.save(&data);
+        self.save(data);
         Ok(m::SessionTranscribed { len: written })
     }
 
@@ -2281,7 +2360,7 @@ impl SessionCopies {
         if let Some(h) = data.held.get_mut(&r.session) {
             h.checkpoints.insert(r.terminal, r);
         }
-        self.save(&data);
+        self.save(data);
         Ok(true)
     }
 
@@ -2453,8 +2532,7 @@ impl SessionCopies {
                 data.forced.remove(session);
             }
         }
-        self.save(&data);
-        drop(data);
+        self.save(data);
         // This Mac runs it before the account says so: listed as its own.
         self.sessions.keep_listed(session, base.is_some());
     }
@@ -2477,14 +2555,14 @@ impl SessionCopies {
     pub fn add_returning(&self, sessions: &[(String, u64)]) {
         let mut data = self.data.lock().unwrap();
         data.returning.extend(sessions.iter().cloned());
-        self.save(&data);
+        self.save(data);
     }
 
     /// Stops trying to bring session `id` back (X73).
     pub fn drop_returning(&self, id: &str) {
         let mut data = self.data.lock().unwrap();
         if data.returning.remove(id).is_some() {
-            self.save(&data);
+            self.save(data);
         }
     }
 
@@ -2493,7 +2571,7 @@ impl SessionCopies {
         let mut data = self.data.lock().unwrap();
         if !data.looked_back {
             data.looked_back = true;
-            self.save(&data);
+            self.save(data);
         }
     }
 
@@ -2502,8 +2580,7 @@ impl SessionCopies {
         let mut data = self.data.lock().unwrap();
         data.sent.remove(id);
         data.files.remove(id);
-        self.save(&data);
-        drop(data);
+        self.save(data);
         self.talk.lock().unwrap().remove(id);
     }
 
@@ -2553,7 +2630,7 @@ impl SessionCopies {
                 ..Default::default()
             },
         );
-        self.save(&data);
+        self.save(data);
     }
 
     /// Stops keeping `session`'s worktree as `owner`'s copy, kept by a give
@@ -2563,7 +2640,7 @@ impl SessionCopies {
         let mut data = self.data.lock().unwrap();
         if data.held.get(session).is_some_and(|h| h.owner == owner && h.given.is_some()) {
             data.held.remove(session);
-            self.save(&data);
+            self.save(data);
         }
     }
 
@@ -2729,7 +2806,7 @@ impl SessionCopies {
         }
         let mut data = self.data.lock().unwrap();
         data.held.remove(session);
-        self.save(&data);
+        self.save(data);
         Ok(TakenCopy {
             path: PathBuf::from(&held.path),
             repo: PathBuf::from(&held.repo),
@@ -2752,7 +2829,7 @@ impl SessionCopies {
         }
         let mut data = self.data.lock().unwrap();
         data.held.insert(session.to_string(), taken.held);
-        self.save(&data);
+        self.save(data);
     }
 
     /// Forgets what this host kept of `session`'s copy beside its worktree,
@@ -2764,21 +2841,21 @@ impl SessionCopies {
         let _ = std::fs::remove_dir_all(self.talk_dir(session));
     }
 
-    /// Removes the copies of sessions that are archived or gone from the
-    /// account.
+    /// Removes the copies of sessions the account says have ended: archived
+    /// or deleted ([`SessionManager::ended_sessions`]). A session the
+    /// account has no record of keeps its copy: the log may be lost, one
+    /// that could not be read and was made again, or not have heard from
+    /// the session's member since, and the copy may be the only other one
+    /// there is (X72).
     pub async fn drop_ended(&self) {
-        let records = self.sessions.session_records();
+        let ended = self.sessions.ended_sessions();
         let ended: Vec<(String, Held)> = self
             .data
             .lock()
             .unwrap()
             .held
             .iter()
-            .filter(|(id, _)| {
-                records
-                    .get(*id)
-                    .is_none_or(|r| r.get("archived").and_then(Value::as_bool).unwrap_or(false))
-            })
+            .filter(|(id, _)| ended.contains(*id))
             .map(|(id, h)| (id.clone(), h.clone()))
             .collect();
         for (id, h) in ended {
@@ -2818,7 +2895,7 @@ impl SessionCopies {
             }
             let mut data = self.data.lock().unwrap();
             data.held.remove(&id);
-            self.save(&data);
+            self.save(data);
         }
     }
 }
@@ -2826,6 +2903,31 @@ impl SessionCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_queued_while_one_is_written_go_to_the_disk_as_the_latest_and_a_failed_one_is_tried_again() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("session-copies.json");
+        let saves = Saves::default();
+        let first = saves.queue(b"{\"held\":{}}".to_vec());
+        let second = saves.queue(b"{\"held\":{\"fix-cart\":{}}}".to_vec());
+        // The first to write writes the latest; the other has nothing left.
+        saves.flush(first, &file);
+        assert_eq!(std::fs::read(&file).unwrap(), b"{\"held\":{\"fix-cart\":{}}}");
+        std::fs::remove_file(&file).unwrap();
+        saves.flush(second, &file);
+        assert!(!file.exists());
+
+        // A folder in the way: the save stays queued for the next one.
+        let tmp = home.path().join("session-copies.tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        let third = saves.queue(b"{\"forced\":{\"fix-cart\":2}}".to_vec());
+        saves.flush(third, &file);
+        assert!(!file.exists());
+        std::fs::remove_dir(&tmp).unwrap();
+        saves.flush(third, &file);
+        assert_eq!(std::fs::read(&file).unwrap(), b"{\"forced\":{\"fix-cart\":2}}");
+    }
 
     #[test]
     fn a_transcript_file_made_again_here_counts_as_unsent() {

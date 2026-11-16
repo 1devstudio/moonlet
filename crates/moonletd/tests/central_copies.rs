@@ -599,6 +599,111 @@ async fn an_archived_sessions_copy_is_removed() {
     .await;
 }
 
+/// A central host that starts with its account log `lost` while the
+/// MacBook is away keeps the copy of the MacBook's session, and the session
+/// goes on in it once the MacBook is back.
+async fn a_lost_log_keeps_the_copy(lose: impl Fn(&Path)) {
+    let origin = Origin::new();
+    let (mut mini, _addr, mut book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "a\n").await;
+
+    book.stop();
+    mini.stop();
+    lose(&mini.home.path().join("account.json"));
+    mini.restart().await;
+    // Whatever it does at start, it has done by now.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        std::fs::read_to_string(copy.join("src/cart.ts")).ok().as_deref(),
+        Some("a\n"),
+        "the copy at {} is gone",
+        copy.display()
+    );
+
+    book.restart().await;
+    std::fs::write(path_of(&made).join("src/cart.ts"), "b\n").unwrap();
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+}
+
+#[tokio::test]
+async fn a_central_host_started_without_its_account_log_keeps_its_copies() {
+    a_lost_log_keeps_the_copy(|log| std::fs::remove_file(log).unwrap()).await;
+}
+
+#[tokio::test]
+async fn a_central_host_started_with_an_empty_account_log_keeps_its_copies() {
+    a_lost_log_keeps_the_copy(|log| std::fs::write(log, "").unwrap()).await;
+}
+
+#[tokio::test]
+async fn a_central_host_started_with_a_truncated_account_log_keeps_its_copies() {
+    a_lost_log_keeps_the_copy(|log| {
+        let whole = std::fs::read(log).unwrap();
+        std::fs::write(log, &whole[..whole.len() / 2]).unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_archived_while_the_central_host_lost_its_log_has_its_copy_removed() {
+    let origin = Origin::new();
+    let (mut mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = copy_of(&mini, &made).await;
+
+    mini.stop();
+    let _: Value = book
+        .call("session.archive", json!({ "id": made["id"] }))
+        .await;
+    std::fs::remove_file(mini.home.path().join("account.json")).unwrap();
+    mini.restart().await;
+    // The MacBook sends its changes again, the archive among them.
+    within(Duration::from_secs(30), "the copy removed", || async {
+        !copy.exists()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_unreadable_copies_file_is_kept_aside() {
+    let origin = Origin::new();
+    let (mut mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+
+    mini.stop();
+    let file = mini.home.path().join("session-copies.json");
+    let whole = std::fs::read(&file).unwrap();
+    let cut = &whole[..whole.len() / 2];
+    std::fs::write(&file, cut).unwrap();
+    mini.restart().await;
+    // Kept even once the MacBook's next update is saved.
+    std::fs::write(path_of(&made).join("src/cart.ts"), "b\n").unwrap();
+    let kept = within_value(Duration::from_secs(30), "session-copies.json kept aside", || async {
+        std::fs::read_dir(mini.home.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                name.starts_with("session-copies.json.") && name.ends_with(".bad")
+            })
+    })
+    .await;
+    within(Duration::from_secs(30), "session-copies.json saved again", || async {
+        std::fs::read(&file).is_ok_and(|b| b != cut)
+    })
+    .await;
+    assert_eq!(std::fs::read(&kept).unwrap(), cut);
+}
+
 #[tokio::test]
 async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
     let origin = Origin::new();
