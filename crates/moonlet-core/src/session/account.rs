@@ -874,14 +874,12 @@ impl SessionManager {
         Ok(sent)
     }
 
-    /// Sets how far ahead of this Mac's clock its central host's clock is,
-    /// from their last exchange (0 when it is not ahead): this member then
-    /// takes what the central host passes on up to a day past the central
-    /// host's clock, as the central host does, and stamps its own changes
-    /// after them ([`Log::limit`]).
-    pub fn set_central_ahead(&self, ms: u64) {
+    /// Notes that this member's central host counts `n` of its own
+    /// changes, from their last exchange: those are never stamped again
+    /// ([`Log::set_shared`]).
+    pub fn set_own_counted(&self, n: u64) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {
-            a.log.set_ahead(ms);
+            a.log.set_shared(n);
         }
     }
 
@@ -892,10 +890,11 @@ impl SessionManager {
         self.with_log(|log| log.own_ahead_after(now_ms(), counted))
     }
 
-    /// Stamps again, now, this member's own changes its central host
-    /// refused for a stamp from a clock that was wrong, and sends them
-    /// ([`Log::restamp_ahead`]): the central host counts `counted` of this
-    /// member's changes and holds `theirs` after them. Gives how many it
+    /// Stamps again, now, this member's own changes the others refused for
+    /// a stamp from a clock that was wrong, and sends them
+    /// ([`Log::restamp_ahead`]): its central host counts `counted` of this
+    /// member's changes and holds `theirs` after them. A central host,
+    /// which no other member referees, passes 0 and none. Gives how many it
     /// sent; an error when the log or the state could not be saved,
     /// leaving both as they were.
     pub fn restamp_own(&self, counted: u64, theirs: &[Change]) -> Result<usize> {
@@ -928,9 +927,9 @@ impl SessionManager {
     /// Takes in changes from other members, and shows what they change.
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
-        // A day past this Mac's clock, or past its central host's when that
-        // is ahead ([`Log::limit`]).
-        let limit = self.with_log(|log| log.limit(now_ms()));
+        let Some(limit) = self.account.lock().unwrap().as_ref().map(|a| a.log.limit(now_ms())) else {
+            return Vec::new();
+        };
         let (changes, ahead): (Vec<Change>, Vec<Change>) =
             changes.into_iter().partition(|c| c.stamp.ms <= limit);
         if let Some(c) = ahead.first() {
@@ -2432,46 +2431,6 @@ mod tests {
         assert!(!book.account_version().contains_key("mini.a1b2c3"));
         // An hour fast is a clock that drifted, and is taken.
         book.apply_account(vec![at(now_ms() + 60 * 60 * 1000, 1, "Home")]);
-        assert_eq!(book.list_workspaces()[0].name, "Home");
-    }
-
-    #[tokio::test]
-    async fn a_member_whose_clock_is_a_week_behind_takes_what_its_central_host_passes_on() {
-        use crate::account::{Log, RecordKind, Version};
-        use moonlet_proto::types::{ChangeOp, Stamp};
-        let (_h1, book) = member("book").await;
-        let w = book.list_workspaces()[0].clone();
-        let at = |ms: u64, seq: u64, name: &str| Change {
-            stamp: Stamp { ms, n: 0, member: "mini.a1b2c3".into() },
-            seq,
-            kind: "workspace".into(),
-            id: w.id.clone(),
-            op: ChangeOp::Set { field: "name".into(), value: serde_json::json!(name) },
-        };
-        let day = 24 * 60 * 60 * 1000;
-        // studio-mini renamed it at its own time, eight days after this
-        // Mac's clock: refused while this Mac goes by its clock alone.
-        let studio = at(now_ms() + 8 * day, 1, "Studio");
-        assert!(book.apply_account(vec![studio.clone()]).is_empty());
-        assert_eq!(book.list_workspaces()[0].name, "Personal");
-        // Its last exchange said studio-mini's clock is eight days ahead.
-        book.set_central_ahead(8 * day);
-        assert_eq!(book.apply_account(vec![studio]).len(), 1);
-        assert_eq!(book.list_workspaces()[0].name, "Studio");
-        // A rename here comes after studio-mini's, so it wins.
-        book.update_workspace(WorkspaceUpdate {
-            id: w.id.clone(),
-            name: Some("Home".into()),
-            color: None,
-            section_ids: None,
-            claude_profile: None,
-        })
-        .unwrap();
-        let mut mini = Log::new("mini.a1b2c3");
-        mini.apply(book.account_changes_for(&Version::new()));
-        assert_eq!(mini.records(RecordKind::Workspace)[&w.id]["name"], serde_json::json!("Home"));
-        // A day past studio-mini's clock is still too far.
-        assert!(book.apply_account(vec![at(now_ms() + 10 * day, 2, "Later")]).is_empty());
         assert_eq!(book.list_workspaces()[0].name, "Home");
     }
 

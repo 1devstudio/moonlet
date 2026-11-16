@@ -813,8 +813,8 @@ function CentralOffline() {
   );
 }
 
-/** "This Mac's clock is 1 year ahead of studio-mini's…": a clock off by
- * more than a day, whose changes the others refuse or this Mac would (X68). */
+/** "studio-mini's clock is 1 year ahead of this Mac's…": a clock off by
+ * more than a day, so account changes between the two wait (X68). */
 function ClockOffLines() {
   const info = useStore((st) => st.accounts.local);
   const lines = useMemo(() => clockLines(info), [info]);

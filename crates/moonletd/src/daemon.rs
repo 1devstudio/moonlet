@@ -726,6 +726,15 @@ impl Daemon {
                 }
             });
         }
+        {
+            // A member's clock is said only while it is linked (X68).
+            let l = Arc::downgrade(&link);
+            workers.on_gone(move |id| {
+                if let Some(l) = l.upgrade() {
+                    l.member_gone(id);
+                }
+            });
+        }
         let emitter = terminals.clone();
         let sync = crate::sync::LiveCopies::new(
             moonlet_core::paths::home(),
@@ -2329,6 +2338,14 @@ impl Daemon {
                 let now = moonlet_core::account::now_ms();
                 if let Some(theirs) = r.now_ms {
                     self.link.member_clock(&worker, theirs, now);
+                }
+                // A central host's own changes from while its clock was
+                // wrong, which its members refused, are stamped again by
+                // its clock once it is right (X68): no member referees it.
+                if self.link.info().central.is_none()
+                    && let Err(e) = self.sessions.restamp_own(0, &[])
+                {
+                    tracing::warn!("cannot stamp this host's account changes again: {e:#}");
                 }
                 // A member sends the changes it made, whose logs are named
                 // after its worker id: never another member's, whose numbers

@@ -362,15 +362,12 @@ describe("clockLines (X68)", () => {
   const day = 24 * 60 * 60 * 1000;
   const member = (ahead_ms: number) => ({ account: "acct-mini", central: "studio-mini", clocks: [{ worker: "acct-mini", name: "studio-mini", ahead_ms }] });
 
-  it("says this Mac's clock is ahead of its central host's, and that its changes wait for it", () => {
-    expect(clockLines(member(-365 * day))).toEqual(["This Mac's clock is 1 year ahead of studio-mini's: changes made here wait until it is right"]);
+  it("names the central host whose clock is off from this Mac's, either way", () => {
+    expect(clockLines(member(-365 * day))).toEqual(["studio-mini's clock is 1 year behind this Mac's: account changes between them wait until the clocks agree"]);
+    expect(clockLines(member(8 * day))).toEqual(["studio-mini's clock is 8 days ahead of this Mac's: account changes between them wait until the clocks agree"]);
   });
 
-  it("says this Mac's clock is behind its central host's", () => {
-    expect(clockLines(member(8 * day))).toEqual(["This Mac's clock is 8 days behind studio-mini's"]);
-  });
-
-  it("names a member whose clock is off on its central host, and says nothing of a clock off by less than a day", () => {
+  it("names each member whose clock is off on its central host, and says nothing of a clock off by less than a day", () => {
     const central = {
       account: "acct-mini",
       central: null,
@@ -381,8 +378,8 @@ describe("clockLines (X68)", () => {
       ],
     };
     expect(clockLines(central)).toEqual([
-      "Alex's MacBook Pro's clock is 2 years ahead of this Mac's: its changes wait until it is right",
-      "Office iMac's clock is 3 days behind this Mac's",
+      "Alex's MacBook Pro's clock is 2 years ahead of this Mac's: account changes between them wait until the clocks agree",
+      "Office iMac's clock is 3 days behind this Mac's: account changes between them wait until the clocks agree",
     ]);
   });
 

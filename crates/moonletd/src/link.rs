@@ -347,18 +347,41 @@ pub fn computer_name() -> String {
 struct Clocks {
     /// The central host's, from the last exchange with it.
     central: Option<i64>,
-    /// Each member's by worker id, from its last `account.sync` here, and
-    /// when that was.
-    members: std::collections::HashMap<String, (i64, std::time::Instant)>,
+    /// The central host's version at the last exchange.
+    central_version: Option<moonlet_core::account::Version>,
+    /// Each linked member's by worker id, from its last `account.sync`
+    /// here.
+    members: std::collections::HashMap<String, i64>,
 }
 
-/// How long a member's clock is said after its last `account.sync`: a
-/// linked member sends one every minute.
-const MEMBER_CLOCK_KEPT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
-/// `ms` to the nearest minute, so a round trip's jitter says nothing new.
+/// `ms` to the nearest minute, so a round trip's jitter says nothing new;
+/// 0 for less than a minute.
 fn to_minute(ms: i64) -> i64 {
+    if ms.abs() < 60_000 {
+        return 0;
+    }
     (ms as f64 / 60_000.0).round() as i64 * 60_000
+}
+
+/// The version a member sends its central host (X68). While the central
+/// host's clock is more than a day ahead of this member's, this member
+/// refuses most of what it would send back, so it says it has seen what
+/// `central` (the central host's last version) holds: the central host then
+/// sends only what is new, not the whole log every minute. Once the clocks
+/// agree, `own` asks for everything this member lacks again.
+fn version_to_send(
+    own: moonlet_core::account::Version,
+    central: Option<&moonlet_core::account::Version>,
+    central_ahead_ms: Option<i64>,
+) -> moonlet_core::account::Version {
+    let behind = central_ahead_ms.is_some_and(|ms| ms > moonlet_core::account::AHEAD_MS as i64);
+    let (true, Some(central)) = (behind, central) else { return own };
+    let mut v = own;
+    for (member, n) in central {
+        let seen = v.entry(member.clone()).or_insert(0);
+        *seen = (*seen).max(*n);
+    }
+    v
 }
 
 /// The worker side of the link: its settings, its state and, while it
@@ -447,12 +470,9 @@ impl WorkerLink {
         if let (Some(name), Some(ahead)) = (central, clocks.central) {
             out.clocks.push(m::ClockOff { worker: out.account.clone(), name, ahead_ms: ahead });
         }
-        let fresh = std::time::Instant::now() - MEMBER_CLOCK_KEPT;
-        for (worker, (ahead, at)) in &clocks.members {
-            if *at >= fresh {
-                let name = names.get(worker).cloned().unwrap_or_else(|| worker.clone());
-                out.clocks.push(m::ClockOff { worker: worker.clone(), name, ahead_ms: *ahead });
-            }
+        for (worker, ahead) in &clocks.members {
+            let name = names.get(worker).cloned().unwrap_or_else(|| worker.clone());
+            out.clocks.push(m::ClockOff { worker: worker.clone(), name, ahead_ms: *ahead });
         }
         out.clocks.retain(|c| c.ahead_ms != 0);
         out
@@ -462,26 +482,24 @@ impl WorkerLink {
     /// said `now_ms`, in its `account.sync` (X68). Says `account.info` when
     /// what this host says of clocks changes.
     pub fn member_clock(&self, worker: &str, their_ms: u64, now_ms: u64) {
-        let before = self.account_info();
-        self.clocks
-            .lock()
-            .unwrap()
-            .members
-            .insert(worker.to_string(), (to_minute(their_ms as i64 - now_ms as i64), std::time::Instant::now()));
-        let after = self.account_info();
-        if after != before {
-            (self.emit)(Message::event(m::EV_ACCOUNT_INFO, after));
-        }
+        let ahead = to_minute(their_ms as i64 - now_ms as i64);
+        self.clocks_changed(|c| {
+            c.members.insert(worker.to_string(), ahead);
+        });
     }
 
-    /// Notes how far the central host's clock is from this one's, from an
-    /// exchange (none from a central host from before X68's clocks): this
-    /// member then takes changes up to a day past the central host's clock
-    /// when it is ahead.
-    fn central_clock(&self, ahead_ms: Option<i64>) {
-        self.sessions.set_central_ahead(ahead_ms.unwrap_or(0).max(0) as u64);
+    /// Forgets member `worker`'s clock once its link closes.
+    pub fn member_gone(&self, worker: &str) {
+        self.clocks_changed(|c| {
+            c.members.remove(worker);
+        });
+    }
+
+    /// Changes what this host knows of clocks with `f`, and says
+    /// `account.info` when what it says of them changes.
+    fn clocks_changed(&self, f: impl FnOnce(&mut Clocks)) {
         let before = self.account_info();
-        self.clocks.lock().unwrap().central = ahead_ms.map(to_minute);
+        f(&mut self.clocks.lock().unwrap());
         let after = self.account_info();
         if after != before {
             (self.emit)(Message::event(m::EV_ACCOUNT_INFO, after));
@@ -579,8 +597,10 @@ impl WorkerLink {
             // A new central host, or new addresses or token: link again,
             // and share its account once it says which (X68).
             self.close();
-            self.sessions.set_central_ahead(0);
-            self.clocks.lock().unwrap().central = None;
+            self.clocks_changed(|c| {
+                c.central = None;
+                c.central_version = None;
+            });
             if self.sessions.set_central_account(None) {
                 (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
             }
@@ -998,9 +1018,10 @@ impl WorkerLink {
 
     /// Stamps again, by this Mac's clock, its own changes the central host
     /// (at `theirs`) refused for a stamp more than a day ahead: made while
-    /// this Mac's clock was wrong (X68). Nothing while it still is. The
-    /// central host's copies of this log's changes past the gap tell which
-    /// it holds: one extra `account.sync` from the count it gave.
+    /// this Mac's clock was wrong, when it has made none since (X68).
+    /// Nothing while it still is. The central host's copies of this log's
+    /// changes past the gap tell which it holds: one extra `account.sync`
+    /// from the count it gave.
     async fn restamp_own(&self, host: &Arc<Host>, name: &str, theirs: &moonlet_core::account::Version) -> Result<(), RpcError> {
         let counted = theirs.get(name).copied().unwrap_or(0);
         if !self.sessions.own_changes_ahead(counted) {
@@ -1061,14 +1082,27 @@ impl WorkerLink {
         // round trip.
         let back = moonlet_core::account::now_ms();
         let mid = sent / 2 + back / 2;
-        self.central_clock(got.now_ms.map(|t| t as i64 - mid as i64));
+        let ahead = got.now_ms.map(|t| to_minute(t as i64 - mid as i64));
+        let version = got.version.clone();
+        self.clocks_changed(|c| {
+            c.central = ahead;
+            c.central_version = Some(version);
+        });
+        // Its own changes the central host counts are never stamped again.
+        if let Some((name, _)) = self.sessions.own_log() {
+            self.sessions.set_own_counted(got.version.get(&name).copied().unwrap_or(0));
+        }
         Ok(got)
     }
 
     /// Sends `changes` with this member's version, takes in what the central
     /// host answers, and returns the central host's version.
     async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
-        let got = self.exchange(host, self.sessions.account_version(), changes).await?;
+        let version = {
+            let c = self.clocks.lock().unwrap();
+            version_to_send(self.sessions.account_version(), c.central_version.as_ref(), c.central)
+        };
+        let got = self.exchange(host, version, changes).await?;
         self.sessions.apply_account(got.changes);
         if got.account.is_some() && self.sessions.set_central_account(got.account) {
             (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
@@ -1631,6 +1665,26 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_member_whose_clock_is_more_than_a_day_behind_asks_only_for_what_is_new() {
+        use moonlet_core::account::Version;
+        let own = Version::from([("book.k3x9q2".to_string(), 7), ("mini.a1b2c3".to_string(), 3)]);
+        let central = Version::from([("book.k3x9q2".to_string(), 5), ("mini.a1b2c3".to_string(), 40), ("air.f0e1d2".to_string(), 9)]);
+        let day = 24 * 60 * 60 * 1000;
+        // studio-mini's clock eight days ahead: what it already sent and
+        // this Mac refused is not asked for again.
+        assert_eq!(
+            version_to_send(own.clone(), Some(&central), Some(8 * day)),
+            Version::from([("book.k3x9q2".to_string(), 7), ("mini.a1b2c3".to_string(), 40), ("air.f0e1d2".to_string(), 9)])
+        );
+        // An hour, a clock behind, or no clock from an older central host:
+        // everything this Mac lacks.
+        for ahead in [Some(3_600_000), Some(-8 * day), None] {
+            assert_eq!(version_to_send(own.clone(), Some(&central), ahead), own);
+        }
+        assert_eq!(version_to_send(own.clone(), None, Some(8 * day)), own);
+    }
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

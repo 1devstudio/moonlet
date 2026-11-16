@@ -162,21 +162,15 @@ function farOff(ms: number): string {
 }
 
 /** What this Mac's sidebar says of clocks that are off (X68), from its
- * daemon's `account.get`: members refuse changes stamped more than a day
- * past their clock, so only a clock off by more than a day is named. On a
- * member, its own clock against its central host's; on a central host,
- * each member's against its own. A Mac ahead has its changes wait, and
- * sends them once its clock is right. */
+ * daemon's `account.get`: on a member, its central host's clock; on a
+ * central host, each member's. Members refuse changes stamped more than a
+ * day past their clock, so only a clock off by more than a day is named.
+ * With two clocks, which one is wrong cannot be told, so each line says
+ * which way the other Mac's is off from this one's. */
 export function clockLines(info: AccountInfo | undefined): string[] {
   return (info?.clocks ?? [])
     .filter((c) => Math.abs(c.ahead_ms) > DAY_MS)
-    .map((c) => {
-      const by = farOff(Math.abs(c.ahead_ms));
-      if (info?.central && c.worker === info.account) {
-        return c.ahead_ms < 0 ? `This Mac's clock is ${by} ahead of ${c.name}'s: changes made here wait until it is right` : `This Mac's clock is ${by} behind ${c.name}'s`;
-      }
-      return c.ahead_ms > 0 ? `${c.name}'s clock is ${by} ahead of this Mac's: its changes wait until it is right` : `${c.name}'s clock is ${by} behind this Mac's`;
-    });
+    .map((c) => `${c.name}'s clock is ${farOff(Math.abs(c.ahead_ms))} ${c.ahead_ms > 0 ? "ahead of" : "behind"} this Mac's: account changes between them wait until the clocks agree`);
 }
 
 /** Where the sidebar is: a workspace of a host, and the account it belongs

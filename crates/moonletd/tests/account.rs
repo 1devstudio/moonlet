@@ -1195,24 +1195,77 @@ async fn a_member_whose_clock_was_a_year_ahead_has_its_changes_taken_once_it_is_
 }
 
 #[tokio::test]
-async fn a_member_whose_clock_is_a_week_behind_takes_the_others_changes_and_says_so() {
+async fn a_member_whose_clock_is_a_week_behind_says_so_and_catches_up_once_it_is_right() {
     let (mini, addr) = central().await;
     let behind = (-8 * DAY_MS).to_string();
-    let book = mac_with(BOOK, "Alex's MacBook Pro", &[("MOONLET_TEST_ACCOUNT_CLOCK_MS", &behind)]).await;
+    let mut book = mac_with(BOOK, "Alex's MacBook Pro", &[("MOONLET_TEST_ACCOUNT_CLOCK_MS", &behind)]).await;
     let minis = mini.workspaces().await[0].id.clone();
     link(&book, &mini, &addr, "Alex's MacBook Pro").await;
-    // studio-mini's "Personal" was made eight days after the MacBook's clock.
-    for d in [&mini, &book] {
-        within(Duration::from_secs(10), "both Personal on both", || async {
-            d.names().await == ["Personal", "Personal"]
-        })
-        .await;
-    }
+    // studio-mini's "Personal" was made eight days after the MacBook's
+    // clock: the MacBook refuses it, and both say whose clock is off.
+    within(Duration::from_secs(10), "the MacBook's Personal on studio-mini", || async {
+        mini.names().await == ["Personal", "Personal"]
+    })
+    .await;
+    within(Duration::from_secs(10), "each says the other's clock is eight days off", || async {
+        clock_days(&book, "studio-mini").await == Some(8) && clock_days(&mini, "Alex's MacBook Pro").await == Some(-8)
+    })
+    .await;
+    assert_eq!(book.names().await, ["Personal"]);
+
+    // Its clock is right again: it takes what it refused, and what comes.
+    book.stop();
+    book.env.retain(|(k, _)| k != "MOONLET_TEST_ACCOUNT_CLOCK_MS");
+    book.restart().await;
+    within(Duration::from_secs(20), "both Personal on the MacBook", || async {
+        book.names().await == ["Personal", "Personal"]
+    })
+    .await;
     rename(&mini, &minis, "Studio").await;
     within(Duration::from_secs(5), "studio-mini's rename on the MacBook", || async {
         book.names().await == ["Personal", "Studio"]
     })
     .await;
-    assert_eq!(clock_days(&book, "studio-mini").await, Some(8));
-    assert_eq!(clock_days(&mini, "Alex's MacBook Pro").await, Some(-8));
+    assert!(account(&book).await.get("clocks").is_none());
+}
+
+#[tokio::test]
+async fn a_central_host_whose_clock_was_a_year_ahead_has_its_changes_taken_once_it_is_right() {
+    let (mut mini, addr) = central().await;
+    let minis = mini.workspaces().await[0].id.clone();
+    let book = mac_with(BOOK, "Alex's MacBook Pro", &[("MOONLET_ACCOUNT_RESYNC_MS", "500")]).await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(Duration::from_secs(10), "both Personal on the MacBook", || async {
+        book.names().await == ["Personal", "Personal"]
+    })
+    .await;
+    // studio-mini's clock a year ahead for a while: the MacBook refuses its
+    // rename.
+    mini.stop();
+    mini.env.push(("MOONLET_TEST_ACCOUNT_CLOCK_MS".into(), (365 * DAY_MS).to_string()));
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    rename(&mini, &minis, "Future").await;
+    within(Duration::from_secs(20), "the MacBook says studio-mini's clock is a year ahead", || async {
+        clock_days(&book, "studio-mini").await == Some(365)
+    })
+    .await;
+    assert_eq!(book.names().await, ["Personal", "Personal"]);
+
+    // Its clock is right again: the MacBook gets the rename, and a later
+    // one to the same field.
+    mini.stop();
+    mini.env.retain(|(k, _)| k != "MOONLET_TEST_ACCOUNT_CLOCK_MS");
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    within(Duration::from_secs(20), "the rename on the MacBook", || async {
+        book.names().await == ["Future", "Personal"]
+    })
+    .await;
+    rename(&mini, &minis, "Studio").await;
+    within(Duration::from_secs(10), "the next rename on the MacBook", || async {
+        book.names().await == ["Personal", "Studio"]
+    })
+    .await;
+    assert_eq!(mini.names().await, ["Personal", "Studio"]);
 }
