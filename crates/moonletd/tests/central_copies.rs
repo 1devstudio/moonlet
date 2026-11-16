@@ -794,6 +794,12 @@ fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
         ("SHELL".to_string(), "/bin/sh".to_string()),
         // `power.simulate` stands in for the Mac's sleep (X73).
         ("MOONLET_TEST_POWER".to_string(), "1".to_string()),
+        // The central host stops in the middle of a give once this file
+        // is there, as a crash would (X73).
+        (
+            "MOONLET_TEST_STOP_IN_GIVE".to_string(),
+            home.join("stop-in-give").display().to_string(),
+        ),
         // Continue here and Take over anyway after 1 s offline instead of
         // 30 (X73).
         (
@@ -900,6 +906,12 @@ struct Network {
     /// Goes down once the MacBook has sent this, as a lid closing right
     /// after a request leaves would make it.
     after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    /// Drops the connection as the MacBook sends this, which never reaches
+    /// studio-mini; the next connection carries everything again.
+    lose: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    /// What studio-mini sent that never reached the MacBook, the network
+    /// down.
+    dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
 impl Network {
@@ -911,17 +923,21 @@ impl Network {
             cut: Default::default(),
             which: Default::default(),
             after: Default::default(),
+            lose: Default::default(),
+            dropped: Default::default(),
         };
-        let (addr, cut, which, after) = (
+        let (addr, cut, which, after, lose, dropped) = (
             addr.to_string(),
             network.cut.clone(),
             network.which.clone(),
             network.after.clone(),
+            network.lose.clone(),
+            network.dropped.clone(),
         );
         tokio::spawn(async move {
             while let Ok((member, _)) = listener.accept().await {
                 if let Ok(central) = tokio::net::TcpStream::connect(&addr).await {
-                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone()));
+                    tokio::spawn(carry(member, central, cut.clone(), which.clone(), after.clone(), lose.clone(), dropped.clone()));
                 }
             }
         });
@@ -936,6 +952,19 @@ impl Network {
     /// reaches studio-mini; its answer does not reach the MacBook.
     fn cut_after(&self, what: &str) {
         *self.after.lock().unwrap() = Some(what.as_bytes().to_vec());
+    }
+
+    /// Drops the connection the MacBook sends `what` on, before it reaches
+    /// studio-mini, as a link that fails just then; the MacBook links again.
+    fn lose(&self, what: &str) {
+        *self.lose.lock().unwrap() = Some(what.as_bytes().to_vec());
+    }
+
+    /// Whether something studio-mini sent with `what` in it was dropped,
+    /// the network down.
+    fn dropped(&self, what: &str) -> bool {
+        let dropped = self.dropped.lock().unwrap();
+        dropped.windows(what.len()).any(|x| x == what.as_bytes())
     }
 
     /// Back up, the same network.
@@ -958,8 +987,11 @@ async fn carry(
     cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
     which: std::sync::Arc<std::sync::atomic::AtomicU64>,
     after: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    lose: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    dropped: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 ) {
     use std::sync::atomic::Ordering::SeqCst;
+    let has = |bytes: &[u8], w: &[u8]| bytes.windows(w.len()).any(|x| x == w);
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let on = which.load(SeqCst);
     let down = || cut.load(SeqCst) || which.load(SeqCst) != on;
@@ -976,18 +1008,32 @@ async fn carry(
                 if n == 0 || (central_closed && !down()) {
                     return;
                 }
+                {
+                    let mut lose = lose.lock().unwrap();
+                    if lose.as_ref().is_some_and(|w| has(&a[..n], w)) {
+                        *lose = None;
+                        return;
+                    }
+                }
                 if !down() && to_central.write_all(&a[..n]).await.is_err() {
                     return;
                 }
                 let mut after = after.lock().unwrap();
-                if after.as_ref().is_some_and(|w| a[..n].windows(w.len()).any(|x| x == w.as_slice())) {
+                if after.as_ref().is_some_and(|w| has(&a[..n], w)) {
                     *after = None;
                     cut.store(true, SeqCst);
                 }
             }
             n = from_central.read(&mut b), if !central_closed => match n {
                 Ok(n) if n > 0 => {
-                    if !down() && to_member.write_all(&b[..n]).await.is_err() {
+                    if down() {
+                        let mut dropped = dropped.lock().unwrap();
+                        // The latest only: enough to find an answer in.
+                        if dropped.len() > 1 << 20 {
+                            dropped.clear();
+                        }
+                        dropped.extend_from_slice(&b[..n]);
+                    } else if to_member.write_all(&b[..n]).await.is_err() {
                         return;
                     }
                 }
@@ -2208,10 +2254,32 @@ async fn continued_and_back_with(
     prepare: impl AsyncFn(&Path, &Path),
 ) -> (Daemon, Daemon, Value) {
     let (mini, mut book) = pair_with_agents_as(origin, false).await;
-    origin.add_to(&mini).await;
-    let project = origin.add_to(&book).await;
-    let made = session_with_a_turn(&book, &project).await;
-    let copy = copy_of(&mini, &made).await;
+    let made = continued_while_away(origin, &mini, &mut book, prepare).await;
+    (mini, book, made)
+}
+
+/// [`continued_and_back`], the MacBook's link going through a [`Network`]
+/// the test can cut.
+async fn continued_and_back_through_a_network(origin: &Origin) -> (Daemon, Daemon, Value, Network) {
+    let (mini, mut book, network) = pair_with_agents_through_a_network(origin).await;
+    let made = continued_while_away(origin, &mini, &mut book, async |_, _| {}).await;
+    (mini, book, made, network)
+}
+
+/// A session made on `book`, continued on `mini` while `book` was away,
+/// with `book` back and keeping a live copy of it; `prepare` runs on the
+/// session's worktree and the central host's copy of it before the
+/// MacBook stops.
+async fn continued_while_away(
+    origin: &Origin,
+    mini: &Daemon,
+    book: &mut Daemon,
+    prepare: impl AsyncFn(&Path, &Path),
+) -> Value {
+    origin.add_to(mini).await;
+    let project = origin.add_to(book).await;
+    let made = session_with_a_turn(book, &project).await;
+    let copy = copy_of(mini, &made).await;
     prepare(&path_of(&made), &copy).await;
     within(
         Duration::from_secs(30),
@@ -2224,7 +2292,7 @@ async fn continued_and_back_with(
     )
     .await;
     book.stop();
-    unreachable(&mini, &made).await;
+    unreachable(mini, &made).await;
     let _: Value = mini
         .call("session.continue_here", json!({ "session": made["id"] }))
         .await;
@@ -2242,7 +2310,7 @@ async fn continued_and_back_with(
         },
     )
     .await;
-    (mini, book, made)
+    made
 }
 
 #[tokio::test]
@@ -2846,6 +2914,153 @@ async fn a_bring_whose_mac_fails_after_the_hand_over_leaves_the_session_running_
         },
     )
     .await;
+}
+
+/// Waits until exactly one of studio-mini `mini` and the MacBook `book`
+/// runs session `made`, the one the account names its owner on both, and
+/// its chat there takes a message; gives that one's worker id.
+async fn one_runs_it(mini: &Daemon, book: &Daemon, made: &Value) -> &'static str {
+    let (owner, chat) = within_value(
+        Duration::from_secs(150),
+        "one host running fix-cart, the one the account names",
+        || async {
+            // With its chat going on there.
+            let own = |list: Vec<Value>| list.into_iter().find(|s| s["id"] == made["id"] && s["terminals"][0].is_u64());
+            let named = |list: Vec<Value>| list.into_iter().find(|s| s["id"] == made["id"]).map(|s| s["owner"]["worker"].clone());
+            let on_mini = own(mini.call("session.list", json!({})).await);
+            let on_book = own(book.call("session.list", json!({})).await);
+            match (on_mini, on_book) {
+                (Some(s), None) if named(with_copies(book).await) == Some(json!(MINI)) => {
+                    Some((MINI, s["terminals"][0].clone()))
+                }
+                (None, Some(s)) if named(with_copies(mini).await) == Some(json!(BOOK)) => {
+                    Some((BOOK, s["terminals"][0].clone()))
+                }
+                _ => None,
+            }
+        },
+    )
+    .await;
+    let runs = if owner == MINI { mini } else { book };
+    let _: Value = runs
+        .call("chat.send", json!({ "id": chat, "text": "Still going" }))
+        .await;
+    within(Duration::from_secs(30), "the message reaching the agent", || async {
+        agent_log(runs, "claude-user").contains("Still going")
+    })
+    .await;
+    owner
+}
+
+#[tokio::test]
+async fn a_bring_whose_answer_is_lost_ends_with_one_host_running_the_session() {
+    let origin = Origin::new();
+    let (mini, book, made, network) = continued_and_back_through_a_network(&origin).await;
+    // studio-mini gives the session up, and the network goes down before
+    // its answer reaches the MacBook; it is back soon after, the answer
+    // lost for good.
+    network.cut_after("session.take");
+    let (brought, _) = tokio::join!(
+        book.try_call("session.bring", json!({ "session": made["id"], "message": "Back here" })),
+        async {
+            within(Duration::from_secs(30), "studio-mini giving fix-cart up, its answer dropped", || async {
+                let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+                theirs.iter().all(|s| s["id"] != made["id"]) && network.dropped("\"transcripts\"")
+            })
+            .await;
+            network.cut_back();
+        }
+    );
+    assert!(brought.is_err(), "{brought:?}");
+
+    // Without the user doing anything, one host runs it, and the account
+    // says which.
+    one_runs_it(&mini, &book, &made).await;
+    // A bring from here works as ever.
+    if !book.call::<Vec<Value>>("session.list", json!({})).await.iter().any(|s| s["id"] == made["id"]) {
+        brought_here(&mini, &book, &made).await;
+    }
+}
+
+#[tokio::test]
+async fn a_bring_that_cannot_note_its_take_never_sends_it() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // The MacBook cannot write down the take: a folder is where it writes
+    // it first.
+    let blocked = book.home.path().join("takes.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("cannot note the take"), "{refused}");
+    // studio-mini never heard of it: it runs the session as before.
+    assert!(!session_on(&mini, &made).await.is_null());
+    assert_eq!(owner_on(&book, &made).await, json!(MINI));
+    std::fs::remove_dir_all(&blocked).unwrap();
+}
+
+#[tokio::test]
+async fn a_bring_cut_off_by_the_macs_daemon_stopping_ends_with_one_host_running_the_session() {
+    cut_off_by_the_macs_daemon_stopping(false).await;
+}
+
+#[tokio::test]
+async fn a_session_an_older_version_left_given_to_the_mac_and_not_taken_in_goes_on_on_the_central_host() {
+    cut_off_by_the_macs_daemon_stopping(true).await;
+}
+
+/// A bring cut off by the MacBook's daemon stopping, after studio-mini gave
+/// the session up and before the MacBook took it in; with `older`, the
+/// MacBook kept no note of the take, as a version from before kept none.
+async fn cut_off_by_the_macs_daemon_stopping(older: bool) {
+    let origin = Origin::new();
+    let (mini, mut book, made, network) = continued_and_back_through_a_network(&origin).await;
+    // studio-mini gives the session up; its answer never reaches the
+    // MacBook, whose daemon stops before it takes the session in.
+    network.cut_after("session.take");
+    let mut app = book.app().await;
+    let bring = {
+        let session = made["id"].clone();
+        tokio::spawn(async move { app.request::<Value, Value>("session.bring", json!({ "session": session })).await })
+    };
+    within(Duration::from_secs(30), "studio-mini giving fix-cart up", || async {
+        let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+        theirs.iter().all(|s| s["id"] != made["id"])
+    })
+    .await;
+    book.stop();
+    assert!(bring.await.unwrap().is_err());
+    if older {
+        std::fs::remove_file(book.home.path().join("takes.json")).unwrap();
+    }
+
+    // It starts again with the network back.
+    network.cut_back();
+    book.restart().await;
+    one_runs_it(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_hand_back_not_delivered_at_first_is_sent_again_and_the_central_host_runs_the_session() {
+    let origin = Origin::new();
+    let (mini, book, made, network) = continued_and_back_through_a_network(&origin).await;
+    // The MacBook cannot save its sessions, so it fails to take the
+    // session in once studio-mini has given it up; and the link fails as
+    // it hands the session back.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+    network.lose("session.give_back");
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    std::fs::remove_dir_all(&blocked).unwrap();
+
+    // The MacBook links again and hands it back: studio-mini runs it.
+    assert_eq!(one_runs_it(&mini, &book, &made).await, MINI);
 }
 
 #[tokio::test]
@@ -4335,6 +4550,137 @@ async fn a_takeover_from_a_member_that_never_lost_the_central_host_is_not_forced
     assert!(busy.starts_with("busy"), "{busy}");
     let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
     assert!(mini_own.iter().any(|s| s["id"] == made["id"]), "studio-mini still runs it");
+}
+
+const PRO: &str = "5a7c9e1b-3d5f-4a8c-9e0b-2d4f6a8c0e1a";
+
+/// Session `made` as studio-mini `mini` runs it; null when it does not.
+async fn session_on(mini: &Daemon, made: &Value) -> Value {
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    own.into_iter().find(|s| s["id"] == made["id"]).unwrap_or(Value::Null)
+}
+
+/// Who `d` says owns session `made`, from its list with copies.
+async fn owner_on(d: &Daemon, made: &Value) -> Value {
+    with_copies(d)
+        .await
+        .into_iter()
+        .find(|s| s["id"] == made["id"])
+        .map(|s| s["owner"]["worker"].clone())
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn of_two_takes_at_once_one_gets_the_session_and_the_other_stale() {
+    let origin = Origin::new();
+    let (mini, _book, made) = continued_and_back(&origin).await;
+    assert!(!session_on(&mini, &made).await.is_null());
+    let air = HandLink::to(&mini, AIR, "MacBook Air").await;
+    let pro = HandLink::to(&mini, PRO, "MacBook Pro").await;
+
+    // Continued on studio-mini at 2: both ask at 2, at once.
+    let take = json!({ "session": made["id"], "epoch": 2 });
+    let (a, b) = tokio::join!(air.ask("session.take", take.clone()), pro.ask("session.take", take));
+    let (won, lost) = match (&a, &b) {
+        (Ok(_), Err(e)) => (AIR, e.clone()),
+        (Err(e), Ok(_)) => (PRO, e.clone()),
+        _ => panic!("one take gets it: {a:?} {b:?}"),
+    };
+    assert!(lost.starts_with("stale"), "{lost}");
+    within(Duration::from_secs(10), "the winner named its owner", || async {
+        owner_on(&mini, &made).await == json!(won)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_take_or_a_hand_back_sent_twice_has_the_effect_of_one() {
+    let origin = Origin::new();
+    let (mini, _book, made) = continued_and_back(&origin).await;
+    let air = HandLink::to(&mini, AIR, "MacBook Air").await;
+
+    let take = json!({ "session": made["id"], "epoch": 2 });
+    let taken = air.ask("session.take", take.clone()).await.unwrap();
+    assert_eq!(taken["epoch"], json!(3), "{taken}");
+    // The same take again, as when its answer was lost: nothing more.
+    let again = air.ask("session.take", take).await.unwrap_err();
+    assert!(again.starts_with("stale"), "{again}");
+    within(Duration::from_secs(10), "the Air named its owner", || async {
+        owner_on(&mini, &made).await == json!(AIR)
+    })
+    .await;
+
+    // Handed back, and handed back again: studio-mini runs it once.
+    let back = json!({ "session": made["id"], "epoch": 3 });
+    let first = air.ask("session.give_back", back.clone()).await.unwrap();
+    assert_eq!(first["id"], made["id"], "{first}");
+    let second = air.ask("session.give_back", back).await.unwrap();
+    assert_eq!(second["id"], made["id"], "{second}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert_eq!(own.iter().filter(|s| s["id"] == made["id"]).count(), 1, "{own:?}");
+    assert_eq!(owner_on(&mini, &made).await, Value::Null, "studio-mini's own");
+    // At 4 now: a take at 3 is stale, and one at 4 gets it.
+    let stale = air.ask("session.take", json!({ "session": made["id"], "epoch": 3 })).await.unwrap_err();
+    assert!(stale.starts_with("stale"), "{stale}");
+    let taken = air.ask("session.take", json!({ "session": made["id"], "epoch": 4 })).await.unwrap();
+    assert_eq!(taken["epoch"], json!(5), "{taken}");
+}
+
+#[tokio::test]
+async fn a_give_cut_off_after_its_branch_moved_leaves_the_central_host_able_to_give_again() {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    // studio-mini stopped right after it moved the session's branch to the
+    // copy's own, as it gives the session up: it never gave it.
+    let worktree = PathBuf::from(session_on(&mini, &made).await["path"].as_str().unwrap());
+    let copy_branch = format!("moonlet-copy/{}", made["id"].as_str().unwrap());
+    git_in(&worktree, &["branch", "-m", "moonlet/fix-cart", &copy_branch]);
+    let before: Value = book.call("link.get", json!({})).await;
+    mini.restart().await;
+    // Back on the session's own branch as it starts, before any give.
+    within(Duration::from_secs(30), "the worktree on moonlet/fix-cart", || async {
+        git_out(&worktree, &["branch", "--show-current"]) == "moonlet/fix-cart"
+    })
+    .await;
+    within(Duration::from_secs(60), "studio-mini's again, the MacBook linked to it again", || async {
+        let link: Value = book.call("link.get", json!({})).await;
+        !session_on(&mini, &made).await.is_null()
+            && link["state"]["kind"] == json!("connected")
+            && link["state"]["since"] != before["state"]["since"]
+    })
+    .await;
+
+    brought_here(&mini, &book, &made).await;
+}
+
+#[tokio::test]
+async fn a_give_cut_off_after_it_named_the_new_owner_ends_with_one_host_running_the_session() {
+    give_cut_off_at("").await;
+}
+
+#[tokio::test]
+async fn a_give_cut_off_half_way_through_giving_the_session_up_ends_with_one_host_running_it() {
+    give_cut_off_at("half-given").await;
+}
+
+/// studio-mini stops in the middle of giving the session to the MacBook,
+/// at `stage`: none once the account names the MacBook the owner, or
+/// `half-given` between the two things it keeps of the give, the session
+/// given up and its worktree kept as the MacBook's copy.
+async fn give_cut_off_at(stage: &str) {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    let home: std::collections::HashMap<_, _> = mini.env.iter().cloned().collect();
+    std::fs::write(PathBuf::from(&home["HOME"]).join("stop-in-give"), stage).unwrap();
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(!refused.is_empty());
+    mini.restart().await;
+
+    assert_eq!(one_runs_it(&mini, &book, &made).await, MINI);
+    brought_here(&mini, &book, &made).await;
 }
 
 #[tokio::test]

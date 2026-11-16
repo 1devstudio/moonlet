@@ -106,6 +106,19 @@ pub struct Known<'a> {
     pub archived: bool,
 }
 
+impl<'a> Known<'a> {
+    /// What account record `r` says.
+    pub fn of(r: &'a moonlet_core::account::Record) -> Known<'a> {
+        use serde_json::Value;
+        Known {
+            owner: r.get("owner").and_then(Value::as_str),
+            epoch: r.get("epoch").and_then(Value::as_u64).unwrap_or(1),
+            pinned: r.get("pinned").is_some_and(|p| !p.is_null()),
+            archived: r.get("archived").and_then(Value::as_bool).unwrap_or(false),
+        }
+    }
+}
+
 /// The hand-overs a member `me` has not heard answered (X73), sorted by its
 /// records once the central host was heard from.
 #[derive(Debug, Default, PartialEq, Eq)]
