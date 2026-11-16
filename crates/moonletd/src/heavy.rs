@@ -89,12 +89,7 @@ fn note(why: &str) -> String {
     )
 }
 
-/// Whether `words` start with one of `entries`' words.
-fn listed(words: &[String], entries: &[String]) -> bool {
-    entries
-        .iter()
-        .any(|e| heavy::split(e).is_some_and(|e| !e.is_empty() && words.starts_with(&e)))
-}
+
 
 impl Heavy {
     pub fn new(home: &Path, sessions: Arc<SessionManager>) -> Arc<Self> {
@@ -194,6 +189,7 @@ impl Heavy {
                     reason: None,
                     line: line.map(|l| RoutedLine {
                         before: l.before(),
+                        args: l.exec_args(),
                         command: l.command(),
                         after: l.after(),
                     }),
@@ -319,34 +315,40 @@ impl Heavy {
             return Err("invalid_config".into());
         }
         let heavy = config.config.heavy;
-        let mentioned = || heavy::mentions(&r.command, &heavy.commands).is_some();
-        let line = match heavy::parse(&r.command) {
-            Ok(line) if listed(&line.words, &heavy.commands) => line,
-            Ok(_) if mentioned() => {
-                return Err(Stay::form("moonlet does not route what is around the command"));
-            }
-            Err(refusal) if mentioned() => return Err(Stay::form(refusal.0)),
-            _ => return Err("not_heavy".into()),
-        };
-        // A hook from before puts the whole text after `moonlet exec --`.
-        if !line.is_bare() && !r.lines {
-            return Err(Stay::form("this moonlet's hook routes a command alone only"));
-        }
-        let approved = self
-            .approval(&project.identity)
-            .ok()
-            .flatten()
-            .ok_or(Stay::heavy("not_approved"))?;
+        let approved = self.approval(&project.identity).ok().flatten();
         let entries: Vec<String> = heavy
             .commands
             .iter()
-            .filter(|c| approved.commands.contains(c))
+            .filter(|c| approved.as_ref().is_some_and(|a| a.commands.contains(c)))
             .cloned()
             .collect();
-        if !listed(&line.words, &entries) {
+        let env_approved = approved
+            .as_ref()
+            .is_some_and(|a| heavy.env.iter().all(|e| a.env.contains(e)));
+        // A line moonlet does not route as written: the agent hears why
+        // only when reshaping it would route its command.
+        let form = |why: String| -> Stay {
+            if heavy::mentions(&r.command, &entries).is_some() {
+                if env_approved { Stay::form(why) } else { Stay::heavy("env_not_approved") }
+            } else if heavy::mentions(&r.command, &heavy.commands).is_some() {
+                Stay::heavy("not_approved")
+            } else {
+                "not_heavy".into()
+            }
+        };
+        let line = match heavy::parse(&r.command) {
+            Ok(line) if heavy::listed(&line.words, &heavy.commands) => line,
+            Ok(_) => return Err(form("moonlet does not route what is around the command".into())),
+            Err(refusal) => return Err(form(refusal.0)),
+        };
+        // A hook from before puts the whole text after `moonlet exec --`.
+        if !line.is_bare() && !r.lines {
+            return Err(form("this moonlet's hook routes a command alone only".into()));
+        }
+        if !heavy::listed(&line.words, &entries) {
             return Err(Stay::heavy("not_approved"));
         }
-        if !heavy.env.iter().all(|e| approved.env.contains(e)) {
+        if !env_approved {
             return Err(Stay::heavy("env_not_approved"));
         }
         // On the worker, only `[heavy] env` names reach the command.
@@ -381,7 +383,9 @@ impl Heavy {
                 .parts()
                 .iter()
                 .any(|w| heavy::rules_block(&rules, &w.join(" "), w));
-        if blocked {
+        // Writing a file skips Claude Code's prompt for edits too.
+        let writes = line.files().iter().any(|f| *f != "/dev/null");
+        if blocked || (writes && heavy::claude_guards_writes(&files)) {
             return Err(Stay::heavy("claude_rule"));
         }
         Ok((!line.is_bare()).then_some(line))

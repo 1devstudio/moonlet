@@ -9,12 +9,14 @@ use moonlet_proto::methods::{self, ExecCancel, ExecExited, ExecRun, ExecRunStart
 use moonlet_proto::{Frame, Message, read_frame, write_frame};
 use tokio::signal::unix::{SignalKind, signal};
 
-/// Runs `argv` through the daemon at `socket` and returns its exit status,
-/// or `None` when the daemon cannot be reached or will not run it.
+/// Runs `argv`, with `env` added to this process's variables, through the
+/// daemon at `socket` and returns its exit status, or `None` when the
+/// daemon cannot be reached or will not run it.
 pub async fn routed(
     socket: &Path,
     session: &str,
     argv: &[String],
+    env: &[(String, String)],
     tool_use_id: Option<String>,
 ) -> Option<i32> {
     let mut c = Client::connect(socket, "moonlet-cli").await.ok()?;
@@ -25,7 +27,7 @@ pub async fn routed(
         session: session.to_string(),
         argv: argv.to_vec(),
         cwd: std::env::current_dir().ok()?.display().to_string(),
-        env: std::env::vars().collect(),
+        env: std::env::vars().chain(env.iter().cloned()).collect(),
         tool_use_id,
     };
     let started: ExecRunStarted = c.request(methods::EXEC_RUN, run).await.ok()?;

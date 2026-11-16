@@ -198,16 +198,16 @@ export function bashChip(job: Job | undefined, command: string, output: string |
 
 // A word the daemon quoted for the shell, or a plain one.
 const WORD = String.raw`(?:'(?:[^']|'\\'')*'|\S+)`;
-// What a routed line runs before `moonlet exec` (X62): `cd <dir> && `,
-// `NAME=value `, `timeout <n> `.
+// A routed line (X62): `cd <dir> && ` and `timeout <n> ` before `moonlet
+// exec`, the line's variables as its `--env` options.
 const ROUTED = new RegExp(
-  String.raw`^((?:cd ${WORD} && )?(?:[A-Za-z_][A-Za-z0-9_]*=(?:'(?:[^']|'\\'')*'|\S*) )*(?:timeout \S+ )?)'(?:[^']|'\\'')*' exec (?:--tool-use \S+ )?-- ([\s\S]*)$`,
+  String.raw`^((?:cd ${WORD} && )?(?:timeout \S+ )?)'(?:[^']|'\\'')*' exec (?:--tool-use \S+ )?((?:--env ${WORD} )*)-- ([\s\S]*)$`,
 );
 
 /** The command as the agent's shell runs it, without the hook's `moonlet exec`. */
 export function shownCommand(command: string): string {
   const m = command.match(ROUTED);
-  return m ? m[1] + m[2] : command;
+  return m ? m[1] + m[2].replace(/--env /g, "") + m[3] : command;
 }
 
 /** A line with a heavy command that ran on the session's host, and why. */

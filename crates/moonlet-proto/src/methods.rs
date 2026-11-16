@@ -3768,11 +3768,15 @@ pub struct ExecRouted {
     pub note: Option<String>,
 }
 
-/// A routed line: `before`, then `moonlet exec -- `, then `command`, then
-/// `after`. Every word in it is quoted for the shell.
+/// A routed line: `before`, then `moonlet exec `, `args`, `-- `, then
+/// `command`, then `after`. Every word in it is quoted for the shell.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoutedLine {
     pub before: String,
+    /// `moonlet exec`'s options, such as `--env CI=1 `: the line's
+    /// variables, for the command alone.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub args: String,
     pub command: String,
     pub after: String,
 }

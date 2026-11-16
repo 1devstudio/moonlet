@@ -32,6 +32,8 @@ const wanted = new Map<string, { host: string; session: string }>();
 const early: Record<string, Job[]> = {};
 /** The central host keeps a session's last 50 jobs; a job past them leaves. */
 const KEPT = 50;
+/** Lines that stayed while a session's list of them was being read, by key. */
+const earlyStayed: Record<string, JobStayed[]> = {};
 /** The daemon keeps a session's last 20 lines that stayed on its host. */
 const STAYED_KEPT = 20;
 /** Output that came while a job's stored output was being read. */
@@ -66,10 +68,16 @@ export function loadJobs(host: string, session: string, again = false) {
     },
   );
   // A daemon from before has no such list: none stayed, as far as it says.
-  void rpc<JobStayed[]>(host, M.jobStayed, { session }).then(
-    (list) => useJobs.setState((s) => ({ stayed: { ...s.stayed, [k]: list } })),
-    () => useJobs.setState((s) => ({ stayed: { ...s.stayed, [k]: s.stayed[k] ?? [] } })),
-  );
+  // Lines that come while it is read go first, each once.
+  earlyStayed[k] = [];
+  const read = (list: JobStayed[]) => {
+    const came = earlyStayed[k] ?? [];
+    delete earlyStayed[k];
+    const same = (a: JobStayed, b: JobStayed) => a.at === b.at && a.command === b.command;
+    const merged = [...came, ...list.filter((s) => !came.some((c) => same(c, s)))].slice(0, STAYED_KEPT);
+    useJobs.setState((s) => ({ stayed: { ...s.stayed, [k]: merged } }));
+  };
+  void rpc<JobStayed[]>(host, M.jobStayed, { session }).then(read, () => read(useJobs.getState().stayed[k] ?? []));
 }
 
 /** Sets session `k`'s jobs, forgetting the output of jobs no longer kept. */
@@ -159,7 +167,8 @@ export function startJobs() {
     } else if (e.name === EV.jobStayed) {
       const st = e.data as JobStayed;
       const k = key(e.host, st.session);
-      useJobs.setState((s) => (s.stayed[k] ? { stayed: { ...s.stayed, [k]: [st, ...s.stayed[k]].slice(0, STAYED_KEPT) } } : s));
+      if (earlyStayed[k]) earlyStayed[k].unshift(st);
+      else useJobs.setState((s) => (s.stayed[k] ? { stayed: { ...s.stayed, [k]: [st, ...s.stayed[k]].slice(0, STAYED_KEPT) } } : s));
     } else if (e.name === EV.jobOutput) {
       const ev = e.data as { job: string; chunks: JobChunk[] };
       if (pending[ev.job]) pending[ev.job].push(...ev.chunks);

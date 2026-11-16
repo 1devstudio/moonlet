@@ -64,10 +64,10 @@ pub fn rewrite(payload: &Value, moonlet: &str, line: Option<&RoutedLine>) -> Val
         })
         .map(|id| format!("--tool-use {id} "))
         .unwrap_or_default();
-    let exec = format!("{} exec {tool_use}--", quote(moonlet));
+    let exec = format!("{} exec {tool_use}", quote(moonlet));
     input["command"] = json!(match line {
-        Some(l) => format!("{}{exec} {}{}", l.before, l.command, l.after),
-        None => format!("{exec} {command}"),
+        Some(l) => format!("{}{exec}{}-- {}{}", l.before, l.args, l.command, l.after),
+        None => format!("{exec}-- {command}"),
     });
     json!({
         "hookSpecificOutput": {
@@ -149,7 +149,8 @@ mod tests {
         let mut payload = captured();
         payload["tool_input"]["command"] = json!("cd web && CI=1 pnpm test 2>&1 | tail -n 50");
         let line = RoutedLine {
-            before: "cd ./web && CI=1 ".into(),
+            before: "cd ./web && ".into(),
+            args: "--env CI=1 ".into(),
             command: "pnpm test".into(),
             after: " 2>&1 | tail -n 50".into(),
         };
@@ -161,7 +162,7 @@ mod tests {
                     "permissionDecision": "allow",
                     "permissionDecisionReason": "moonlet: an approved heavy command; it runs on whichever machine is free",
                     "updatedInput": {
-                        "command": "cd ./web && CI=1 '/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- pnpm test 2>&1 | tail -n 50",
+                        "command": "cd ./web && '/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb --env CI=1 -- pnpm test 2>&1 | tail -n 50",
                         "timeout": 600000,
                         "description": "Run the tests",
                     },

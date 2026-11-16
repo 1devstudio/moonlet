@@ -134,6 +134,21 @@ describe("the jobs the app keeps (X62)", () => {
     expect(useJobs.getState().stayed["h6/s1"]?.map((s) => s.command)).toEqual(["pnpm test && ls", "pnpm test; ls"]);
   });
 
+  it("keeps a line that stayed while the list was read, once", async () => {
+    const stayed = (command: string, at: number): JobStayed => ({ session: "s1", at, command, why: "it runs a second command" });
+    let answer: (list: JobStayed[]) => void = () => {};
+    answers["job.list"] = () => [];
+    answers["job.stayed"] = () => new Promise<JobStayed[]>((r) => (answer = r));
+    loadJobs("h8", "s1");
+    await settle();
+    events.emit({ host: "h8", name: "job.stayed", data: stayed("pnpm test; ls", 2) });
+    events.emit({ host: "h8", name: "job.stayed", data: stayed("pnpm test | sh", 3) });
+    // The daemon read its list after the first line, before the second.
+    answer([stayed("pnpm test; ls", 2), stayed("pnpm build; ls", 1)]);
+    await settle();
+    expect(useJobs.getState().stayed["h8/s1"]?.map((s) => s.command)).toEqual(["pnpm test | sh", "pnpm test; ls", "pnpm build; ls"]);
+  });
+
   it("lists none from a host whose daemon has no such list", async () => {
     answers["job.list"] = () => [job("j1")];
     loadJobs("h7", "s1");

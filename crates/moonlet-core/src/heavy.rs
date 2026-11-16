@@ -23,9 +23,14 @@ pub fn route(command: &str, entries: &[String]) -> Option<Vec<String>> {
     {
         return None;
     }
-    let starts =
-        |entry: &String| split(entry).is_some_and(|e| !e.is_empty() && words.starts_with(&e));
-    entries.iter().any(starts).then_some(words)
+    listed(&words, entries).then_some(words)
+}
+
+/// Whether `words` start with the words of one of `entries`.
+pub fn listed(words: &[String], entries: &[String]) -> bool {
+    entries
+        .iter()
+        .any(|e| split(e).is_some_and(|e| !e.is_empty() && words.starts_with(&e)))
 }
 
 /// Why a line is not routed, in words for the agent and the Jobs tab.
@@ -41,8 +46,9 @@ const REDIRECTION: &str = "it has a redirection moonlet does not route";
 
 /// A line moonlet can route (X62 › Lines moonlet routes): one command,
 /// with what the agent's own shell runs around it. Only the command runs
-/// through `moonlet exec`; `cd`, the variables, `timeout`, redirections
-/// and filters stay in the agent's shell, around `moonlet exec`.
+/// through `moonlet exec`, with the line's variables given to it alone;
+/// `cd`, `timeout`, redirections and filters stay in the agent's shell,
+/// around `moonlet exec`.
 ///
 /// ```text
 /// line     = [ "cd" DIR "&&" ] command { "|" filter }
@@ -106,13 +112,20 @@ impl Line {
             };
             s.push_str(&format!("cd {} && ", quote(&dir)));
         }
-        for (name, value) in &self.assigns {
-            s.push_str(&format!("{name}={} ", quote(value)));
-        }
         if let Some(t) = &self.timeout {
             s.push_str(&format!("timeout {t} "));
         }
         s
+    }
+
+    /// `moonlet exec`'s options before `--`, ending in a space when there
+    /// is any: the line's variables, which reach the command only, never
+    /// `timeout` or `moonlet exec` itself.
+    pub fn exec_args(&self) -> String {
+        self.assigns
+            .iter()
+            .map(|(name, value)| format!("--env {} ", quote(&format!("{name}={value}"))))
+            .collect()
     }
 
     /// The command, each word quoted as it was parsed.
@@ -442,7 +455,14 @@ pub fn parse(line: &str) -> Result<Line, Refusal> {
 
 fn cd_folder(part: Vec<Item>) -> Result<String, Refusal> {
     match part.as_slice() {
-        [_, Item::Word { text, .. }] if !text.is_empty() && !text.starts_with('-') => Ok(text.clone()),
+        [_, Item::Word { text, .. }] if !text.is_empty() && !text.starts_with('-') => {
+            // The shell reads `..` by the path as written, through links,
+            // where moonlet checks the folder it leads to.
+            if text.split('/').any(|part| part == "..") {
+                return refuse("`cd` takes a folder without `..`");
+            }
+            Ok(text.clone())
+        }
         _ => refuse("`cd` takes one folder"),
     }
 }
@@ -505,7 +525,6 @@ fn command(part: Vec<Item>, out: &mut Line) -> Result<(), Refusal> {
 fn duration(s: &str) -> bool {
     let n = s.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(s);
     let (whole, frac) = n.split_once('.').unwrap_or((n, "0"));
-    let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
     digits(whole) && digits(frac)
 }
 
@@ -669,9 +688,7 @@ pub fn mentions(line: &str, entries: &[String]) -> Option<String> {
                 _ => break,
             }
         }
-        let found = entries
-            .iter()
-            .find(|e| split(e).is_some_and(|e| !e.is_empty() && w.starts_with(&e)));
+        let found = entries.iter().find(|e| listed(w, std::slice::from_ref(e)));
         if let Some(e) = found {
             return Some(e.clone());
         }
@@ -856,6 +873,36 @@ pub fn claude_rules(files: &[std::path::PathBuf]) -> Vec<BashRule> {
         }
     }
     rules
+}
+
+/// Whether Claude Code settings `files` have a `deny` or `ask` rule for
+/// editing or writing files, as for a line that writes one: a routed line
+/// runs without Claude Code's prompt for it. A settings file that exists
+/// but cannot be read could hold one.
+pub fn claude_guards_writes(files: &[std::path::PathBuf]) -> bool {
+    const TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+    files.iter().any(|f| {
+        let text = match std::fs::read_to_string(f) {
+            Ok(t) => t,
+            Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return true;
+        };
+        ["deny", "ask"].iter().any(|list| {
+            json.pointer(&format!("/permissions/{list}"))
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .any(|rule| {
+                    let rule = rule.trim();
+                    TOOLS.iter().any(|t| {
+                        rule == *t || rule.strip_prefix(t).is_some_and(|r| r.starts_with('('))
+                    })
+                })
+        })
+    })
 }
 
 fn bash_rule(rule: &str) -> Option<BashRule> {
@@ -1172,7 +1219,7 @@ mod tests {
     /// with `M` for `moonlet exec -- `, or why it is refused.
     fn reads(line: &str) -> Result<String, String> {
         parse(line)
-            .map(|l| format!("{}M{}{}", l.before(), l.command(), l.after()))
+            .map(|l| format!("{}M {}-- {}{}", l.before(), l.exec_args(), l.command(), l.after()))
             .map_err(|r| r.0)
     }
 
@@ -1182,43 +1229,43 @@ mod tests {
     fn wrapped_lines_parse_into_the_command_and_what_runs_around_it() {
         let ok = |s: &str| Ok::<String, String>(s.to_string());
         let rows: [(&str, Result<String, String>); 27] = [
-            ("pnpm test", ok("Mpnpm test")),
-            ("cd web && pnpm test", ok("cd ./web && Mpnpm test")),
-            ("cd /w/shop/web && pnpm test", ok("cd /w/shop/web && Mpnpm test")),
-            ("cd 'my app' && pnpm test", ok("cd './my app' && Mpnpm test")),
-            ("CI=1 pnpm test", ok("CI=1 Mpnpm test")),
-            ("CI=1 NODE_ENV='a b' pnpm test", ok("CI=1 NODE_ENV='a b' Mpnpm test")),
-            ("env CI=1 pnpm test", ok("CI=1 Mpnpm test")),
-            ("timeout 600 pnpm test", ok("timeout 600 Mpnpm test")),
-            ("timeout 1.5m pnpm test", ok("timeout 1.5m Mpnpm test")),
-            ("pnpm test 2>&1", ok("Mpnpm test 2>&1")),
-            ("pnpm test 2>&1 | tail -50", ok("Mpnpm test 2>&1 | tail -50")),
-            ("pnpm test | tail -n 50", ok("Mpnpm test | tail -n 50")),
-            ("pnpm test | tail -n +3", ok("Mpnpm test | tail -n +3")),
-            ("pnpm test | head -n20", ok("Mpnpm test | head -n20")),
+            ("pnpm test", ok("M -- pnpm test")),
+            ("cd web && pnpm test", ok("cd ./web && M -- pnpm test")),
+            ("cd /w/shop/web && pnpm test", ok("cd /w/shop/web && M -- pnpm test")),
+            ("cd 'my app' && pnpm test", ok("cd './my app' && M -- pnpm test")),
+            ("CI=1 pnpm test", ok("M --env CI=1 -- pnpm test")),
+            ("CI=1 NODE_ENV='a b' pnpm test", ok("M --env CI=1 --env 'NODE_ENV=a b' -- pnpm test")),
+            ("env CI=1 pnpm test", ok("M --env CI=1 -- pnpm test")),
+            ("timeout 600 pnpm test", ok("timeout 600 M -- pnpm test")),
+            ("timeout 1.5m pnpm test", ok("timeout 1.5m M -- pnpm test")),
+            ("pnpm test 2>&1", ok("M -- pnpm test 2>&1")),
+            ("pnpm test 2>&1 | tail -50", ok("M -- pnpm test 2>&1 | tail -50")),
+            ("pnpm test | tail -n 50", ok("M -- pnpm test | tail -n 50")),
+            ("pnpm test | tail -n +3", ok("M -- pnpm test | tail -n +3")),
+            ("pnpm test | head -n20", ok("M -- pnpm test | head -n20")),
             (
                 "pnpm test 2>&1 | grep -E \"FAIL|Error\" | head -20",
-                ok("Mpnpm test 2>&1 | grep -E 'FAIL|Error' | head -20"),
+                ok("M -- pnpm test 2>&1 | grep -E 'FAIL|Error' | head -20"),
             ),
-            ("pnpm test | grep -v -e skip -A 3", ok("Mpnpm test | grep -v -e skip -A 3")),
-            ("pnpm test > out.txt 2>&1", ok("Mpnpm test > out.txt 2>&1")),
-            ("pnpm test 2>/dev/null >> log/test.txt", ok("Mpnpm test 2> /dev/null >> log/test.txt")),
-            ("pnpm test 2>&1 >out.txt", ok("Mpnpm test 2>&1 > out.txt")),
-            ("pnpm test --reporter=dot 2>&1 --run", ok("Mpnpm test --reporter=dot --run 2>&1")),
+            ("pnpm test | grep -v -e skip -A 3", ok("M -- pnpm test | grep -v -e skip -A 3")),
+            ("pnpm test > out.txt 2>&1", ok("M -- pnpm test > out.txt 2>&1")),
+            ("pnpm test 2>/dev/null >> log/test.txt", ok("M -- pnpm test 2> /dev/null >> log/test.txt")),
+            ("pnpm test 2>&1 >out.txt", ok("M -- pnpm test 2>&1 > out.txt")),
+            ("pnpm test --reporter=dot 2>&1 --run", ok("M -- pnpm test --reporter=dot --run 2>&1")),
             // Words the shell would read are quoted, so they reach the
             // command as they were parsed.
-            ("pnpm test \"a;b\" =x", ok("Mpnpm test 'a;b' '=x'")),
-            ("pnpm test a\\ b", ok("Mpnpm test 'a b'")),
+            ("pnpm test \"a;b\" =x", ok("M -- pnpm test 'a;b' '=x'")),
+            ("pnpm test a\\ b", ok("M -- pnpm test 'a b'")),
             (
                 "cd web && CI=1 timeout 600 pnpm test 2>&1 | tail -n 50",
-                ok("cd ./web && CI=1 timeout 600 Mpnpm test 2>&1 | tail -n 50"),
+                ok("cd ./web && timeout 600 M --env CI=1 -- pnpm test 2>&1 | tail -n 50"),
             ),
-            ("pnpm  test", ok("Mpnpm test")),
+            ("pnpm  test", ok("M -- pnpm test")),
             // `env` and `timeout` in any other form are the command
             // itself, routed only when approved as such.
-            ("env", ok("Menv")),
-            ("env -i CI=1 pnpm test", ok("Menv -i CI=1 pnpm test")),
-            ("timeout -s KILL 5 pnpm test", ok("Mtimeout -s KILL 5 pnpm test")),
+            ("env", ok("M -- env")),
+            ("env -i CI=1 pnpm test", ok("M -- env -i CI=1 pnpm test")),
+            ("timeout -s KILL 5 pnpm test", ok("M -- timeout -s KILL 5 pnpm test")),
         ];
         for (line, want) in rows {
             assert_eq!(reads(line), want, "{line}");
@@ -1230,7 +1277,7 @@ mod tests {
     fn lines_beyond_the_routed_forms_are_refused_with_why() {
         let no = |s: &str| Err::<String, String>(s.to_string());
         let second = "it runs a second command";
-        let rows: [(&str, Result<String, String>); 32] = [
+        let rows: [(&str, Result<String, String>); 34] = [
             ("pnpm test && git status", no(second)),
             ("pnpm test; git status", no(second)),
             ("pnpm test || true", no(second)),
@@ -1262,6 +1309,9 @@ mod tests {
             ("time pnpm test", no("it starts with `time`, which the shell runs itself")),
             ("\"CI\"=1 pnpm test", no("`CI=1` reads as an assignment the shell would not make")),
             ("cd && pnpm test", no("`cd` takes one folder")),
+            // The shell reads `..` by the path as written, through links.
+            ("cd .. && pnpm test", no("`cd` takes a folder without `..`")),
+            ("cd web/link/../.. && pnpm test", no("`cd` takes a folder without `..`")),
             ("pnpm test 'open", no("a quote is not closed")),
         ];
         for (line, want) in rows {

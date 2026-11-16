@@ -67,6 +67,10 @@ enum Cmd {
         /// The Claude Code tool call it runs for, so its job is found (X62).
         #[arg(long)]
         tool_use: Option<String>,
+        /// A variable for the command alone, `NAME=value`: a routed line's
+        /// assignments, which never reach `moonlet exec` itself.
+        #[arg(long = "env", value_name = "NAME=VALUE", value_parser = parse_assignment)]
+        env: Vec<(String, String)>,
         /// The command and its arguments, after `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
@@ -446,15 +450,15 @@ fn main() {
         .enable_all()
         .build()
         .expect("runtime");
-    if let Cmd::Exec { command, tool_use } = &cli.cmd {
+    if let Cmd::Exec { command, tool_use, env } = &cli.cmd {
         // In a session, the session's daemon runs it (X62); anything it
         // refuses, or no daemon at all, runs here as without moonlet.
         if let Ok(session) = std::env::var("MOONLET_SESSION") {
-            if let Some(status) = rt.block_on(exec::routed(&socket, &session, command, tool_use.clone())) {
+            if let Some(status) = rt.block_on(exec::routed(&socket, &session, command, env, tool_use.clone())) {
                 std::process::exit(status);
             }
         }
-        exec_here(command);
+        exec_here(command, env);
     }
     if let Cmd::Hook { agent, payload } = cli.cmd {
         // Hooks run inside every agent session, moonlet or not: stay silent and fast.
@@ -475,10 +479,25 @@ async fn connect(socket: &std::path::Path) -> Result<Client> {
         .context("is the moonlet daemon running? (moonletd start)")
 }
 
-/// Runs `command` in place of this process, as the shell would have.
-fn exec_here(command: &[String]) -> ! {
+/// `NAME=value`, for `moonlet exec --env`.
+fn parse_assignment(s: &str) -> std::result::Result<(String, String), String> {
+    let (name, value) = s.split_once('=').ok_or("expected NAME=value")?;
+    let ok = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !ok {
+        return Err(format!("`{name}` is not a variable name"));
+    }
+    Ok((name.to_string(), value.to_string()))
+}
+
+/// Runs `command`, with `env` added, in place of this process, as the
+/// shell would have.
+fn exec_here(command: &[String], env: &[(String, String)]) -> ! {
     use std::os::unix::process::CommandExt;
-    let e = std::process::Command::new(&command[0]).args(&command[1..]).exec();
+    let e = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .envs(env.iter().cloned())
+        .exec();
     eprintln!("moonlet: cannot run {}: {e}", command[0]);
     std::process::exit(127);
 }

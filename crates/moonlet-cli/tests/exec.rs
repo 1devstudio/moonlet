@@ -508,7 +508,7 @@ async fn a_wrapped_line_runs_its_command_through_moonlet_and_gives_what_it_gives
     assert_eq!(
         rewritten,
         format!(
-            "cd ./web && CI=1 '{}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- sh -c 'echo \"$CI@${{PWD##*/}}\"; echo noise; touch made; exit 3' 2>&1 | grep @web",
+            "cd ./web && '{}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb --env CI=1 -- sh -c 'echo \"$CI@${{PWD##*/}}\"; echo noise; touch made; exit 3' 2>&1 | grep @web",
             env!("CARGO_BIN_EXE_moonlet")
         )
     );
@@ -521,12 +521,26 @@ async fn a_wrapped_line_runs_its_command_through_moonlet_and_gives_what_it_gives
         assert_eq!(shell(&s, sh, &rewritten), ("1@web\n".to_string(), Some(status)), "{sh:?} routed");
         assert!(Path::new(&s.worktree).join("web/made").exists());
     }
+    // The other parts, each where it runs.
+    let m = env!("CARGO_BIN_EXE_moonlet");
+    for (line, want) in [
+        ("timeout 600 sh -c 'echo hi'", format!("timeout 600 '{m}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- sh -c 'echo hi'")),
+        ("env CI=1 sh -c 'echo hi'", format!("'{m}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb --env CI=1 -- sh -c 'echo hi'")),
+        ("sh -c 'echo hi' > web/out.txt 2>&1", format!("'{m}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- sh -c 'echo hi' > web/out.txt 2>&1")),
+    ] {
+        let out = hook(&s.socket, &s.session, &payload(line, &s.worktree));
+        let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(answer["hookSpecificOutput"]["updatedInput"]["command"], json!(want), "{line}");
+    }
+    // A variable reaches the command, not what runs around it here.
+    let rewritten = format!("export CI=2; '{m}' exec --env CI=1 -- sh -c 'echo $CI'; echo \"$CI\"");
+    assert_eq!(shell(&s, &["sh", "-c"], &rewritten).0, "1\n2\n");
     // It ran as a job, with `CI` passed on.
     let jobs: Value = app
         .request("job.list", json!({ "session": s.session }))
         .await
         .unwrap();
-    assert_eq!(jobs.as_array().unwrap().len(), 2);
+    assert_eq!(jobs.as_array().unwrap().len(), 3);
     assert_eq!(jobs[0]["env"], json!(["CI"]));
 }
 

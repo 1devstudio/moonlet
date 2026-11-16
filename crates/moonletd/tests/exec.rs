@@ -267,8 +267,15 @@ async fn a_wrapped_line_routes_with_what_runs_around_its_command() {
             "cd web && pnpm test 2>&1 | tail -n 50",
             routed("cd ./web && ", "pnpm test", " 2>&1 | tail -n 50"),
         ),
-        ("CI=1 pnpm test --run", routed("CI=1 ", "pnpm test --run", "")),
-        ("env CI=1 pnpm test", routed("CI=1 ", "pnpm test", "")),
+        // The variables go to the command alone, through `moonlet exec`.
+        (
+            "CI=1 pnpm test --run",
+            json!({ "route": true, "reason": null, "line": { "before": "", "args": "--env CI=1 ", "command": "pnpm test --run", "after": "" } }),
+        ),
+        (
+            "env CI=1 timeout 600 pnpm test",
+            json!({ "route": true, "reason": null, "line": { "before": "timeout 600 ", "args": "--env CI=1 ", "command": "pnpm test", "after": "" } }),
+        ),
         ("timeout 600 pnpm build", routed("timeout 600 ", "pnpm build", "")),
         (
             "pnpm test 2>/dev/null | grep -E 'FAIL|Error'",
@@ -293,7 +300,7 @@ async fn a_wrapped_line_that_leaves_the_worktree_or_passes_other_variables_stays
     std::fs::create_dir_all(c.worktree.join("web")).unwrap();
     let top = c.worktree.clone();
     let rows = [
-        ("cd .. && pnpm test", "`cd ..` leaves the session's worktree"),
+        ("cd .. && pnpm test", "`cd` takes a folder without `..`"),
         ("cd missing && pnpm test", "`cd missing` leaves the session's worktree"),
         ("pnpm test > /tmp/out.txt", "`/tmp/out.txt` is outside the session's worktree"),
         ("pnpm test > ../out.txt", "`../out.txt` is outside the session's worktree"),
@@ -334,6 +341,22 @@ async fn a_wrapped_line_that_leaves_the_worktree_or_passes_other_variables_stays
 }
 
 #[tokio::test]
+async fn a_line_whose_heavy_command_is_not_approved_tells_the_agent_nothing() {
+    let c = central().await;
+    let top = c.worktree.clone();
+    // Reshaping it would not route it: it stays here as not approved.
+    assert_eq!(
+        c.route_line("pnpm test; git status", &top).await,
+        json!({ "route": false, "reason": "not_approved" })
+    );
+    let stayed: Value = c
+        .daemon
+        .call("job.stayed", json!({ "session": c.session }))
+        .await;
+    assert_eq!(stayed[0]["why"], json!("the project's heavy commands are not approved"));
+}
+
+#[tokio::test]
 async fn a_hook_that_rewrites_only_bare_commands_never_gets_a_wrapped_line() {
     let c = central().await;
     c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
@@ -347,6 +370,27 @@ async fn a_hook_that_rewrites_only_bare_commands_never_gets_a_wrapped_line() {
     assert_eq!(
         c.route("pnpm test").await,
         json!({ "route": true, "reason": null })
+    );
+}
+
+#[tokio::test]
+async fn a_line_that_writes_a_file_stays_here_when_claude_code_guards_edits() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    let top = c.worktree.clone();
+    write(
+        &c.worktree.join(".claude/settings.local.json"),
+        r#"{"permissions": {"ask": ["Edit(./src/**)"]}}"#,
+    );
+    // Claude Code would ask before a file is written: the line keeps it.
+    assert_eq!(
+        c.route_line("pnpm test > out.txt", &top).await,
+        json!({ "route": false, "reason": "claude_rule" })
+    );
+    // Writing nowhere, or nothing, still routes.
+    assert_eq!(
+        c.route_line("pnpm test 2>/dev/null | tail -5", &top).await,
+        json!({ "route": true, "reason": null, "line": { "before": "", "command": "pnpm test", "after": " 2> /dev/null | tail -5" } })
     );
 }
 

@@ -152,8 +152,9 @@ describe("routed Bash rows in the chat (X62)", () => {
 
   it("a routed line shows what ran around moonlet exec, without it", () => {
     expect(
-      shownCommand("cd ./web && CI=1 timeout 600 '/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_01 -- pnpm test 2>&1 | tail -n 50"),
-    ).toBe("cd ./web && CI=1 timeout 600 pnpm test 2>&1 | tail -n 50");
+      shownCommand("cd ./web && timeout 600 '/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_01 --env CI=1 -- pnpm test 2>&1 | tail -n 50"),
+    ).toBe("cd ./web && timeout 600 CI=1 pnpm test 2>&1 | tail -n 50");
+    expect(shownCommand("'/m/moonlet' exec --env CI=1 --env 'NODE_ENV=a b' -- pnpm test")).toBe("CI=1 'NODE_ENV=a b' pnpm test");
     expect(shownCommand("cd './my app' && '/Users/al'\\''ex/moonlet' exec -- pnpm test")).toBe("cd './my app' && pnpm test");
     // Text that only looks like it, inside the agent's own command, stays.
     expect(shownCommand("echo \"x' exec -- y\"")).toBe("echo \"x' exec -- y\"");
