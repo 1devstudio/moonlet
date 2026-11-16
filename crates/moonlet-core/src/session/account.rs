@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::account::{
-    Log, LogFile, Record, RecordKind, Version, key_between, log_owner, new_log_name,
+    now_ms, Log, LogFile, Record, RecordKind, Version, key_between, log_owner, new_log_name,
 };
 use crate::identity::same_project;
 
@@ -99,11 +99,6 @@ const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
 
-/// How far ahead of this machine's clock a change may be stamped. One
-/// further ahead would win every field from then on and pull every
-/// member's clock forward with it, so it is refused, and stays with its
-/// member until its clock is right.
-const AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub(super) struct Account {
     log: Log,
@@ -879,10 +874,67 @@ impl SessionManager {
         Ok(sent)
     }
 
+    /// Notes that this member's central host counts `n` of its own
+    /// changes, from their last exchange: those are never stamped again
+    /// ([`Log::set_shared`]).
+    pub fn set_own_counted(&self, n: u64) {
+        if let Some(a) = self.account.lock().unwrap().as_mut() {
+            a.log.set_shared(n);
+        }
+    }
+
+    /// Whether this member holds any of its own changes after the first
+    /// `counted` stamped past [`Log::limit`]: made while its clock was
+    /// wrong, so its central host may have refused them.
+    pub fn own_changes_ahead(&self, counted: u64) -> bool {
+        self.with_log(|log| log.own_ahead_after(now_ms(), counted))
+    }
+
+    /// Stamps again, now, this member's own changes the others refused for
+    /// a stamp from a clock that was wrong, and sends them
+    /// ([`Log::restamp_ahead`]): its central host counts `counted` of this
+    /// member's changes and holds `theirs` after them. A central host,
+    /// which no other member referees, passes 0 and none. Gives how many it
+    /// sent; an error when the log or the state could not be saved,
+    /// leaving both as they were.
+    pub fn restamp_own(&self, counted: u64, theirs: &[Change]) -> Result<usize> {
+        let again = {
+            let mut st = self.state.lock().unwrap();
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return Ok(0) };
+            // Every member's exchange asks on a central host: the log is
+            // copied only when there is something to stamp again.
+            if !a.log.own_ahead_after(now_ms(), counted) {
+                return Ok(0);
+            }
+            let mut log = a.log.clone();
+            let again = log.restamp_ahead(now_ms(), counted, theirs);
+            if again.is_empty() {
+                return Ok(0);
+            }
+            let mut next = st.clone();
+            lay_onto(&mut next, &log);
+            write_private(&a.path, &log).and_then(|()| self.save(&next))?;
+            a.log = log;
+            *st = next;
+            again
+        };
+        tracing::warn!(
+            "{} of this member's account changes were stamped while its clock was wrong, and its central host refused them: stamped them again by its clock",
+            again.len()
+        );
+        let sent = again.len();
+        self.account_changed(again);
+        self.emit_all();
+        Ok(sent)
+    }
+
     /// Takes in changes from other members, and shows what they change.
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
-        let limit = now_ms() + AHEAD_MS;
+        let Some(limit) = self.account.lock().unwrap().as_ref().map(|a| a.log.limit(now_ms())) else {
+            return Vec::new();
+        };
         let (changes, ahead): (Vec<Change>, Vec<Change>) =
             changes.into_iter().partition(|c| c.stamp.ms <= limit);
         if let Some(c) = ahead.first() {

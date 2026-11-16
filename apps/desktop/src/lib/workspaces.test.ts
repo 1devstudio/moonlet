@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerWorkspace, isShown, workspaceMembers, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { clockLines, composerWorkspace, isShown, workspaceMembers, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -355,5 +355,36 @@ describe("wsKey and parseWsKey (one build, one parse)", () => {
     expect(wsKey("mac-mini", "personal")).toBe("mac-mini/personal");
     expect(parseWsKey("mac-mini/personal")).toEqual({ host: "mac-mini", id: "personal" });
     expect(parseWsKey("local/a/b")).toEqual({ host: "local", id: "a/b" });
+  });
+});
+
+describe("clockLines (X68)", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const member = (ahead_ms: number) => ({ account: "acct-mini", central: "studio-mini", clocks: [{ worker: "acct-mini", name: "studio-mini", ahead_ms }] });
+
+  it("names the central host whose clock is off from this Mac's, either way", () => {
+    expect(clockLines(member(-365 * day))).toEqual(["studio-mini's clock is 1 year behind this Mac's: account changes between them wait until the clocks agree"]);
+    expect(clockLines(member(8 * day))).toEqual(["studio-mini's clock is 8 days ahead of this Mac's: account changes between them wait until the clocks agree"]);
+  });
+
+  it("names each member whose clock is off on its central host, and says nothing of a clock off by less than a day", () => {
+    const central = {
+      account: "acct-mini",
+      central: null,
+      clocks: [
+        { worker: "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", name: "Alex's MacBook Pro", ahead_ms: 2 * 365 * day },
+        { worker: "0b9e4f61-2a7c-4d3e-8f15-6c2a9d0e7b48", name: "Alex's MacBook Air", ahead_ms: -23 * 60 * 60 * 1000 },
+        { worker: "5c1d", name: "Office iMac", ahead_ms: -3 * day },
+      ],
+    };
+    expect(clockLines(central)).toEqual([
+      "Alex's MacBook Pro's clock is 2 years ahead of this Mac's: account changes between them wait until the clocks agree",
+      "Office iMac's clock is 3 days behind this Mac's: account changes between them wait until the clocks agree",
+    ]);
+  });
+
+  it("says nothing without clocks, or from a daemon from before them", () => {
+    expect(clockLines(undefined)).toEqual([]);
+    expect(clockLines({ account: "acct-mini", central: "studio-mini" })).toEqual([]);
   });
 });

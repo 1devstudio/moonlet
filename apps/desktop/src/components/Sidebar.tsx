@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
+import { clockLines } from "../lib/workspaces";
 import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
@@ -812,6 +813,23 @@ function CentralOffline() {
   );
 }
 
+/** "studio-mini's clock is 1 year ahead of this Mac's…": a clock off by
+ * more than a day, so account changes between the two wait (X68). */
+function ClockOffLines() {
+  const info = useStore((st) => st.accounts.local);
+  const lines = useMemo(() => clockLines(info), [info]);
+  return (
+    <>
+      {lines.map((line) => (
+        <div key={line} className="flex items-start gap-1.5 px-4 pb-1 ui-text-12 text-faint">
+          <Clock size={12} className="mt-0.5 shrink-0 opacity-50" />
+          <span>{line}</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Run only on…, Unpin and Take over anyway for session `s` on `host` (X73). */
 function followItems(host: string, s: Session): MenuItem[] {
   const st = useStore.getState();
@@ -1010,6 +1028,7 @@ export function Sidebar() {
       ) : (
       <>
       <CentralOffline />
+      <ClockOffLines />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />

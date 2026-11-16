@@ -58,6 +58,23 @@ impl RecordKind {
     }
 }
 
+/// How far ahead of a member's wall clock a stamp may be (X68). A change
+/// stamped further ahead would win every field from then on and pull every
+/// member's clock forward with it, so members refuse it, and a member never
+/// takes its own clock from one.
+pub const AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// The wall clock the account goes by, in ms. Tests shift it by
+/// `MOONLET_TEST_ACCOUNT_CLOCK_MS` (signed) to play a Mac whose clock is
+/// wrong, never changing the machine's own.
+pub fn now_ms() -> u64 {
+    let now = crate::paths::now_ms();
+    match std::env::var("MOONLET_TEST_ACCOUNT_CLOCK_MS").ok().and_then(|v| v.parse::<i64>().ok()) {
+        Some(off) => now.saturating_add_signed(off),
+        None => now,
+    }
+}
+
 /// A record's fields by name.
 pub type Record = BTreeMap<String, Value>;
 
@@ -83,8 +100,14 @@ pub struct LogFile {
 #[derive(Debug, Clone)]
 pub struct Log {
     member: String,
-    /// The latest stamp's time and counter seen or made here.
+    /// The latest stamp's time and counter seen or made here. A change
+    /// made here comes after it only while it is within [`AHEAD_MS`] of the
+    /// wall clock ([`Self::stamped`]).
     clock: (u64, u32),
+    /// How many of its own changes this log's central host counts, by
+    /// their last exchange: those are never stamped again, as other
+    /// members may hold them ([`Self::restamp_ahead`]).
+    shared: u64,
     /// How many changes this member has made.
     seq: u64,
     /// Every change seen, by member and `seq`, so one that arrives twice
@@ -101,6 +124,7 @@ impl Log {
         Log {
             member: member.into(),
             clock: (0, 0),
+            shared: 0,
             seq: 0,
             changes: BTreeMap::new(),
             former: Vec::new(),
@@ -238,26 +262,47 @@ impl Log {
         self.stamped(now_ms, kind, id, ChangeOp::Delete)
     }
 
+    /// Notes that this log's central host counts `n` of its own changes,
+    /// from their last exchange.
+    pub fn set_shared(&mut self, n: u64) {
+        self.shared = n;
+    }
+
+    /// The latest stamp a change may have at wall time `now_ms`: one later
+    /// is from a clock that was wrong, here or on another member.
+    pub fn limit(&self, now_ms: u64) -> u64 {
+        now_ms.saturating_add(AHEAD_MS)
+    }
+
+    /// The clock a change made at wall time `now_ms` follows: the latest
+    /// stamp seen or made here, leaving out any past [`Self::limit`]. A
+    /// stamp this member made while its own clock was wrong would otherwise
+    /// carry every change it makes after it, and the other members refuse
+    /// those until real time catches up.
+    fn clock_at(&self, now_ms: u64) -> (u64, u32) {
+        let limit = self.limit(now_ms);
+        if self.clock.0 <= limit {
+            return self.clock;
+        }
+        self.changes
+            .values()
+            .map(|c| (c.stamp.ms, c.stamp.n))
+            .filter(|&(ms, _)| ms <= limit)
+            .max()
+            .unwrap_or((0, 0))
+    }
+
     /// A change stamped later than every change seen, even when this
-    /// machine's clock is behind another member's.
+    /// machine's clock is behind another member's, but never from a clock
+    /// that was wrong ([`Self::clock_at`]). This log's own changes stamped
+    /// past the limit are stamped again first ([`Self::restamp_ahead`]), so
+    /// a change made now still comes after them.
     fn stamped(&mut self, now_ms: u64, kind: RecordKind, id: &str, op: ChangeOp) -> Change {
-        let (ms, n) = self.clock;
-        self.clock = if now_ms > ms {
-            (now_ms, 0)
-        } else if n == u32::MAX {
-            // A counter at its limit, from a change received: the next
-            // millisecond instead.
-            (ms + 1, 0)
-        } else {
-            (ms, n + 1)
-        };
+        self.restamp_ahead(now_ms, 0, &[]);
+        let stamp = self.next_stamp(now_ms);
         self.seq = self.seq.saturating_add(1);
         let c = Change {
-            stamp: Stamp {
-                ms: self.clock.0,
-                n: self.clock.1,
-                member: self.member.clone(),
-            },
+            stamp,
             seq: self.seq,
             kind: kind.as_str().into(),
             id: id.into(),
@@ -266,6 +311,75 @@ impl Log {
         self.changes
             .insert((self.member.clone(), self.seq), c.clone());
         c
+    }
+
+    /// The next stamp of a change made here at wall time `now_ms`. The
+    /// clock stays the latest stamp seen or made, so a stamp left out now
+    /// counts again once the wall clock is within a day of it.
+    fn next_stamp(&mut self, now_ms: u64) -> Stamp {
+        let (ms, n) = self.clock_at(now_ms);
+        let next = if now_ms > ms {
+            (now_ms, 0)
+        } else if n == u32::MAX {
+            // A counter at its limit, from a change received: the next
+            // millisecond instead.
+            (ms + 1, 0)
+        } else {
+            (ms, n + 1)
+        };
+        self.clock = self.clock.max(next);
+        Stamp {
+            ms: next.0,
+            n: next.1,
+            member: self.member.clone(),
+        }
+    }
+
+    /// This log's own changes after the first `counted`, oldest first.
+    fn own_after(&self, counted: u64) -> impl Iterator<Item = &Change> {
+        self.changes
+            .range((self.member.clone(), counted.saturating_add(1))..)
+            .take_while(|((m, _), _)| *m == self.member)
+            .map(|(_, c)| c)
+    }
+
+    /// Whether any of this log's own changes after the first `counted` is
+    /// stamped past [`Self::limit`] at wall time `now_ms`: made while this
+    /// member's clock was wrong, so its central host may have refused it.
+    pub fn own_ahead_after(&self, now_ms: u64, counted: u64) -> bool {
+        let limit = self.limit(now_ms);
+        self.own_after(counted).any(|c| c.stamp.ms > limit)
+    }
+
+    /// Stamps again, at wall time `now_ms`, this log's own changes stamped
+    /// past [`Self::limit`]: made while this member's clock was wrong, and
+    /// refused by every member whose clock was right. Each keeps its number
+    /// with its new stamp, which closes the gap they left in what the
+    /// others count, and a field one of them set can change again. Those
+    /// its central host counts (`counted`, or [`Self::set_shared`]) or
+    /// holds past them (`theirs`) are left as they are: another member may
+    /// hold them, and takes no other change under their numbers. Returns
+    /// the changes stamped again, oldest first; none while the clock is
+    /// still wrong, as the stamps are then within its limit.
+    pub fn restamp_ahead(&mut self, now_ms: u64, counted: u64, theirs: &[Change]) -> Vec<Change> {
+        let limit = self.limit(now_ms);
+        let held: BTreeSet<u64> = theirs
+            .iter()
+            .filter(|c| c.stamp.member == self.member)
+            .map(|c| c.seq)
+            .collect();
+        let refused: Vec<Change> = self
+            .own_after(counted.max(self.shared))
+            .filter(|c| c.stamp.ms > limit && !held.contains(&c.seq))
+            .cloned()
+            .collect();
+        let mut again = Vec::new();
+        for c in refused {
+            let c = Change { stamp: self.next_stamp(now_ms), ..c };
+            self.changes.insert((self.member.clone(), c.seq), c.clone());
+            again.push(c);
+        }
+        again
     }
 
     /// What this member has seen: for each member, the changes up to the
@@ -625,6 +739,115 @@ mod tests {
         );
         assert_eq!(later.seq, 3);
         assert!(book.records(RecordKind::Workspace).is_empty());
+    }
+
+    #[test]
+    fn a_member_whose_clock_was_a_year_ahead_once_stamps_by_its_wall_clock_once_it_is_right() {
+        // 2026-11-16 10:00 on the MacBook, whose clock said 2027-11-16 for a
+        // minute while it renamed a workspace.
+        let now = 1_794_823_200_000;
+        let year = 365 * 24 * 60 * 60 * 1000;
+        let mut book = Log::new("book.k3x9q2");
+        let wrong = book.set(now + year, RecordKind::Workspace, "w1", "name", json!("Home"));
+        assert_eq!(wrong.stamp.ms, 1_826_359_200_000);
+        // Its clock is right again a minute later; the log, saved and
+        // loaded again, still holds the stamp a year ahead. The next change
+        // stamps "Home" again first, and comes after it.
+        let mut book = Log::from_file(book.to_file());
+        let right = book.set(now + 60_000, RecordKind::Workspace, "w1", "color", json!("blue"));
+        let at = |ms: u64, n: u32| Stamp { ms, n, member: "book.k3x9q2".into() };
+        assert_eq!(book.get("book.k3x9q2", 1).unwrap().stamp, at(1_794_823_260_000, 0));
+        assert_eq!(right.stamp, at(1_794_823_260_000, 1));
+        // So a rename made here now wins over it.
+        book.set(now + 90_000, RecordKind::Workspace, "w1", "name", json!("Work"));
+        assert_eq!(book.records(RecordKind::Workspace)["w1"]["name"], json!("Work"));
+        // A change another member stamped an hour ahead still comes first:
+        // a clock that drifts is not a clock that is wrong.
+        book.apply(vec![set(now + 3_600_000, "mini.a1b2c3", 1, "w1", "name", json!("Studio"))]);
+        let next = book.set(now + 120_000, RecordKind::Workspace, "w1", "name", json!("Office"));
+        assert_eq!(next.stamp, at(1_794_826_800_000, 1));
+        assert_eq!(book.records(RecordKind::Workspace)["w1"]["name"], json!("Office"));
+    }
+
+    #[test]
+    fn a_stamp_left_out_of_the_clock_counts_again_once_the_wall_clock_is_within_a_day_of_it() {
+        let now = 1_794_823_200_000;
+        let hour = 60 * 60 * 1000;
+        let mut book = Log::new("book.k3x9q2");
+        // studio-mini's change, taken while this Mac's clock said a day
+        // later than it says now.
+        book.apply(vec![set(now + 36 * hour, "mini.a1b2c3", 1, "w1", "name", json!("Studio"))]);
+        let first = book.set(now, RecordKind::Workspace, "w1", "color", json!("blue"));
+        assert_eq!(first.stamp.ms, 1_794_823_200_000);
+        // Fifteen hours on, it is within a day: a change comes after it.
+        let next = book.set(now + 15 * hour, RecordKind::Workspace, "w1", "name", json!("Home"));
+        assert_eq!((next.stamp.ms, next.stamp.n), (1_794_952_800_000, 1));
+        assert_eq!(book.records(RecordKind::Workspace)["w1"]["name"], json!("Home"));
+    }
+
+    #[test]
+    fn changes_refused_for_a_clock_that_was_wrong_are_stamped_again_and_their_fields_change_again() {
+        let now = 1_794_823_200_000;
+        let year = 365 * 24 * 60 * 60 * 1000;
+        let book = "book.k3x9q2";
+        let mut log = Log::new(book);
+        let home = log.set(now - 600_000, RecordKind::Workspace, "w1", "name", json!("Home"));
+        // A minute with the clock a year ahead: studio-mini refuses both.
+        log.set(now + year, RecordKind::Workspace, "w1", "name", json!("Future"));
+        log.set(now + year, RecordKind::Section, "s1", "name", json!("Train"));
+        let mut central = Log::new("mini.a1b2c3");
+        central.apply(vec![home]);
+
+        // Nothing is stamped again while the clock is still a year ahead.
+        assert!(!log.own_ahead_after(now + year + 5_000, 1));
+        assert_eq!(log.clone().restamp_ahead(now + year + 5_000, 1, &[]), vec![]);
+        assert!(log.own_ahead_after(now + 2_000, 1));
+        let again = log.restamp_ahead(now + 2_000, 1, &[]);
+        let at = |n: u32| Stamp { ms: 1_794_823_202_000, n, member: book.into() };
+        assert_eq!(
+            again.iter().map(|c| (c.seq, c.stamp.clone(), c.kind.as_str(), c.op.clone())).collect::<Vec<_>>(),
+            vec![
+                (2, at(0), "workspace", ChangeOp::Set { field: "name".into(), value: json!("Future") }),
+                (3, at(1), "section", ChangeOp::Set { field: "name".into(), value: json!("Train") }),
+            ]
+        );
+        assert!(!log.own_ahead_after(now + 2_000, 1));
+        central.apply(again);
+        assert_eq!(central.version()[book], 3);
+        for l in [&log, &central] {
+            assert_eq!(l.records(RecordKind::Workspace)["w1"]["name"], json!("Future"));
+            assert_eq!(l.records(RecordKind::Section)["s1"]["name"], json!("Train"));
+        }
+        // Another member renames it a second later, and both take that.
+        let studio = central.set(now + 3_000, RecordKind::Workspace, "w1", "name", json!("Studio"));
+        log.apply(vec![studio]);
+        for l in [&log, &central] {
+            assert_eq!(l.records(RecordKind::Workspace)["w1"]["name"], json!("Studio"));
+        }
+    }
+
+    #[test]
+    fn a_change_another_member_holds_is_never_stamped_again() {
+        let now = 1_794_823_200_000;
+        let year = 365 * 24 * 60 * 60 * 1000;
+        let book = "book.k3x9q2";
+        let mut log = Log::new(book);
+        // studio-mini's clock was a year ahead too, and took the first one.
+        let held = log.set(now + year, RecordKind::Workspace, "w1", "name", json!("Future"));
+        log.set(now + year, RecordKind::Workspace, "w1", "color", json!("red"));
+        log.set(now + year, RecordKind::Workspace, "w1", "view", json!("list"));
+        assert_eq!(
+            log.clone().restamp_ahead(now, 0, std::slice::from_ref(&held)).iter().map(|c| c.seq).collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(log.clone().restamp_ahead(now, 2, &[]).iter().map(|c| c.seq).collect::<Vec<_>>(), [3]);
+        // Once an exchange said it counts the first two, a change made here
+        // stamps only the third again.
+        log.set_shared(2);
+        log.set(now, RecordKind::Workspace, "w1", "name", json!("Home"));
+        assert_eq!(log.get(book, 1), Some(&held));
+        assert_eq!(log.get(book, 2).unwrap().stamp.ms, 1_826_359_200_000);
+        assert_eq!(log.get(book, 3).unwrap().stamp.ms, 1_794_823_200_000);
     }
 
     #[test]

@@ -151,6 +151,28 @@ export function sharedNotice(info: AccountInfo, seen: string[]): string | null {
   return info.central && !seen.includes(info.account) ? `Workspaces are now shared with ${info.central}` : null;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "1 year", "8 days": how far a clock is off, for one off by a day or more. */
+function farOff(ms: number): string {
+  const years = Math.round(ms / (365 * DAY_MS));
+  if (years >= 1) return years === 1 ? "1 year" : `${years} years`;
+  const days = Math.max(1, Math.round(ms / DAY_MS));
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/** What this Mac's sidebar says of clocks that are off (X68), from its
+ * daemon's `account.get`: on a member, its central host's clock; on a
+ * central host, each member's. Members refuse changes stamped more than a
+ * day past their clock, so only a clock off by more than a day is named.
+ * With two clocks, which one is wrong cannot be told, so each line says
+ * which way the other Mac's is off from this one's. */
+export function clockLines(info: AccountInfo | undefined): string[] {
+  return (info?.clocks ?? [])
+    .filter((c) => Math.abs(c.ahead_ms) > DAY_MS)
+    .map((c) => `${c.name}'s clock is ${farOff(Math.abs(c.ahead_ms))} ${c.ahead_ms > 0 ? "ahead of" : "behind"} this Mac's: account changes between them wait until the clocks agree`);
+}
+
 /** Where the sidebar is: a workspace of a host, and the account it belongs
  * to, which shows it on every member of that account (X68). */
 export interface WorkspaceRef {

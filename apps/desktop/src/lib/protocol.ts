@@ -839,6 +839,20 @@ export interface Workspace {
 export interface AccountInfo {
   account: string;
   central: string | null;
+  /** Hosts of the account whose clock is a minute or more off from this
+   * host's: on a member, its central host; on a central host, its members.
+   * Absent when none is, and from a daemon from before them. */
+  clocks?: ClockOff[];
+}
+
+/** A host whose clock is off from this host's (X68). */
+export interface ClockOff {
+  /** Its worker id. */
+  worker: string;
+  /** Its name, as the account knows it. */
+  name: string;
+  /** How far its clock is ahead of this host's; negative when behind. */
+  ahead_ms: number;
 }
 
 /** A Claude Code config folder (X33). */

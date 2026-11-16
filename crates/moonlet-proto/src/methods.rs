@@ -3219,6 +3219,11 @@ pub struct AccountSync {
     pub version: BTreeMap<String, u64>,
     #[serde(default)]
     pub changes: Vec<crate::types::Change>,
+    /// The member's clock when it sent this, in ms, so the central host can
+    /// say whose clock looks wrong. A member from before this field sends
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_ms: Option<u64>,
 }
 
 /// `account.sync`'s reply: the changes the member lacks, and what the
@@ -3230,6 +3235,12 @@ pub struct AccountSynced {
     /// The account the central host shares, which its members share too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// The central host's clock when it answered, in ms: a member says when
+    /// the two clocks are far off, and while the central host's is more
+    /// than a day ahead, asks only for what is new. A central host from
+    /// before this field sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_ms: Option<u64>,
 }
 
 /// `account.get` (X68): the account this host shares, named after the
@@ -3239,6 +3250,25 @@ pub struct AccountSynced {
 pub struct AccountInfo {
     pub account: String,
     pub central: Option<String>,
+    /// Hosts of the account whose clock is a minute or more off from this
+    /// host's, by their last `account.sync`: on a member, its central host;
+    /// on a central host, its members. Absent when none is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clocks: Vec<ClockOff>,
+}
+
+/// A host whose clock is off from this host's (X68): changes stamped more
+/// than a day past a member's clock are refused, so a clock that far off
+/// keeps changes from reaching the others.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockOff {
+    /// Its worker id.
+    pub worker: String,
+    /// Its name, as the account knows it.
+    pub name: String,
+    /// How far its clock is ahead of this host's, to the minute; negative
+    /// when it is behind.
+    pub ahead_ms: i64,
 }
 
 /// `account.changed` (X68).
@@ -4286,6 +4316,34 @@ pub struct CloudTypes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X68: the clocks `account.sync` and `account.get` carry are optional
+    /// both ways, so a host from before them reads what a newer one sends,
+    /// and a newer one reads what an older one sends.
+    #[test]
+    fn account_messages_from_before_clocks_read_and_write_as_before() {
+        let old_sync = r#"{"version":{"book.k3x9q2":3},"changes":[]}"#;
+        let sync: AccountSync = serde_json::from_str(old_sync).unwrap();
+        assert_eq!(sync.now_ms, None);
+        assert_eq!(serde_json::to_string(&sync).unwrap(), old_sync);
+        let old_reply = r#"{"changes":[],"version":{"mini.a1b2c3":4},"account":"acct-mini"}"#;
+        let reply: AccountSynced = serde_json::from_str(old_reply).unwrap();
+        assert_eq!(reply.now_ms, None);
+        assert_eq!(serde_json::to_string(&reply).unwrap(), old_reply);
+        let info: AccountInfo = serde_json::from_str(r#"{"account":"acct-mini","central":"studio-mini"}"#).unwrap();
+        assert!(info.clocks.is_empty());
+        assert_eq!(serde_json::to_string(&info).unwrap(), r#"{"account":"acct-mini","central":"studio-mini"}"#);
+        // What an older host reads of a newer one's: the fields it knows.
+        #[derive(Deserialize)]
+        struct Older {
+            version: BTreeMap<String, u64>,
+            changes: Vec<crate::types::Change>,
+        }
+        let new_sync = serde_json::to_string(&AccountSync { now_ms: Some(1_794_823_200_000), ..sync }).unwrap();
+        assert_eq!(new_sync, r#"{"version":{"book.k3x9q2":3},"changes":[],"now_ms":1794823200000}"#);
+        let older: Older = serde_json::from_str(&new_sync).unwrap();
+        assert_eq!((older.version.len(), older.changes.len()), (1, 0));
+    }
 
     /// X73: a hand-over names each session's ownership number beside the
     /// ids, which stay a list of ids for a central host from before; a
