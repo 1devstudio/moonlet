@@ -3918,22 +3918,26 @@ impl Daemon {
                     continue;
                 }
             };
-            if let Some(why) = why.filter(|_| cut_off) {
-                let note = crate::session_copies::cut_off_note(&from, &me.name, why, &taken.from_path, &adopted.path);
-                if let Err(e) = self.chats.send(started.id, &note, &[]) {
-                    tracing::warn!(%session, "cannot tell the agent its turn was cut off: {e:#}");
-                }
+            // The cut-off turn goes on with a note, then the messages it
+            // had queued; an ask kept open waits for its answer instead.
+            let note = why
+                .filter(|_| cut_off)
+                .map(|why| crate::session_copies::cut_off_note(&from, &me.name, why, &taken.from_path, &adopted.path));
+            if let Err(e) = self.chats.go_on(started.id, note.as_deref()) {
+                tracing::warn!(%session, "cannot go on with a continued chat: {e:#}");
             }
         }
         let s = self.sessions.session(session).map_err(internal)?;
-        // What its chats hold now never counts as typed here (X73).
+        // What its chats hold now never counts as typed here (X73), the
+        // messages queued as it moved included: each keeps its id.
         let held = s
             .terminals
             .iter()
             .filter_map(|t| self.chats.state(*t).ok())
-            .flat_map(|st| st.items)
-            .filter(|i| i.kind == "user")
-            .map(|i| i.id)
+            .flat_map(|st| {
+                let typed = st.items.into_iter().filter(|i| i.kind == "user").map(|i| i.id);
+                typed.chain(st.queued.into_iter().map(|q| q.id)).collect::<Vec<_>>()
+            })
             .collect();
         self.took_with.lock().unwrap().insert(session.to_string(), held);
         Ok(s)
@@ -4258,6 +4262,11 @@ impl Daemon {
             first.get_or_insert(started.id);
             if r.terminal == Some(chat.terminal) {
                 typed_in = Some(started.id);
+            }
+            // The messages it had queued there go on here, before the one
+            // typed; an ask kept open waits for its answer (X73).
+            if let Err(e) = self.chats.go_on(started.id, None) {
+                tracing::warn!(session = %r.session, "cannot go on with a brought chat: {e:#}");
             }
         }
         if let (Some(id), Some(message)) = (typed_in.or(first), r.message.as_deref().filter(|m| !m.trim().is_empty()))

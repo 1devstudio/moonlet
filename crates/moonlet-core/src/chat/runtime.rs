@@ -68,9 +68,17 @@ struct Inner {
     generation: u64,
     /// Settings changed: restart (with resume) before the next message.
     restart: bool,
-    /// Asks kept from before a daemon restart; their answers go to the
-    /// resumed agent as its next message.
+    /// Asks kept from before a daemon restart, or from the member a moved
+    /// session ran on (X73); their answers go to the resumed agent as its
+    /// next message.
     kept: Vec<String>,
+    /// Messages queued for the agent on the member a moved session ran on
+    /// (X73), by id: still in the state's queue, sent to this agent after
+    /// the move's note or the kept ask's answer, in order.
+    held: Vec<String>,
+    /// The move's note to the agent, kept while an ask waits (X73): it goes
+    /// before the next message, as one with the answer.
+    preface: Option<String>,
     stderr: Vec<String>,
     saved_at: Instant,
     dirty: bool,
@@ -173,20 +181,38 @@ fn agent_state(status: &str) -> AgentState {
     }
 }
 
-/// A chat's state from another member, going on here (X73): what its
-/// agent had running is over, as after a daemon restart, and the messages
-/// it had not read yet say they never reached it.
-fn continued_state(mut st: ChatState) -> ChatState {
+/// A chat's state from another member, going on here (X73), with the
+/// asks it keeps and the queued messages it holds, by id. What its agent
+/// had running is over, as after a daemon restart: a turn that was running
+/// goes on only with the next message. The main agent's questions and
+/// plans stay open, as through a restart, and their answers go to the
+/// resumed agent as a message; a tool's permission is asked again as the
+/// turn goes on. The messages its agent had not read yet stay queued, to
+/// go to the agent here.
+fn continued_state(mut st: ChatState) -> (ChatState, Vec<String>, Vec<String>) {
+    let mut kept = Vec::new();
+    if super::busy(&st) {
+        st.pending.retain(|p| p.agent.is_none() && KEPT_TOOLS.contains(&p.tool.as_str()));
+        kept = st.pending.iter().map(|p| p.id.clone()).collect();
+    } else {
+        st.pending.clear();
+    }
+    st.status = if kept.is_empty() { "idle" } else { "blocked" }.into();
+    st.turn_started_at = None;
     super::stop_subagents(&mut st);
     st.has_plan = super::has_plan(&st.items);
+    let pending = st.pending.clone();
     for it in &mut st.items {
         it.partial = false;
-        if let Some(t) = it.tool.as_mut().filter(|t| t.status == "running") {
+        if let Some(t) = it.tool.as_mut().filter(|t| t.status == "running" && !pending.iter().any(|p| asks_for(p, t))) {
             t.status = "error".into();
         }
     }
-    super::undeliver(&mut st);
-    st
+    for q in &mut st.queued {
+        q.sending = false;
+    }
+    let held = st.queued.iter().map(|q| q.id.clone()).collect();
+    (st, kept, held)
 }
 
 /// Asks that wait through a daemon restart.
@@ -273,6 +299,10 @@ impl ChatManager {
         let mut command = vec![program];
         command.extend(args);
         let now = now_ms();
+        let (state, kept, held) = match history {
+            Some(h) => continued_state(ChatState { add_dirs, ..h }),
+            None => (ChatState { status: "idle".into(), add_dirs, ..Default::default() }, Vec::new(), Vec::new()),
+        };
         let info = self.terms.register_chat(TerminalInfo {
             id: 0,
             kind: TerminalKind::Agent,
@@ -281,7 +311,7 @@ impl ChatManager {
             command,
             session_id: req.session_id,
             agent: Some(req.agent),
-            agent_state: AgentState::Idle,
+            agent_state: agent_state(&state.status),
             agent_message: None,
             cols: 80,
             rows: 24,
@@ -305,17 +335,16 @@ impl ChatManager {
                 info: info.clone(),
                 cfg,
                 env: req.env,
-                state: match history {
-                    Some(h) => continued_state(ChatState { status: "idle".into(), pending: Vec::new(), turn_started_at: None, add_dirs, ..h }),
-                    None => ChatState { status: "idle".into(), add_dirs, ..Default::default() },
-                },
+                state,
                 adapter: None,
                 stdin: None,
                 pid: None,
                 family: Default::default(),
                 generation: 0,
                 restart: false,
-                kept: Vec::new(),
+                kept,
+                held,
+                preface: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -374,13 +403,24 @@ impl ChatManager {
         self.deliver(&chat, &mut inner, text, images)
     }
 
-    /// Sends a user message, starting or restarting the agent first when needed.
+    /// Sends a user message, starting or restarting the agent first when
+    /// needed. A moved chat's note and the messages it held go first (X73).
     fn deliver(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
         // A message: the agent is not idle (X84).
         inner.active_at = now_ms();
         // A new message instead of an answer: the kept asks are moot.
         let kept = inner.kept.clone();
         self.close_kept(chat, inner, &kept, "error", None);
+        if let Some(note) = inner.preface.take() {
+            self.write(chat, inner, &note, &[])?;
+        }
+        self.send_held(chat, inner)?;
+        self.write(chat, inner, text, images)
+    }
+
+    /// Starts the agent, or starts it again for new settings, unless it
+    /// runs already.
+    fn ready_agent(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
         if inner.restart || inner.stdin.is_none() {
             // A restart for new settings keeps what the agent left running (a
             // dev server it started): it ends with the new agent instead (X79).
@@ -393,10 +433,51 @@ impl ChatManager {
                 return Err(e);
             }
         }
+        Ok(())
+    }
+
+    /// Writes one message to the agent.
+    fn write(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
+        self.ready_agent(chat, inner)?;
         let Inner { adapter, state, .. } = &mut *inner;
         let outs = adapter.as_mut().context("agent not running")?.send(text, images, state);
         self.apply(chat, inner, outs);
         Ok(())
+    }
+
+    /// Sends the messages a moved chat held to its agent here, in order,
+    /// each as the same queued message (X73).
+    fn send_held(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
+        while let Some(id) = inner.held.first().cloned() {
+            self.ready_agent(chat, inner)?;
+            inner.held.remove(0);
+            let Some(at) = inner.state.queued.iter().position(|q| q.id == id) else { continue };
+            let q = inner.state.queued.remove(at);
+            let Inner { adapter, state, .. } = &mut *inner;
+            let outs = adapter.as_mut().context("agent not running")?.resend(&q, state);
+            self.apply(chat, inner, outs);
+        }
+        Ok(())
+    }
+
+    /// Goes on with a chat continued from another member (X73): `note`
+    /// first, the move's note to the agent, then the messages it held.
+    /// While an ask kept from there waits, all of it waits for the answer,
+    /// the note to go with it; no agent starts until then.
+    pub fn go_on(&self, id: TerminalId, note: Option<&str>) -> Result<()> {
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if !inner.kept.is_empty() {
+            if let Some(n) = note {
+                inner.preface = Some(n.to_string());
+            }
+            return Ok(());
+        }
+        if let Some(n) = note {
+            inner.active_at = now_ms();
+            self.write(&chat, &mut inner, n, &[])?;
+        }
+        self.send_held(&chat, &mut inner)
     }
 
     /// Takes kept asks off the chat and ends their tool calls with
@@ -441,10 +522,27 @@ impl ChatManager {
             _ if !allowed => message.map(String::from),
             _ => None,
         };
-        match text {
-            Some(t) => self.deliver(chat, inner, &t, &[]),
-            None => Ok(()),
+        // The note of the move that kept the ask goes with its answer, and
+        // the messages held go after it (X73).
+        let text = match (inner.preface.take(), text) {
+            (Some(p), Some(t)) => Some(format!("{p}\n\n{t}")),
+            (Some(p), None) if !inner.held.is_empty() => Some(p),
+            (p, t) => {
+                inner.preface = p;
+                t
+            }
+        };
+        if text.is_none() && inner.held.is_empty() {
+            return Ok(());
         }
+        // Any other kept ask is moot once the agent goes on.
+        inner.active_at = now_ms();
+        let kept = inner.kept.clone();
+        self.close_kept(chat, inner, &kept, "error", None);
+        if let Some(t) = text {
+            self.write(chat, inner, &t, &[])?;
+        }
+        self.send_held(chat, inner)
     }
 
     /// `mode` switches the agent's permission mode with an approval; only a
@@ -482,6 +580,14 @@ impl ChatManager {
         if !inner.kept.is_empty() {
             let kept = inner.kept.clone();
             self.close_kept(&chat, &mut inner, &kept, "error", Some("Interrupted"));
+            // Queued messages run as the next turn once a stopped one ends
+            // (X49), those a moved chat held too (X73).
+            if !inner.held.is_empty() {
+                if let Some(note) = inner.preface.take() {
+                    self.write(&chat, &mut inner, &note, &[])?;
+                }
+                self.send_held(&chat, &mut inner)?;
+            }
             return Ok(());
         }
         let Inner { adapter, state, .. } = &mut *inner;
@@ -494,11 +600,37 @@ impl ChatManager {
     /// Asks the agent to read a queued message now, or every queued one
     /// without `message` (X49).
     pub fn send_now(&self, id: TerminalId, message: Option<&str>) -> Result<()> {
+        {
+            // Messages a moved chat holds go to its agent here now, in
+            // order, in place of a kept ask's answer (X73).
+            let chat = self.get(id)?;
+            let mut inner = chat.inner.lock().unwrap();
+            if message.map_or(!inner.held.is_empty(), |m| inner.held.iter().any(|h| h == m)) {
+                inner.active_at = now_ms();
+                let kept = inner.kept.clone();
+                self.close_kept(&chat, &mut inner, &kept, "error", None);
+                if let Some(note) = inner.preface.take() {
+                    self.write(&chat, &mut inner, &note, &[])?;
+                }
+                return self.send_held(&chat, &mut inner);
+            }
+        }
         self.with_queued(id, message, |a, m, st| a.send_now(m, st))
     }
 
     /// Takes a queued message out of the agent's queue (X49).
     pub fn unqueue(&self, id: TerminalId, message: &str) -> Result<()> {
+        {
+            // One a moved chat holds never reached this agent (X73).
+            let chat = self.get(id)?;
+            let mut inner = chat.inner.lock().unwrap();
+            if inner.held.iter().any(|h| h == message) {
+                inner.held.retain(|h| h != message);
+                inner.state.queued.retain(|q| q.id != message);
+                self.apply(&chat, &mut inner, vec![Out::State]);
+                return Ok(());
+            }
+        }
         self.with_queued(id, Some(message), |a, _, st| a.unqueue(message, st))
     }
 
@@ -752,6 +884,8 @@ impl ChatManager {
                 generation: 0,
                 restart: false,
                 kept,
+                held: Vec::new(),
+                preface: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
@@ -1529,6 +1663,8 @@ case "$*" in
   *--fork-session*) echo '{"type":"result","subtype":"success","is_error":false,"result":"Port 4000.","duration_ms":1200,"total_cost_usd":0.0015}'; exit 0 ;;
 esac
 while IFS= read -r line; do
+  # Every message it is sent, in order (X73).
+  case "$line" in *'"type":"user"'*) printf '%s\n' "$line" >> claude-user ;; esac
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"sess-1","model":"fake","slash_commands":["clear"]}' ;;
     *'"subtype":"mcp_status"'*)
@@ -2444,6 +2580,160 @@ done
         let info = chats.create_continuing(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }, history).unwrap();
         assert!(chats.state(info.id).unwrap().has_plan);
         chats.shutdown().await;
+    }
+
+    /// Another member's chats, as a member that took the session over
+    /// holds them (X73): same working folder, a manager of their own.
+    fn elsewhere(dir: &Path, terms: &TerminalManager) -> Arc<ChatManager> {
+        let terms2 = TerminalManager::new(dir.join("sock-elsewhere"), terms.base_env().clone());
+        ChatManager::new(terms2, dir.join("chats-elsewhere"))
+    }
+
+    /// The texts of the messages the fake agent was sent, in order, after
+    /// the first `skip`.
+    fn sent_to_agent(dir: &Path, skip: usize) -> Vec<String> {
+        let log = std::fs::read_to_string(dir.join("claude-user")).unwrap_or_default();
+        log.lines()
+            .skip(skip)
+            .map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v["message"]["content"][0]["text"].as_str().unwrap_or_default().to_string()
+            })
+            .collect()
+    }
+
+    async fn sent_within(dir: &Path, skip: usize, n: usize) -> Vec<String> {
+        for _ in 0..200 {
+            let sent = sent_to_agent(dir, skip);
+            if sent.len() >= n {
+                return sent;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the agent was sent {:?}", sent_to_agent(dir, skip));
+    }
+
+    const NOT_DELIVERED: &str = "Not delivered: Claude stopped before reading this message.";
+
+    /// X73: a plan waiting for approval on the member it moved from waits
+    /// here too, and no agent starts for it. Approving it resumes Claude in
+    /// the mode chosen, with the move's note before the approval and the
+    /// message queued meanwhile after it, still the same queued message.
+    #[tokio::test]
+    async fn a_plan_open_as_its_session_moves_waits_here_and_its_approval_goes_on_with_the_note_then_the_queued_message() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
+        chats.send(id, "queue this", &[]).unwrap();
+        let moved = wait_for(&chats, id, |s| s.queued.len() == 1).await;
+        let queued_id = moved.queued[0].id.clone();
+        chats.shutdown().await;
+        let before = sent_to_agent(dir.path(), 0).len();
+        let starts = std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count();
+
+        let here = elsewhere(dir.path(), &terms);
+        let cwd = dir.path().display().to_string();
+        let info = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), mode: Some("plan".into()), ..Default::default() }, moved).unwrap();
+        here.go_on(info.id, Some("This session moved.")).unwrap();
+        let st = here.state(info.id).unwrap();
+        assert_eq!(st.status, "blocked");
+        assert_eq!(st.pending.iter().map(|p| (p.id.as_str(), p.tool.as_str())).collect::<Vec<_>>(), [("p1", "ExitPlanMode")]);
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["queue this"]);
+        assert!(!st.items.iter().any(|i| i.text == NOT_DELIVERED));
+        assert_eq!(std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count(), starts, "an agent started before the answer");
+
+        here.permission(info.id, "p1", "allow", None, None, Some("acceptEdits")).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 2).await, ["This session moved.\n\nI approve your plan. Go ahead with it.", "queue this"]);
+        let start = last_start(dir.path());
+        assert!(start.contains("--permission-mode acceptEdits --resume sess-1"), "{start}");
+        let st = here.state(info.id).unwrap();
+        assert_eq!(tool_status(&st, "ExitPlanMode"), "ok");
+        assert_eq!(st.queued.iter().map(|q| q.id.as_str()).collect::<Vec<_>>(), [queued_id.as_str()]);
+        here.shutdown().await;
+    }
+
+    /// X73: a question open as its session moves waits here, and its
+    /// answers go to the resumed agent with the move's note before them.
+    #[tokio::test]
+    async fn a_question_open_as_its_session_moves_waits_here_and_its_answers_go_on_with_the_note() {
+        let (dir, terms, chats) = setup().await;
+        let id = blocked_chat(dir.path(), &chats, None, "ask me").await;
+        let moved = chats.state(id).unwrap();
+        chats.shutdown().await;
+        let before = sent_to_agent(dir.path(), 0).len();
+
+        let here = elsewhere(dir.path(), &terms);
+        let cwd = dir.path().display().to_string();
+        let id = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }, moved).unwrap().id;
+        here.go_on(id, Some("This session moved.")).unwrap();
+        let st = here.state(id).unwrap();
+        assert_eq!(st.status, "blocked");
+        assert_eq!(st.pending.iter().map(|p| (p.id.as_str(), p.summary.as_str())).collect::<Vec<_>>(), [("q1", "Which size?")]);
+        assert_eq!(tool_status(&st, "AskUserQuestion"), "running");
+        assert_eq!(sent_to_agent(dir.path(), before), Vec::<String>::new());
+
+        let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string()), ("Which size?".to_string(), "Large".to_string())]);
+        here.permission(id, "q1", "allow", None, Some(&answers), None).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 1).await, ["This session moved.\n\nAnswers to your questions:\n\nWhich size?\nLarge\n\nWhich colours?\nGitHub"]);
+        let st = here.state(id).unwrap();
+        assert!(st.pending.is_empty());
+        assert_eq!(tool_status(&st, "AskUserQuestion"), "ok");
+        assert!(last_start(dir.path()).contains("--resume sess-1"));
+        here.shutdown().await;
+    }
+
+    /// X73: a tool's permission open as its session moves is not kept: the
+    /// tool never ran, and the turn goes on with the move's note, so the
+    /// agent asks for it again here. A subagent's ask ends with its
+    /// subagent.
+    #[tokio::test]
+    async fn a_tool_permission_open_as_its_session_moves_is_asked_again_as_the_turn_goes_on() {
+        let (dir, terms, chats) = setup().await;
+        let a = blocked_chat(dir.path(), &chats, None, "run a command").await;
+        let b = blocked_chat(dir.path(), &chats, None, "agent asks").await;
+        let moved = [chats.state(a).unwrap(), chats.state(b).unwrap()];
+        chats.shutdown().await;
+
+        let here = elsewhere(dir.path(), &terms);
+        for history in moved {
+            let before = sent_to_agent(dir.path(), 0).len();
+            let cwd = dir.path().display().to_string();
+            let id = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }, history).unwrap().id;
+            let st = here.state(id).unwrap();
+            assert_eq!(st.status, "idle");
+            assert!(st.pending.is_empty(), "{:?}", st.pending);
+            here.go_on(id, Some("This session moved.")).unwrap();
+            assert_eq!(sent_within(dir.path(), before, 1).await, ["This session moved."]);
+        }
+        here.shutdown().await;
+    }
+
+    /// X73: messages queued during a turn its session's move cut off go to
+    /// the agent here after the move's note, in order, each still queued
+    /// as the same message: none is marked not delivered.
+    #[tokio::test]
+    async fn messages_queued_as_a_session_moves_go_to_the_agent_here_after_the_note_in_order() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "run a long command", &[]).unwrap();
+        chats.send(info.id, "queue this", &[]).unwrap();
+        chats.send(info.id, "queue this too", &[]).unwrap();
+        let moved = wait_for(&chats, info.id, |s| s.queued.len() == 2).await;
+        assert_eq!(moved.status, "working");
+        let ids: Vec<String> = moved.queued.iter().map(|q| q.id.clone()).collect();
+        chats.shutdown().await;
+        let before = sent_to_agent(dir.path(), 0).len();
+
+        let here = elsewhere(dir.path(), &terms);
+        let cwd = dir.path().display().to_string();
+        let id = here.create_continuing(ChatCreate { cwd, agent: "claude".into(), ..Default::default() }, moved).unwrap().id;
+        here.go_on(id, Some("This session moved.")).unwrap();
+        assert_eq!(sent_within(dir.path(), before, 3).await, ["This session moved.", "queue this", "queue this too"]);
+        let st = here.state(id).unwrap();
+        assert_eq!(last_user_text(&st), "This session moved.");
+        assert_eq!(st.queued.iter().map(|q| q.id.clone()).collect::<Vec<_>>(), ids);
+        assert!(!st.items.iter().any(|i| i.text == NOT_DELIVERED));
+        here.shutdown().await;
     }
 
     #[tokio::test]
