@@ -985,10 +985,15 @@ async fn carry(
 
 /// A session of `shop` on `book` with a chat agent, after one message.
 async fn session_with_a_turn(book: &Daemon, project: &str) -> Value {
+    session_with_a_turn_named(book, project, "fix-cart").await
+}
+
+/// [`session_with_a_turn`], called `name`.
+async fn session_with_a_turn_named(book: &Daemon, project: &str, name: &str) -> Value {
     let made: Value = book
         .call(
             "session.create",
-            json!({ "project_id": project, "name": "fix-cart", "agent": "claude" }),
+            json!({ "project_id": project, "name": name, "agent": "claude" }),
         )
         .await;
     let agent = made["terminals"][0].clone();
@@ -3308,7 +3313,12 @@ async fn taken_while_asleep_then_woken(back: fn(&Network)) {
 /// A busy session of the MacBook's, its turn running on the MacBook and
 /// in studio-mini's copy.
 async fn busy_session(mini: &Daemon, book: &Daemon, project: &str) -> Value {
-    let made = session_with_a_turn(book, project).await;
+    busy_session_named(mini, book, project, "fix-cart").await
+}
+
+/// [`busy_session`], called `name`.
+async fn busy_session_named(mini: &Daemon, book: &Daemon, project: &str, name: &str) -> Value {
+    let made = session_with_a_turn_named(book, project, name).await;
     let agent = made["terminals"][0].clone();
     copy_of(mini, &made).await;
     let _: Value = book
@@ -3337,6 +3347,60 @@ async fn back_on_the_mac(mini: &Daemon, book: &Daemon, made: &Value) {
             && theirs.iter().all(|s| s["id"] != made["id"])
     })
     .await;
+}
+
+/// Makes every snapshot of `worktree` from now on take `secs` seconds, as
+/// a large pack or a slow disk would make its last changes slow to send:
+/// a clean filter that sleeps, for a file only this worktree has.
+fn slow_to_send(worktree: &Path, secs: u32) {
+    git(worktree, &["config", "filter.slow.clean", &format!("sleep {secs}; cat")]);
+    std::fs::write(worktree.join(".gitattributes"), "*.slow filter=slow\n").unwrap();
+    std::fs::write(worktree.join("notes.slow"), "slow\n").unwrap();
+}
+
+#[tokio::test]
+async fn a_busy_session_is_handed_over_before_an_idle_one_slow_to_send() {
+    let origin = Origin::new();
+    let (mini, book, _network) = pair_with_agents_through_a_network_holding(&origin, Some("6000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let idle = new_session(&book, &project, "notes").await;
+    copy_of(&mini, &idle).await;
+    let made = busy_session(&mini, &book, &project).await;
+
+    // The lid closes while the idle session's last changes would take
+    // longer than the whole hold to send.
+    slow_to_send(&path_of(&idle), 20);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "fix-cart stayed on the MacBook");
+    assert!(theirs.iter().all(|s| s["id"] != idle["id"]), "the idle session went to studio-mini");
+}
+
+#[tokio::test]
+async fn a_busy_session_slow_to_send_stays_on_the_mac_and_holds_back_no_other() {
+    let origin = Origin::new();
+    let (mini, book, _network) = pair_with_agents_through_a_network_holding(&origin, Some("6000")).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let slow = busy_session_named(&mini, &book, &project, "fix-search").await;
+    let made = busy_session(&mini, &book, &project).await;
+
+    // The lid closes while fix-search's last changes would take longer
+    // than the whole hold to send.
+    slow_to_send(&path_of(&slow), 20);
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "fix-cart stayed on the MacBook");
+    // studio-mini never continues fix-search from a copy short of its last
+    // changes: it stays the MacBook's, for the next wake.
+    assert!(theirs.iter().all(|s| s["id"] != slow["id"]), "fix-search went to studio-mini");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == slow["id"]), "fix-search is no longer the MacBook's");
 }
 
 #[tokio::test]

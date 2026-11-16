@@ -4316,9 +4316,10 @@ impl Daemon {
     }
 
     /// The Mac goes to sleep or woke (X73). Going to sleep, this member
-    /// freezes the agents of the sessions it runs, sends what is new, and
-    /// hands the sessions at work that are not pinned to the central host,
-    /// which continues them; an idle one stays. Waking, it asks the central
+    /// freezes the agents of the sessions it runs, sends the last changes
+    /// of the sessions at work that are not pinned, and hands each to the
+    /// central host, which continues it, as soon as its own are sent; then
+    /// it sends the rest. An idle one stays. Waking, it asks the central
     /// host first, and lets an agent go on only while its session is still
     /// this member's at the epoch it slept at; one handed over is let go of.
     pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
@@ -4378,17 +4379,30 @@ impl Daemon {
                 let earlier = self.moves.pending();
                 self.moves.remove(earlier.keys().map(String::as_str).filter(|id| own.iter().any(|s| s.id == *id)));
                 self.moves.add(&busy);
-                // A session the central host would continue from an older
+                // The busy sessions' last changes go first, each on its
+                // own, and each is handed over as soon as all of them are
+                // sent; the idle ones' after that, with the time left. A
+                // session the central host would continue from an older
                 // copy stays here for now, as when the hand-over cannot be
                 // sent: it goes at the next wake.
-                let unsent = self.session_copies.send_now().await;
-                let handed: Vec<(String, u64)> = busy.into_iter().filter(|(id, _)| !unsent.contains(id)).collect();
-                if handed.is_empty() {
-                    return;
-                }
-                if let Some(taken) = self.yield_sessions(&handed).await {
-                    tracing::info!("handed {taken:?} to the central host before sleep");
-                    self.asleep.lock().unwrap().taken.extend(taken);
+                let first: Vec<String> = busy.iter().map(|(id, _)| id.clone()).collect();
+                let epochs: std::collections::BTreeMap<String, u64> = busy.into_iter().collect();
+                let me = self.clone();
+                let unsent = self
+                    .session_copies
+                    .send_for_sleep(&first, move |ids| {
+                        let handed: Vec<(String, u64)> = ids.into_iter().filter_map(|id| epochs.get(&id).map(|e| (id, *e))).collect();
+                        let d = me.clone();
+                        async move {
+                            if let Some(taken) = d.yield_sessions(&handed).await {
+                                tracing::info!("handed {taken:?} to the central host before sleep");
+                                d.asleep.lock().unwrap().taken.extend(taken);
+                            }
+                        }
+                    })
+                    .await;
+                if !unsent.is_empty() {
+                    tracing::info!("kept {unsent:?} here for the next wake: their last changes did not reach the central host in time");
                 }
             }
             Power::Wake => {
