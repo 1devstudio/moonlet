@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "@desktop/lib/protocol";
-import { continueFailed, continueOffer, continueWait, copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
+import { emptyData } from "./app";
+import { continueFailed, continueOffer, continueWait, copyData, dropRelisted, followedHost, ownerLine, readOnlyLine } from "./copies";
 
 const session = (owner?: Session["owner"]): Session => ({
   id: "5e7f9a1b3c5d",
@@ -97,5 +98,31 @@ describe("continuing a session whose member is away (X73)", () => {
       "studio-mini has no copy of fix-cart yet.",
     );
     expect(continueFailed(new Error("the connection closed"), away, "studio-mini")).toBe("Could not continue on studio-mini: the connection closed");
+  });
+});
+
+describe("a session open on the phone as its owner changes (X73)", () => {
+  const central = (...sessions: Session[]) => ({ studio: { ...emptyData(), sessions } });
+
+  it("follows the session to the central host once the central host runs it", () => {
+    // Handed over as the MacBook slept, or continued on studio-mini: the
+    // central host lists it as its own, with no owner.
+    expect(followedHost("studio#copy:5e7f9a1b3c5d", "5e7f9a1b3c5d", central(session()))).toBe("studio");
+  });
+
+  it("follows the session to its copy host once its Mac runs it again", () => {
+    // Brought back to the MacBook: the central host lists it as the
+    // MacBook's, and its terminals are the MacBook's, through the copy host.
+    const back = session({ worker: "w1", name: "MacBook", reachable: true });
+    expect(followedHost("studio", "5e7f9a1b3c5d", central(back))).toBe("studio#copy:5e7f9a1b3c5d");
+  });
+
+  it("stays where it is while the same host runs it, asleep or not, or before the list is loaded", () => {
+    const asleep = session({ worker: "w1", name: "MacBook", reachable: false, unreachable_since: 1790000000000 });
+    expect(followedHost("studio#copy:5e7f9a1b3c5d", "5e7f9a1b3c5d", central(asleep))).toBeNull();
+    expect(followedHost("studio", "5e7f9a1b3c5d", central(session()))).toBeNull();
+    // Archived, or not in the list yet: no host to follow it to.
+    expect(followedHost("studio#copy:5e7f9a1b3c5d", "5e7f9a1b3c5d", central())).toBeNull();
+    expect(followedHost("studio#copy:5e7f9a1b3c5d", "5e7f9a1b3c5d", {})).toBeNull();
   });
 });
