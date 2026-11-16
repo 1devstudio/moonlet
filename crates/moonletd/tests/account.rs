@@ -42,6 +42,12 @@ async fn central() -> (Daemon, String) {
 
 /// [`central`], with `prepare` filling its home first.
 async fn central_with(prepare: impl Fn(&std::path::Path)) -> (Daemon, String) {
+    central_pinging(prepare, "200").await
+}
+
+/// [`central_with`], pinging its workers every `ping_ms`: a debug build
+/// takes over a second to write a reply of 15 MiB, and pings wait behind it.
+async fn central_pinging(prepare: impl Fn(&std::path::Path), ping_ms: &str) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
         prepare(home.path());
@@ -55,7 +61,7 @@ async fn central_with(prepare: impl Fn(&std::path::Path)) -> (Daemon, String) {
             home,
             &[
                 ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
-                ("MOONLET_WORKER_PING_MS", "200"),
+                ("MOONLET_WORKER_PING_MS", ping_ms),
             ],
         )
         .await;
@@ -400,7 +406,8 @@ async fn sync_refused(s: &mut tokio::net::TcpStream) -> Option<String> {
     }
 }
 
-/// Sends request `id` on `s` and returns its reply.
+/// Sends request `id` on `s` and returns its reply, answering the central
+/// host's pings meanwhile, as a member's daemon does.
 async fn ask(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> Message {
     use moonlet_proto::{read_frame, write_frame};
     let req = Message::Request {
@@ -410,11 +417,14 @@ async fn ask(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value
     };
     write_frame(s, &Frame::Json(req)).await.unwrap();
     loop {
-        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+        match tokio::time::timeout(Duration::from_secs(20), read_frame(s))
             .await
             .expect("no reply")
         {
             Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+            Ok(Some(Frame::Json(Message::Request { id: ping, method, .. }))) if method == "worker.ping" => {
+                write_frame(s, &Frame::Json(Message::ok(ping, json!({})))).await.unwrap();
+            }
             Ok(Some(_)) => {}
             other => panic!("the connection ended: {other:?}"),
         }
@@ -1268,4 +1278,254 @@ async fn a_central_host_whose_clock_was_a_year_ahead_has_its_changes_taken_once_
     })
     .await;
     assert_eq!(mini.names().await, ["Personal", "Studio"]);
+}
+
+/// The central host's worker id, for tests that write its log first.
+const MINI: &str = "5a7e0c3d-9b21-4f86-a4d7-3e1b6c8f0a92";
+
+/// The central host's own log, `<MINI>.a1b2c3`, written into `home` before
+/// it starts: `n` changes to records of a kind no member reads, about 170
+/// bytes each as JSON, then workspace "Studio" made, as its last change.
+/// Built here, never kept in the repository.
+fn write_central_log(home: &std::path::Path, n: u64) {
+    std::fs::write(
+        home.join("link.json"),
+        json!({ "central": null, "worker": { "id": MINI, "name": "studio-mini", "enabled": false } }).to_string(),
+    )
+    .unwrap();
+    let log = format!("{MINI}.a1b2c3");
+    let at = now_ms() - 3_600_000;
+    let set = |seq: u64, kind: &str, id: &str, field: &str, value: Value| {
+        json!({ "stamp": { "ms": at + seq, "n": 0, "member": log }, "seq": seq, "kind": kind, "id": id, "op": { "set": { "field": field, "value": value } } })
+    };
+    let mut changes: Vec<Value> = (1..=n)
+        .map(|i| set(i, "x68_filler", &format!("{:012x}", i / 13), "branch", json!(format!("moonlet/fix-checkout-total-rounding-{i}"))))
+        .collect();
+    changes.push(set(n + 1, "workspace", "w-studio", "created_at", json!(at)));
+    changes.push(set(n + 2, "workspace", "w-studio", "name", json!("Studio")));
+    std::fs::write(home.join("account.json"), json!({ "member": log, "changes": changes }).to_string()).unwrap();
+}
+
+/// More changes than one frame holds, 16 MiB, at about 170 bytes each.
+const PAST_ONE_FRAME: u64 = 110_000;
+
+/// More than two frames hold: a member from before pages, which gets a
+/// second part when it sends its own changes, still lacks the third.
+const PAST_TWO_FRAMES: u64 = 220_000;
+
+#[tokio::test]
+async fn a_member_catching_up_on_a_log_larger_than_one_frame_gets_all_of_it() {
+    let (mini, addr) = central_pinging(|home| write_central_log(home, PAST_TWO_FRAMES), "5000").await;
+    assert_eq!(mini.names().await, ["Studio"]);
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    // At once, not a part each minute: "Studio" is the last change.
+    within(Duration::from_secs(40), "Studio on the MacBook", || async {
+        book.names().await.contains(&"Studio".to_string())
+    })
+    .await;
+    // And the MacBook's own changes reach the central host after it.
+    let w = book.workspaces().await.into_iter().find(|w| w.name == "Personal").unwrap();
+    rename(&book, &w.id, "Laptop").await;
+    within(Duration::from_secs(10), "the rename on studio-mini", || async {
+        mini.names().await.contains(&"Laptop".to_string())
+    })
+    .await;
+}
+
+/// The changes, `more` and `version` of an `account.sync` reply.
+fn synced(reply: Message) -> (Vec<Value>, Option<Value>, Value) {
+    let Message::Response { result: Some(r), error: None, .. } = reply else { panic!("account.sync failed: {reply:?}") };
+    (r["changes"].as_array().unwrap().clone(), r.get("more").cloned(), r["version"].clone())
+}
+
+#[tokio::test]
+async fn an_older_member_gets_a_log_larger_than_one_frame_a_part_per_exchange() {
+    let (mini, addr) = central_pinging(|home| write_central_log(home, PAST_ONE_FRAME), "5000").await;
+    // A member from before pages sends its version alone, and reads
+    // neither `more` nor anything past the changes and the version.
+    let mut s = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let (first, more, version) = synced(ask(&mut s, 2, "account.sync", json!({ "version": {}, "changes": [] })).await);
+    assert_eq!(more, Some(json!(true)));
+    let log = format!("{MINI}.a1b2c3");
+    let total = version[&log].as_u64().unwrap();
+    assert!(total > PAST_ONE_FRAME);
+    // It takes the part, so its next exchange asks from past it.
+    let seen = first.last().unwrap()["seq"].as_u64().unwrap();
+    assert!(seen < total);
+    let (rest, more, _) = synced(ask(&mut s, 3, "account.sync", json!({ "version": { &log: seen }, "changes": [] })).await);
+    assert_eq!(more, None);
+    assert_eq!(rest.first().unwrap()["seq"], json!(seen + 1));
+    assert!(rest.iter().any(|c| c["op"]["set"]["value"] == json!("Studio")));
+    // Every change once, the central host's log being the only one.
+    assert_eq!(version.as_object().unwrap().len(), 1);
+    assert_eq!(first.len() + rest.len(), total as usize);
+}
+
+#[tokio::test]
+async fn an_older_member_syncs_a_small_log_in_one_reply_as_before() {
+    let (mini, addr) = central().await;
+    let mut s = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let reply = ask(&mut s, 2, "account.sync", json!({ "version": {}, "changes": [] })).await;
+    let Message::Response { result: Some(r), .. } = &reply else { panic!("{reply:?}") };
+    // No field a member from before does not know of, other than the clock.
+    assert_eq!(r.get("more"), None);
+    let (changes, _, version) = synced(reply);
+    assert_eq!(changes.len() as u64, version.as_object().unwrap().values().map(|v| v.as_u64().unwrap()).sum::<u64>());
+}
+
+/// A central host from before pages, played by hand on 127.0.0.1: it
+/// answers `account.sync` with `answer`, given the request's params, in one
+/// frame and in the shape it had then, registers every worker, answers
+/// `daemon.info`, and knows no other method. It keeps every `account.sync`
+/// it gets.
+struct OlderCentral {
+    addr: String,
+    syncs: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    links: std::sync::Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+type Answer = std::sync::Arc<dyn Fn(&Value) -> Result<Value, moonlet_proto::RpcError> + Send + Sync>;
+
+impl OlderCentral {
+    async fn start(answer: Answer) -> OlderCentral {
+        use moonlet_proto::{read_frame, write_frame};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let syncs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let links = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (kept, held) = (syncs.clone(), links.clone());
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let (kept, answer) = (kept.clone(), answer.clone());
+                held.lock().unwrap().push(tokio::spawn(async move {
+                    let Ok(Some(Frame::Json(Message::Auth { .. }))) = read_frame(&mut s).await else { return };
+                    let authed = Message::Authed { device_id: "book".into(), token: None, protocol: None, daemon_version: None, host: None, os: None };
+                    write_frame(&mut s, &Frame::Json(authed)).await.unwrap();
+                    let Ok(Some(Frame::Json(Message::Hello { .. }))) = read_frame(&mut s).await else { return };
+                    let welcome = Message::Welcome { protocol: moonlet_proto::PROTOCOL_VERSION, daemon_version: "0.1.40".into(), host: "studio-mini".into(), pid: 1 };
+                    write_frame(&mut s, &Frame::Json(welcome)).await.unwrap();
+                    while let Ok(Some(f)) = read_frame(&mut s).await {
+                        let Frame::Json(Message::Request { id, method, params }) = f else { continue };
+                        let reply = match method.as_str() {
+                            "worker.register" => Message::ok(id, true),
+                            "daemon.info" => Message::ok(id, json!({})),
+                            "account.sync" => {
+                                kept.lock().unwrap().push(params.clone());
+                                match answer(&params) {
+                                    Ok(v) => Message::ok(id, v),
+                                    Err(e) => Message::err(id, e),
+                                }
+                            }
+                            _ => Message::err(id, moonlet_proto::RpcError::new("unknown_method", method)),
+                        };
+                        if write_frame(&mut s, &Frame::Json(reply)).await.is_err() {
+                            return;
+                        }
+                    }
+                }));
+            }
+        });
+        OlderCentral { addr, syncs, links }
+    }
+
+    fn syncs(&self) -> Vec<Value> {
+        self.syncs.lock().unwrap().clone()
+    }
+
+    /// Ends every link, as a restart does.
+    fn drop_links(&self) {
+        for link in self.links.lock().unwrap().drain(..) {
+            link.abort();
+        }
+    }
+}
+
+/// A Mac whose central host is `central`, by its `link.json`.
+async fn mac_linked_to(central: &OlderCentral, env: &[(&str, &str)]) -> Daemon {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        json!({
+            "central": { "name": "studio-mini", "addrs": [central.addr], "token": "t" },
+            "worker": { "id": BOOK, "name": "Alex's MacBook Pro", "enabled": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut all = vec![("MOONLET_MOBILE_ADDRS", "127.0.0.2")];
+    all.extend_from_slice(env);
+    Daemon::start(home, &all).await
+}
+
+#[tokio::test]
+async fn a_newer_member_syncs_a_small_log_with_a_central_host_from_before_pages() {
+    let log = format!("{MINI}.a1b2c3");
+    let at = now_ms() - 60_000;
+    let own = vec![
+        json!({ "stamp": { "ms": at, "n": 0, "member": log }, "seq": 1, "kind": "workspace", "id": "w-studio", "op": { "set": { "field": "created_at", "value": at } } }),
+        json!({ "stamp": { "ms": at + 1, "n": 0, "member": log }, "seq": 2, "kind": "workspace", "id": "w-studio", "op": { "set": { "field": "name", "value": "Studio" } } }),
+    ];
+    let held = std::sync::Arc::new(std::sync::Mutex::new(own));
+    let kept = held.clone();
+    // As a central host from before pages answered: whatever the member
+    // lacks, at once, with no `more`.
+    let central = OlderCentral::start(std::sync::Arc::new(move |p: &Value| {
+        let mut held = kept.lock().unwrap();
+        held.extend(p["changes"].as_array().unwrap().iter().cloned());
+        let seen = |c: &Value| p["version"][c["stamp"]["member"].as_str().unwrap()].as_u64().unwrap_or(0);
+        let lacks: Vec<Value> = held.iter().filter(|c| c["seq"].as_u64().unwrap() > seen(c)).cloned().collect();
+        let mut version = serde_json::Map::new();
+        for c in held.iter() {
+            let n = version.entry(c["stamp"]["member"].as_str().unwrap()).or_insert(json!(0));
+            *n = json!(n.as_u64().unwrap().max(c["seq"].as_u64().unwrap()));
+        }
+        Ok(json!({ "changes": lacks, "version": version, "account": MINI }))
+    }))
+    .await;
+    let book = mac_linked_to(&central, &[]).await;
+    within(Duration::from_secs(20), "Studio on the MacBook", || async { book.names().await == ["Personal", "Studio"] }).await;
+    // And the MacBook's own workspace reached the central host.
+    within(Duration::from_secs(10), "the MacBook's changes on studio-mini", || async {
+        held.lock().unwrap().iter().any(|c| c["op"]["set"]["value"] == json!("Personal"))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_log_too_large_for_a_central_host_from_before_pages_is_said_and_asked_again_only_on_the_next_link() {
+    // A central host from before pages, with a log past one frame, answers
+    // every `account.sync` so, until it answers that it has no account.
+    let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gone = lost.clone();
+    let central = OlderCentral::start(std::sync::Arc::new(move |_: &Value| {
+        Err(if gone.load(std::sync::atomic::Ordering::SeqCst) {
+            moonlet_proto::RpcError::new("no_account", "this host shares no account")
+        } else {
+            moonlet_proto::RpcError::new("too_large", "frame of 17301504 bytes exceeds the maximum")
+        })
+    }))
+    .await;
+    let book = mac_linked_to(&central, &[("MOONLET_ACCOUNT_RESYNC_MS", "100"), ("MOONLET_TEST_POWER", "1")]).await;
+    within(Duration::from_secs(20), "the MacBook asks", || async { !central.syncs().is_empty() }).await;
+    within(Duration::from_secs(5), "the MacBook says the account is not syncing", || async {
+        account(&book).await["not_syncing"] == json!("too_large")
+    })
+    .await;
+    // Not again every minute (here every 100 ms): it cannot succeed.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert_eq!(central.syncs().len(), 1);
+    // On the next link it asks again, in case the central host was updated.
+    central.drop_links();
+    within(Duration::from_secs(20), "the MacBook asks again on its next link", || async { central.syncs().len() == 2 }).await;
+    // A wake asks once, not again and again while it waits for an answer.
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+    let _: Value = book.call("power.simulate", json!({ "event": "wake" })).await;
+    assert_eq!(central.syncs().len(), 3);
+    assert_eq!(account(&book).await["not_syncing"], json!("too_large"));
+    // A central host that has no account to share any more says nothing of
+    // its size: the line goes.
+    lost.store(true, std::sync::atomic::Ordering::SeqCst);
+    central.drop_links();
+    within(Duration::from_secs(20), "the line gone", || async { account(&book).await.get("not_syncing").is_none() }).await;
 }

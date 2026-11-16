@@ -5,7 +5,7 @@ import { M, type Copy, type HostInfo, type Project, type Section, type SectionVi
 import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
-import { clockLines } from "../lib/workspaces";
+import { clockLines, notSyncingLine } from "../lib/workspaces";
 import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
@@ -813,13 +813,24 @@ function CentralOffline() {
   );
 }
 
-/** "studio-mini's clock is 1 year ahead of this Mac's…": a clock off by
- * more than a day, so account changes between the two wait (X68). */
-function ClockOffLines() {
+/** What the sidebar says of the account's sync (X68): that it does not sync
+ * with the central host, and "studio-mini's clock is 1 year ahead of this
+ * Mac's…", a clock off by more than a day, so account changes between the
+ * two wait. */
+function AccountLines() {
   const info = useStore((st) => st.accounts.local);
   const lines = useMemo(() => clockLines(info), [info]);
+  const central = useSync((st) => st.central);
+  const label = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
+  const stalled = notSyncingLine(info, label);
   return (
     <>
+      {stalled && (
+        <div className="flex items-start gap-1.5 px-4 pb-1 ui-text-12 text-faint">
+          <CircleAlert size={12} className="mt-0.5 shrink-0 opacity-50" />
+          <span>{stalled}</span>
+        </div>
+      )}
       {lines.map((line) => (
         <div key={line} className="flex items-start gap-1.5 px-4 pb-1 ui-text-12 text-faint">
           <Clock size={12} className="mt-0.5 shrink-0 opacity-50" />
@@ -1028,7 +1039,7 @@ export function Sidebar() {
       ) : (
       <>
       <CentralOffline />
-      <ClockOffLines />
+      <AccountLines />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />

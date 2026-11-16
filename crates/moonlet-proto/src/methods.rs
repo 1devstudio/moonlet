@@ -3241,7 +3241,19 @@ pub struct AccountSynced {
     /// before this field sends none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now_ms: Option<u64>,
+    /// True when `changes` holds only part of what the member lacks, as
+    /// all of it would not fit one frame: the member asks again from a
+    /// version past them ([`ACCOUNT_PAGE_BYTES`]). A central host from
+    /// before pages sends none, and a member from before them takes the
+    /// part and gets the rest at its next exchanges.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub more: bool,
 }
+
+/// How many bytes of changes, as JSON, one `account.sync` request or reply
+/// holds at most (X68): a frame's limit less room for the rest of the
+/// message, so a log of any size still syncs, a part at a time.
+pub const ACCOUNT_PAGE_BYTES: usize = crate::MAX_FRAME_LEN - 1024 * 1024;
 
 /// `account.get` (X68): the account this host shares, named after the
 /// worker id of the central host that holds it (this host's own when it has
@@ -3255,6 +3267,13 @@ pub struct AccountInfo {
     /// on a central host, its members. Absent when none is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clocks: Vec<ClockOff>,
+    /// Why this member's account does not sync with its central host now,
+    /// for the sidebar; absent while it does. `too_large`: what the central
+    /// host would send does not fit one message, as from a central host
+    /// from before pages with a log past 16 MiB, so the member asks again
+    /// only on its next link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_syncing: Option<String>,
 }
 
 /// A host whose clock is off from this host's (X68): changes stamped more
@@ -4343,6 +4362,31 @@ mod tests {
         assert_eq!(new_sync, r#"{"version":{"book.k3x9q2":3},"changes":[],"now_ms":1794823200000}"#);
         let older: Older = serde_json::from_str(&new_sync).unwrap();
         assert_eq!((older.version.len(), older.changes.len()), (1, 0));
+    }
+
+    /// X68: `more` and `not_syncing` are optional both ways and left out
+    /// when they say nothing, so a reply that holds everything reads and
+    /// writes as before pages, and a host from before them reads a part as
+    /// the changes it knows.
+    #[test]
+    fn account_messages_from_before_pages_read_and_write_as_before() {
+        let old_reply = r#"{"changes":[],"version":{"mini.a1b2c3":4},"account":"acct-mini","now_ms":1794823200000}"#;
+        let reply: AccountSynced = serde_json::from_str(old_reply).unwrap();
+        assert!(!reply.more);
+        assert_eq!(serde_json::to_string(&reply).unwrap(), old_reply);
+        let part = serde_json::to_string(&AccountSynced { more: true, ..reply }).unwrap();
+        assert_eq!(part, r#"{"changes":[],"version":{"mini.a1b2c3":4},"account":"acct-mini","now_ms":1794823200000,"more":true}"#);
+        #[derive(Deserialize)]
+        struct Older {
+            changes: Vec<crate::types::Change>,
+            version: BTreeMap<String, u64>,
+        }
+        let older: Older = serde_json::from_str(&part).unwrap();
+        assert_eq!((older.changes.len(), older.version.len()), (0, 1));
+        let info = AccountInfo { account: "acct-mini".into(), central: Some("studio-mini".into()), ..Default::default() };
+        assert_eq!(serde_json::to_string(&info).unwrap(), r#"{"account":"acct-mini","central":"studio-mini"}"#);
+        let stalled = AccountInfo { not_syncing: Some("too_large".into()), ..info };
+        assert_eq!(serde_json::to_string(&stalled).unwrap(), r#"{"account":"acct-mini","central":"studio-mini","not_syncing":"too_large"}"#);
     }
 
     /// X73: a hand-over names each session's ownership number beside the

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockLines, composerWorkspace, isShown, workspaceMembers, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { clockLines, notSyncingLine, composerWorkspace, isShown, workspaceMembers, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -386,5 +386,26 @@ describe("clockLines (X68)", () => {
   it("says nothing without clocks, or from a daemon from before them", () => {
     expect(clockLines(undefined)).toEqual([]);
     expect(clockLines({ account: "acct-mini", central: "studio-mini" })).toEqual([]);
+  });
+});
+
+describe("notSyncingLine (X68)", () => {
+  it("says the account does not sync with the central host while its log is too large for one message", () => {
+    expect(notSyncingLine({ account: "acct-mini", central: "studio-mini", not_syncing: "too_large" }, "studio-mini")).toBe(
+      "Account changes are not syncing with studio-mini: the account is too large for the moonlet it runs. Updating moonlet on studio-mini fixes it",
+    );
+    // Before the central host named the account, by the name this Mac gave it.
+    expect(notSyncingLine({ account: "7d3f1c2a", central: null, not_syncing: "too_large" }, "Studio Mini")).toBe(
+      "Account changes are not syncing with Studio Mini: the account is too large for the moonlet it runs. Updating moonlet on Studio Mini fixes it",
+    );
+    // With no name for it at all.
+    expect(notSyncingLine({ account: "7d3f1c2a", central: null, not_syncing: "too_large" }, null)).toBe(
+      "Account changes are not syncing with the central host: the account is too large for the moonlet it runs. Updating moonlet on the central host fixes it",
+    );
+  });
+
+  it("says nothing while it syncs, or from a daemon from before it said so", () => {
+    expect(notSyncingLine(undefined, "studio-mini")).toBeNull();
+    expect(notSyncingLine({ account: "acct-mini", central: "studio-mini" }, "studio-mini")).toBeNull();
   });
 });
