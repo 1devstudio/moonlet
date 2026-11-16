@@ -12,10 +12,13 @@ use std::sync::Mutex;
 
 use moonlet_core::paths::now_ms;
 use moonlet_proto::Message;
-use moonlet_proto::methods::{self as m, Job, JobChunk, JobOutput, JobOutputEvent, JobState};
+use moonlet_proto::methods::{self as m, Job, JobChunk, JobOutput, JobOutputEvent, JobStayed, JobState};
 
 /// Jobs kept per session, unless `MOONLET_TEST_JOBS_KEPT` says otherwise.
 const KEPT: usize = 50;
+/// Lines that stayed on the session's host, kept per session while the
+/// daemon runs.
+const STAYED_KEPT: usize = 20;
 /// Output kept per job: its start and its end, half each.
 const OUTPUT_MAX: u64 = 10 * 1024 * 1024;
 /// What one `job.output` answer carries at most.
@@ -45,6 +48,9 @@ pub struct Jobs {
     /// Held while a session's `jobs.json` is written, so two writes never
     /// mix, nor an older list land last.
     saving: Mutex<()>,
+    /// Lines with a heavy command that ran on the session's host, oldest
+    /// first, by session.
+    stayed: Mutex<HashMap<String, VecDeque<JobStayed>>>,
 }
 
 impl Jobs {
@@ -87,6 +93,7 @@ impl Jobs {
             output_max: env("MOONLET_TEST_JOB_OUTPUT_MAX").unwrap_or(OUTPUT_MAX),
             emit: Box::new(emit),
             saving: Mutex::default(),
+            stayed: Mutex::default(),
         };
         // Saved, so a later restart keeps when they ended.
         lost.dedup();
@@ -333,8 +340,30 @@ impl Jobs {
         })
     }
 
+    /// A line with a heavy command stayed on the session's host.
+    pub fn stayed(&self, s: JobStayed) {
+        {
+            let mut all = self.stayed.lock().unwrap();
+            let list = all.entry(s.session.clone()).or_default();
+            list.push_back(s.clone());
+            while list.len() > STAYED_KEPT {
+                list.pop_front();
+            }
+        }
+        (self.emit)(Message::event(m::EV_JOB_STAYED, &s));
+    }
+
+    /// `job.stayed`: a session's lines that stayed here, newest first.
+    pub fn stayed_list(&self, session: &str) -> Vec<JobStayed> {
+        let all = self.stayed.lock().unwrap();
+        all.get(session)
+            .map(|l| l.iter().rev().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// A session was archived: its jobs go.
     pub fn forget(&self, session: &str) {
+        self.stayed.lock().unwrap().remove(session);
         let gone = self.sessions.lock().unwrap().remove(session);
         let mut live = self.live.lock().unwrap();
         for j in gone.iter().flatten() {

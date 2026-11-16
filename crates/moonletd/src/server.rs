@@ -382,7 +382,8 @@ where
                 Ok(Message::Event { name, .. })
                     if no_jobs
                         && (name == moonlet_proto::methods::EV_JOB_OUTPUT
-                            || name == moonlet_proto::methods::EV_JOB_CHANGED) => {}
+                            || name == moonlet_proto::methods::EV_JOB_CHANGED
+                            || name == moonlet_proto::methods::EV_JOB_STAYED) => {}
                 // Setup questions go where they are answered: the app and
                 // paired phones (X62, X40).
                 Ok(Message::Event { name, .. })

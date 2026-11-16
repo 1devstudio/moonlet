@@ -56,13 +56,22 @@ pub async fn routed(
         };
         match frame {
             Some(Frame::RunOutput { run, stream, data }) if run == started.run => {
-                let _ = if stream == 1 {
+                let wrote = if stream == 1 {
                     std::io::stdout()
                         .write_all(&data)
                         .and_then(|()| std::io::stdout().flush())
                 } else {
                     std::io::stderr().write_all(&data)
                 };
+                // Its reader has gone, as when `| head` has read enough: a
+                // command here would die of SIGPIPE, so the run stops too.
+                if let Err(e) = wrote
+                    && e.kind() == std::io::ErrorKind::BrokenPipe
+                    && cancelled.is_none()
+                {
+                    cancelled = Some(128 + SIGPIPE);
+                    cancel(&mut writer, started.run).await;
+                }
             }
             Some(Frame::Json(Message::Event { name, data })) if name == methods::EV_EXEC_EXITED => {
                 if let Ok(e) = serde_json::from_value::<ExecExited>(data)
@@ -84,6 +93,9 @@ pub async fn routed(
         }
     }
 }
+
+/// SIGPIPE's number on macOS and Linux.
+const SIGPIPE: i32 = 13;
 
 /// `path` with the home folder as `~`.
 fn tilde(path: &str) -> String {

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job } from "./protocol";
 import { loadJobs, loadOutput, startJobs, useJobs } from "./jobsStore";
+import type { JobStayed } from "./protocol";
 import { outputShown } from "./jobs";
 
 /** What the daemon answers, by method; a function may throw or wait. */
@@ -34,7 +35,7 @@ const ids = (host: string, session: string) => (useJobs.getState().jobs[`${host}
 
 beforeAll(() => startJobs());
 beforeEach(() => {
-  useJobs.setState({ jobs: {}, output: {} });
+  useJobs.setState({ jobs: {}, output: {}, stayed: {} });
   for (const k of Object.keys(answers)) delete answers[k];
 });
 
@@ -121,5 +122,23 @@ describe("the jobs the app keeps (X62)", () => {
     expect(useJobs.getState().output.old0).toBeDefined();
     events.emit({ host: "h4", name: "job.changed", data: job("new") });
     expect(useJobs.getState().output.old0).toBeUndefined();
+  });
+
+  it("lists the lines that stayed on the session's host, newest first, as they come", async () => {
+    const stayed = (command: string): JobStayed => ({ session: "s1", at: 1, command, why: "it runs a second command" });
+    answers["job.list"] = () => [];
+    answers["job.stayed"] = () => [stayed("pnpm test; ls")];
+    loadJobs("h6", "s1");
+    await settle();
+    events.emit({ host: "h6", name: "job.stayed", data: stayed("pnpm test && ls") });
+    expect(useJobs.getState().stayed["h6/s1"]?.map((s) => s.command)).toEqual(["pnpm test && ls", "pnpm test; ls"]);
+  });
+
+  it("lists none from a host whose daemon has no such list", async () => {
+    answers["job.list"] = () => [job("j1")];
+    loadJobs("h7", "s1");
+    await settle();
+    expect(ids("h7", "s1")).toEqual(["j1:running"]);
+    expect(useJobs.getState().stayed["h7/s1"]).toEqual([]);
   });
 });

@@ -529,7 +529,8 @@ async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String
 }
 
 /// Prints the answer that sends an approved heavy command of an agent in a
-/// session through `moonlet exec`; prints nothing otherwise.
+/// session through `moonlet exec`, or, once per session for each reason,
+/// why a line with one stays here; prints nothing otherwise.
 async fn route(socket: &std::path::Path, payload: &serde_json::Value) -> Result<()> {
     let Ok(session) = std::env::var("MOONLET_SESSION") else {
         return Ok(());
@@ -546,12 +547,16 @@ async fn route(socket: &std::path::Path, payload: &serde_json::Value) -> Result<
                 command: ask.command,
                 cwd: ask.cwd,
                 tool_use_id: ask.tool_use_id,
+                lines: true,
             },
         )
         .await?;
     if routed.route {
         let moonlet = std::env::current_exe()?;
-        println!("{}", hook::rewrite(payload, &moonlet.display().to_string()));
+        let moonlet = moonlet.display().to_string();
+        println!("{}", hook::rewrite(payload, &moonlet, routed.line.as_ref()));
+    } else if let Some(note) = routed.note {
+        println!("{}", hook::stays(&note));
     }
     Ok(())
 }

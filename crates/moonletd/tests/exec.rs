@@ -229,7 +229,166 @@ async fn an_unapproved_entry_is_not_routed() {
     );
     assert_eq!(
         c.route("pnpm test && git status").await,
+        json!({ "route": false, "reason": "form" })
+    );
+}
+
+impl Central {
+    /// `exec.route` from a hook that rewrites whole lines, in `cwd`.
+    async fn route_line(&self, command: &str, cwd: &Path) -> Value {
+        self.daemon
+            .call(
+                "exec.route",
+                json!({ "session": self.session, "command": command, "cwd": cwd, "lines": true }),
+            )
+            .await
+    }
+}
+
+/// The note the agent gets once per session for each reason a line with a
+/// heavy command stays here.
+fn note(why: &str) -> String {
+    format!(
+        "moonlet: this line runs here, not on a worker: {why}. moonlet sends a heavy command to a worker when the line is the command alone, or with `cd <folder> &&`, `NAME=value` (names in [heavy] env) or `timeout <n>` before it, and `2>&1`, `> file` in the worktree, `| tail`, `| head` or `| grep` after it."
+    )
+}
+
+#[tokio::test]
+async fn a_wrapped_line_routes_with_what_runs_around_its_command() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    std::fs::create_dir_all(c.worktree.join("web/log")).unwrap();
+    let top = c.worktree.clone();
+    let routed = |before: &str, command: &str, after: &str| {
+        json!({ "route": true, "reason": null, "line": { "before": before, "command": command, "after": after } })
+    };
+    let rows = [
+        (
+            "cd web && pnpm test 2>&1 | tail -n 50",
+            routed("cd ./web && ", "pnpm test", " 2>&1 | tail -n 50"),
+        ),
+        ("CI=1 pnpm test --run", routed("CI=1 ", "pnpm test --run", "")),
+        ("env CI=1 pnpm test", routed("CI=1 ", "pnpm test", "")),
+        ("timeout 600 pnpm build", routed("timeout 600 ", "pnpm build", "")),
+        (
+            "pnpm test 2>/dev/null | grep -E 'FAIL|Error'",
+            routed("", "pnpm test", " 2> /dev/null | grep -E 'FAIL|Error'"),
+        ),
+        (
+            "cd web && pnpm test > log/out.txt 2>&1",
+            routed("cd ./web && ", "pnpm test", " > log/out.txt 2>&1"),
+        ),
+        // The command alone keeps the hook's rewrite of X62: no line.
+        ("pnpm test", json!({ "route": true, "reason": null })),
+    ];
+    for (command, want) in rows {
+        assert_eq!(c.route_line(command, &top).await, want, "{command}");
+    }
+}
+
+#[tokio::test]
+async fn a_wrapped_line_that_leaves_the_worktree_or_passes_other_variables_stays_here() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    std::fs::create_dir_all(c.worktree.join("web")).unwrap();
+    let top = c.worktree.clone();
+    let rows = [
+        ("cd .. && pnpm test", "`cd ..` leaves the session's worktree"),
+        ("cd missing && pnpm test", "`cd missing` leaves the session's worktree"),
+        ("pnpm test > /tmp/out.txt", "`/tmp/out.txt` is outside the session's worktree"),
+        ("pnpm test > ../out.txt", "`../out.txt` is outside the session's worktree"),
+        ("pnpm test > .git/hooks/pre-commit", "`.git/hooks/pre-commit` is git's, moonlet's or Claude Code's own"),
+        ("pnpm test 2> .claude/settings.json", "`.claude/settings.json` is git's, moonlet's or Claude Code's own"),
+        ("pnpm test > web", "`web` is a folder"),
+        ("NODE_OPTIONS=--inspect pnpm test", "`NODE_OPTIONS` is not one of the project's [heavy] env names"),
+        ("pnpm test; git push", "it runs a second command"),
+        ("pnpm test | sh", "`sh` is not a filter moonlet runs after a command: use tail, head or grep"),
+    ];
+    for (command, why) in rows {
+        assert_eq!(
+            c.route_line(command, &top).await,
+            json!({ "route": false, "reason": "form", "note": note(why) }),
+            "{command}"
+        );
+    }
+    // A link in the worktree that leads into one of those folders, or out.
+    std::fs::create_dir_all(c.worktree.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(c.worktree.join(".claude"), c.worktree.join("conf")).unwrap();
+    std::os::unix::fs::symlink("/tmp", c.worktree.join("tmp")).unwrap();
+    for (command, why) in [
+        ("pnpm test > conf/settings.json", "`conf/settings.json` is git's, moonlet's or Claude Code's own"),
+        ("pnpm test > tmp/out.txt", "`tmp/out.txt` is outside the session's worktree"),
+        ("cd tmp && pnpm test", "`cd tmp` leaves the session's worktree"),
+    ] {
+        assert_eq!(
+            c.route_line(command, &top).await,
+            json!({ "route": false, "reason": "form", "note": note(why) }),
+            "{command}"
+        );
+    }
+    // A line with no heavy command in it is not one.
+    assert_eq!(
+        c.route_line("git status; ls", &top).await,
         json!({ "route": false, "reason": "not_heavy" })
+    );
+}
+
+#[tokio::test]
+async fn a_hook_that_rewrites_only_bare_commands_never_gets_a_wrapped_line() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    std::fs::create_dir_all(c.worktree.join("web")).unwrap();
+    // A hook from before X62's lines puts the whole text after `moonlet
+    // exec --`: `cd` would be the command.
+    assert_eq!(
+        c.route("cd web && pnpm test").await,
+        json!({ "route": false, "reason": "form" })
+    );
+    assert_eq!(
+        c.route("pnpm test").await,
+        json!({ "route": true, "reason": null })
+    );
+}
+
+#[tokio::test]
+async fn the_agent_is_told_once_and_the_jobs_tab_lists_each_line_that_stayed_here() {
+    let c = central().await;
+    c.approve(&["pnpm test", "pnpm build"], &["CI"]).await;
+    let top = c.worktree.clone();
+    assert_eq!(
+        c.route_line("pnpm test; git status", &top).await,
+        json!({ "route": false, "reason": "form", "note": note("it runs a second command") })
+    );
+    assert_eq!(
+        c.route_line("pnpm build && git status", &top).await,
+        json!({ "route": false, "reason": "form" })
+    );
+    // An approved command a deny rule covers stays here too, said once.
+    write(
+        &c.worktree.join(".claude/settings.json"),
+        r#"{"permissions": {"deny": ["Bash(tail:*)"]}}"#,
+    );
+    assert_eq!(
+        c.route_line("pnpm test | tail -5", &top).await,
+        json!({ "route": false, "reason": "claude_rule" })
+    );
+    let stayed: Value = c
+        .daemon
+        .call("job.stayed", json!({ "session": c.session }))
+        .await;
+    let stayed: Vec<(&str, &str)> = stayed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["command"].as_str().unwrap(), s["why"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        stayed,
+        [
+            ("pnpm test | tail -5", "a deny or ask rule in Claude Code's settings matches it"),
+            ("pnpm build && git status", "it runs a second command"),
+            ("pnpm test; git status", "it runs a second command"),
+        ]
     );
 }
 

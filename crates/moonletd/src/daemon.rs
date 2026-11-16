@@ -2262,6 +2262,11 @@ impl Daemon {
                 let r: m::JobList = params(p)?;
                 ok(self.jobs.list(&r.session))
             }
+            m::JOB_STAYED => {
+                jobs_reader(conn)?;
+                let r: m::JobList = params(p)?;
+                ok(self.jobs.stayed_list(&r.session))
+            }
             m::JOB_OUTPUT => {
                 jobs_reader(conn)?;
                 let r: m::JobOutputGet = params(p)?;
@@ -2285,7 +2290,11 @@ impl Daemon {
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;
-                ok(self.heavy.route(&r))
+                let (routed, stayed) = self.heavy.route(&r);
+                if let Some(s) = stayed {
+                    self.jobs.stayed(s);
+                }
+                ok(routed)
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_SETTINGS => ok(self.worker_settings()),

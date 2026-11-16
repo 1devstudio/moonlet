@@ -671,6 +671,11 @@ pub const JOB_STOP_ALL: &str = "job.stop_all";
 /// [`JobRef`] → `true`: a job waiting for a cloud machine runs on the
 /// central host now (X63); `not_waiting` otherwise.
 pub const JOB_RUN_HERE: &str = "job.run_here";
+/// [`JobList`] → `[JobStayed]`: lines with a heavy command that ran on the
+/// session's host instead of through moonlet, newest first, and why (X62).
+pub const JOB_STAYED: &str = "job.stayed";
+/// [`JobStayed`]: a line with a heavy command stayed on the session's host.
+pub const EV_JOB_STAYED: &str = "job.stayed";
 /// [`Job`]: a job changed.
 pub const EV_JOB_CHANGED: &str = "job.changed";
 /// [`JobOutputEvent`]: a running job's new output.
@@ -3738,15 +3743,48 @@ pub struct ExecRoute {
     /// The tool call's id, so the app can match the call to its job.
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// The hook puts [`ExecRouted::line`] around `moonlet exec`. A hook
+    /// from before sends false, and gets `route: true` only for a command
+    /// alone, which it puts after `moonlet exec --` as it is.
+    #[serde(default)]
+    pub lines: bool,
 }
 
 /// `exec.route`'s answer. `reason` says why a call stays where it is:
 /// `no_session`, `outside_worktree`, `invalid_config`, `not_heavy`,
+/// `form` (a heavy command in a line moonlet does not route),
 /// `not_approved`, `env_not_approved` or `claude_rule`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecRouted {
     pub route: bool,
     pub reason: Option<String>,
+    /// For a routed line that is more than its command: what the agent's
+    /// shell runs around `moonlet exec`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<RoutedLine>,
+    /// What to tell the agent about a line that stays here, the first time
+    /// in the session for its reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// A routed line: `before`, then `moonlet exec -- `, then `command`, then
+/// `after`. Every word in it is quoted for the shell.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoutedLine {
+    pub before: String,
+    pub command: String,
+    pub after: String,
+}
+
+/// A line with a heavy command that ran on the session's host, not
+/// through moonlet, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobStayed {
+    pub session: String,
+    pub at: u64,
+    pub command: String,
+    pub why: String,
 }
 
 /// `exec.run` params, from `moonlet exec`.

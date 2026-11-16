@@ -5,7 +5,7 @@
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
 - **Depends on:** [X41](X41-worker-link-and-project-identity.md) (the worker link, `worker.list`, project identity), [X61](X61-remote-hosts-for-heavy-commands.md) (remote hosts as workers) and [X60](X60-keep-in-sync.md) (snapshots, packs, offer and update rounds, setup approval).
-- **Changed by:** [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
+- **Changed by:** [Lines moonlet routes](#lines-moonlet-routes) (2026-11-16: `cd`, variables, `timeout`, redirections and filters around a heavy command), [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
 
 ## Summary
 
@@ -52,17 +52,86 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `pnpm  test` (two spaces) | yes |
   | `"pnpm" test` | yes |
   | `pnpm testing` | no: the words differ |
-  | `pnpm test && git status` | no: chaining |
-  | `pnpm test 2>&1 \| tail -50` | no: redirection and a pipe |
-  | `cd web && pnpm test` | no: chaining |
-  | `NODE_ENV=test pnpm test` | no: an assignment |
+  | `pnpm test && git status` | no: a second command |
+  | `pnpm test 2>&1 \| tail -50` | yes, as a line (below): `2>&1 \| tail -50` runs in the agent's shell |
+  | `cd web && pnpm test` | yes, as a line: it runs in `web` |
+  | `NODE_ENV=test pnpm test` | as a line when `NODE_ENV` is in `[heavy] env`; otherwise no |
   | `pnpm test $(cat files.txt)` | no: substitution |
   | `pnpm test "$FILE"` | no: expansion inside double quotes |
   | `cargo test 'a b'` | yes, with the argument `a b` |
   | `pnpm test src/*.ts` | no: a glob |
   | `pnpm test # all` | no: a comment |
 
-  A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
+  The command alone is routed when it has, outside quotes, none of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#` and no newline, nor `$` or `` ` `` inside double quotes, and when it does not start with an assignment. Anything around it is read as a line, below. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
+
+### Lines moonlet routes
+
+Agents rarely run a test or a build alone: they `cd` into a package, set a variable, put a `timeout` on it, merge stderr and keep the end of the output. moonlet routes these lines too. Only the heavy command runs through `moonlet exec`, on whichever machine is free; what is around it stays in the agent's own shell, around `moonlet exec`, so it means what it meant before.
+
+- [x] moonlet reads the line by shell rules, into the parts below, and routes it only when it is exactly these parts. Anything else stays where it is, as before. The grammar:
+
+  ```text
+  line     = [ "cd" DIR "&&" ] command { "|" filter }
+  command  = { NAME=VALUE } [ "env" NAME=VALUE { NAME=VALUE } ]
+             [ "timeout" DURATION ] WORD { WORD | redirect }
+  filter   = ( "tail" | "head" ) [ "-N" | "-n" N | "-nN" ] { redirect }      tail also -n +N
+           | "grep" { option } PATTERN { redirect }
+  redirect = [ "1" | "2" ] ( ">" | ">>" ) PATH  |  [ "1" | "2" ] ">&" ( "1" | "2" )
+  ```
+
+  - `WORD`s must start with an approved entry's words, as for the command alone.
+  - `DIR` is one folder, not an option, inside the session's worktree once followed (links too).
+  - `NAME` must be one of the project's `[heavy] env` names: on the worker, no other variable reaches the command.
+  - `DURATION` is a number with an optional fraction and `s`, `m`, `h` or `d`.
+  - `env` and `timeout` in any other form (`env -i …`, `timeout -s KILL …`) are the command itself, routed only when approved as such.
+  - `grep`'s options are `-i -v -E -F -G -n -w -x -o -c -q -s` (alone or together), `-e PATTERN`, `-A`, `-B`, `-C` and `-m` with a number, and their long forms; it takes one pattern (or only `-e` ones) and no file.
+  - `PATH` is `/dev/null` or a file in the session's worktree, not a folder, not a link that leads out, and not in `.git`, `.moonlet` or `.claude`.
+  - Quotes and `\` work as in the shell; `$` and `` ` `` are refused in double quotes too, and a word that only looks like an assignment (`"CI"=1`) is refused.
+- [x] Worked examples (entry `pnpm test`, `CI` in `[heavy] env`). What runs is the line Claude Code runs instead, `M` standing for the quoted `moonlet` path, `exec` and `--`:
+
+  | Line | Runs |
+  |---|---|
+  | `cd web && pnpm test` | `cd ./web && M pnpm test` |
+  | `CI=1 pnpm test`, `env CI=1 pnpm test` | `CI=1 M pnpm test` |
+  | `timeout 600 pnpm test` | `timeout 600 M pnpm test` |
+  | `pnpm test 2>&1 \| tail -n 50` | `M pnpm test 2>&1 \| tail -n 50` |
+  | `pnpm test 2>&1 \| grep -E "FAIL\|Error" \| head -20` | `M pnpm test 2>&1 \| grep -E 'FAIL\|Error' \| head -20` |
+  | `pnpm test > out.txt 2>&1` | `M pnpm test > out.txt 2>&1` |
+  | `pnpm test "a;b"` | `M pnpm test 'a;b'` |
+
+  | Line | Stays here, because |
+  |---|---|
+  | `pnpm test; git status`, `cd web && pnpm test && git push`, `pnpm test \|\| true` | it runs a second command |
+  | `pnpm test $(cat files.txt)` | it has `$`, which the shell expands |
+  | `pnpm test src/*.ts` | it has `*`, which the shell expands |
+  | `(pnpm test)` | it has a subshell |
+  | `pnpm test \| sh` | `sh` is not a filter moonlet runs after a command: use tail, head or grep |
+  | `pnpm test \| tail -f` | `tail -f` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep |
+  | `cd .. && pnpm test` | `cd ..` leaves the session's worktree |
+  | `pnpm test > /tmp/out.txt` | `/tmp/out.txt` is outside the session's worktree |
+  | `pnpm test > .git/hooks/pre-commit` | `.git/hooks/pre-commit` is git's, moonlet's or Claude Code's own |
+  | `NODE_OPTIONS=--inspect pnpm test` | `NODE_OPTIONS` is not one of the project's [heavy] env names |
+- [x] Every word the line runs is the one moonlet read, quoted for the shell (`sh`, `bash` or `zsh`). A relative `cd` folder starts with `./`, so `CDPATH` never takes it elsewhere.
+- [x] **Where each part runs.** The command runs on the worker, from the folder `cd` went to (relative to the worktree, as for any call), with the line's variables if they are approved `[heavy] env` names. `cd`, `timeout`, the redirections and the filters run in the agent's shell on the session's host, on `moonlet exec`'s output, which is the command's output as it streams. So:
+  - `cd` leaves the agent's shell in that folder, as it would have;
+  - `timeout` stops `moonlet exec` with SIGTERM, which stops the run (as Cancelling below), and exits 124;
+  - with `2>&1`, moonlet's own lines (`moonlet: running on …`, `moonlet: full output in …`) are in the filtered output too;
+  - the exit status the agent sees is the shell's: the last filter's, or with `pipefail` the last command that failed, the command's own status coming from `moonlet exec` as before;
+  - when a filter stops reading, as `head` does, `moonlet exec` stops the run and exits 141, as a command dies of SIGPIPE here.
+- [x] **Older hosts.** Nothing new crosses machines: the worker gets the command's words, its folder and the approved variables, as for a command alone run from that folder. A hook that sends `exec.route` without `lines: true` (one from before) is never routed a line, since it would put the whole text after `moonlet exec --`; such a line stays here with reason `form`. A newer hook asking an older daemon gets `not_heavy` for a line and routes the command alone as before.
+- [x] **The agent is told.** When a line with an approved or listed heavy command in it stays here because of its form, the hook's answer carries, the first time in the session for that reason, `hookSpecificOutput.additionalContext`:
+
+  ```json
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "additionalContext": "moonlet: this line runs here, not on a worker: it runs a second command. moonlet sends a heavy command to a worker when the line is the command alone, or with `cd <folder> &&`, `NAME=value` (names in [heavy] env) or `timeout <n>` before it, and `2>&1`, `> file` in the worktree, `| tail`, `| head` or `| grep` after it."
+    }
+  }
+  ```
+
+  It has no `permissionDecision`, so the call goes through Claude Code's own checks and runs where it is, as without moonlet. Claude Code reads it to the agent next to the call's result; a Claude Code that does not know the field still runs the call (an output it cannot read never blocks one). The rewrite for a routed call carries no new field.
+- [x] **The user sees it.** The session's Jobs tab lists, under its jobs, each line with a heavy command that stayed on the session's host, whatever the reason (its form, not approved, a deny or ask rule), with why: "Ran on the session's host, not on a worker: it runs a second command". The daemon keeps the last 20 per session while it runs.
 - [x] Only Bash calls of Claude Code agents in sessions on the central host are routed (since [X89](X89-every-host-runs-heavy-commands.md), in sessions on any member): calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout`, `description` and (since [X90](X90-heavy-commands-in-practice.md)) `run_in_background` is not routed: one that asks to leave Claude Code's sandbox goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
 - [x] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [x] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
@@ -71,7 +140,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### The hook
 
-- [x] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {session, command, cwd, tool_use_id}` for Bash calls, with the session from `MOONLET_SESSION`. With `route: false`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet.
+- [x] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {session, command, cwd, tool_use_id, lines: true}` for Bash calls, with the session from `MOONLET_SESSION`. With `route: false` and no `note`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet. With a `note`, it prints only `additionalContext` (Lines moonlet routes).
 - [x] With `route: true`, it prints:
 
   ```json
@@ -89,7 +158,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   }
   ```
 
-  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes, `exec`, the tool call's id as `--tool-use <id>` (so the job is found from the chat's row) and `--`. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command.
+  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes, `exec`, the tool call's id as `--tool-use <id>` (so the job is found from the chat's row) and `--`. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command. For a routed line, the answer's `line {before, command, after}` goes around it instead: `before`, the path, `exec`, `--tool-use <id>`, `--`, `command`, `after`.
 - [x] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs. A command it cannot start exits with 127 and "moonlet: cannot run <command>: <reason>", as a shell would.
 
 ### Picking a worker
@@ -305,7 +374,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 **Daemon, local and on the central host:**
 
-- `exec.route {session, command, cwd, tool_use_id}` returns `{route: bool, reason}`. `reason` says why a call stays where it is: `no_session` (unknown or archived), `outside_worktree`, `invalid_config`, `not_heavy`, `not_approved`, `env_not_approved` or `claude_rule`. The decision reads `[heavy]` from the session's own worktree, so an agent's edit there counts, and fails closed when it cannot be read or checked.
+- `exec.route {session, command, cwd, tool_use_id, lines}` returns `{route: bool, reason, line?, note?}`. `reason` says why a call stays where it is: `no_session` (unknown or archived), `outside_worktree`, `invalid_config`, `not_heavy`, `form` (a heavy command in a line moonlet does not route as written), `not_approved`, `env_not_approved` or `claude_rule`. `lines` (default false) says the hook puts `line {before, command, after}` around `moonlet exec`; it comes only for a routed line that is more than its command. `note` is what to tell the agent, the first time in the session for each reason, only with `lines`. The decision reads `[heavy]` from the session's own worktree, so an agent's edit there counts, and fails closed when it cannot be read or checked.
 - `exec.run {session, argv, cwd, env}` returns `{run, host}`, then:
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
@@ -316,6 +385,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
 - `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
 - The event `job.changed {job}`.
+- `job.stayed {session}` → `[{session, at, command, why}]`, newest first: the lines with a heavy command that stayed on the session's host, and the event `job.stayed {session, at, command, why}`. Like `job.list`, for the app and paired devices only; a daemon from before answers with an error, read as none.
 - `exec.route` and `exec.run` take the tool call's id (`tool_use_id` from the hook payload), so the chat can match its row to the job.
 - `heavy.get {project}` returns `{config, approved, error}`: the `[heavy]` table of the project's folder, the approved `{commands, env}` or `null`, and why the table cannot be used, if it cannot. The app works out each entry's state and the machines that approved it from these and the workers' answers.
 - `heavy.set {project, commands, os, env, outputs}` writes `[heavy]` in `.moonlet/config.toml` as X8 writes the other keys. It never approves.
@@ -356,6 +426,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **The worker checks again.** It runs a command only when the command matches its own approved list for that project and central host. It runs an argument list, never `sh -c`, and only with a working directory inside the routing copy. Paths and folder names from the central host follow X60's rules.
 - **Environment.** Only `[heavy] env` crosses machines, and only once the user has approved its exact names, so an agent cannot add a name and have its value sent. The approval banner names secret-looking ones (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`) and says they reach every machine, cloud machines included.
 - **Outputs.** Bringing back `outputs` never follows a symbolic link on either machine, so a run cannot make the central host read or write outside the worktree through one.
+- **Lines.** The hook's `allow` covers the whole rewritten line, so a line routes only when everything in it besides the approved command is one of a few fixed parts that run nothing else: a `cd` into the worktree, approved variable names, `timeout`, writes to `/dev/null` or to files in the worktree outside `.git`, `.moonlet` and `.claude`, and `tail`, `head` or `grep` reading the command's output, with options that read no file. moonlet parses the line rather than matching its text, and the line Claude Code runs is the one moonlet built from what it parsed, every word quoted, so a word cannot mean something else to the shell. Each part is checked against the user's deny and ask rules too. The worker still gets an argument list only, and checks it against its own approval.
 - **Files.** A routing copy gets what a live copy gets (X60). An ignored `.env` stays where it is, so a command that needs it on the worker needs it there already.
 
 ## Out of scope
@@ -388,6 +459,12 @@ Where the tests live:
 | The user's Claude Code deny and ask rules | `deny_and_ask_rules_stop_routing_in_each_form`, `a_rule_moonlet_cannot_read_stops_routing_for_its_first_word`, `a_deny_rule_in_the_worktree_keeps_the_command_here`, `a_managed_deny_rule_keeps_the_command_here` |
 | The hook stays silent | `the_hook_prints_nothing_when_the_daemon_says_no`, `the_hook_prints_nothing_when_the_daemon_is_gone` |
 | The hook's rewrite | `the_hook_rewrites_a_captured_bash_call_to_moonlet_exec` |
+| Lines moonlet routes: the grammar and worked examples | `wrapped_lines_parse_into_the_command_and_what_runs_around_it`, `lines_beyond_the_routed_forms_are_refused_with_why`, `a_wrapped_line_routes_with_what_runs_around_its_command`, `a_wrapped_line_that_leaves_the_worktree_or_passes_other_variables_stays_here` |
+| Lines: where each part runs, exit status | `a_wrapped_line_runs_its_command_through_moonlet_and_gives_what_it_gives_here`, `a_routed_command_whose_reader_has_gone_ends_as_it_would_here`, `a_line_that_starts_with_cd_runs_its_command_in_that_folder_on_another_host` (in X89's `tests/mesh.rs`) |
+| Lines: the hook's answer | `the_hook_puts_a_routed_lines_parts_around_moonlet_exec`; Vitest "a routed line shows what ran around moonlet exec, without it" |
+| Lines: older hosts | `a_hook_that_rewrites_only_bare_commands_never_gets_a_wrapped_line` |
+| Lines: the agent is told once | `the_hook_tells_the_agent_why_a_line_stays_here`, `a_heavy_command_anywhere_in_a_line_is_found_for_the_note`, `the_agent_is_told_once_and_the_jobs_tab_lists_each_line_that_stayed_here`, `the_hook_tells_the_agent_once_why_a_line_with_a_heavy_command_stays_here` |
+| Lines: the user sees it | `the_agent_is_told_once_and_the_jobs_tab_lists_each_line_that_stayed_here`; Vitest "a line that stayed on the session's host says why", "lists the lines that stayed on the session's host, newest first, as they come", "lists none from a host whose daemon has no such list"; e2e "lists a line with a heavy command that stayed on the session's host, and why" |
 | `moonlet exec` without routing | `moonlet_exec_without_routing_runs_the_command_here` |
 | `moonlet exec` in a session, and `exec.run`'s own check | `moonlet_exec_in_a_session_runs_through_its_daemon`, `an_unapproved_moonlet_exec_is_refused` |
 | Candidates and `os` | `a_worker_on_another_os_is_skipped` |

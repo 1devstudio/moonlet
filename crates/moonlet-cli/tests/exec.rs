@@ -66,6 +66,10 @@ struct Shop {
 }
 
 async fn shop() -> Shop {
+    shop_with("[heavy]\ncommands = [\"pnpm test\", \"sh -c\"]\n").await
+}
+
+async fn shop_with(config: &str) -> Shop {
     let home = tempfile::tempdir().unwrap();
     let socket = home.path().join("run/d.sock");
     // This machine's name, as the first line of a run says it; read when
@@ -99,11 +103,7 @@ async fn shop() -> Shop {
     let repo = home.path().join("src/shop");
     std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(
-        repo.join(".moonlet/config.toml"),
-        "[heavy]\ncommands = [\"pnpm test\", \"sh -c\"]\n",
-    )
-    .unwrap();
+    std::fs::write(repo.join(".moonlet/config.toml"), config).unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "shop"]);
     let mut app = Client::connect_app(&socket, home.path()).await.unwrap();
@@ -470,4 +470,115 @@ async fn a_job_knows_its_tool_call() {
         .unwrap();
     assert_eq!(jobs[0]["tool_use_id"], json!("toolu_01Abc"));
     assert_eq!(jobs[0]["command"], json!("sh -c 'echo hi'"));
+}
+
+/// A shell line as Claude Code's Bash tool runs it, in the session's
+/// worktree: its stdout and exit status.
+fn shell(s: &Shop, shell: &[&str], line: &str) -> (String, Option<i32>) {
+    let out = Command::new(shell[0])
+        .args(&shell[1..])
+        .arg(line)
+        .current_dir(&s.worktree)
+        .env("MOONLET_SOCK", &s.socket)
+        .env("MOONLET_SESSION", &s.session)
+        .output()
+        .unwrap();
+    (String::from_utf8_lossy(&out.stdout).into(), out.status.code())
+}
+
+#[tokio::test]
+async fn a_wrapped_line_runs_its_command_through_moonlet_and_gives_what_it_gives_here() {
+    let s = shop_with("[heavy]\ncommands = [\"sh -c\"]\nenv = [\"CI\"]\n").await;
+    let mut app = Client::connect_app(&s.socket, s.home.path()).await.unwrap();
+    let _: Value = app
+        .request(
+            "heavy.approve",
+            json!({ "project": s.project, "commands": ["sh -c"], "env": ["CI"] }),
+        )
+        .await
+        .unwrap();
+    std::fs::create_dir_all(Path::new(&s.worktree).join("web")).unwrap();
+    let line = "cd web && CI=1 sh -c 'echo \"$CI@${PWD##*/}\"; echo noise; touch made; exit 3' 2>&1 | grep @web";
+    let out = hook(&s.socket, &s.session, &payload(line, &s.worktree));
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rewritten = answer["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        rewritten,
+        format!(
+            "cd ./web && CI=1 '{}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- sh -c 'echo \"$CI@${{PWD##*/}}\"; echo noise; touch made; exit 3' 2>&1 | grep @web",
+            env!("CARGO_BIN_EXE_moonlet")
+        )
+    );
+    // As the line gives it here: grep's output and status, or with
+    // pipefail the command's.
+    for (sh, status) in [(&["sh", "-c"][..], 0), (&["bash", "-o", "pipefail", "-c"][..], 3)] {
+        let _ = std::fs::remove_file(Path::new(&s.worktree).join("web/made"));
+        assert_eq!(shell(&s, sh, line), ("1@web\n".to_string(), Some(status)), "{sh:?} here");
+        let _ = std::fs::remove_file(Path::new(&s.worktree).join("web/made"));
+        assert_eq!(shell(&s, sh, &rewritten), ("1@web\n".to_string(), Some(status)), "{sh:?} routed");
+        assert!(Path::new(&s.worktree).join("web/made").exists());
+    }
+    // It ran as a job, with `CI` passed on.
+    let jobs: Value = app
+        .request("job.list", json!({ "session": s.session }))
+        .await
+        .unwrap();
+    assert_eq!(jobs.as_array().unwrap().len(), 2);
+    assert_eq!(jobs[0]["env"], json!(["CI"]));
+}
+
+#[tokio::test]
+async fn the_hook_tells_the_agent_once_why_a_line_with_a_heavy_command_stays_here() {
+    let s = approved_shop().await;
+    let note = "moonlet: this line runs here, not on a worker: it runs a second command. moonlet sends a heavy command to a worker when the line is the command alone, or with `cd <folder> &&`, `NAME=value` (names in [heavy] env) or `timeout <n>` before it, and `2>&1`, `> file` in the worktree, `| tail`, `| head` or `| grep` after it.";
+    let out = hook(&s.socket, &s.session, &payload("pnpm test; git status", &s.worktree));
+    assert!(out.status.success());
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        answer,
+        json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "additionalContext": note } })
+    );
+    // Said once: the same reason again, and a line with no heavy command
+    // in it, print nothing.
+    for line in ["pnpm test && git push", "git status; ls"] {
+        let out = hook(&s.socket, &s.session, &payload(line, &s.worktree));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "", "{line}");
+    }
+}
+
+#[tokio::test]
+async fn a_routed_command_whose_reader_has_gone_ends_as_it_would_here() {
+    let s = approved_shop().await;
+    // `head` exits after a line: the command here dies of SIGPIPE (141);
+    // routed, it is stopped the same way rather than running on.
+    let line = format!(
+        "'{}' exec -- sh -c 'while :; do echo y; done' | head -n 1",
+        env!("CARGO_BIN_EXE_moonlet")
+    );
+    let mut child = Command::new("bash")
+        .args(["-o", "pipefail", "-c", &line])
+        .current_dir(&s.worktree)
+        .env("MOONLET_SOCK", &s.socket)
+        .env("MOONLET_SESSION", &s.session)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(15) {
+            let _ = child.kill();
+            panic!("the routed command ran on after its reader had gone");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+    assert_eq!((out.as_str(), status.code()), ("y\n", Some(141)));
 }
