@@ -2,7 +2,7 @@
 // detail, its tab and the chat's Bash rows show it. Pure.
 
 import { clock } from "./subagents";
-import type { Job, JobChunk } from "./protocol";
+import type { Job, JobChunk, JobStayed } from "./protocol";
 
 /** A total, in whole seconds: `42s`, `1m 00s`. */
 export function dur(ms: number): string {
@@ -196,10 +196,23 @@ export function bashChip(job: Job | undefined, command: string, output: string |
   return shownCommand(command) !== command ? chipFromOutput(output ?? "") : null;
 }
 
-/** The command as the agent wrote it, without the hook's `moonlet exec` in front. */
+// A word the daemon quoted for the shell, or a plain one.
+const WORD = String.raw`(?:'(?:[^']|'\\'')*'|\S+)`;
+// A routed line (X62): `cd <dir> && ` and `timeout <n> ` before `moonlet
+// exec`, the line's variables as its `--env` options.
+const ROUTED = new RegExp(
+  String.raw`^((?:cd ${WORD} && )?(?:timeout \S+ )?)'(?:[^']|'\\'')*' exec (?:--tool-use \S+ )?((?:--env ${WORD} )*)-- ([\s\S]*)$`,
+);
+
+/** The command as the agent's shell runs it, without the hook's `moonlet exec`. */
 export function shownCommand(command: string): string {
-  const m = command.match(/^'(?:[^']|'\\'')*' exec (?:--tool-use \S+ )?-- ([\s\S]*)$/);
-  return m ? m[1] : command;
+  const m = command.match(ROUTED);
+  return m ? m[1] + m[2].replace(/--env /g, "") + m[3] : command;
+}
+
+/** A line with a heavy command that ran on the session's host, and why. */
+export function stayedLine(s: JobStayed): string {
+  return `Ran on the session's host, not on a worker: ${s.why}`;
 }
 
 export interface OutputLine {

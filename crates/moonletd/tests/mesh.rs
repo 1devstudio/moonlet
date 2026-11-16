@@ -634,6 +634,59 @@ async fn a_members_session_runs_its_heavy_command_on_the_central_host() {
     );
 }
 
+/// `exec.run` of `argv` in `session`'s folder `sub`, as `moonlet exec` sends
+/// it from a line that starts with `cd <sub> &&`.
+async fn run_in(d: &Daemon, session: &Value, sub: &str, argv: &[&str]) -> Ran {
+    let mut s = session.clone();
+    s["path"] = json!(format!("{}/{sub}", session["path"].as_str().unwrap()));
+    run(d, &s, argv).await
+}
+
+#[tokio::test]
+async fn a_line_that_starts_with_cd_runs_its_command_in_that_folder_on_another_host() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let worktree = std::path::PathBuf::from(session["path"].as_str().unwrap());
+    std::fs::create_dir_all(worktree.join("web")).unwrap();
+    std::fs::write(worktree.join("web/package.json"), "{}\n").unwrap();
+    let line = "cd web && sh -c 'echo \"${PWD##*/}\"; echo hi > out.txt' 2>&1 | tail -n 5";
+    let routed: Value = book
+        .call(
+            "exec.route",
+            json!({ "session": session["id"], "command": line, "cwd": worktree, "lines": true }),
+        )
+        .await;
+    assert_eq!(
+        routed,
+        json!({ "route": true, "reason": null, "line": {
+            "before": "cd ./web && ",
+            "command": "sh -c 'echo \"${PWD##*/}\"; echo hi > out.txt'",
+            "after": " 2>&1 | tail -n 5",
+        } })
+    );
+    // What `moonlet exec` sends once the agent's shell is in `web`.
+    let ran = run_in(
+        &book,
+        &session,
+        "web",
+        &["sh", "-c", "echo \"${PWD##*/}\"; echo hi > out.txt"],
+    )
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("web\n", 0), "{ran:?}");
+    assert!(
+        ran.stderr.starts_with("moonlet: running on studio-mini\n"),
+        "{}",
+        ran.stderr
+    );
+    // The file it wrote in that folder is in the MacBook's worktree.
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("web/out.txt")).unwrap(),
+        "hi\n"
+    );
+}
+
 /// Turns studio-mini's switch on or off from the MacBook, and waits until
 /// studio-mini has it.
 async fn mini_takes(mini: &Daemon, book: &Daemon, heavy: bool) {

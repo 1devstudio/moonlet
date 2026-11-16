@@ -9,12 +9,14 @@ use moonlet_proto::methods::{self, ExecCancel, ExecExited, ExecRun, ExecRunStart
 use moonlet_proto::{Frame, Message, read_frame, write_frame};
 use tokio::signal::unix::{SignalKind, signal};
 
-/// Runs `argv` through the daemon at `socket` and returns its exit status,
-/// or `None` when the daemon cannot be reached or will not run it.
+/// Runs `argv`, with `env` added to this process's variables, through the
+/// daemon at `socket` and returns its exit status, or `None` when the
+/// daemon cannot be reached or will not run it.
 pub async fn routed(
     socket: &Path,
     session: &str,
     argv: &[String],
+    env: &[(String, String)],
     tool_use_id: Option<String>,
 ) -> Option<i32> {
     let mut c = Client::connect(socket, "moonlet-cli").await.ok()?;
@@ -25,7 +27,7 @@ pub async fn routed(
         session: session.to_string(),
         argv: argv.to_vec(),
         cwd: std::env::current_dir().ok()?.display().to_string(),
-        env: std::env::vars().collect(),
+        env: std::env::vars().chain(env.iter().cloned()).collect(),
         tool_use_id,
     };
     let started: ExecRunStarted = c.request(methods::EXEC_RUN, run).await.ok()?;
@@ -56,13 +58,22 @@ pub async fn routed(
         };
         match frame {
             Some(Frame::RunOutput { run, stream, data }) if run == started.run => {
-                let _ = if stream == 1 {
+                let wrote = if stream == 1 {
                     std::io::stdout()
                         .write_all(&data)
                         .and_then(|()| std::io::stdout().flush())
                 } else {
                     std::io::stderr().write_all(&data)
                 };
+                // Its reader has gone, as when `| head` has read enough: a
+                // command here would die of SIGPIPE, so the run stops too.
+                if let Err(e) = wrote
+                    && e.kind() == std::io::ErrorKind::BrokenPipe
+                    && cancelled.is_none()
+                {
+                    cancelled = Some(128 + SIGPIPE);
+                    cancel(&mut writer, started.run).await;
+                }
             }
             Some(Frame::Json(Message::Event { name, data })) if name == methods::EV_EXEC_EXITED => {
                 if let Ok(e) = serde_json::from_value::<ExecExited>(data)
@@ -70,20 +81,24 @@ pub async fn routed(
                 {
                     // Claude Code may cut a long output short: the agent
                     // reads the rest from the job's log (X90).
+                    // Its reader may be gone (`2>&1 | head`): never a panic.
                     if let Some(log) = &e.log {
-                        eprintln!("moonlet: full output in {}", tilde(log));
+                        let _ = writeln!(std::io::stderr(), "moonlet: full output in {}", tilde(log));
                     }
                     return Some(cancelled.unwrap_or(e.status));
                 }
             }
             Some(_) => {}
             None => {
-                eprintln!("moonlet: lost {}'s daemon during the run", started.host);
+                let _ = writeln!(std::io::stderr(), "moonlet: lost {}'s daemon during the run", started.host);
                 return Some(125);
             }
         }
     }
 }
+
+/// SIGPIPE's number on macOS and Linux.
+const SIGPIPE: i32 = 13;
 
 /// `path` with the home folder as `~`.
 fn tilde(path: &str) -> String {

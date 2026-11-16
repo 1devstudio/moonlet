@@ -5,11 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stderrCount, workerLine } from "../lib/jobs";
-import { loadOutput, useJobs } from "../lib/jobsStore";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stayedLine, stderrCount, workerLine } from "../lib/jobs";
+import { loadOutput, useJobs, useSessionStayed } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
-import { M, type Job, type Session } from "../lib/protocol";
+import { M, type Job, type JobStayed, type Session } from "../lib/protocol";
 import { clock } from "../lib/subagents";
 import { useNow } from "../lib/useNow";
 import { errorToast, useStore } from "../lib/store";
@@ -88,9 +88,10 @@ export const copyText = (lines: OutputLine[]) => lines.map((l) => l.text).join("
 export function JobsPanel({ host, ws, jobs }: { host: string; ws: Session; jobs: Job[] }) {
   const detail = useStore((s) => s.jobDetail);
   const now = useNow(jobs.some(going));
+  const stayed = useSessionStayed(host, ws.id);
   const open = jobs.find((j) => j.id === detail);
   if (open) return <JobDetail host={host} ws={ws} job={open} now={now} />;
-  if (!jobs.length) {
+  if (!jobs.length && !stayed.length) {
     return (
       <Empty icon={<Cpu size={20} />} title="No jobs yet">
         Heavy commands this session's agents run through moonlet show here.
@@ -131,7 +132,24 @@ export function JobsPanel({ host, ws, jobs }: { host: string; ws: Session; jobs:
           </div>
         );
       })}
+      {stayed.map((s, i) => (
+        <StayedRow key={`${s.at}-${i}`} stayed={s} />
+      ))}
       <p className="px-4 py-4 ui-text-12 text-faint">Heavy commands this session's agents ran through moonlet. Click one for its output.</p>
+    </div>
+  );
+}
+
+/** A line with a heavy command that ran on the session's host, under the
+ *  jobs: a row like theirs, with why instead of where it ran. */
+function StayedRow({ stayed }: { stayed: JobStayed }) {
+  return (
+    <div data-stayed={stayed.command} className="border-b border-border px-4 py-3">
+      <div className="flex items-center gap-2.5">
+        <Circle size={9} className="mx-[2px] shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 truncate font-mono ui-text-13 text-muted">{stayed.command}</span>
+      </div>
+      <div className="mt-1 pl-[17px] ui-text-12.5 text-faint">{stayedLine(stayed)}</div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stderrCount, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stayedLine, stderrCount, workerFacts, workerLine } from "./jobs";
 import type { Job, JobChunk } from "./protocol";
 import { lastOf } from "./showEarlier";
 
@@ -148,6 +148,22 @@ describe("routed Bash rows in the chat (X62)", () => {
     expect(shownCommand("'/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_01 -- pnpm test")).toBe("pnpm test");
     expect(shownCommand("'/Users/al'\\''ex/moonlet' exec -- pnpm test --run")).toBe("pnpm test --run");
     expect(shownCommand("pnpm test")).toBe("pnpm test");
+  });
+
+  it("a routed line shows what ran around moonlet exec, without it", () => {
+    expect(
+      shownCommand("cd ./web && timeout 600 '/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_01 --env CI=1 -- pnpm test 2>&1 | tail -n 50"),
+    ).toBe("cd ./web && timeout 600 CI=1 pnpm test 2>&1 | tail -n 50");
+    expect(shownCommand("'/m/moonlet' exec --env CI=1 --env 'NODE_ENV=a b' -- pnpm test")).toBe("CI=1 'NODE_ENV=a b' pnpm test");
+    expect(shownCommand("cd './my app' && '/Users/al'\\''ex/moonlet' exec -- pnpm test")).toBe("cd './my app' && pnpm test");
+    // Text that only looks like it, inside the agent's own command, stays.
+    expect(shownCommand("echo \"x' exec -- y\"")).toBe("echo \"x' exec -- y\"");
+  });
+
+  it("a line that stayed on the session's host says why", () => {
+    expect(stayedLine({ session: "s1", at: 0, command: "pnpm test; git status", why: "it runs a second command" })).toBe(
+      "Ran on the session's host, not on a worker: it runs a second command",
+    );
   });
 });
 

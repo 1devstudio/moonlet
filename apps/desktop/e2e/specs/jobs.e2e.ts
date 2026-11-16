@@ -45,7 +45,15 @@ describe("jobs", () => {
     // The worktree's own config decides what is routed; the project's is what gets approved.
     writeFileSync(join(session.path, ".moonlet", "config.toml"), HEAVY);
     resetConfig(w, HEAVY);
-    await socketRpc(daemonSock(w), w.env, "heavy.approve", { project: projectId(w), commands: ["./job.sh"], env: [] });
+    // Only the app approves (X62), so through the app's own connection.
+    const approved = await browser.executeAsync((project: string, done: (r: unknown) => void) => {
+      const tauri = (window as unknown as { __TAURI__: { core: { invoke(cmd: string, args: object): Promise<unknown> } } }).__TAURI__;
+      tauri.core.invoke("rpc", { host: "local", method: "heavy.approve", params: { project, commands: ["./job.sh"], env: [] } }).then(
+        () => done(true),
+        (e) => done(String(e?.message ?? e)),
+      );
+    }, projectId(w));
+    expect(approved).toBe(true);
     await $(sel.sessionRow(SESSION)).click();
   });
 
@@ -83,5 +91,18 @@ describe("jobs", () => {
     expect(await exit).toBe(143);
     await jsClick(`${panel}//button[normalize-space()="Jobs"]`);
     await expect($(`${row("./job.sh slow")}//span[starts-with(normalize-space(), "Stopped")]`)).toBeDisplayed();
+  });
+
+  it("lists a line with a heavy command that stayed on the session's host, and why", async () => {
+    // As the hook asks for a line it cannot route as written.
+    const routed = await socketRpc<{ route: boolean; reason: string }>(daemonSock(w), w.env, "exec.route", {
+      session: session.id,
+      command: "./job.sh; git status",
+      cwd: session.path,
+      lines: true,
+    });
+    expect(routed).toMatchObject({ route: false, reason: "form" });
+    const stayed = `${panel}//div[@data-stayed="./job.sh; git status"]`;
+    await expect($(`${stayed}//div[normalize-space()="Ran on the session's host, not on a worker: it runs a second command"]`)).toBeDisplayed();
   });
 });

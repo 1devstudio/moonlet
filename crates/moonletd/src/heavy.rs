@@ -2,7 +2,7 @@
 //! each project's `[heavy]` table, kept in `~/.moonlet/heavy.json` by
 //! project identity, and whether an agent's Bash call may be routed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +11,9 @@ use moonlet_core::hooks::HookPaths;
 use moonlet_core::project_config;
 use moonlet_core::session::SessionManager;
 use moonlet_proto::RpcError;
-use moonlet_proto::methods::{ExecRoute, ExecRouted, HeavyApproval, HeavyApprove, HeavyInfo};
+use moonlet_proto::methods::{
+    ExecRoute, ExecRouted, HeavyApproval, HeavyApprove, HeavyInfo, JobStayed, RoutedLine,
+};
 use moonlet_proto::types::{Project, ProjectIdentity};
 
 use crate::daemon::internal;
@@ -39,7 +41,55 @@ pub struct Heavy {
     /// Reads and writes of `heavy.json` never interleave.
     lock: Mutex<()>,
     sessions: Arc<SessionManager>,
+    /// The sessions whose agent was told why a line stays here, by why.
+    told: Mutex<HashSet<(String, String)>>,
 }
+
+/// Why a call stays where it is: `exec.route`'s reason, and, for a line
+/// with a heavy command in it, why in words for the agent and the Jobs tab.
+struct Stay {
+    reason: &'static str,
+    why: Option<String>,
+}
+
+impl From<&'static str> for Stay {
+    fn from(reason: &'static str) -> Self {
+        Stay { reason, why: None }
+    }
+}
+
+impl Stay {
+    fn form(why: impl Into<String>) -> Self {
+        Stay {
+            reason: "form",
+            why: Some(why.into()),
+        }
+    }
+
+    /// A heavy command that stays here for `reason`, which says why.
+    fn heavy(reason: &'static str) -> Self {
+        let why = match reason {
+            "not_approved" => "the project's heavy commands are not approved",
+            "env_not_approved" => "the project's [heavy] env names are not approved",
+            "claude_rule" => "a deny or ask rule in Claude Code's settings matches it",
+            _ => return reason.into(),
+        };
+        Stay {
+            reason,
+            why: Some(why.into()),
+        }
+    }
+}
+
+/// What the agent is told the first time a line with a heavy command
+/// stays here for a reason of its form.
+fn note(why: &str) -> String {
+    format!(
+        "moonlet: this line runs here, not on a worker: {why}. moonlet sends a heavy command to a worker when the line is the command alone, or with `cd <folder> &&`, `NAME=value` (names in [heavy] env) or `timeout <n>` before it, and `2>&1`, `> file` in the worktree, `| tail`, `| head` or `| grep` after it."
+    )
+}
+
+
 
 impl Heavy {
     pub fn new(home: &Path, sessions: Arc<SessionManager>) -> Arc<Self> {
@@ -47,6 +97,7 @@ impl Heavy {
             file: home.join("heavy.json"),
             lock: Mutex::new(()),
             sessions,
+            told: Mutex::default(),
         })
     }
 
@@ -128,16 +179,52 @@ impl Heavy {
     /// `exec.route`: whether a Bash call of an agent in a session may run
     /// on another machine. Anything moonlet cannot vouch for stays where
     /// it is.
-    pub fn route(&self, r: &ExecRoute) -> ExecRouted {
+    /// A line with a heavy command that stays here comes back as well,
+    /// for the session's Jobs tab.
+    pub fn route(&self, r: &ExecRoute) -> (ExecRouted, Option<JobStayed>) {
         match self.why_not(r) {
-            Ok(()) => ExecRouted {
-                route: true,
-                reason: None,
-            },
-            Err(reason) => ExecRouted {
-                route: false,
-                reason: Some(reason.into()),
-            },
+            Ok(line) => (
+                ExecRouted {
+                    route: true,
+                    reason: None,
+                    line: line.map(|l| RoutedLine {
+                        before: l.before(),
+                        args: l.exec_args(),
+                        command: l.command(),
+                        after: l.after(),
+                    }),
+                    note: None,
+                },
+                None,
+            ),
+            Err(stay) => {
+                // Told once per session for each reason, and only through
+                // a hook that can say it.
+                let note = stay
+                    .why
+                    .as_ref()
+                    .filter(|_| stay.reason == "form" && r.lines)
+                    .filter(|why| {
+                        let mut told = self.told.lock().unwrap_or_else(|e| e.into_inner());
+                        told.insert((r.session.clone(), why.to_string()))
+                    })
+                    .map(|why| note(why));
+                let stayed = stay.why.map(|why| JobStayed {
+                    session: r.session.clone(),
+                    at: moonlet_core::paths::now_ms(),
+                    command: r.command.clone(),
+                    why,
+                });
+                (
+                    ExecRouted {
+                        route: false,
+                        reason: Some(stay.reason.into()),
+                        line: None,
+                        note,
+                    },
+                    stayed,
+                )
+            }
         }
     }
 
@@ -161,8 +248,9 @@ impl Heavy {
             command,
             cwd: cwd.to_string(),
             tool_use_id: None,
+            lines: false,
         };
-        self.why_not(&ask)?;
+        self.why_not(&ask).map_err(|s| s.reason)?;
         let s = self.sessions.session(session).map_err(|_| "no_session")?;
         let worktree = std::fs::canonicalize(&s.path).map_err(|_| "no_session")?;
         let project = self
@@ -200,7 +288,9 @@ impl Heavy {
         })
     }
 
-    fn why_not(&self, r: &ExecRoute) -> Result<(), &'static str> {
+    /// Whether `r` routes, and the line around its command when it is
+    /// more than the command alone.
+    fn why_not(&self, r: &ExecRoute) -> Result<Option<heavy::Line>, Stay> {
         let session = self
             .sessions
             .session(&r.session)
@@ -208,10 +298,10 @@ impl Heavy {
             .filter(|s| !s.archived)
             .ok_or("no_session")?;
         let worktree = std::fs::canonicalize(&session.path).map_err(|_| "no_session")?;
-        let inside = std::fs::canonicalize(&r.cwd).is_ok_and(|cwd| cwd.starts_with(&worktree));
-        if !inside {
-            return Err("outside_worktree");
-        }
+        let cwd = std::fs::canonicalize(&r.cwd)
+            .ok()
+            .filter(|cwd| cwd.starts_with(&worktree))
+            .ok_or("outside_worktree")?;
         let project = self
             .sessions
             .list_projects()
@@ -222,24 +312,60 @@ impl Heavy {
         // worktree made from git may have no `.moonlet/` at all.
         let config = project_config::load(Path::new(&project.path), project.base_branch.clone());
         if config.error.is_some() || heavy::check(&config.config.heavy).is_err() {
-            return Err("invalid_config");
+            return Err("invalid_config".into());
         }
         let heavy = config.config.heavy;
-        let words = heavy::route(&r.command, &heavy.commands).ok_or("not_heavy")?;
-        let approved = self
-            .approval(&project.identity)
-            .ok()
-            .flatten()
-            .ok_or("not_approved")?;
+        let approved = self.approval(&project.identity).ok().flatten();
         let entries: Vec<String> = heavy
             .commands
             .iter()
-            .filter(|c| approved.commands.contains(c))
+            .filter(|c| approved.as_ref().is_some_and(|a| a.commands.contains(c)))
             .cloned()
             .collect();
-        heavy::route(&r.command, &entries).ok_or("not_approved")?;
-        if !heavy.env.iter().all(|e| approved.env.contains(e)) {
-            return Err("env_not_approved");
+        let env_approved = approved
+            .as_ref()
+            .is_some_and(|a| heavy.env.iter().all(|e| a.env.contains(e)));
+        // A line moonlet does not route as written: the agent hears why
+        // only when reshaping it would route its command.
+        let form = |why: String| -> Stay {
+            if heavy::mentions(&r.command, &entries).is_some() {
+                if env_approved { Stay::form(why) } else { Stay::heavy("env_not_approved") }
+            } else if heavy::mentions(&r.command, &heavy.commands).is_some() {
+                Stay::heavy("not_approved")
+            } else {
+                "not_heavy".into()
+            }
+        };
+        let line = match heavy::parse(&r.command) {
+            Ok(line) if heavy::listed(&line.words, &heavy.commands) => line,
+            Ok(_) => return Err(form("moonlet does not route what is around the command".into())),
+            Err(refusal) => return Err(form(refusal.0)),
+        };
+        // A hook from before puts the whole text after `moonlet exec --`.
+        if !line.is_bare() && !r.lines {
+            return Err(form("this moonlet's hook routes a command alone only".into()));
+        }
+        if !heavy::listed(&line.words, &entries) {
+            return Err(Stay::heavy("not_approved"));
+        }
+        if !env_approved {
+            return Err(Stay::heavy("env_not_approved"));
+        }
+        // On the worker, only `[heavy] env` names reach the command.
+        if let Some((name, _)) = line.assigns.iter().find(|(n, _)| !heavy.env.contains(n)) {
+            return Err(Stay::form(format!(
+                "`{name}` is not one of the project's [heavy] env names"
+            )));
+        }
+        let here = match &line.cd {
+            None => cwd,
+            Some(dir) => std::fs::canonicalize(cwd.join(dir))
+                .ok()
+                .filter(|d| d.starts_with(&worktree) && d.is_dir())
+                .ok_or_else(|| Stay::form(format!("`cd {dir}` leaves the session's worktree")))?,
+        };
+        for path in line.files() {
+            written_inside(&worktree, &here, path).map_err(Stay::form)?;
         }
         let user = match self.sessions.config_dir(&r.session) {
             Some(dir) => Path::new(&dir).join("settings.json"),
@@ -251,10 +377,18 @@ impl Heavy {
             worktree.join(".claude/settings.json"),
             worktree.join(".claude/settings.local.json"),
         ];
-        if heavy::rules_block(&heavy::claude_rules(&files), &r.command, &words) {
-            return Err("claude_rule");
+        let rules = heavy::claude_rules(&files);
+        let blocked = heavy::rules_block(&rules, &r.command, &line.words)
+            || line
+                .parts()
+                .iter()
+                .any(|w| heavy::rules_block(&rules, &w.join(" "), w));
+        // Writing a file skips Claude Code's prompt for edits too.
+        let writes = line.files().iter().any(|f| *f != "/dev/null");
+        if blocked || (writes && heavy::claude_guards_writes(&files)) {
+            return Err(Stay::heavy("claude_rule"));
         }
-        Ok(())
+        Ok((!line.is_bare()).then_some(line))
     }
 
     /// Project `identity`'s approval: the account's, kept once for every
@@ -352,17 +486,58 @@ pub fn runs_approved(argv: &[String], env: &BTreeMap<String, String>, approved: 
         && env.keys().all(|k| approved.env.contains(k))
 }
 
-/// `w` as one word for a POSIX shell: as it is when it holds nothing a
-/// shell reads, in single quotes otherwise.
-pub fn quote(w: &str) -> String {
-    let plain = !w.is_empty()
-        && w.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
-    if plain {
-        w.to_string()
-    } else {
-        format!("'{}'", w.replace('\'', "'\\''"))
+pub use heavy::quote;
+
+/// Why a line may not write `path`, a redirection's target, from folder
+/// `here`: the file must be in the session's `worktree` (or be
+/// `/dev/null`), and not in git's, moonlet's or Claude Code's own folders.
+fn written_inside(worktree: &Path, here: &Path, path: &str) -> Result<(), String> {
+    if path == "/dev/null" {
+        return Ok(());
     }
+    let outside = || format!("`{path}` is outside the session's worktree");
+    let own_err = || format!("`{path}` is git's, moonlet's or Claude Code's own");
+    // As written, and once links are followed.
+    let own = |p: &Path| {
+        p.strip_prefix(worktree).unwrap_or(p).components().any(|c| match c {
+            std::path::Component::Normal(n) => {
+                let n = n.to_string_lossy();
+                [".git", ".moonlet", ".claude"]
+                    .iter()
+                    .any(|d| moonlet_core::sync::reads_as(&n, d))
+            }
+            _ => false,
+        })
+    };
+    let target = here.join(path);
+    if own(&target) {
+        return Err(own_err());
+    }
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+        return Err(outside());
+    };
+    let parent = std::fs::canonicalize(parent).map_err(|_| outside())?;
+    if !parent.starts_with(worktree) {
+        return Err(outside());
+    }
+    let file = parent.join(name);
+    if own(&file) {
+        return Err(own_err());
+    }
+    if file.is_dir() {
+        return Err(format!("`{path}` is a folder"));
+    }
+    // A link that leads out of the worktree.
+    if std::fs::symlink_metadata(&file).is_ok() {
+        let real = std::fs::canonicalize(&file).map_err(|_| outside())?;
+        if !real.starts_with(worktree) {
+            return Err(outside());
+        }
+        if own(&real) {
+            return Err(own_err());
+        }
+    }
+    Ok(())
 }
 
 pub fn sorted(v: &[String]) -> Vec<String> {

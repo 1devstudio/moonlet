@@ -508,6 +508,15 @@ export interface WorkerSettingsEntry {
   slots: number;
 }
 
+/** A line with a heavy command that ran on the session's host instead of
+ *  through moonlet, and why (X62), from `job.stayed` and its event. */
+export interface JobStayed {
+  session: string;
+  at: number;
+  command: string;
+  why: string;
+}
+
 /** A routed command of a session (X62), from `job.list` and `job.changed`. */
 export interface Job {
   id: string;
@@ -1663,6 +1672,7 @@ export const M = {
   cloudDown: "cloud.down",
   cloudCheck: "cloud.check",
   jobList: "job.list",
+  jobStayed: "job.stayed",
   jobOutput: "job.output",
   jobStop: "job.stop",
   jobStopAll: "job.stop_all",
@@ -1741,6 +1751,7 @@ export const EV = {
   workerSettingsChanged: "worker.settings_changed",
   heavyApprovalChanged: "heavy.approval_changed",
   jobChanged: "job.changed",
+  jobStayed: "job.stayed",
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",
   jobOutput: "job.output",

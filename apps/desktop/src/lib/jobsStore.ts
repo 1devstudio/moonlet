@@ -1,5 +1,6 @@
 // Jobs (X62) as the app keeps them: each session's jobs, from `job.list`
-// and `job.changed`, and the output of the jobs a view shows, from
+// and `job.changed`, the lines that stayed on its host, from `job.stayed`,
+// and the output of the jobs a view shows, from
 // `job.output` and its event. Jobs live on the session's host.
 
 import { parseCopyHost } from "./copyHost";
@@ -7,7 +8,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { DaemonError, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { type JobOutput, readOutput } from "./jobs";
-import { EV, M, type Job, type JobChunk } from "./protocol";
+import { EV, M, type Job, type JobChunk, type JobStayed } from "./protocol";
 
 interface JobsState {
   /** By `host/session`, newest first as `job.list` gives them. */
@@ -15,9 +16,12 @@ interface JobsState {
   /** By job id, for the jobs whose output a view has loaded: its last
    *  part, read as lines as it comes (X81). */
   output: Record<string, JobOutput>;
+  /** By `host/session`, newest first: lines with a heavy command that ran
+   *  on the session's host, not through moonlet. */
+  stayed: Record<string, JobStayed[]>;
 }
 
-export const useJobs = create<JobsState>(() => ({ jobs: {}, output: {} }));
+export const useJobs = create<JobsState>(() => ({ jobs: {}, output: {}, stayed: {} }));
 
 const key = (host: string, session: string) => `${host}/${session}`;
 const loading = new Set<string>();
@@ -28,6 +32,10 @@ const wanted = new Map<string, { host: string; session: string }>();
 const early: Record<string, Job[]> = {};
 /** The central host keeps a session's last 50 jobs; a job past them leaves. */
 const KEPT = 50;
+/** Lines that stayed while a session's list of them was being read, by key. */
+const earlyStayed: Record<string, JobStayed[]> = {};
+/** The daemon keeps a session's last 20 lines that stayed on its host. */
+const STAYED_KEPT = 20;
 /** Output that came while a job's stored output was being read. */
 const pending: Record<string, JobChunk[]> = {};
 
@@ -59,6 +67,17 @@ export function loadJobs(host: string, session: string, again = false) {
       loading.delete(k);
     },
   );
+  // A daemon from before has no such list: none stayed, as far as it says.
+  // Lines that come while it is read go first, each once.
+  earlyStayed[k] = [];
+  const read = (list: JobStayed[]) => {
+    const came = earlyStayed[k] ?? [];
+    delete earlyStayed[k];
+    const same = (a: JobStayed, b: JobStayed) => a.at === b.at && a.command === b.command;
+    const merged = [...came, ...list.filter((s) => !came.some((c) => same(c, s)))].slice(0, STAYED_KEPT);
+    useJobs.setState((s) => ({ stayed: { ...s.stayed, [k]: merged } }));
+  };
+  void rpc<JobStayed[]>(host, M.jobStayed, { session }).then(read, () => read(useJobs.getState().stayed[k] ?? []));
 }
 
 /** Sets session `k`'s jobs, forgetting the output of jobs no longer kept. */
@@ -78,6 +97,13 @@ export function useSessionJobs(host: string, session: string): Job[] {
 }
 
 const EMPTY: Job[] = [];
+const NONE: JobStayed[] = [];
+
+/** A session's lines that stayed on its host, newest first. */
+export function useSessionStayed(host: string, session: string): JobStayed[] {
+  useEffect(() => loadJobs(host, session), [host, session]);
+  return useJobs((s) => s.stayed[key(host, session)] ?? NONE);
+}
 
 /** The job a chat's tool call started, matched by its id; none for a call not routed. */
 export function useToolJob(host: string, session: string, toolUse: string, routable: boolean): Job | undefined {
@@ -126,7 +152,7 @@ export async function loadOutput(host: string, job: string) {
 
 let started = false;
 
-/** Follows `job.changed` and `job.output` from every host. */
+/** Follows `job.changed`, `job.stayed` and `job.output` from every host. */
 export function startJobs() {
   if (started) return;
   started = true;
@@ -138,6 +164,11 @@ export function startJobs() {
       if (early[k]) early[k].push(job);
       else if (list) setJobs(k, upsert(list, job));
       if (job.ended_at != null && useJobs.getState().output[job.id]) void loadOutput(e.host, job.id).catch(() => {});
+    } else if (e.name === EV.jobStayed) {
+      const st = e.data as JobStayed;
+      const k = key(e.host, st.session);
+      if (earlyStayed[k]) earlyStayed[k].unshift(st);
+      else useJobs.setState((s) => (s.stayed[k] ? { stayed: { ...s.stayed, [k]: [st, ...s.stayed[k]].slice(0, STAYED_KEPT) } } : s));
     } else if (e.name === EV.jobOutput) {
       const ev = e.data as { job: string; chunks: JobChunk[] };
       if (pending[ev.job]) pending[ev.job].push(...ev.chunks);

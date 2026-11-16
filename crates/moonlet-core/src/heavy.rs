@@ -23,9 +23,680 @@ pub fn route(command: &str, entries: &[String]) -> Option<Vec<String>> {
     {
         return None;
     }
-    let starts =
-        |entry: &String| split(entry).is_some_and(|e| !e.is_empty() && words.starts_with(&e));
-    entries.iter().any(starts).then_some(words)
+    listed(&words, entries).then_some(words)
+}
+
+/// Whether `words` start with the words of one of `entries`.
+pub fn listed(words: &[String], entries: &[String]) -> bool {
+    entries
+        .iter()
+        .any(|e| split(e).is_some_and(|e| !e.is_empty() && words.starts_with(&e)))
+}
+
+/// Why a line is not routed, in words for the agent and the Jobs tab.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Refusal(pub String);
+
+fn refuse<T>(why: impl Into<String>) -> Result<T, Refusal> {
+    Err(Refusal(why.into()))
+}
+
+const SECOND: &str = "it runs a second command";
+const REDIRECTION: &str = "it has a redirection moonlet does not route";
+
+/// A line moonlet can route (X62 › Lines moonlet routes): one command,
+/// with what the agent's own shell runs around it. Only the command runs
+/// through `moonlet exec`, with the line's variables given to it alone;
+/// `cd`, `timeout`, redirections and filters stay in the agent's shell,
+/// around `moonlet exec`.
+///
+/// ```text
+/// line     = [ "cd" DIR "&&" ] command { "|" filter }
+/// command  = { NAME=VALUE } [ "env" NAME=VALUE { NAME=VALUE } ]
+///            [ "timeout" DURATION ] WORD { WORD | redirect }
+/// filter   = ( "tail" | "head" ) [ "-N" | "-n" N | "-nN" ] { redirect }
+///          | "grep" { option } PATTERN { redirect }
+/// redirect = [ "1" | "2" ] ( ">" | ">>" ) PATH | [ "1" | "2" ] ">&" ( "1" | "2" )
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Line {
+    /// The folder of `cd <dir> &&`, as written.
+    pub cd: Option<String>,
+    /// `NAME=value` before the command, from `env` too.
+    pub assigns: Vec<(String, String)>,
+    /// The duration of `timeout <duration>`.
+    pub timeout: Option<String>,
+    /// The command's words.
+    pub words: Vec<String>,
+    /// The command's redirections, in order.
+    pub redirects: Vec<Redirect>,
+    /// Filters the command's output goes through, in order.
+    pub filters: Vec<Filter>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Redirect {
+    /// `>` or `>>` to a file; `fd` is 1 or 2.
+    File { fd: u8, append: bool, path: String },
+    /// `2>&1`, `>&2`: `fd` and `to` are 1 or 2.
+    Dup { fd: u8, to: u8 },
+}
+
+/// `tail`, `head` or `grep` reading the command's output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filter {
+    pub words: Vec<String>,
+    pub redirects: Vec<Redirect>,
+}
+
+impl Line {
+    /// Nothing around the command: the line is the command alone.
+    pub fn is_bare(&self) -> bool {
+        self.cd.is_none()
+            && self.assigns.is_empty()
+            && self.timeout.is_none()
+            && self.redirects.is_empty()
+            && self.filters.is_empty()
+    }
+
+    /// What the agent's shell runs before `moonlet exec`, ending in a
+    /// space when there is any. A relative folder starts with `./`, so
+    /// `CDPATH` never takes `cd` elsewhere.
+    pub fn before(&self) -> String {
+        let mut s = String::new();
+        if let Some(dir) = &self.cd {
+            let dir = if dir.starts_with('/') || dir.starts_with("./") {
+                dir.clone()
+            } else {
+                format!("./{dir}")
+            };
+            s.push_str(&format!("cd {} && ", quote(&dir)));
+        }
+        if let Some(t) = &self.timeout {
+            s.push_str(&format!("timeout {t} "));
+        }
+        s
+    }
+
+    /// `moonlet exec`'s options before `--`, ending in a space when there
+    /// is any: the line's variables, which reach the command only, never
+    /// `timeout` or `moonlet exec` itself.
+    pub fn exec_args(&self) -> String {
+        self.assigns
+            .iter()
+            .map(|(name, value)| format!("--env {} ", quote(&format!("{name}={value}"))))
+            .collect()
+    }
+
+    /// The command, each word quoted as it was parsed.
+    pub fn command(&self) -> String {
+        words_text(&self.words)
+    }
+
+    /// What follows the command in the agent's shell: its redirections and
+    /// filters, starting with a space when there is any.
+    pub fn after(&self) -> String {
+        let mut s = redirects_text(&self.redirects);
+        for f in &self.filters {
+            s.push_str(&format!(" | {}{}", words_text(&f.words), redirects_text(&f.redirects)));
+        }
+        s
+    }
+
+    /// The files the line writes, as written.
+    pub fn files(&self) -> Vec<&str> {
+        self.redirects
+            .iter()
+            .chain(self.filters.iter().flat_map(|f| &f.redirects))
+            .filter_map(|r| match r {
+                Redirect::File { path, .. } => Some(path.as_str()),
+                Redirect::Dup { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Every simple command the agent's shell runs, as words, for the
+    /// user's deny and ask rules.
+    pub fn parts(&self) -> Vec<Vec<String>> {
+        let mut parts = Vec::new();
+        if let Some(dir) = &self.cd {
+            parts.push(vec!["cd".to_string(), dir.clone()]);
+        }
+        if let Some(t) = &self.timeout {
+            let mut w = vec!["timeout".to_string(), t.clone()];
+            w.extend(self.words.iter().cloned());
+            parts.push(w);
+        }
+        parts.push(self.words.clone());
+        parts.extend(self.filters.iter().map(|f| f.words.clone()));
+        parts
+    }
+}
+
+fn words_text(words: &[String]) -> String {
+    words.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ")
+}
+
+fn redirects_text(redirects: &[Redirect]) -> String {
+    redirects
+        .iter()
+        .map(|r| match r {
+            Redirect::File { fd, append, path } => {
+                let fd = if *fd == 2 { "2" } else { "" };
+                let op = if *append { ">>" } else { ">" };
+                format!(" {fd}{op} {}", quote(path))
+            }
+            Redirect::Dup { fd, to } => {
+                let fd = if *fd == 2 { "2" } else { "" };
+                format!(" {fd}>&{to}")
+            }
+        })
+        .collect()
+}
+
+/// `w` as one word for a POSIX shell or zsh: as it is when it holds
+/// nothing either reads, in single quotes otherwise.
+pub fn quote(w: &str) -> String {
+    let plain = !w.is_empty()
+        && !w.starts_with('=')
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
+    if plain {
+        w.to_string()
+    } else {
+        format!("'{}'", w.replace('\'', "'\\''"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    /// A word as the shell gives it, and as it was written.
+    Word { text: String, raw: String },
+    And,
+    Pipe,
+    /// `>` or `>>`, before the word it writes to.
+    Out { fd: u8, append: bool },
+    Dup { fd: u8, to: u8 },
+}
+
+/// Ends of a word outside quotes.
+fn ends_word(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '|' | '&' | ';' | '<' | '>' | '(' | ')')
+}
+
+/// The tokens of `line`, or why it is not one moonlet routes: anything a
+/// shell would expand, chain to a second command or read input from.
+fn lex(line: &str) -> Result<Vec<Tok>, Refusal> {
+    if line.contains(['\n', '\r']) {
+        return refuse(SECOND);
+    }
+    let mut toks = Vec::new();
+    // The word being read: as the shell gives it, as written.
+    let mut word: Option<(String, String)> = None;
+    let flush = |word: &mut Option<(String, String)>, toks: &mut Vec<Tok>| {
+        if let Some((text, raw)) = word.take() {
+            toks.push(Tok::Word { text, raw });
+        }
+    };
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' => flush(&mut word, &mut toks),
+            '\'' => {
+                let (text, raw) = word.get_or_insert_with(Default::default);
+                raw.push(c);
+                loop {
+                    match chars.next() {
+                        None => return refuse("a quote is not closed"),
+                        Some('\'') => break raw.push('\''),
+                        Some(c) => {
+                            text.push(c);
+                            raw.push(c);
+                        }
+                    }
+                }
+            }
+            '"' => {
+                let (text, raw) = word.get_or_insert_with(Default::default);
+                raw.push(c);
+                loop {
+                    match chars.next() {
+                        None => return refuse("a quote is not closed"),
+                        Some('"') => break raw.push('"'),
+                        Some(c @ ('$' | '`')) => return refuse(expands(c)),
+                        Some('\\') => match chars.next() {
+                            None => return refuse("a quote is not closed"),
+                            Some(c @ ('$' | '`')) => return refuse(expands(c)),
+                            Some(c @ ('"' | '\\')) => {
+                                text.push(c);
+                                raw.extend(['\\', c]);
+                            }
+                            Some(c) => {
+                                text.extend(['\\', c]);
+                                raw.extend(['\\', c]);
+                            }
+                        },
+                        Some(c) => {
+                            text.push(c);
+                            raw.push(c);
+                        }
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                None => return refuse("it ends with `\\`"),
+                Some(c) => {
+                    let (text, raw) = word.get_or_insert_with(Default::default);
+                    text.push(c);
+                    raw.extend(['\\', c]);
+                }
+            },
+            '&' => match chars.peek() {
+                Some('&') => {
+                    chars.next();
+                    flush(&mut word, &mut toks);
+                    toks.push(Tok::And);
+                }
+                Some('>') => return refuse(REDIRECTION),
+                _ => return refuse(SECOND),
+            },
+            '|' => match chars.peek() {
+                Some('|') => return refuse(SECOND),
+                Some('&') => return refuse(REDIRECTION),
+                _ => {
+                    flush(&mut word, &mut toks);
+                    toks.push(Tok::Pipe);
+                }
+            },
+            '>' => {
+                // `2>`: a number right before `>`, unquoted, names the
+                // stream; only 1 and 2 are routed.
+                let fd = match &word {
+                    Some((text, raw)) if text == raw && text.bytes().all(|b| b.is_ascii_digit()) => {
+                        let fd = match text.as_str() {
+                            "1" => 1,
+                            "2" => 2,
+                            _ => return refuse(REDIRECTION),
+                        };
+                        word = None;
+                        fd
+                    }
+                    _ => {
+                        flush(&mut word, &mut toks);
+                        1
+                    }
+                };
+                match chars.peek() {
+                    Some('>') => {
+                        chars.next();
+                        if matches!(chars.peek(), Some('&' | '|')) {
+                            return refuse(REDIRECTION);
+                        }
+                        toks.push(Tok::Out { fd, append: true });
+                    }
+                    Some('&') => {
+                        chars.next();
+                        let mut to = String::new();
+                        while let Some(&c) = chars.peek() {
+                            if ends_word(c) {
+                                break;
+                            }
+                            to.push(c);
+                            chars.next();
+                        }
+                        let to = match to.as_str() {
+                            "1" => 1,
+                            "2" => 2,
+                            _ => return refuse(REDIRECTION),
+                        };
+                        toks.push(Tok::Dup { fd, to });
+                    }
+                    Some('|') => return refuse(REDIRECTION),
+                    _ => toks.push(Tok::Out { fd, append: false }),
+                }
+            }
+            '<' => return refuse("it reads input with `<`"),
+            ';' => return refuse(SECOND),
+            '(' | ')' => return refuse("it has a subshell"),
+            '#' => return refuse("it has `#`, which starts a comment"),
+            '$' | '`' | '*' | '?' | '[' | '{' | '~' => return refuse(expands(c)),
+            c => {
+                let (text, raw) = word.get_or_insert_with(Default::default);
+                text.push(c);
+                raw.push(c);
+            }
+        }
+    }
+    flush(&mut word, &mut toks);
+    Ok(toks)
+}
+
+fn expands(c: char) -> String {
+    if c == '`' {
+        "it has `` ` ``, which the shell expands".into()
+    } else {
+        format!("it has `{c}`, which the shell expands")
+    }
+}
+
+/// A word or a redirection of one simple command.
+#[derive(Clone)]
+enum Item {
+    Word { text: String, raw: String },
+    Redirect(Redirect),
+}
+
+/// `NAME=` at the start of a word as written: an assignment to the shell.
+fn assignment(raw: &str) -> Option<(&str, &str)> {
+    let (name, value) = raw.split_once('=')?;
+    let ok = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    ok.then_some((name, value))
+}
+
+/// The line moonlet would route `line` as, or why it would not.
+pub fn parse(line: &str) -> Result<Line, Refusal> {
+    // Simple commands, and the `&&` or `|` after each.
+    let mut parts: Vec<Vec<Item>> = vec![Vec::new()];
+    let mut seps: Vec<Tok> = Vec::new();
+    let mut toks = lex(line)?.into_iter();
+    while let Some(t) = toks.next() {
+        match t {
+            Tok::And | Tok::Pipe => {
+                seps.push(t);
+                parts.push(Vec::new());
+            }
+            Tok::Word { text, raw } => parts.last_mut().unwrap().push(Item::Word { text, raw }),
+            Tok::Dup { fd, to } => parts.last_mut().unwrap().push(Item::Redirect(Redirect::Dup { fd, to })),
+            Tok::Out { fd, append } => match toks.next() {
+                Some(Tok::Word { text, .. }) if !text.is_empty() => parts
+                    .last_mut()
+                    .unwrap()
+                    .push(Item::Redirect(Redirect::File { fd, append, path: text })),
+                _ => return refuse(REDIRECTION),
+            },
+        }
+    }
+    if parts.iter().any(|p| p.is_empty()) {
+        return refuse(if parts.len() == 1 { "it is empty" } else { SECOND });
+    }
+    let first_word = |p: &[Item]| match p.first() {
+        Some(Item::Word { text, .. }) => Some(text.clone()),
+        _ => None,
+    };
+    let mut out = Line::default();
+    let mut parts = parts.into_iter();
+    let mut seps = seps.into_iter().peekable();
+    let mut part = parts.next().unwrap();
+    if seps.peek() == Some(&Tok::And) {
+        seps.next();
+        if first_word(&part).as_deref() != Some("cd") {
+            return refuse(SECOND);
+        }
+        out.cd = Some(cd_folder(part)?);
+        part = parts.next().unwrap();
+    }
+    if seps.peek() == Some(&Tok::And) {
+        return refuse(if first_word(&part).as_deref() == Some("cd") {
+            "it has more than one `cd`"
+        } else {
+            SECOND
+        });
+    }
+    command(part, &mut out)?;
+    for (sep, part) in seps.zip(parts) {
+        if sep != Tok::Pipe {
+            return refuse(SECOND);
+        }
+        out.filters.push(filter(part)?);
+    }
+    Ok(out)
+}
+
+fn cd_folder(part: Vec<Item>) -> Result<String, Refusal> {
+    match part.as_slice() {
+        [_, Item::Word { text, .. }] if !text.is_empty() && !text.starts_with('-') => {
+            // The shell reads `..` by the path as written, through links,
+            // where moonlet checks the folder it leads to.
+            if text.split('/').any(|part| part == "..") {
+                return refuse("`cd` takes a folder without `..`");
+            }
+            Ok(text.clone())
+        }
+        _ => refuse("`cd` takes one folder"),
+    }
+}
+
+fn command(part: Vec<Item>, out: &mut Line) -> Result<(), Refusal> {
+    let mut items = part.into_iter().peekable();
+    let assign = |item: Option<&Item>| match item {
+        Some(Item::Word { text, raw }) => assignment(raw).map(|(name, _)| {
+            let value = text.split_once('=').map_or("", |(_, v)| v);
+            (name.to_string(), value.to_string())
+        }),
+        _ => None,
+    };
+    let is_word = |item: Option<&Item>, w: &str| matches!(item, Some(Item::Word { text, .. }) if text == w);
+    while let Some(a) = assign(items.peek()) {
+        out.assigns.push(a);
+        items.next();
+    }
+    // `env NAME=value` and `timeout <duration>` wrap the command; in any
+    // other form they are the command itself.
+    let next_is = |items: &std::iter::Peekable<std::vec::IntoIter<Item>>, ok: &dyn Fn(&Item) -> bool| {
+        items.clone().nth(1).as_ref().is_some_and(ok)
+    };
+    if is_word(items.peek(), "env") && next_is(&items, &|i| assign(Some(i)).is_some()) {
+        items.next();
+        while let Some(a) = assign(items.peek()) {
+            out.assigns.push(a);
+            items.next();
+        }
+    }
+    let is_duration = |i: &Item| matches!(i, Item::Word { text, .. } if duration(text));
+    if is_word(items.peek(), "timeout") && next_is(&items, &is_duration) {
+        items.next();
+        if let Some(Item::Word { text, .. }) = items.next() {
+            out.timeout = Some(text);
+        }
+    }
+    match items.peek() {
+        Some(Item::Word { text, raw }) => {
+            if SHELL_WORDS.contains(&text.as_str()) {
+                return refuse(format!("it starts with `{text}`, which the shell runs itself"));
+            }
+            if assignment(text).is_some() && assignment(raw).is_none() {
+                return refuse(format!("`{text}` reads as an assignment the shell would not make"));
+            }
+        }
+        Some(Item::Redirect(_)) => return refuse(REDIRECTION),
+        None => return refuse("it has no command"),
+    }
+    for item in items {
+        match item {
+            Item::Word { text, .. } => out.words.push(text),
+            Item::Redirect(r) => out.redirects.push(r),
+        }
+    }
+    Ok(())
+}
+
+/// `600`, `1.5m`: a duration `timeout` reads.
+fn duration(s: &str) -> bool {
+    let n = s.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(s);
+    let (whole, frac) = n.split_once('.').unwrap_or((n, "0"));
+    digits(whole) && digits(frac)
+}
+
+fn filter(part: Vec<Item>) -> Result<Filter, Refusal> {
+    let mut words = Vec::new();
+    let mut redirects = Vec::new();
+    for item in part {
+        match item {
+            Item::Word { text, .. } => words.push(text),
+            Item::Redirect(r) => redirects.push(r),
+        }
+    }
+    let Some(name) = words.first() else {
+        return refuse("a `|` has no command after it");
+    };
+    let ok = match name.as_str() {
+        "tail" => count_ok(&words[1..], true),
+        "head" => count_ok(&words[1..], false),
+        "grep" => grep_ok(&words[1..]),
+        name => {
+            return refuse(format!(
+                "`{name}` is not a filter moonlet runs after a command: use tail, head or grep"
+            ));
+        }
+    };
+    if !ok {
+        return refuse(format!(
+            "`{}` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep",
+            words.join(" ")
+        ));
+    }
+    Ok(Filter { words, redirects })
+}
+
+fn digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `tail` and `head` with nothing but a line count.
+fn count_ok(args: &[String], plus: bool) -> bool {
+    let count = |n: &str| digits(n) || (plus && n.strip_prefix('+').is_some_and(digits));
+    match args {
+        [] => true,
+        [a] => a.strip_prefix("-n").is_some_and(count) || a.strip_prefix('-').is_some_and(digits),
+        [n, v] => n == "-n" && count(v),
+        _ => false,
+    }
+}
+
+/// `grep` reading its input only: options that change what it matches or
+/// prints, and one pattern.
+fn grep_ok(args: &[String]) -> bool {
+    const FLAGS: &str = "ivEFGnwxocqs";
+    const LONG: [&str; 15] = [
+        "--ignore-case",
+        "--invert-match",
+        "--extended-regexp",
+        "--fixed-strings",
+        "--basic-regexp",
+        "--line-number",
+        "--count",
+        "--word-regexp",
+        "--line-regexp",
+        "--only-matching",
+        "--quiet",
+        "--silent",
+        "--color",
+        "--color=never",
+        "--color=always",
+    ];
+    let mut patterns = 0;
+    let mut positional = Vec::new();
+    let mut args = args.iter();
+    while let Some(a) = args.next() {
+        if a == "--" {
+            positional.extend(args.by_ref());
+            break;
+        }
+        if !a.starts_with('-') || a == "-" {
+            positional.push(a);
+            continue;
+        }
+        if LONG.contains(&a.as_str()) {
+            continue;
+        }
+        if a == "-e" {
+            if args.next().is_none() {
+                return false;
+            }
+            patterns += 1;
+            continue;
+        }
+        if a.starts_with("-e") {
+            patterns += 1;
+            continue;
+        }
+        let numbered = ["-A", "-B", "-C", "-m"].iter().find(|o| a.starts_with(**o));
+        if let Some(o) = numbered {
+            let rest = &a[o.len()..];
+            let ok = if rest.is_empty() {
+                args.next().is_some_and(|n| digits(n))
+            } else {
+                digits(rest)
+            };
+            if !ok {
+                return false;
+            }
+            continue;
+        }
+        if !a[1..].chars().all(|c| FLAGS.contains(c)) {
+            return false;
+        }
+    }
+    patterns + positional.len() == 1 || (patterns > 0 && positional.is_empty())
+}
+
+/// The heavy command of `entries` that `line` runs somewhere in it,
+/// however it is written, for telling the agent why it stays where it
+/// is; `None` when it runs none. It never decides routing.
+pub fn mentions(line: &str, entries: &[String]) -> Option<String> {
+    // Words, with any shell character ending a simple command.
+    let mut commands: Vec<Vec<String>> = vec![Vec::new()];
+    let mut word: Option<String> = None;
+    let mut chars = line.chars();
+    let end = |word: &mut Option<String>, commands: &mut Vec<Vec<String>>| {
+        if let Some(w) = word.take() {
+            commands.last_mut().unwrap().push(w);
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' => end(&mut word, &mut commands),
+            '\'' | '"' => {
+                let w = word.get_or_insert_with(String::new);
+                for q in chars.by_ref() {
+                    if q == c {
+                        break;
+                    }
+                    w.push(q);
+                }
+            }
+            ';' | '&' | '|' | '(' | ')' | '`' | '\n' | '\r' | '{' | '}' => {
+                end(&mut word, &mut commands);
+                commands.push(Vec::new());
+            }
+            '<' | '>' => {
+                // A redirection's target is no word of the command.
+                end(&mut word, &mut commands);
+                commands.push(Vec::new());
+            }
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    end(&mut word, &mut commands);
+    let wrappers = ["env", "time", "!", "nohup", "exec", "command", "builtin", "nice"];
+    for words in commands {
+        let mut w: &[String] = &words;
+        loop {
+            match w.first().map(String::as_str) {
+                Some(x) if assignment(x).is_some() || wrappers.contains(&x) => w = &w[1..],
+                Some(x) if x.starts_with('-') => w = &w[1..],
+                Some("timeout") => w = w.get(2..).unwrap_or_default(),
+                Some(x) if x.starts_with('$') => w = &w[1..],
+                _ => break,
+            }
+        }
+        let found = entries.iter().find(|e| listed(w, std::slice::from_ref(e)));
+        if let Some(e) = found {
+            return Some(e.clone());
+        }
+    }
+    None
 }
 
 /// Bash keywords, and builtins with no program of their own: Bash runs
@@ -205,6 +876,36 @@ pub fn claude_rules(files: &[std::path::PathBuf]) -> Vec<BashRule> {
         }
     }
     rules
+}
+
+/// Whether Claude Code settings `files` have a `deny` or `ask` rule for
+/// editing or writing files, as for a line that writes one: a routed line
+/// runs without Claude Code's prompt for it. A settings file that exists
+/// but cannot be read could hold one.
+pub fn claude_guards_writes(files: &[std::path::PathBuf]) -> bool {
+    const TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+    files.iter().any(|f| {
+        let text = match std::fs::read_to_string(f) {
+            Ok(t) => t,
+            Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return true;
+        };
+        ["deny", "ask"].iter().any(|list| {
+            json.pointer(&format!("/permissions/{list}"))
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .any(|rule| {
+                    let rule = rule.trim();
+                    TOOLS.iter().any(|t| {
+                        rule == *t || rule.strip_prefix(t).is_some_and(|r| r.starts_with('('))
+                    })
+                })
+        })
+    })
 }
 
 fn bash_rule(rule: &str) -> Option<BashRule> {
@@ -515,6 +1216,132 @@ mod tests {
         }
         // A newline is a second command.
         assert_eq!(route("pnpm test\nrm -rf /", &entries), None);
+    }
+
+    /// How `line` reads: the shell line moonlet would run in its place,
+    /// with `M` for `moonlet exec -- `, or why it is refused.
+    fn reads(line: &str) -> Result<String, String> {
+        parse(line)
+            .map(|l| format!("{}M {}-- {}{}", l.before(), l.exec_args(), l.command(), l.after()))
+            .map_err(|r| r.0)
+    }
+
+    /// The forms around one command that route (X62 › Lines moonlet
+    /// routes), and what moonlet runs in their place.
+    #[test]
+    fn wrapped_lines_parse_into_the_command_and_what_runs_around_it() {
+        let ok = |s: &str| Ok::<String, String>(s.to_string());
+        let rows: [(&str, Result<String, String>); 27] = [
+            ("pnpm test", ok("M -- pnpm test")),
+            ("cd web && pnpm test", ok("cd ./web && M -- pnpm test")),
+            ("cd /w/shop/web && pnpm test", ok("cd /w/shop/web && M -- pnpm test")),
+            ("cd 'my app' && pnpm test", ok("cd './my app' && M -- pnpm test")),
+            ("CI=1 pnpm test", ok("M --env CI=1 -- pnpm test")),
+            ("CI=1 NODE_ENV='a b' pnpm test", ok("M --env CI=1 --env 'NODE_ENV=a b' -- pnpm test")),
+            ("env CI=1 pnpm test", ok("M --env CI=1 -- pnpm test")),
+            ("timeout 600 pnpm test", ok("timeout 600 M -- pnpm test")),
+            ("timeout 1.5m pnpm test", ok("timeout 1.5m M -- pnpm test")),
+            ("pnpm test 2>&1", ok("M -- pnpm test 2>&1")),
+            ("pnpm test 2>&1 | tail -50", ok("M -- pnpm test 2>&1 | tail -50")),
+            ("pnpm test | tail -n 50", ok("M -- pnpm test | tail -n 50")),
+            ("pnpm test | tail -n +3", ok("M -- pnpm test | tail -n +3")),
+            ("pnpm test | head -n20", ok("M -- pnpm test | head -n20")),
+            (
+                "pnpm test 2>&1 | grep -E \"FAIL|Error\" | head -20",
+                ok("M -- pnpm test 2>&1 | grep -E 'FAIL|Error' | head -20"),
+            ),
+            ("pnpm test | grep -v -e skip -A 3", ok("M -- pnpm test | grep -v -e skip -A 3")),
+            ("pnpm test > out.txt 2>&1", ok("M -- pnpm test > out.txt 2>&1")),
+            ("pnpm test 2>/dev/null >> log/test.txt", ok("M -- pnpm test 2> /dev/null >> log/test.txt")),
+            ("pnpm test 2>&1 >out.txt", ok("M -- pnpm test 2>&1 > out.txt")),
+            ("pnpm test --reporter=dot 2>&1 --run", ok("M -- pnpm test --reporter=dot --run 2>&1")),
+            // Words the shell would read are quoted, so they reach the
+            // command as they were parsed.
+            ("pnpm test \"a;b\" =x", ok("M -- pnpm test 'a;b' '=x'")),
+            ("pnpm test a\\ b", ok("M -- pnpm test 'a b'")),
+            (
+                "cd web && CI=1 timeout 600 pnpm test 2>&1 | tail -n 50",
+                ok("cd ./web && timeout 600 M --env CI=1 -- pnpm test 2>&1 | tail -n 50"),
+            ),
+            ("pnpm  test", ok("M -- pnpm test")),
+            // `env` and `timeout` in any other form are the command
+            // itself, routed only when approved as such.
+            ("env", ok("M -- env")),
+            ("env -i CI=1 pnpm test", ok("M -- env -i CI=1 pnpm test")),
+            ("timeout -s KILL 5 pnpm test", ok("M -- timeout -s KILL 5 pnpm test")),
+        ];
+        for (line, want) in rows {
+            assert_eq!(reads(line), want, "{line}");
+        }
+    }
+
+    /// Anything beyond those forms stays where it is, with why.
+    #[test]
+    fn lines_beyond_the_routed_forms_are_refused_with_why() {
+        let no = |s: &str| Err::<String, String>(s.to_string());
+        let second = "it runs a second command";
+        let rows: [(&str, Result<String, String>); 35] = [
+            ("pnpm test && git status", no(second)),
+            ("pnpm test; git status", no(second)),
+            ("pnpm test || true", no(second)),
+            ("pnpm test & git status", no(second)),
+            ("pnpm test\nrm -rf x", no(second)),
+            ("cd web && pnpm test && git push", no(second)),
+            ("cd web; pnpm test", no(second)),
+            ("cd web && cd api && pnpm test", no("it has more than one `cd`")),
+            ("pnpm test $(cat files.txt)", no("it has `$`, which the shell expands")),
+            ("pnpm test \"$FILE\"", no("it has `$`, which the shell expands")),
+            ("pnpm test `ls`", no("it has `` ` ``, which the shell expands")),
+            ("pnpm test src/*.ts", no("it has `*`, which the shell expands")),
+            ("pnpm test ~/x", no("it has `~`, which the shell expands")),
+            ("pnpm test {a,b}", no("it has `{`, which the shell expands")),
+            ("pnpm test # all", no("it has `#`, which starts a comment")),
+            ("(pnpm test)", no("it has a subshell")),
+            ("pnpm test < in.txt", no("it reads input with `<`")),
+            ("pnpm test &> out.txt", no("it has a redirection moonlet does not route")),
+            ("pnpm test 3>&1", no("it has a redirection moonlet does not route")),
+            ("pnpm test 2>&-", no("it has a redirection moonlet does not route")),
+            ("pnpm test >| out.txt", no("it has a redirection moonlet does not route")),
+            ("pnpm test |& tail", no("it has a redirection moonlet does not route")),
+            ("pnpm test | > out.txt", no("a `|` has no command after it")),
+            ("pnpm test | sh", no("`sh` is not a filter moonlet runs after a command: use tail, head or grep")),
+            ("pnpm test | xargs rm", no("`xargs` is not a filter moonlet runs after a command: use tail, head or grep")),
+            ("pnpm test | tail -f", no("`tail -f` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep")),
+            ("pnpm test | grep -r x", no("`grep -r x` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep")),
+            ("pnpm test | grep x src", no("`grep x src` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep")),
+            ("pnpm test | grep -f pats", no("`grep -f pats` is not a filter moonlet runs after a command: use tail -n N, head -n N or grep")),
+            ("time pnpm test", no("it starts with `time`, which the shell runs itself")),
+            ("\"CI\"=1 pnpm test", no("`CI=1` reads as an assignment the shell would not make")),
+            ("cd && pnpm test", no("`cd` takes one folder")),
+            // The shell reads `..` by the path as written, through links.
+            ("cd .. && pnpm test", no("`cd` takes a folder without `..`")),
+            ("cd web/link/../.. && pnpm test", no("`cd` takes a folder without `..`")),
+            ("pnpm test 'open", no("a quote is not closed")),
+        ];
+        for (line, want) in rows {
+            assert_eq!(reads(line), want, "{line}");
+        }
+    }
+
+    /// Which heavy command a line runs somewhere in it, for telling the
+    /// agent why the line stays where it is.
+    #[test]
+    fn a_heavy_command_anywhere_in_a_line_is_found_for_the_note() {
+        let entries = vec!["pnpm test".to_string(), "cargo test".to_string()];
+        let rows = [
+            ("pnpm test; git status", Some("pnpm test")),
+            ("git status && cargo test -p core", Some("cargo test")),
+            ("cd web && pnpm test | sort", Some("pnpm test")),
+            ("echo $(pnpm test)", Some("pnpm test")),
+            ("CI=1 timeout 5 env A=b pnpm test --run", Some("pnpm test")),
+            ("(cd web; pnpm test) > out.txt", Some("pnpm test")),
+            ("git status", None),
+            ("pnpm testing", None),
+            ("echo 'pnpm test'", None),
+        ];
+        for (line, want) in rows {
+            assert_eq!(mentions(line, &entries).as_deref(), want, "{line}");
+        }
     }
 
     #[test]
