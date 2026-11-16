@@ -67,7 +67,7 @@ describe("what became of a message or an answer for a session whose Mac is away 
     });
   });
 
-  it("holds it when the central host refused it unsent: too soon, a silent Mac, or kept on that Mac", () => {
+  it("holds it when the central host refused it unsent: too soon, a silent Mac, kept on that Mac, or the Mac back just then", () => {
     expect(
       sentOutcome(
         refused("not_yet", "MacBook has been unreachable for less than 30 s"),
@@ -89,6 +89,7 @@ describe("what became of a message or an answer for a session whose Mac is away 
         "studio-mini",
       ),
     ).toEqual({ kind: "held" });
+    expect(sentOutcome(refused("reachable", "the member running that session is reachable"), away(NOW - 31_000), "studio-mini")).toEqual({ kind: "held" });
   });
 
   it("says why it was not sent when nothing will send it", () => {

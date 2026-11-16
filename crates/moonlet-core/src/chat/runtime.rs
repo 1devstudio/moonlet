@@ -106,8 +106,7 @@ struct Inner {
 
 /// An answer [`ChatManager::answer_when_asked`] keeps for an ask to come.
 struct AnswerAgain {
-    tool: String,
-    input: serde_json::Value,
+    asked: PermissionAsk,
     decision: String,
     message: Option<String>,
 }
@@ -610,7 +609,7 @@ impl ChatManager {
             bail!("no turn runs to ask that again");
         }
         inner.active_at = now_ms();
-        inner.answer_again = Some(AnswerAgain { tool: asked.tool.clone(), input: asked.input.clone(), decision: decision.to_string(), message: message.map(String::from) });
+        inner.answer_again = Some(AnswerAgain { asked: asked.clone(), decision: decision.to_string(), message: message.map(String::from) });
         self.answer_if_asked_again(&chat, &mut inner);
         Ok(())
     }
@@ -619,7 +618,7 @@ impl ChatManager {
     /// it once another ask came or the turn ended (X73).
     fn answer_if_asked_again(&self, chat: &Chat, inner: &mut Inner) {
         let Some(again) = inner.answer_again.take() else { return };
-        let asked = inner.state.pending.iter().find(|p| p.agent.is_none() && p.tool == again.tool && p.input == again.input).map(|p| p.id.clone());
+        let asked = inner.state.pending.iter().find(|p| same_ask(p, &again.asked)).map(|p| p.id.clone());
         match asked {
             Some(ask) => {
                 let Inner { adapter, state, .. } = &mut *inner;

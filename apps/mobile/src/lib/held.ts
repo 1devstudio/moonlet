@@ -24,8 +24,9 @@ export type Sent =
   | { kind: "failed"; line: string };
 
 /** The central host's refusals that leave nothing sent, and that it stops
- * giving once the session can continue or its member answers again. */
-const HELD = new Set(["not_yet", "owner_not_responding", "pinned"]);
+ * giving once the session can continue or its member answers again:
+ * `reachable` when the member came back just as it was taking over. */
+const HELD = new Set(["not_yet", "owner_not_responding", "pinned", "reachable"]);
 
 const codeOf = (e: unknown) =>
   e && typeof e === "object" && "code" in e ? String(e.code) : null;

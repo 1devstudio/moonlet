@@ -12,7 +12,8 @@ import { showScreen, useApp } from "../lib/app";
 import { checkMark, checkNote, checksSummary, fixPrompt, reviewText, stackedOn, startsDraft, updatedAgo } from "../lib/checks";
 import { sessionChat } from "../lib/chatView";
 import { forget, useGitStatus, usePr } from "../lib/rowDetails";
-import { useBusy } from "../lib/busy";
+import { errorText, useBusy } from "../lib/busy";
+import { sendFor } from "../lib/held";
 import { StatusMark } from "../components/chat";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { useNow } from "../lib/now";
@@ -64,6 +65,7 @@ export function PrTab({ host, session }: { host: string; session: Session }) {
   const [git] = useGitStatus(host, session);
   const [stack, setStack] = useState<PrStack | null>(null);
   const [loadedAt, setLoadedAt] = useState(Date.now());
+  const [fixError, setFixError] = useState<string | null>(null);
   const now = useNow(5_000);
   const refresh = () => {
     forget(`pr:${host}:${session.id}`);
@@ -86,9 +88,16 @@ export function PrTab({ host, session }: { host: string; session: Session }) {
   const below = stackedOn(stack, pr.number);
   const review = reviewText(pr.review_decision);
   const chat = d ? sessionChat(d, session.id) : null;
+  // A message held for a Mac that is away shows in the chat (X73).
   const askFix = async () => {
     if (!failing || chat === null) return;
-    await rpc(host, M.chatSend, { id: chat, text: fixPrompt(failing, pr.number), images: [] }).catch(console.error);
+    setFixError(null);
+    try {
+      await sendFor(host, chat, M.chatSend, { id: chat, text: fixPrompt(failing, pr.number), images: [] }, "message");
+    } catch (e) {
+      setFixError(errorText(e));
+      return;
+    }
     showScreen({ kind: "session", host, id: session.id, tab: "chat" });
   };
 
@@ -141,6 +150,11 @@ export function PrTab({ host, session }: { host: string; session: Session }) {
         </div>
       </main>
       <div className="flex flex-col gap-2 border-t border-border px-4 pt-3 pb-3">
+        {fixError && (
+          <p role="alert" className="m-0 text-[13px] leading-snug text-error">
+            {fixError}
+          </p>
+        )}
         {failing && chat !== null && (
           <Btn tone="primary" onClick={() => void askFix()}>
             <AgentIcon agent="claude" size={15} /> Ask Claude to fix {failing.name}

@@ -42,7 +42,7 @@ function Meta({ card }: { card: InboxCard }) {
 
 function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
   const ask = card.ask!;
-  const { busy, run } = useBusy();
+  const { busy, error, run } = useBusy();
   const answer = (d: "allow" | "always" | "deny") => run(() => answerAsk(card.host, card.terminal, ask.id, d));
   return (
     <div className="flex flex-col gap-3 rounded-[14px] border border-[rgba(242,201,76,0.28)] bg-panel p-3.5">
@@ -74,6 +74,7 @@ function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
           Deny
         </Btn>
       </div>
+      {error && <span role="alert" className="text-[12.5px] text-error">{error}</span>}
     </div>
   );
 }
@@ -81,7 +82,7 @@ function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
 function PlanCard({ card, now }: { card: InboxCard; now: number }) {
   const ask = card.ask!;
   const plan = planOf(ask);
-  const { busy, run } = useBusy();
+  const { busy, error, run } = useBusy();
   return (
     <div className="flex flex-col gap-2.5 rounded-[14px] border border-border-strong bg-panel p-3.5">
       <div className="flex items-center gap-2">
@@ -102,6 +103,7 @@ function PlanCard({ card, now }: { card: InboxCard; now: number }) {
           Approve, auto
         </Btn>
       </div>
+      {error && <span role="alert" className="text-[12.5px] text-error">{error}</span>}
     </div>
   );
 }

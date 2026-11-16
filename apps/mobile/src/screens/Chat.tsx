@@ -15,7 +15,7 @@ import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
 import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
 import { errorText, useBusy } from "../lib/busy";
-import { cancelHeld, dismissFailed, heldKey, sendFor, useHeld, useHeldLine } from "../lib/held";
+import { type What, cancelHeld, dismissFailed, heldKey, sendFor, useHeld, useHeldLine } from "../lib/held";
 import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
 import { Markdown } from "../components/Markdown";
 import { ModelChoices } from "../components/ModelChoices";
@@ -193,7 +193,7 @@ function AsideSheet({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: ()
 
 /** A message or an answer held for a session whose member is away (X73):
  * when it goes, and Take back while it is not being sent. */
-function HeldLine({ host, terminal, what, onTakeBack }: { host: string; terminal: number; what: "message" | "answer"; onTakeBack: (text: string) => void }) {
+function HeldLine({ host, terminal, what, onTakeBack }: { host: string; terminal: number; what: What; onTakeBack: (text: string) => void }) {
   const held = useHeldLine(host, terminal, what);
   const params = useHeld((s) => s.held[heldKey(host, terminal, what)]?.params);
   if (!held) return null;
@@ -216,6 +216,19 @@ function HeldLine({ host, terminal, what, onTakeBack }: { host: string; terminal
         Take back
       </button>
     </div>
+  );
+}
+
+/** A held answer the central host then refused for good, with why (X73):
+ * the ask, if still open, can be answered again. */
+function FailedAnswer({ host, terminal }: { host: string; terminal: number }) {
+  const key = heldKey(host, terminal, "answer");
+  const failed = useHeld((s) => s.failed[key]);
+  if (!failed) return null;
+  return (
+    <button type="button" role="alert" aria-label={`${failed.line} Dismiss`} onClick={() => dismissFailed(key)} className="border-t border-border bg-panel px-4 py-2 text-left text-[13px] leading-snug text-error">
+      {failed.line}
+    </button>
   );
 }
 
@@ -365,6 +378,7 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
       </main>
       {ask && <HeldLine host={host} terminal={terminal} what="answer" onTakeBack={() => {}} />}
+      <FailedAnswer host={host} terminal={terminal} />
       {ask &&
         (ask.tool === "ExitPlanMode" ? (
           <section className="flex items-center gap-3 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 py-3">
@@ -400,7 +414,7 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         <AsideSheet
           aside={aside}
           onRequeue={() => {
-            void rpc(host, M.chatSend, { id: terminal, text: aside.question, images: [] }).catch(console.error);
+            void sendFor(host, terminal, M.chatSend, { id: terminal, text: aside.question, images: [] }, "message").catch((e) => setQueueNote(errorText(e)));
             setAside(null);
           }}
           onClose={() => setAside(null)}

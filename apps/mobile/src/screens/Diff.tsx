@@ -12,7 +12,8 @@ import { sessionChat } from "../lib/chatView";
 import { DIFF_LINE } from "../lib/palette";
 import { type DiffRow, diffRows, editsDiff, folderGroups } from "../lib/diffView";
 import { forget, useGitStatus } from "../lib/rowDetails";
-import { useBusy } from "../lib/busy";
+import { errorText, useBusy } from "../lib/busy";
+import { sendFor } from "../lib/held";
 import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 
@@ -63,6 +64,7 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
   const [tick, setTick] = useState(0);
   const [comment, setComment] = useState<{ row: number; text: string } | null>(null);
   const { busy, run } = useBusy();
+  const [commentError, setCommentError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ title: string; run: () => Promise<unknown> } | null>(null);
   // Hunks against the base include committed lines (X40): staging and
   // discarding happen in the diff against HEAD only.
@@ -100,7 +102,14 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
   const sendComment = async (row: Extract<DiffRow, { kind: "line" }>, body: string) => {
     const chat = d ? sessionChat(d, id) : null;
     if (chat === null) return;
-    await rpc(host, M.chatSend, { id: chat, text: commentPrompt(path, row.new ?? row.old ?? 0, body, row.text), images: [] });
+    setCommentError(null);
+    // A message held for a Mac that is away shows in the chat (X73).
+    try {
+      await sendFor(host, chat, M.chatSend, { id: chat, text: commentPrompt(path, row.new ?? row.old ?? 0, body, row.text), images: [] }, "message");
+    } catch (e) {
+      setCommentError(errorText(e));
+      return;
+    }
     showScreen({ kind: "session", host, id, tab: "chat" });
   };
 
@@ -162,6 +171,11 @@ export function DiffScreen({ host, id, path, against }: { host: string; id: stri
                     <AgentIcon agent="claude" size={13} /> Comment to Claude on line {r.new ?? r.old}
                   </label>
                   <textarea id="cm" autoFocus rows={2} value={comment.text} onChange={(e) => setComment({ row: i, text: e.target.value })} className="rounded-[10px] border border-border-strong bg-bg p-2.5 text-[14.5px] outline-none" />
+                  {commentError && (
+          <p role="alert" className="m-0 text-[13px] leading-snug text-error">
+            {commentError}
+          </p>
+        )}
                   <div className="flex justify-end gap-2">
                     <Btn tone="ghost" onClick={() => setComment(null)}>
                       Cancel

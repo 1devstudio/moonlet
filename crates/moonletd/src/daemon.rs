@@ -579,8 +579,6 @@ pub fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", format!("{e:#}"))
 }
 
-/// The lock of `key` in `locks`, made when there is none. Locks nobody
-/// holds or waits for are dropped as it goes, so the map stays small.
 /// The chats a session taken in from a copy goes on with here (X73): each
 /// chat's id here by the id its member gave it, and the asks they were
 /// waiting on there, by id, with that chat's member id.
@@ -597,6 +595,8 @@ fn takes_over(method: &str) -> bool {
     method == m::CHAT_SEND || method == m::CHAT_PERMISSION
 }
 
+/// The lock of `key` in `locks`, made when there is none. Locks nobody
+/// holds or waits for are dropped as it goes, so the map stays small.
 fn lock_of(locks: &Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>, key: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = locks.lock().unwrap();
     locks.retain(|k, l| k == key || Arc::strong_count(l) > 1);
@@ -4982,10 +4982,10 @@ impl Daemon {
             // A message or an answer goes only to a member that answers
             // now. One whose link went silent never gets it, so the client
             // can send it again, once, without a minute's wait (X73).
-            if takes_over(&r.method) && !self.workers.answers(&member).await {
+            let writes = takes_over(&r.method);
+            if writes && !self.workers.answers(&member).await {
                 return Err(RpcError::new("owner_not_responding", format!("{} is not responding", name())));
             }
-            let writes = takes_over(&r.method);
             return match member
                 .request(m::SESSION_FORWARD, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(60))
                 .await
@@ -5073,6 +5073,11 @@ impl Daemon {
             let took = took.get(&r.session).ok_or_else(|| RpcError::new("not_found", "that session was not taken in here"))?;
             let ask = r.params.get("ask").and_then(Value::as_str).unwrap_or_default();
             let chat = was.and_then(|w| took.chats.get(&w).copied()).ok_or_else(|| RpcError::new("not_found", "that chat did not go on here"))?;
+            // Only while the session still runs it here: one that left and
+            // came back another way has chats of its own now.
+            if !self.sessions.session(&r.session).is_ok_and(|s| s.terminals.contains(&chat)) {
+                return Err(RpcError::new("not_found", "that chat did not go on here"));
+            }
             let asked = took.asks.get(ask).filter(|(c, _)| Some(*c) == was).map(|(_, a)| a.clone());
             (chat, asked)
         };
