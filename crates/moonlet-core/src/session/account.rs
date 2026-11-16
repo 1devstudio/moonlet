@@ -902,6 +902,11 @@ impl SessionManager {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
             let Some(a) = account.as_mut() else { return Ok(0) };
+            // Every member's exchange asks on a central host: the log is
+            // copied only when there is something to stamp again.
+            if !a.log.own_ahead_after(now_ms(), counted) {
+                return Ok(0);
+            }
             let mut log = a.log.clone();
             let again = log.restamp_ahead(now_ms(), counted, theirs);
             if again.is_empty() {
