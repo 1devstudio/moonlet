@@ -36,6 +36,7 @@ The files travel over the link outside git, so they never enter a git object sto
 - [ ] Never copied, whatever the list says: anything under `.git/`, a link of any kind, and a file over 1 MiB.
 - [ ] At most 200 files and 16 MiB are copied per worktree. Matches are taken in the byte order of their relative paths (`/`-separated, from the worktree's root), so every member picks the same files. The 201st match and every later one are skipped. So is the first file that would take the total past 16 MiB, and every file after it, even a smaller one. A skipped file is listed with its reason (see UI).
 - [ ] Only the Mac's own app changes the list (`project.copied_files.set`). A paired Mac, a phone, the `moonlet` CLI and an agent get `forbidden`, as `sync.project_set` does (X60). So an agent cannot widen the list to carry files of its choosing to other members.
+- [x] The same holds for lists that arrive through the account log (X89, "Who a permission counts from"): once the central host referees permissions, a list counts on a member only from the central host and from that member itself. A list a member's app sets reaches the others once the central host made it its own, which the member asks for; a list a member's daemon writes into the log without its app counts on that member alone. A member also keeps only patterns this spec accepts, whoever wrote them. (`a_list_a_members_daemon_writes_without_its_app_is_not_taken`, `the_list_set_on_one_member_reaches_the_others`; core `copied_files_a_member_writes_without_its_app_are_not_taken`)
 
 ### Where files are copied
 
@@ -75,6 +76,7 @@ The files travel over the link outside git, so they never enter a git object sto
 - An agent on any member can write a file that matches the list, such as a `.env` with `NODE_OPTIONS=--require ./evil.js`, and it reaches every member. This is ADR 0014's "trust is the weakest member's", now with secrets in both directions. Removing a member offers to rotate the secrets it held (ADR 0014); X74 adds the copied files of each project to what that offer names.
 - Paths come from the other member: a path with `..`, an absolute path, a name that is not text, or one that does not match this member's own copy of the list is refused. Files are written through the worktree's `cap-std` handle, which never follows a link (as X71 writes copies).
 - The list cannot name a folder outside the worktree, and a matching link is never followed.
+- The list counts from the central host and from the member reading it, not from whichever member wrote it into the log (X89). A fully compromised member can still have the central host take over a list of its choosing, as its app's lists are; X89's security section says what remains open.
 
 ## Out of scope
 

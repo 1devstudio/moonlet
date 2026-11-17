@@ -112,6 +112,7 @@ Session records, settings, devices and secrets join the account state in later s
 - `account.sync`'s reply gains `account`, the account the central host shares.
 - `account.sync` and its reply gain `now_ms`, the sender's clock, optional both ways. `account.get` and `account.info` gain `clocks: [{worker, name, ahead_ms}]`, absent when empty: how far ahead of this host's clock another host's is, to the minute, negative when behind.
 - `account.get` → `{account, central}`, and the event `account.info` with the same, when it changes.
+- `account.sync` gains `asks: [{member, seq}]`, optional (X89): the member's own changes to a project's approval or copied files that its app made, which it asks the central host to make its own. An older central host ignores it.
 - `account.sync`'s reply gains `more: true` when its `changes` are only the first of what the member lacks, as many as fit `ACCOUNT_PAGE_BYTES` (15 MiB of JSON, a frame's 16 MiB less room for the rest); absent otherwise. The member asks again from a version past them. A request's `changes` are at most as many.
 - `account.get` and `account.info` gain `not_syncing`, absent while the account syncs: `"too_large"` once what the central host would send does not fit one message.
 - `workspace.list`: each workspace gains `made_by`, the name of the member that made it.
@@ -137,6 +138,7 @@ Session records, settings, devices and secrets join the account state in later s
 - A log named after an older worker id (link.json made again) goes on under a new name and takes over the old log's changes as its own, with their times, so changes made before the rename still reach the central host. The old name stays reserved. (`edits_made_before_a_macs_worker_id_changed_reach_the_central_host`, `a_log_named_after_an_older_worker_id_goes_on_under_the_new_one`)
 - Values are checked again when applied: names lose control characters and surrounding space, colours must be known, a `view` must parse, and project identities must parse. A field whose value fails its check takes its default (the name "Personal" or "My projects", the default colour and view, no projects); the change stays in the log, so versions stay in step.
 - The log never holds paths or secrets.
+- Records that act as permissions (X89's `worker` and `heavy_approval`, X74's `project_files`) count only from the authors X89 names, once the central host wrote its `referee` record; the others count from any member. (X89, "Who a permission counts from")
 
 ## Out of scope
 
