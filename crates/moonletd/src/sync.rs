@@ -4243,9 +4243,11 @@ impl LiveCopies {
     /// The heavy commands and `env` names this host's own checkout of the
     /// project routing copy `copy` is of lists, read from its main checkout
     /// (X90): a runner runs another host's command only when this list
-    /// names it too, beside the account's approval (X89). `None` when this
-    /// host cannot tell: it has no checkout of the project, or that
-    /// checkout lists no heavy commands or has a config it cannot read.
+    /// names it too, beside the account's approval (X89). An empty list,
+    /// which names nothing, when that checkout's config cannot be read.
+    /// `None` when this host cannot tell: it has no checkout of the
+    /// project, or that checkout lists no heavy commands, as when its
+    /// config is kept out of git and this clone has none (X90).
     pub fn own_heavy_list(&self, copy: &str) -> Option<m::HeavyApproval> {
         let identity = self.kept(copy)?.identity?;
         let p = self
@@ -4255,7 +4257,10 @@ impl LiveCopies {
             .find(|p| moonlet_core::identity::same_project(&p.identity, &identity))?;
         let config = moonlet_core::project_config::load(Path::new(&p.path), p.base_branch.clone());
         let heavy = config.config.heavy;
-        if config.error.is_some() || moonlet_core::heavy::check(&heavy).is_err() || heavy.commands.is_empty() {
+        if config.error.is_some() || moonlet_core::heavy::check(&heavy).is_err() {
+            return Some(m::HeavyApproval::default());
+        }
+        if heavy.commands.is_empty() {
             return None;
         }
         Some(m::HeavyApproval { commands: heavy.commands, env: heavy.env })

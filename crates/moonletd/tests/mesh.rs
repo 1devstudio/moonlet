@@ -872,6 +872,10 @@ async fn a_runner_with_its_own_checkout_runs_only_what_that_checkout_lists_too()
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
     assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+    // A config it cannot read names nothing either.
+    std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), "[heavy\n").unwrap();
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
     // Once it lists `sh -c` too, it runs it.
     std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), RUN_HEAVY).unwrap();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
