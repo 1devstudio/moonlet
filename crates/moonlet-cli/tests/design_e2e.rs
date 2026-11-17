@@ -170,7 +170,7 @@ async fn the_sync_agent_reports_checks_and_records_from_its_folder() {
                 .success()
         );
     }
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let ws: Workspace = c
         .request(
             methods::WORKSPACE_CREATE,
@@ -276,7 +276,7 @@ async fn the_sync_agent_reports_checks_and_records_from_its_folder() {
 #[tokio::test]
 async fn the_sync_agents_commands_act_only_on_the_system_of_their_folder() {
     let d = Daemon::start().await;
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let ws: Workspace = c
         .request(
             methods::WORKSPACE_CREATE,
@@ -338,7 +338,7 @@ async fn the_sync_agents_commands_act_only_on_the_system_of_their_folder() {
 /// A design system with a button card of two variants and a field card
 /// whose mount is empty, for `--render` and `snap` (X64).
 async fn render_system(d: &Daemon) -> PathBuf {
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let ws: Workspace = c
         .request(
             methods::WORKSPACE_CREATE,
@@ -496,7 +496,7 @@ async fn without_the_app_render_and_snap_say_to_open_moonlet() {
 /// A workspace with the design system `moonlet-desktop` (no sync agent);
 /// returns the workspace's id.
 async fn workspace_with_system(d: &Daemon) -> String {
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let ws: Workspace = c
         .request(
             methods::WORKSPACE_CREATE,
@@ -612,7 +612,7 @@ async fn designs_are_made_listed_opened_and_removed_from_the_cli() {
 async fn a_designs_agent_checks_and_fixes_its_pages_from_its_folder() {
     let d = Daemon::with_fake_claude().await;
     let ws = workspace_with_system(&d).await;
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: serde_json::Value = c
         .request(
             methods::DESIGN_CREATE,
@@ -657,7 +657,7 @@ async fn a_sessions_agent_makes_a_session_design_with_design_new_here() {
     for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
         assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
     }
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
     let sec: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": ws.id, "name": "Apps"})).await.unwrap();
     let project: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": sec.id, "path": repo})).await.unwrap();

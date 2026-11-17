@@ -749,7 +749,7 @@ async fn only_the_app_or_a_paired_mac_approves_heavy_commands() {
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages heavy commands"
+        "forbidden: only the moonlet app does that"
     );
 
     // A paired phone.
@@ -2660,7 +2660,7 @@ async fn an_agents_cli_neither_reads_nor_stops_jobs() {
         let e = cli.request::<_, Value>(method, params).await.unwrap_err();
         assert_eq!(
             e.to_string(),
-            "forbidden: only the moonlet app manages jobs",
+            "forbidden: only the moonlet app does that",
             "{method}"
         );
     }
@@ -2757,6 +2757,6 @@ async fn exec_status_lists_the_central_host_its_runs_and_why_workers_were_skippe
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages jobs"
+        "forbidden: only the moonlet app does that"
     );
 }

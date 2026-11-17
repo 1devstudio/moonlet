@@ -95,7 +95,7 @@ The design export "Moonlet Mobile.html", 390 × 844, dark only: pages Tasks · b
 ## Protocol and RPCs
 
 - `tasks.snapshot {workspace?}` → `{ workspace, snapshot }[]`: the saved snapshots, all or one workspace's.
-- `tasks.set_snapshot {workspace, snapshot}` → `true`. Refused for phones and the CLI ("only the moonlet app shares boards"), for an unknown workspace, and over 4 MB.
+- `tasks.set_snapshot {workspace, snapshot}` → `true`. Refused for phones ("only the moonlet app shares boards") and the CLI ("only the moonlet app does that", [A6](A6-cli-and-socket-api.md)), for an unknown workspace, and over 4 MB.
 - Event `tasks.changed {workspace, snapshot}` (`snapshot` null once its workspace is deleted).
 - `tasks.app {}` → `{open}`; event `tasks.app {open}` when it changes.
 - `tasks.request {workspace, action}` → the app's answer. `action` is one of:

@@ -2907,7 +2907,7 @@ async fn a_copy_runs_the_projects_setup_once_the_user_approves_the_command() {
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages setup"
+        "forbidden: only the moonlet app does that"
     );
 
     let _: Copy = worker
@@ -3530,7 +3530,7 @@ async fn a_project_set_to_keep_new_sessions_in_sync_gets_a_copy_of_each_new_one(
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages sync"
+        "forbidden: only the moonlet app does that"
     );
     let on: Value = worker
         .call(

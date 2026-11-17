@@ -466,7 +466,9 @@ fn ssh_session_command() -> bool {
 
 /// Forwards the client's first frame. The Mac's app cannot read this host's
 /// app credential (X75), so when the proxy runs as an SSH session's command
-/// (`vouch`), a `hello` from `moonlet-app` gets it here. A credential the
+/// (`vouch`), a `hello` from `moonlet-app` gets it here, and so does one
+/// from a phone the Mac routes here (`moonlet-mobile`), which the daemon
+/// then takes for a routed phone, not the app (A6). A credential the
 /// client sent never goes through: the daemon would take the proxy for the
 /// app. Any other first frame goes on unchanged.
 async fn forward_hello(
@@ -486,7 +488,7 @@ async fn forward_hello(
     let mut frames = moonlet_proto::FrameDecoder::new();
     frames.push(&raw);
     if let Ok(Some(Frame::Json(Message::Hello { protocol, client, app_token: sent }))) = frames.next_frame() {
-        let token = if vouch && client == daemon::APP_CLIENT {
+        let token = if vouch && (client == daemon::APP_CLIENT || client == daemon::MOBILE_CLIENT) {
             moonlet_core::app_token::read(&moonlet_core::app_token::file())
         } else {
             None

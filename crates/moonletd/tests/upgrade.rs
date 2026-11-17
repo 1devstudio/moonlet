@@ -23,6 +23,8 @@ fn moonletd(home: &std::path::Path, socket: &PathBuf, args: &[&str]) -> Command 
         .env("MOONLET_HOME", home)
         .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_SOCK", socket)
+        // The test attaches as the app (X75, A6).
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -53,7 +55,7 @@ async fn upgrade_keeps_sessions_alive() {
         .await
         .unwrap();
 
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let before: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     let s: TerminalInfo = c
         .request(
@@ -91,7 +93,7 @@ async fn upgrade_keeps_sessions_alive() {
         .unwrap();
     assert!(status.success(), "moonletd upgrade failed");
 
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     assert_ne!(after.pid, before.pid, "a new daemon process serves");
     let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
@@ -149,6 +151,7 @@ async fn start_takes_over_a_jaunt_daemon() {
             .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env_remove("MOONLET_SOCK")
             .env_remove("JAUNT_HOME")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -163,7 +166,7 @@ async fn start_takes_over_a_jaunt_daemon() {
         .await
         .unwrap();
 
-    let mut c = Client::connect(&legacy, "test").await.unwrap();
+    let mut c = Client::connect_app(&legacy, home.path()).await.unwrap();
     let s: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -198,7 +201,7 @@ async fn start_takes_over_a_jaunt_daemon() {
     let status = plain(&["start"]).status().unwrap();
     assert!(status.success(), "moonletd start failed");
 
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let same = list
@@ -232,7 +235,7 @@ async fn start_takes_over_a_jaunt_daemon() {
     }
 
     // Hooks and CLI calls from jaunt's binary still dial run/jauntd.sock.
-    let mut via_old = Client::connect(&legacy, "test").await.unwrap();
+    let mut via_old = Client::connect_app(&legacy, home.path()).await.unwrap();
     let info: DaemonInfo = via_old.request(methods::DAEMON_INFO, ()).await.unwrap();
     assert_eq!(info.pid, after.pid);
 
@@ -250,7 +253,7 @@ async fn after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left() {
     let _old = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
     wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
     let job_file = home.path().join("job.pid");
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let _: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -279,7 +282,7 @@ async fn after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left() {
     // Time for the old daemon to record the shell's session.
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(moonletd(home.path(), &socket, &["upgrade"]).status().unwrap().success(), "moonletd upgrade failed");
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let new: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     drop(c);
     // Time for the new daemon to write its own record, then it crashes.
@@ -301,7 +304,7 @@ async fn after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left() {
     if !gone {
         let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
     }
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
     assert!(gone, "the exited shell's job outlived the upgraded daemon's crash");
 }
@@ -338,7 +341,7 @@ async fn systemd_hears_ready_and_follows_the_upgrade() {
         .status()
         .unwrap();
     assert!(status.success(), "moonletd upgrade failed");
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     // The new daemon names itself before it answers the handoff.
     assert_eq!(
@@ -377,7 +380,7 @@ async fn an_agent_at_work_keeps_the_mac_awake_across_an_upgrade_until_the_daemon
     };
     let _old = Kill(moonletd(home.path(), &socket, &["daemon"]).env("MOONLET_TEST_AWAKE_LOG", &awake).spawn().unwrap());
     wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let tab: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -401,7 +404,7 @@ async fn an_agent_at_work_keeps_the_mac_awake_across_an_upgrade_until_the_daemon
     assert!(status.success(), "moonletd upgrade failed");
     // The old daemon let go as it handed over; the new one holds.
     until(2, 1).await;
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
     let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     assert_eq!(list.iter().find(|t| t.id == tab.id).map(|t| t.agent_state), Some(AgentState::Working));

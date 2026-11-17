@@ -397,7 +397,7 @@ async fn cloud_set_from_the_cli_or_a_phone_is_forbidden() {
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages cloud workers"
+        "forbidden: only the moonlet app does that"
     );
     // Check uses the OAuth client's secret too.
     let e = cli
@@ -406,7 +406,7 @@ async fn cloud_set_from_the_cli_or_a_phone_is_forbidden() {
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages cloud workers"
+        "forbidden: only the moonlet app does that"
     );
     let phone = pair(&d, &addr, "Alex's iPhone", DeviceKind::Phone).await;
     assert_eq!(

@@ -82,7 +82,7 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 - `browser.pending` → `[browser.show]`: the URLs that came for this Mac's app while it was not connected, each handed over once. The app asks each time it connects to its own daemon; any other client gets `forbidden`.
 - `presence.active {client}`, member → central host, at most every 30 s while the user is active.
 - `tunnel.open {port, to: <member>, key}` on the link: a stream from the Mac's daemon to the member's loopback port. It is accepted only for a port named by a `browser.route` from that member that is still waiting, with the key that member made for it. The key goes member → central host in `browser.route` and central host → the chosen Mac in its `browser.show` request, never in the event to an app or a phone.
-- `signins.list` → the entries. `signins.set {entries}` → `true`. `signins.check {entry}` → `{<member>: bool}`. `signins.run {entry, members}` → `true`. Only the Mac's own app may call `signins.set`, `.check` and `.run`; other clients get `forbidden`.
+- `signins.list` → the entries. `signins.set {entries}` → `true`. `signins.check {entry}` → `{<member>: bool}`. `signins.run {entry, members}` → `true`. Only the Mac's own app may call `signins.set`, `.check` and `.run`; other clients get `forbidden`. On the Mac's socket, a client that did not prove it is the app gets `forbidden` for `signins.list` too, as for every method the `moonlet` CLI does not use ([A6](A6-cli-and-socket-api.md)).
 - `browser.open` registers a callback as described above. `tunnel.open` is refused with `forbidden` without a matching callback or its key.
 
 ## Data and config

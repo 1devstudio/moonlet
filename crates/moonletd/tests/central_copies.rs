@@ -1564,6 +1564,63 @@ async fn the_owners_chat_events_reach_the_central_hosts_clients() {
     assert_eq!(event["event"]["data"]["id"], agent);
 }
 
+/// Audit 2026-11-15: a local process on the central host that proves
+/// nothing reaches no member's session, whatever client name it gives: not
+/// through `session.forward`, `session.attach` or `session.continue_here`,
+/// and it hears none of the session's events.
+#[tokio::test]
+async fn a_local_process_that_proves_nothing_reaches_no_members_session() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let mut other = moonlet_core::client::Client::connect(&mini.socket, "moonlet-helper")
+        .await
+        .unwrap();
+    let mut listener = mini.app().await;
+    for (method, params) in [
+        (
+            "session.forward",
+            json!({ "session": made["id"], "method": "chat.send", "params": { "id": agent, "text": "Not from the app" } }),
+        ),
+        ("session.attach", json!({ "session": made["id"], "terminal": agent })),
+        ("session.continue_here", json!({ "session": made["id"] })),
+    ] {
+        let e = other.request::<_, Value>(method, params).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app does that", "{method}");
+    }
+
+    forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match listener.next_frame().await.unwrap() {
+                Some(moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }))
+                    if name == "session.event" && data["event"]["name"] == json!("chat.item") =>
+                {
+                    return;
+                }
+                Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("the app heard no session.event");
+    let mut heard: Vec<moonlet_proto::Frame> = std::mem::take(&mut other.backlog);
+    while let Ok(Ok(Some(f))) = tokio::time::timeout(Duration::from_secs(1), other.next_frame()).await {
+        heard.push(f);
+    }
+    assert!(
+        !heard.iter().any(|f| matches!(f, moonlet_proto::Frame::Json(moonlet_proto::Message::Event { .. }))),
+        "it heard {heard:?}"
+    );
+}
+
 // --- Terminals through the central host ----------------------------------
 
 /// A shell in `session`'s worktree on `d`; gives its terminal id.
@@ -5292,7 +5349,7 @@ async fn only_the_macs_app_changes_the_list() {
         .request::<_, Value>("project.copied_files.set", set.clone())
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages copied files");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     for bad in ["!.env", "../.env"] {
         let e = book
             .try_call(

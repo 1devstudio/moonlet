@@ -906,8 +906,10 @@ async fn only_the_macs_app_changes_or_runs_sign_ins() {
         let e = cli.request::<_, Value>(method, params).await.unwrap_err();
         assert!(e.to_string().contains("forbidden"), "{method}: {e}");
     }
-    // Anyone reads the list.
-    let list: Vec<Value> = cli.request("signins.list", json!({})).await.unwrap();
+    // The CLI does not read the list either (A6); the app does.
+    let e = cli.request::<_, Value>("signins.list", json!({})).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
+    let list: Vec<Value> = d.call("signins.list", json!({})).await;
     assert_eq!(list[0]["id"], json!("gh"));
 }
 
@@ -920,7 +922,7 @@ async fn a_process_that_only_says_it_is_the_app_cannot_change_app_only_settings(
         .request::<_, Value>("signins.set", entries.clone())
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let wrong = "0".repeat(64);
     let mut guessed = Client::connect_with(&d.socket, "moonlet-app", Some(&wrong))
         .await
@@ -929,11 +931,11 @@ async fn a_process_that_only_says_it_is_the_app_cannot_change_app_only_settings(
         .request::<_, Value>("signins.set", entries.clone())
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     // With the credential its daemon wrote, the app may.
     let mut app = d.app().await;
     let _: bool = app.request("signins.set", entries).await.unwrap();
-    let list: Vec<Value> = forged.request("signins.list", json!({})).await.unwrap();
+    let list: Vec<Value> = app.request("signins.list", json!({})).await.unwrap();
     assert_eq!(list[0]["id"], json!("t"));
 }
 
@@ -951,12 +953,12 @@ async fn a_process_with_the_app_credential_that_is_not_the_app_is_not_the_app() 
         .request::<_, Value>("signins.set", json!({ "entries": [entry("true", "true")] }))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = stolen
         .request::<_, Value>("browser.pending", json!({}))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 }
 
 /// What a copy of this test binary does when [`run_copy_as`] runs it:
@@ -1015,7 +1017,7 @@ async fn a_binary_copied_under_the_app_s_name_is_not_the_app() {
     .await;
 
     let elsewhere = run_copy_as(&dir.path().join("Downloads/moonlet-app"), &d).await;
-    assert_eq!(elsewhere, "forbidden: only the moonlet app manages sign-ins");
+    assert_eq!(elsewhere, "forbidden: only the moonlet app does that");
     // The same binary where the app is, beside the daemon, is the app.
     let beside = run_copy_as(&installed.join("moonlet-app"), &d).await;
     assert_eq!(beside, "allowed");
@@ -1029,12 +1031,12 @@ async fn a_process_that_only_says_it_is_the_app_never_hears_where_the_user_signs
         .request::<_, Value>("presence.active", json!({}))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the app says where the user is");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = forged
         .request::<_, Value>("browser.pending", json!({}))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let mut app = d.app().await;
     in_terminal(&d, "\"$BROWSER\" 'https://accounts.example.test/auth'").await;
     let shown = next_show(&mut app, Duration::from_secs(10))

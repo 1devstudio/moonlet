@@ -163,7 +163,7 @@ moonlet project ls               # list known projects
 moonlet session new <project> "Fix the login form"   # new worktree + agent
 moonlet hooks install            # install Claude Code and Codex hooks
 moonlet notify --state done -m "Tests pass"   # report agent state for this terminal
-moonlet rpc repo.list            # call any daemon method, print JSON
+moonlet rpc repo.list            # call a daemon method the CLI may call, print JSON
 
 moonletd status                  # daemon info
 moonletd upgrade                 # hand live sessions to a newer daemon
