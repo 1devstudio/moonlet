@@ -2714,6 +2714,17 @@ async fn build_box() -> (Daemon, String) {
 }
 
 /// Pairs `worker` with `central` as [`link`] does; returns the token.
+/// Keeps `token` for studio-mini at `addr` in the host list of `worker`'s
+/// app (X57): the app hands its own token to the link (X41), and keeps it.
+fn kept_by_app(worker: &Daemon, addr: &str, token: &str) {
+    std::fs::write(
+        worker.home.path().join("app-hosts.json"),
+        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": token }] })
+            .to_string(),
+    )
+    .unwrap();
+}
+
 async fn pair_with(central: &Central) -> String {
     let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     moonlet_link::tailnet::pair(
@@ -2732,6 +2743,8 @@ async fn a_copy_waits_while_another_host_is_the_central_host() {
     let central = central().await;
     let worker = worker(&central.origin).await;
     let token = pair_with(&central).await;
+    // The app's own token, which it hands the link again below (X41).
+    kept_by_app(&worker, &central.addr, &token);
     let studio_mini =
         json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
     let _: Value = worker.call("link.set", studio_mini.clone()).await;
@@ -2790,6 +2803,8 @@ async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later()
     let central = central().await;
     let worker = worker(&central.origin).await;
     let token = pair_with(&central).await;
+    // The app's own token, which it hands the link again below (X41).
+    kept_by_app(&worker, &central.addr, &token);
     let studio_mini =
         json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
     let _: Value = worker.call("link.set", studio_mini.clone()).await;

@@ -179,6 +179,7 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
                 Some(authed.device_id.clone()),
                 None,
                 authed.cloud,
+                authed.worker_link,
             ));
             let mut here = here;
             tokio::select! {

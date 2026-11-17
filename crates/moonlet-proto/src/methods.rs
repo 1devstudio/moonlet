@@ -459,6 +459,10 @@ pub const LINK_RETRY: &str = "link.retry";
 pub const LINK_PAIR: &str = "link.pair";
 /// A worker introduces itself to its central host: [`WorkerRegister`].
 pub const WORKER_REGISTER: &str = "worker.register";
+/// A paired Mac's daemon asks its central host for a credential that is
+/// only a worker link, to link with instead of its paired token:
+/// [`WorkerCredential`] → [`WorkerCredentialGiven`].
+pub const WORKER_CREDENTIAL: &str = "worker.credential";
 /// The central host's linked workers: [`WorkerInfo`]s.
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
@@ -3306,6 +3310,21 @@ pub struct ClockOff {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccountChanged {
     pub changes: Vec<crate::types::Change>,
+}
+
+/// `worker.credential` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerCredential {
+    /// The token asking stops working once the new one is first used: it
+    /// was the link's alone. False when this Mac's app holds it too.
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// `worker.credential` result: a token that only links a member.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerCredentialGiven {
+    pub token: String,
 }
 
 /// `worker.register` params, sent again on every link.

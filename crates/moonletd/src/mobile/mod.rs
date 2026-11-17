@@ -171,6 +171,17 @@ struct StoredDevice {
     /// The cloud machine a `cloud` device is (X63).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     machine: Option<String>,
+    /// A member's link to this central host: a `desktop` device whose
+    /// token reaches only a member's work, never the app's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    worker_link: bool,
+    /// The paired Mac whose connection asked for this worker link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    minted_by: Option<String>,
+    /// Until this worker link is first used: that use removes `minted_by`,
+    /// whose token was the link's alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    replaces: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -324,6 +335,9 @@ pub struct Authed {
     /// A cloud machine's device (X63), as it was when it authenticated: its
     /// connection stays limited even once removal forgets the device.
     pub cloud: bool,
+    /// A member's worker link, as it was when it authenticated: its
+    /// connection reaches only a member's work, whatever client it says.
+    pub worker_link: bool,
 }
 
 struct LiveConn {
@@ -622,11 +636,67 @@ impl Mobile {
         Ok(())
     }
 
+    /// A token that only links a member, for paired Mac `device`, whose
+    /// daemon asked over its link with its own token. It is listed under
+    /// the Mac's name, in place of `device` with `replace`: the first time
+    /// it is used, `device` is removed, so its token stops working. The
+    /// worker links `device` asked for before, used or not, go now: the
+    /// member keeps only the newest.
+    pub fn worker_credential(&self, device: &str, replace: bool) -> Result<String, RpcError> {
+        let token = random_hex(32);
+        let gone: Vec<String> = {
+            let mut data = self.data.lock().unwrap();
+            let asker = data
+                .devices
+                .iter()
+                .find(|d| d.id == device && d.kind == DeviceKind::Desktop && !d.worker_link)
+                .ok_or_else(|| RpcError::new("forbidden", "only a paired Mac's daemon asks for a worker link"))?;
+            let name = asker.name.clone();
+            let gone: Vec<String> = data
+                .devices
+                .iter()
+                .filter(|d| d.minted_by.as_deref() == Some(device))
+                .map(|d| d.id.clone())
+                .collect();
+            data.devices.retain(|d| !gone.contains(&d.id));
+            data.devices.push(StoredDevice {
+                id: random_hex(8),
+                name,
+                token_sha256: sha256_hex(token.as_bytes()),
+                created_at: now_ms(),
+                last_seen: None,
+                kind: DeviceKind::Desktop,
+                machine: None,
+                worker_link: true,
+                minted_by: Some(device.to_string()),
+                replaces: replace,
+            });
+            self.save(&data);
+            gone
+        };
+        for id in gone {
+            self.close_device(&id);
+        }
+        self.changed();
+        Ok(token)
+    }
+
     /// Whether device `id` is still paired. A device that removed itself
     /// keeps its connection a moment longer, for the reply.
     /// What kind of device `id` is, while it is paired.
     pub fn kind_of(&self, id: &str) -> Option<DeviceKind> {
         self.data.lock().unwrap().devices.iter().find(|d| d.id == id).map(|d| d.kind)
+    }
+
+    /// The paired Mac whose daemon asked for worker link `id`, if it is one.
+    pub fn minted_by(&self, id: &str) -> Option<String> {
+        self.data
+            .lock()
+            .unwrap()
+            .devices
+            .iter()
+            .find(|d| d.id == id && d.worker_link)
+            .and_then(|d| d.minted_by.clone())
     }
 
     pub fn is_paired(&self, id: &str) -> bool {
@@ -688,21 +758,40 @@ impl Mobile {
                     return None;
                 }
                 let d = data.devices.iter_mut().find(|d| d.token_sha256 == hash)?;
-                // A cloud machine (X63) reaches only this daemon's worker
-                // methods: a route would take it to a remote host's daemon.
-                if route.is_some() && d.kind == DeviceKind::Cloud {
-                    tracing::info!("a cloud machine asked for a route");
+                // A cloud machine (X63) and a member's worker link reach only
+                // this daemon's worker methods: a route would take them to a
+                // remote host's daemon, which takes them for the app.
+                if route.is_some() && (d.kind == DeviceKind::Cloud || d.worker_link) {
+                    tracing::info!("a cloud machine or a worker link asked for a route");
                     return None;
                 }
                 d.last_seen = Some(now_ms());
                 let device_id = d.id.clone();
                 let cloud = d.kind == DeviceKind::Cloud;
+                let worker_link = d.worker_link;
+                // The first use of a worker link that replaces its Mac's
+                // token: the member saved it, so the old token goes.
+                let replaced = if d.replaces {
+                    d.replaces = false;
+                    d.minted_by.clone()
+                } else {
+                    None
+                };
+                if let Some(old) = &replaced {
+                    data.devices.retain(|d| &d.id != old);
+                }
                 self.save(&data);
+                drop(data);
+                if let Some(old) = replaced {
+                    self.close_device(&old);
+                    self.changed();
+                }
                 Some(Authed {
                     device_id,
                     token: None,
                     route,
                     cloud,
+                    worker_link,
                 })
             }
             (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
@@ -723,6 +812,9 @@ impl Mobile {
                     last_seen: Some(now),
                     kind: DeviceKind::Cloud,
                     machine: Some(machine.clone()),
+                    worker_link: false,
+                    minted_by: None,
+                    replaces: false,
                 };
                 let device_id = dev.id.clone();
                 {
@@ -738,6 +830,7 @@ impl Mobile {
                     token: Some(token),
                     route: None,
                     cloud: true,
+                    worker_link: false,
                 })
             }
             (None, Some(code)) if route.is_none() => {
@@ -765,6 +858,9 @@ impl Mobile {
                             last_seen: Some(now),
                             kind,
                             machine: None,
+                            worker_link: false,
+                            minted_by: None,
+                            replaces: false,
                         };
                         let device_id = dev.id.clone();
                         {
@@ -781,6 +877,7 @@ impl Mobile {
                             token: Some(token),
                             route: None,
                             cloud: kind == DeviceKind::Cloud,
+                            worker_link: false,
                         })
                     }
                     (PairCheck::Exhausted, current) => {
@@ -968,6 +1065,77 @@ mod tests {
         });
         std::fs::write(&file, json.to_string()).unwrap();
         (dir, Mobile::load(file, |_| {}))
+    }
+
+    /// A Mobile whose file holds a paired Mac with token "tok" and a phone
+    /// with token "phone".
+    fn with_mac() -> (tempfile::TempDir, Mobile) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mobile.json");
+        let json = serde_json::json!({
+            "enabled": true,
+            "devices": [
+                { "id": "d1", "name": "Alex's MacBook Pro", "token_sha256": sha256_hex(b"tok"), "created_at": 1, "kind": "desktop" },
+                { "id": "p1", "name": "iPhone", "token_sha256": sha256_hex(b"phone"), "created_at": 1 },
+            ],
+        });
+        std::fs::write(&file, json.to_string()).unwrap();
+        (dir, Mobile::load(file, |_| {}))
+    }
+
+    fn by_token(mobile: &Mobile, token: &str) -> Option<Authed> {
+        mobile.authenticate(Some(token), None, None, None, None)
+    }
+
+    fn names(mobile: &Mobile) -> Vec<String> {
+        mobile.status().devices.into_iter().map(|d| d.name).collect()
+    }
+
+    #[test]
+    fn a_worker_link_replaces_the_macs_token_the_first_time_it_is_used() {
+        let (_dir, mobile) = with_mac();
+        let link = mobile.worker_credential("d1", true).unwrap();
+        // The member may not have saved the new token yet: the old one works
+        // until the new one is used.
+        let old = by_token(&mobile, "tok").expect("the old token before the new one is used");
+        assert!(!old.worker_link);
+        let authed = by_token(&mobile, &link).expect("the worker link");
+        assert!(authed.worker_link);
+        assert!(!authed.cloud);
+        assert!(by_token(&mobile, "tok").is_none(), "the old token still works");
+        assert_eq!(names(&mobile), ["iPhone", "Alex's MacBook Pro"]);
+        assert_eq!(mobile.kind_of(&authed.device_id), Some(DeviceKind::Desktop));
+        // It stays a worker link.
+        assert!(by_token(&mobile, &link).unwrap().worker_link);
+    }
+
+    #[test]
+    fn a_worker_link_beside_the_apps_token_leaves_that_token_working() {
+        let (_dir, mobile) = with_mac();
+        let link = mobile.worker_credential("d1", false).unwrap();
+        assert!(by_token(&mobile, &link).unwrap().worker_link);
+        let app = by_token(&mobile, "tok").expect("the app's token");
+        assert!(!app.worker_link);
+    }
+
+    #[test]
+    fn only_a_paired_macs_own_token_gets_a_worker_link() {
+        let (_dir, mobile) = with_mac();
+        assert_eq!(mobile.worker_credential("p1", true).unwrap_err().code, "forbidden");
+        assert_eq!(mobile.worker_credential("nope", true).unwrap_err().code, "forbidden");
+        let link = mobile.worker_credential("d1", false).unwrap();
+        let id = by_token(&mobile, &link).unwrap().device_id;
+        assert_eq!(mobile.worker_credential(&id, false).unwrap_err().code, "forbidden");
+    }
+
+    #[test]
+    fn asking_again_drops_the_worker_link_asked_for_before() {
+        let (_dir, mobile) = with_mac();
+        let first = mobile.worker_credential("d1", true).unwrap();
+        let second = mobile.worker_credential("d1", true).unwrap();
+        assert!(by_token(&mobile, &first).is_none(), "the first worker link still works");
+        assert!(by_token(&mobile, &second).unwrap().worker_link);
+        assert_eq!(names(&mobile), ["iPhone", "Alex's MacBook Pro"]);
     }
 
     #[test]

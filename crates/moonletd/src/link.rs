@@ -34,6 +34,11 @@ struct LinkFile {
     #[serde(default)]
     central: Option<LinkCentral>,
     worker: LinkWorker,
+    /// `central`'s token is a worker link of its own, which reaches only a
+    /// member's work there; until then it is the token this Mac paired
+    /// with, which the link trades for one (`worker.credential`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    worker_link: bool,
 }
 
 /// The link settings, as kept in `link.json`.
@@ -64,6 +69,7 @@ impl LinkStore {
                         slots: m::default_slots(),
                         cloud: false,
                     },
+                    worker_link: false,
                 };
                 return LinkStore { path, data, revision: 0 };
             }
@@ -94,8 +100,9 @@ impl LinkStore {
                 d
             }
             other => {
+                let (central, worker_link) = other.map_or((None, false), |d| (d.central, d.worker_link));
                 let d = LinkFile {
-                    central: other.and_then(|d| d.central),
+                    central,
                     worker: LinkWorker {
                         id: uuid::Uuid::new_v4().to_string(),
                         name: computer_name.to_string(),
@@ -103,6 +110,7 @@ impl LinkStore {
                         slots: m::default_slots(),
                         cloud: false,
                     },
+                    worker_link,
                 };
                 if let Err(e) = save(&path, &d) {
                     tracing::warn!("cannot write {}: {e:#}", path.display());
@@ -141,6 +149,27 @@ impl LinkStore {
         self.revision
     }
 
+    /// Whether `central`'s token is a worker link of its own.
+    pub fn worker_link(&self) -> bool {
+        self.data.worker_link
+    }
+
+    /// Keeps `token`, a worker link of this Mac's own, in place of the
+    /// token `was`. False, with nothing stored, when the central host's
+    /// token is no longer `was`: it changed meanwhile, and the newer stands.
+    fn take_worker_link(&mut self, was: &str, token: String) -> Result<bool, RpcError> {
+        let mut next = self.data.clone();
+        match next.central.as_mut() {
+            Some(c) if c.token == was => c.token = token,
+            _ => return Ok(false),
+        }
+        next.worker_link = true;
+        save(&self.path, &next)
+            .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
+        self.data = next;
+        Ok(true)
+    }
+
     /// Marks this machine a cloud machine (X63).
     fn set_cloud(&mut self) -> Result<(), RpcError> {
         let mut next = self.data.clone();
@@ -164,6 +193,8 @@ impl LinkStore {
                 check_central(c, own)?;
             }
             next.central = central;
+            // A token from `link.set` or a pairing is the paired Mac's.
+            next.worker_link = false;
         }
         if let Some(w) = req.worker {
             if let Some(enabled) = w.enabled {
@@ -399,6 +430,9 @@ pub struct WorkerLink {
     synced: AtomicUsize,
     /// Set while `link.set` applies a change, which says `link.changed` once.
     quiet: AtomicBool,
+    /// Set while the link trades its paired token for a worker link: a
+    /// registration asked for meanwhile is the move's to make.
+    moving: AtomicBool,
     /// Which account exchange loop is current: the connection reconnects
     /// and registers again by itself, and each registration starts a new
     /// loop that ends the one before (X68).
@@ -443,6 +477,7 @@ impl WorkerLink {
             generation: AtomicU64::new(0),
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
+            moving: AtomicBool::new(false),
             account_loop: AtomicU64::new(0),
             clocks: Mutex::new(Clocks::default()),
             not_syncing: Mutex::new(None),
@@ -911,11 +946,87 @@ impl WorkerLink {
         }
     }
 
+    /// Trades the token this Mac paired with for a worker link of its own,
+    /// over the link `host` made with it, and links again with the new
+    /// one. True when the link moves, so `host` registers nothing. A
+    /// central host from before worker links, or one that refuses, keeps
+    /// the paired token in use.
+    async fn take_worker_link(self: &Arc<Self>, host: &Arc<Host>) -> bool {
+        if self.store.lock().unwrap().worker_link() {
+            return false;
+        }
+        // One move at a time: a second ask would make the central host drop
+        // the worker link the first one is saving. The move registers.
+        if self.moving.swap(true, Ordering::SeqCst) {
+            return true;
+        }
+        let moved = self.move_to_worker_link(host).await;
+        self.moving.store(false, Ordering::SeqCst);
+        // A link made meanwhile by `link.set` left its registration to
+        // this move.
+        if moved && !self.is_current(host) {
+            self.register_again();
+        }
+        moved
+    }
+
+    async fn move_to_worker_link(self: &Arc<Self>, host: &Arc<Host>) -> bool {
+        let was = {
+            let store = self.store.lock().unwrap();
+            match store.central() {
+                // A cloud machine's token is only a cloud machine's (X63).
+                Some(c) if !store.worker_link() && !store.worker().cloud => c.token.clone(),
+                _ => return false,
+            }
+        };
+        // This Mac's app keeps a token of its own to reach the host (X57),
+        // which may be the one it handed to the link (X41): that one stays
+        // the app's. One the link alone holds goes once the new one works.
+        let apps = moonlet_core::ssh::saved_hosts().tailnet.iter().any(|t| t.token == was);
+        let ask = serde_json::to_value(m::WorkerCredential { replace: !apps }).unwrap();
+        let given = match host.request(m::WORKER_CREDENTIAL, ask).await {
+            Ok(v) => match serde_json::from_value::<m::WorkerCredentialGiven>(v) {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::warn!("the central host gave no worker link: {e}");
+                    return false;
+                }
+            },
+            Err(e) => {
+                tracing::info!("the link keeps this Mac's paired token: {}", e.message);
+                return false;
+            }
+        };
+        // Taken under the host's lock, so a `link.set` cannot slip between.
+        let mut current = self.host.lock().unwrap();
+        if !current.as_ref().is_some_and(|h| Arc::ptr_eq(h, host)) {
+            return true;
+        }
+        match self.store.lock().unwrap().take_worker_link(&was, given.token) {
+            Ok(true) => {}
+            Ok(false) => return true,
+            Err(e) => {
+                tracing::warn!("cannot keep the worker link: {}", e.message);
+                return false;
+            }
+        }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(h) = current.take() {
+            h.stop();
+        }
+        drop(current);
+        self.apply();
+        true
+    }
+
     /// Introduces this worker to its central host, on every new link.
     async fn register(self: Arc<Self>, host: Arc<Host>) {
         // Tests only: a slow registration, so a copy can start before it.
         if let Some(ms) = std::env::var("MOONLET_TEST_REGISTER_DELAY_MS").ok().and_then(|v| v.parse().ok()) {
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+        if self.take_worker_link(&host).await {
+            return;
         }
         let worker = self.store.lock().unwrap().worker().clone();
         let projects = self

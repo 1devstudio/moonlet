@@ -34,7 +34,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - `addrs` are one or more `ip:port` addresses of the host's tailnet listener;
   - `token` is the device token this Mac got when it paired with the host.
 
-  When the user chooses **Make central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The Mac is one paired device, so the app and its daemon share the token, and removing the Mac on the central host cuts both. (`choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set`, `worker-link.e2e.ts`)
+  When the user chooses **Make central host**, the app's Rust side fills these in from its own entry for the host and calls `link.set` itself, so the token never reaches the webview (X57). The link then trades that token for a worker link of its own (see [The link's own credential](#the-links-own-credential)); the app keeps its token. (`choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set`, `a_link_set_with_the_apps_own_token_leaves_the_app_its_token`, `worker-link.e2e.ts`)
 - [x] The first time the daemon reads `link.json`, it gives this machine a **worker id**. The id is a random UUID that never changes afterwards and that `link.set` cannot edit. Workers are told apart by id, never by name. (`the_first_load_makes_a_worker_id_that_later_loads_keep`, `link_set_cannot_change_the_worker_id`, `a_worker_id_links_once_and_names_may_repeat`) A `link.json` that cannot be parsed (not JSON, not text) is moved aside to `link.json.bad` rather than written over, and this machine starts afresh with a new id. One that exists but cannot be opened is left as it is and not written at start. (`a_link_json_that_is_not_text_is_kept_aside_too`, `a_link_json_that_cannot_be_opened_is_never_written_over`) A `link.set` whose settings cannot be written fails, and the settings stay as they were. (`a_link_json_that_cannot_be_read_is_kept_aside_not_written_over`, `link_set_fails_and_keeps_the_settings_when_link_json_cannot_be_written`)
 - [x] `name` is a label. It defaults to the Mac's computer name (the hostname on Linux) and `link.set` can change it. (`the_name_defaults_to_the_computer_name_and_link_set_changes_it`)
 - [x] An invalid `central` is rejected with an error, and nothing is stored: an empty `name` or one with control characters, no `addrs` or one that is not `ip:port`, or a `token` that is not 64 hex characters. (`an_invalid_central_is_refused_and_nothing_is_stored`)
@@ -45,7 +45,30 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
 ### The link
 
 - [x] The link is a `moonlet-link` `Host` with the tailnet `Connector` from ADR 0011's pairing slice. It tries `central.addrs` in order, 5 s each, and sends `auth {token}` as its first frame. The link is its own TCP connection, separate from the app's. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`)
-- [x] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection and serves it as any paired device (X57): `mobile.*` other than `mobile.hosts` and `mobile.unpair` is refused. The worker never calls `mobile.unpair`, which would also remove this Mac's app. (`the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`)
+- [x] After `authed`, the worker sends `Hello {client: "moonletd-worker"}` and then `worker.register`. The central host accepts that client name on a tailnet connection: `mobile.*` other than `mobile.hosts` and `mobile.unpair` is refused. The worker never calls `mobile.unpair`. What the connection may do beyond that is decided by the token it authenticated with, never by the client name (next section). (`the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`)
+
+### The link's own credential
+
+Added 2026-11-17, after a security audit: the link used to authenticate with the token this Mac paired with, the same kind of token a paired Mac's app holds, so anything on the Mac that could read `link.json` could act as the app on the central host. The client name a connection sends in `hello` told the two apart, and a caller chooses that name itself.
+
+- [x] The central host keeps a **worker link** as a `desktop` device with a mark, `worker_link`, in `mobile.json`, not as a new device kind: the methods members already use check for a paired Mac (`desktop`), a central host or app that predates the mark still reads the device, and the pairing code a Mac pairs with stays a `desktop` code. A connection that authenticates with a worker link's token is marked so when it authenticates, as a cloud machine's is (X63), and keeps that mark for its whole life. (`a_worker_link_replaces_the_macs_token_the_first_time_it_is_used`)
+- [x] A worker link's connection reaches only the methods a member's daemon sends its central host, an allowlist (`WORKER_LINK_METHODS` in `daemon.rs`):
+  - the link: `daemon.info`, `worker.register`, `account.sync`;
+  - keeping projects in sync and routing copies (X60, X89): `session.list`, `project.list`, `sync.open`, `sync.fetch`, `sync.offer`, `sync.close`, `sync.closing`, `sync.update`;
+  - the member's sessions and their files (X72, X74): `session.open`, `session.offer`, `session.chat`, `session.transcript`, `session.checkpoint`, `session.event`, `session.take`, `session.give_back`, `session.transcript_fetch`, `session.yield`, `session.pin`, `session.files`, `session.files_fetch`, `files.checkout`;
+  - design copies (X71): `design.offer`, `design.fetch`;
+  - where the user is, URLs and sign-ins between members (X75): `presence.active`, `browser.route`, `tunnel.open`, `signins.here`;
+  - heavy commands between members (X89): `peer.call`, `worker.status`, `worker.peers`, `cloud.overflow`, `exec.prepare`, `exec.start`, `exec.cancel`, `exec.done`.
+
+  Anything else is refused with `forbidden`, whatever client name the connection says, so a method added later is refused to links until it is added to the list. So are `terminal.attach`, input to a terminal, `daemon.update` in place of `hello` (X69) and a `route` to an SSH host (X39), and the connection hears the events a worker hears. (`a_members_link_credential_is_refused_the_apps_methods_whatever_it_says_it_is`, and every test of `tests/account.rs`, `tests/mesh.rs`, `tests/sync.rs`, `tests/central_copies.rs`, `tests/exec.rs` and `tests/browser.rs` that links a member, which now goes through a worker link)
+- [x] A paired Mac's app keeps everything it had, through its own token from pairing (X57), which is never a worker link. (`a_link_set_with_the_apps_own_token_leaves_the_app_its_token`)
+- [x] A link that authenticated with a token this Mac paired with asks for a worker link before it registers: `worker.credential {replace}` over that connection. The central host makes a worker link under the Mac's name and returns its token. The member saves it in `link.json` with `"worker_link": true`, closes the link and links again with it. Only a connection authenticated with a paired Mac's own token may ask, never a phone, a cloud machine or a worker link. Asking again removes the worker links asked for before. (`a_link_made_with_a_paired_macs_token_moves_to_a_worker_credential_by_itself`, `only_a_paired_macs_own_token_gets_a_worker_link`, `asking_again_drops_the_worker_link_asked_for_before`)
+- [x] `replace` is true unless this Mac's app holds the same token in its host list (`app-hosts.json`, X57), as after **Make central host**. With `replace`, the first time the worker link authenticates, the central host removes the paired token's device and closes its connections, so the old token stops working at all. Until then it still works: a member that could not save the new token links again with the old one and asks again. Without `replace`, the app's token stays the app's. (`a_worker_link_replaces_the_macs_token_the_first_time_it_is_used`, `a_worker_link_beside_the_apps_token_leaves_that_token_working`, `a_link_made_with_a_paired_macs_token_moves_to_a_worker_credential_by_itself`, `a_link_set_with_the_apps_own_token_leaves_the_app_its_token`)
+- [x] Existing links move by themselves, and no host is locked out by updating one side first:
+  - a member that updates before its central host asks, gets `unknown_method`, and keeps linking with its paired token, as before; it moves the first time it links once the central host has updated;
+  - a member that has not updated keeps linking with its paired token, which keeps what it has until the member updates;
+  - a `link.set` or `link.pair` that sets a new central host or token makes the link ask again.
+
 - [x] A central host whose `authed` reply reports another protocol (the pairing slice adds `protocol` and `daemon_version` to it) puts the link in state `needs_update {daemon_version}`. An `unauthorized` reply to `auth` puts it in state `refused`, which the app words "studio-mini no longer accepts this Mac". In both states the link does not retry until `link.set` or `link.retry` is called; any `link.set` retries it. `link.retry` leaves a link that is connected or connecting alone. (`a_retry_leaves_a_working_link_alone`, `a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retry`, `a_mac_the_central_host_removed_says_so_and_waits_for_a_retry`)
 - [x] A dropped link reconnects with `moonlet-link`'s backoff: 300 ms, doubling, capped at 5 s, as for the apps' host links. (`retries_wait_longer_each_time_up_to_five_seconds`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
 - [x] The link's state is `off`, or one of `moonlet-link`'s host statuses: `connecting`, `connected {since}`, `reconnecting`, `needs_update {daemon_version}`, `refused` or `error {message}`. `link.get` reports it, and the event `link.changed` fires on every change, once for each `link.set`. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`, `one_link_set_says_link_changed_once`, `a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retry`)
@@ -129,6 +152,7 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   - `worker.ping` (central host to worker);
   - `project.identity`.
 - **New events:** `link.changed` (local), `workers.changed` (central host).
+- **Added 2026-11-17:** `worker.credential {replace} → {token}` (central host), asked by a member's link that authenticated with a paired Mac's token.
 - **Requests both ways:** on a connection whose Hello says `moonletd-worker`, the central host may send `request` messages, and the worker answers with `response`. Other clients never receive requests.
 - **Changed type:** `Project` gains `identity {origin: string | null, root: string | null}`.
 - `PROTOCOL_VERSION` goes from 3 to 4.
@@ -154,16 +178,17 @@ Nothing is routed or synced yet. Everything that only routing uses waits for the
   }
   ```
 
+- Since 2026-11-17, `link.json` has `"worker_link": true` once `central.token` is a worker link of this Mac's own; a `link.set` or `link.pair` that sets `central` clears it. On the central host, a worker link's device in `mobile.json` has `"worker_link": true`, `"minted_by"` (the paired device whose connection asked) and, until its first use, `"replaces": true`.
 - `state.json`: each project gains `identity`. The migration on load fills it in for existing projects. A failure to compute one leaves `null` fields, never a failed load.
 - The central host keeps its worker list in memory only. It reflects live connections and is rebuilt as workers reconnect after a central restart or a live upgrade.
 
 ## Security considerations
 
 - The link runs inside the user's tailnet, which encrypts it, and the central host checks the device token as it does for phones (X39). A worker connects only to the addresses in `link.json`.
-- The token lets anyone holding it act as this Mac on the central host. It is stored only in `link.json` (mode 0600) and the app's host list, and `link.get` never returns it.
+- `link.json` is readable by every process of the user on the Mac, agents included. Since 2026-11-17 the token in it is a worker link, which reaches only a member's work on the central host (see [The link's own credential](#the-links-own-credential)), not what the app may do there. `link.get` never returns it. The app's own token stays in the app's host list.
 - Linking makes the worker a daemon that answers the central host's requests. In this slice the only such request is `worker.ping`. Routed commands come later, with their own checks on the worker.
 - Normalizing removes credentials from origin URLs before anything is stored or sent.
-- A paired device can say `moonletd-worker` in its hello and register a worker id it knows. That is no new power: a paired device, phone or Mac, can already do everything the app can on the central host (X39).
+- A paired device can say `moonletd-worker` in its hello and register a worker id it knows. That is no new power: a paired device, phone or Mac, can already do everything the app can on the central host (X39). The reverse is closed: a worker link that says it is the app is still a worker link.
 - On this Mac's Unix socket the `moonlet` CLI is told apart only by the client name it gives, as for phone access (X39). A process running as the user could also edit `link.json` itself, so the socket check guards against mistakes, not against such a process.
 
 ## Out of scope
@@ -221,5 +246,6 @@ None open. Decided on 2026-10-13, and revised for ADR 0011 on 2026-10-20:
 - **Workers have an id; the name is only a label.** With names, two Macs both called "MacBook Pro" would keep replacing each other's links.
 - **The link is its own connection.** It stays open for days and belongs to the daemon, which keeps running when the app is closed, so it cannot ride on the app's connection.
 - **The worker uses the Mac's pairing (2026-10-20).** Pairing the daemon separately would ask the user for a second code for the same Mac. One device per Mac also means one Remove on the central host cuts both.
+- **Revised 2026-11-17: the link trades the Mac's pairing for a worker link of its own.** The user still pairs once; the link asks for its own token over the connection the pairing gave it. Where the app handed the link its own token, the central host now lists the Mac twice under one name, the app's device and the link's, and cutting the Mac off takes removing both.
 - **Pings every 10 s, disconnect after 3 misses**, so a closed lid shows within about 30 s.
 - **Slice 1 leaves out slots, tool detection, live project updates, the Workers screen and renaming in the UI.** Only routing uses them. A smaller slice lets every criterion have a real test.

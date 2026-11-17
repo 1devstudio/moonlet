@@ -72,7 +72,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 
 ## Data and config
 
-- The remote host's `$MOONLET_HOME/link.json`, as in X41. `link.pair` writes the token it gets there, mode 0600.
+- The remote host's `$MOONLET_HOME/link.json`, as in X41. `link.pair` writes the token it gets there, mode 0600. On its first link the daemon trades that token for a worker link of its own, which replaces the paired device on the central host (X41, "The link's own credential", 2026-11-17).
 - The central host's `mobile.json` gains the remote host as a paired `desktop` device, as for any Mac (X57).
 
 ## Security considerations

@@ -279,7 +279,9 @@ async fn a_worker_that_stops_answering_pings_is_dropped() {
 async fn turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back() {
     let (mut central, addr) = central().await;
     let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    // The app's token, which it hands the link again (X41).
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    apps_token(&worker, &addr, &token);
     link(&worker, &addr, &token).await;
     eventually("the worker is listed", || async {
         workers(&central).await.len() == 1
@@ -1251,4 +1253,164 @@ async fn slots_out_of_range_in_link_json_read_as_two() {
         let got: Value = worker.call("link.get", json!({})).await;
         assert_eq!(got["worker"]["slots"], json!(2), "{bad}: {got}");
     }
+}
+
+/// Puts `token` in the host list of `worker`'s app, as the app keeps the
+/// token it paired with (X57) before it hands it to the link (X41).
+fn apps_token(worker: &Daemon, addr: &str, token: &str) {
+    std::fs::write(
+        worker.home.path().join("app-hosts.json"),
+        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": token }] })
+            .to_string(),
+    )
+    .unwrap();
+}
+
+/// The token `worker` keeps in its `link.json` for its central host.
+fn link_token(worker: &Daemon) -> String {
+    let file = std::fs::read(worker.home.path().join("link.json")).unwrap();
+    let file: Value = serde_json::from_slice(&file).unwrap();
+    file["central"]["token"].as_str().unwrap().to_string()
+}
+
+/// Whether `token` still authenticates with the tailnet listener at `addr`.
+async fn authenticates(addr: &str, token: &str) -> bool {
+    authenticates_to(addr, token, None).await
+}
+
+/// Whether `token` authenticates at `addr`, asking for SSH host `route`.
+async fn authenticates_to(addr: &str, token: &str, route: Option<&str>) -> bool {
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.into()),
+        pair: None,
+        device: None,
+        route: route.map(String::from),
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    matches!(
+        tokio::time::timeout(Duration::from_secs(5), read_frame(&mut s)).await,
+        Ok(Ok(Some(Frame::Json(Message::Authed { .. }))))
+    )
+}
+
+/// What the app's methods answer on a connection made with `token`, saying
+/// it is `client`: an error code, or "ok".
+async fn app_methods(addr: &str, token: &str, client: &str) -> Vec<(String, String)> {
+    let asks = [
+        ("terminal.create", json!({ "cwd": "/", "command": ["true"] })),
+        ("terminal.attach", json!({ "id": 1 })),
+        ("fs.read", json!({ "path": "/etc/hosts" })),
+        ("cloud.set", json!({ "idle_minutes": 5 })),
+        ("heavy.approve", json!({ "project": "/tmp/shop", "commands": ["make"], "env": [] })),
+        // Older than this build: never an update on a host that lets it.
+        ("daemon.update", json!({ "version": "0.0.1" })),
+    ];
+    let mut s = raw(addr, token, client).await;
+    let mut out = Vec::new();
+    for (i, (method, params)) in asks.into_iter().enumerate() {
+        let reply = ask(&mut s, i as u64 + 1, method, params).await;
+        let got = refused(&reply).unwrap_or_else(|| "ok".into());
+        out.push((method.to_string(), got));
+    }
+    out
+}
+
+/// The member registered with `token` as a build from before worker links
+/// did, and went away: the central host keeps its worker id for that token.
+async fn registered_before(central: &Daemon, addr: &str, token: &str) {
+    let mut s = raw(addr, token, "moonletd-worker").await;
+    let reply = ask(&mut s, 1, "worker.register", registration(WORKER_ID, "Alex's MacBook Pro")).await;
+    assert_eq!(refused(&reply), None);
+    drop(s);
+    eventually("the old link is gone", || async { workers(central).await.is_empty() }).await;
+}
+
+/// A member's link credential reaches only a member's work on its central
+/// host: none of the app's methods, whatever client name it says.
+#[tokio::test]
+async fn a_members_link_credential_is_refused_the_apps_methods_whatever_it_says_it_is() {
+    // The app on the central host has an SSH host a phone may route to (X39).
+    let (central, addr) = listening("127.0.0.1", |home| {
+        std::fs::write(home.join("app-hosts.json"), r#"{ "remotes": ["devbox"] }"#).unwrap();
+    })
+    .await;
+    let worker = linked_worker(&central, &addr).await;
+    let token = link_token(&worker);
+    for client in ["moonlet-app", "moonletd-worker", "moonlet-mobile"] {
+        let got = app_methods(&addr, &token, client).await;
+        let forbidden: Vec<(String, String)> = got
+            .iter()
+            .map(|(m, _)| (m.clone(), "forbidden".to_string()))
+            .collect();
+        assert_eq!(got, forbidden, "{client}");
+    }
+    // Nor in place of hello (X69).
+    let e = moonlet_link::tailnet::update(std::slice::from_ref(&addr), &token, "0.0.1")
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "forbidden");
+    // Nor piped to an SSH host's daemon, which would take it for the app.
+    assert!(!authenticates_to(&addr, &token, Some("devbox")).await);
+    // The link itself still does its work.
+    let info: LinkInfo = worker.call("link.get", json!({})).await;
+    assert!(matches!(info.state, LinkState::Connected { .. }), "{:?}", info.state);
+    assert_eq!(workers(&central).await.len(), 1);
+}
+
+/// A member linked before worker-link credentials, with a token from
+/// pairing, moves to one by itself: the old token stops working at all,
+/// and the user pairs nothing again.
+#[tokio::test]
+async fn a_link_made_with_a_paired_macs_token_moves_to_a_worker_credential_by_itself() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let paired = pair(&central, &addr, "Alex's MacBook Pro").await;
+    registered_before(&central, &addr, &paired).await;
+    link(&worker, &addr, &paired).await;
+    eventually("the link has a credential of its own", || async {
+        link_token(&worker) != paired
+    })
+    .await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    assert!(!authenticates(&addr, &paired).await, "the old token still works");
+    // One device for the Mac on the central host, as before.
+    let status: moonlet_proto::methods::MobileStatus = central.call("mobile.status", json!({})).await;
+    let names: Vec<&str> = status.devices.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["Alex's MacBook Pro"]);
+    // It stays linked across a restart of the member, with its new token.
+    let mut worker = worker;
+    worker.restart().await;
+    let moved = link_token(&worker);
+    eventually("linked again", || async {
+        matches!(link_state(&worker).await, LinkState::Connected { .. })
+    })
+    .await;
+    eventually("listed again", || async { workers(&central).await.len() == 1 }).await;
+    assert_eq!(link_token(&worker), moved, "it moved twice");
+}
+
+/// The app on the same Mac handed its own token to the link (X41): the
+/// link gets a credential of its own, and the app keeps its token and what
+/// it may do with it.
+#[tokio::test]
+async fn a_link_set_with_the_apps_own_token_leaves_the_app_its_token() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let apps = pair(&central, &addr, "Alex's MacBook Pro").await;
+    apps_token(&worker, &addr, &apps);
+    registered_before(&central, &addr, &apps).await;
+    link(&worker, &addr, &apps).await;
+    eventually("the link has a credential of its own", || async {
+        link_token(&worker) != apps
+    })
+    .await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    let link = link_token(&worker);
+    let app = app_methods(&addr, &apps, "moonlet-app").await;
+    assert!(app.iter().all(|(_, got)| got != "forbidden"), "{app:?}");
+    let linked = app_methods(&addr, &link, "moonlet-app").await;
+    assert!(linked.iter().all(|(_, got)| got == "forbidden"), "{linked:?}");
 }
