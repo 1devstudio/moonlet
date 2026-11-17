@@ -3846,6 +3846,10 @@ pub struct ExecPrepare {
     /// member's command on to a cloud machine of that project only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<crate::types::ProjectIdentity>,
+    /// The session's name, which a central host shows for a member's
+    /// command it passes on to a cloud machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live
@@ -4315,9 +4319,14 @@ pub struct CloudMachine {
     /// The session it was made for.
     #[serde(default)]
     pub for_session: Option<String>,
-    /// Its routed commands running now.
+    /// Its routed commands running now, or being prepared there, for
+    /// any host's session.
     #[serde(default)]
     pub running: u32,
+    /// Those commands: whose session each is for, and what it runs. Absent
+    /// from a central host before it counted members' commands.
+    #[serde(default)]
+    pub runs: Vec<CloudRun>,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
@@ -4332,6 +4341,22 @@ pub struct CloudMachine {
     /// `cloud.machines` and `cloud.changed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<String>,
+}
+
+/// A routed command on a cloud machine, from when it was placed there:
+/// its routing copy is prepared, then it runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudRun {
+    /// The session's name.
+    pub session: String,
+    /// The member whose session it is (X89); none for the central host's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The command; none while its routing copy is being prepared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// When it was placed there, unix ms.
+    pub since: u64,
 }
 
 /// `cloud.machines` and `cloud.changed`.

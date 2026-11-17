@@ -11,7 +11,7 @@ import { EV, M, type ExecStatus, type HeavyInfo, type LinkInfo, type Project, ty
 import { goSettings } from "../../lib/settingsNavigation";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { centralHostId, clampSlots } from "../../lib/workerLink";
-import { settingsToast, workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
+import { runLabel, settingsToast, workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
 import { cloudSummary } from "../../lib/cloudMachines";
 import { retryRemoval, useCloud } from "../../lib/cloudStore";
 import { readLinks, workerRowApproval } from "../../lib/heavyApproval";
@@ -99,7 +99,7 @@ function WorkerLine({ row, now, onApprove, onSet }: { row: WorkerRow; now: numbe
       {row.running.map((r, i) => (
         <div key={i} className="ml-[46px] flex items-center gap-2 rounded-md bg-panel-2 px-3 py-1.5 ui-text-12">
           <LoaderCircle size={12} className="animate-spin text-muted" />
-          <span className="text-muted">{r.host ? `${r.session} on ${r.host}` : r.session}</span>
+          <span className="text-muted">{runLabel(r)}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{r.command}</span>
           <span className="font-mono text-muted">{elapsed(r.since, now)}</span>
         </div>
@@ -146,7 +146,7 @@ function CloudLine({ row, now, host }: { row: CloudRow; now: number; host: strin
       {row.running.map((r, i) => (
         <div key={i} className="ml-[46px] flex items-center gap-2 rounded-md bg-panel-2 px-3 py-1.5 ui-text-12">
           <LoaderCircle size={12} className="animate-spin text-muted" />
-          <span className="text-muted">{r.session}</span>
+          <span className="text-muted">{runLabel(r)}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{r.command}</span>
           <span className="font-mono text-muted">{elapsed(r.since, now)}</span>
         </div>

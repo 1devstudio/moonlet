@@ -2020,6 +2020,75 @@ async fn overflow_starts_no_second_machine_while_one_is_starting() {
 }
 
 impl Cloud {
+    /// Machines that could not be made, removed ones included.
+    async fn failed(&self) -> usize {
+        let all = self.machines().await;
+        all["machines"]
+            .as_array()
+            .into_iter()
+            .chain(all["removed"].as_array())
+            .flatten()
+            .filter(|m| m["state"] == "failed")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_machine_that_could_not_be_made_is_not_tried_again_on_every_busy_command() {
+    // The central host is busy, and a minute lasts 5 s here.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100"), ("MOONLET_TEST_CLOUD_MINUTE_MS", "5000")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    // No Tailscale credential: every machine fails before it is made.
+    c.steer("tailnet-key", "");
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    for _ in 0..50 {
+        if c.failed().await == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(c.failed().await, 1);
+    // The next busy commands run here and leave the cloud alone.
+    for _ in 0..3 {
+        let ran = c.run(&s, &["sh", "run.sh"]).await;
+        assert_eq!(ran_on(&ran), "studio-mini");
+    }
+    assert_eq!(c.failed().await, 1);
+    // A minute after the failure it is tried once more, then two minutes.
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    for _ in 0..50 {
+        if c.failed().await == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(c.failed().await, 2);
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.failed().await, 2);
+}
+
+#[tokio::test]
+async fn a_machine_removed_on_request_before_it_was_ready_does_not_hold_overflow_back() {
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    c.steer("slow-create", "3000");
+    let first = c.up().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": first["id"] })).await;
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    let all = c.machines().await;
+    assert!(
+        all["machines"].as_array().unwrap().iter().any(|m| m["id"] != first["id"] && m["state"] == "creating"),
+        "{all}"
+    );
+}
+
+impl Cloud {
     async fn jobs(&self, session: &Value) -> Vec<Value> {
         self.d
             .call("job.list", json!({ "session": session["id"] }))
@@ -2759,6 +2828,126 @@ async fn a_members_session_runs_on_the_projects_cloud_machine() {
         std::fs::read_to_string(worktree.join("out.txt")).unwrap(),
         "hi\n"
     );
+}
+
+#[tokio::test]
+async fn a_machine_running_a_members_command_outlives_its_idle_time_and_goes_after_it() {
+    // A minute lasts a second here: idle 1 s, and 5 s for a machine that
+    // has run nothing yet.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_MINUTE_MS", "1000")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 1 })).await;
+    let (book, session) = busy_member(&c).await;
+    let machine = c.ready().await;
+    let name = machine["name"].as_str().unwrap();
+    // The MacBook's build outlasts every idle time the machine was given.
+    let (out, err, status) = run_in(&book, &session, &["sh", "-c", "sleep 7; echo built"]).await;
+    assert_eq!((out.as_str(), status), ("built\n", 0), "{err}");
+    assert_eq!(err, format!("moonlet: running on {name}\n"));
+    // Its idle time starts when the build ends.
+    assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
+    let removed = c.until(machine["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 1 min idle"));
+}
+
+#[tokio::test]
+async fn a_members_command_stops_counting_on_its_machine_once_the_member_goes_silent() {
+    // The central host drops a member after three missed 500 ms pings.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_WORKER_PING_MS", "500")]).await;
+    let (book, session) = busy_member(&c).await;
+    let machine = c.ready().await;
+    let mut app = book.app().await;
+    let _: Value = app
+        .request(
+            "exec.run",
+            json!({ "session": session["id"], "argv": ["sh", "-c", "sleep 60"], "cwd": session["path"], "env": {} }),
+        )
+        .await
+        .unwrap();
+    // The machine names the MacBook's command while it runs.
+    let mut shown = Value::Null;
+    for _ in 0..300 {
+        shown = c.machines().await["machines"][0].clone();
+        if shown["runs"][0]["command"].is_string() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(shown["id"], machine["id"]);
+    assert_eq!(shown["running"], json!(1), "{shown}");
+    assert_eq!(shown["runs"][0]["session"], json!("Fix cart"), "{shown}");
+    assert_eq!(shown["runs"][0]["host"], json!("Alex's MacBook Pro"), "{shown}");
+    assert_eq!(shown["runs"][0]["command"], json!("sh -c 'sleep 60'"), "{shown}");
+    // The MacBook freezes, as a crashed or sleeping Mac's link goes silent.
+    let book_pid = nix::unistd::Pid::from_raw(book.child.id() as i32);
+    nix::sys::signal::kill(book_pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let mut left = Value::Null;
+    for _ in 0..100 {
+        left = c.machines().await["machines"][0].clone();
+        if left["running"] == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = nix::sys::signal::kill(book_pid, nix::sys::signal::Signal::SIGCONT);
+    assert_eq!((left["running"].clone(), left["runs"].clone()), (json!(0), json!([])), "{left}");
+    assert!(left["idle_until"].is_u64(), "{left}");
+}
+
+#[tokio::test]
+async fn a_members_command_counts_on_its_machine_while_its_copy_is_prepared() {
+    let c = cloud().await;
+    // With 0, a machine that has run something goes as soon as it is idle.
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
+    let machine = c.ready().await;
+    let worker = machine["worker"].as_str().unwrap().to_string();
+    // A member's daemon, by hand, that never answers the machine's calls
+    // back for the session's files: the prepare goes on. It registers as
+    // the worker "intruder".
+    let token = pair(&c.d, &c.addr, "Maya's Mac", DeviceKind::Desktop).await;
+    let mut s = worker_link(&c.addr, &token).await;
+    let identity = json!({ "origin": null, "root": c.key.trim() });
+    let call = json!({ "to": worker, "method": "exec.prepare", "params": {
+        "session": "s1", "identity": identity, "session_name": "big-refactor"
+    } });
+    moonlet_proto::write_frame(
+        &mut s,
+        &Frame::Json(Message::Request { id: 2, method: "peer.call".into(), params: call }),
+    )
+    .await
+    .unwrap();
+    let mut shown = Value::Null;
+    for _ in 0..100 {
+        shown = c.machines().await["machines"][0].clone();
+        if shown["running"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let run = &shown["runs"][0];
+    assert_eq!((&run["session"], &run["host"]), (&json!("big-refactor"), &json!("intruder")), "{shown}");
+    // No command yet: its copy is being prepared.
+    assert_eq!(run["command"], Value::Null, "{shown}");
+    assert!(run["since"].as_u64().unwrap() >= machine["since"].as_u64().unwrap(), "{shown}");
+    assert_eq!(shown["idle_until"], Value::Null, "{shown}");
+    // The member goes: its prepare no longer counts.
+    drop(s);
+    let mut left = Value::Null;
+    for _ in 0..100 {
+        left = c.machines().await["machines"][0].clone();
+        if left["running"] == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(left["runs"], json!([]), "{left}");
+    // It ran nothing: it keeps the 5 minutes a machine gets for its first
+    // command, from now.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let kept = c.machines().await["machines"][0].clone();
+    assert_eq!(kept["state"], json!("ready"), "{kept}");
+    let until = kept["idle_until"].as_u64().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    assert!(until > now + 4 * 60_000, "{kept}");
 }
 
 #[tokio::test]

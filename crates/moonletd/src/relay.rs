@@ -31,6 +31,10 @@ const FIRST_RELAY: u32 = 0x6000_0000;
 /// a run going on: a routing copy is made within the prepare's 10 minutes.
 const PREPARED_FOR: Duration = Duration::from_secs(15 * 60);
 
+/// How long a member's command for a cloud machine counts there while its
+/// `exec.prepare` goes on: the prepare's own 10 minutes, and a minute more.
+const PREPARING_FOR: Duration = Duration::from_secs(11 * 60);
+
 /// Output queued for a router before a relay run's output is dropped.
 const MAX_QUEUED: usize = 16 * 1024 * 1024;
 
@@ -48,6 +52,19 @@ struct Passed {
     router_id: String,
     run: u32,
     runner: String,
+    /// Its count on the cloud machine that runs it (X63).
+    hold: Option<u64>,
+}
+
+/// A member's command placed on one of this host's cloud machines, before
+/// its start: its routing copy is being prepared or fenced. `copy` once
+/// the prepare answered.
+struct Placed {
+    router: String,
+    runner: String,
+    copy: Option<String>,
+    hold: u64,
+    at: std::time::Instant,
 }
 
 pub struct Relay {
@@ -59,6 +76,9 @@ pub struct Relay {
     /// with when: a runner calls its router back only while that is recent
     /// or a run of that router's goes on there.
     prepared: Mutex<HashMap<Pair, std::time::Instant>>,
+    /// Members' commands placed on cloud machines and not started yet.
+    placed: Mutex<Vec<Placed>>,
+    machines: Mutex<std::sync::Weak<Machines>>,
 }
 
 impl Relay {
@@ -68,7 +88,32 @@ impl Relay {
             runs: Mutex::default(),
             prepared: Mutex::default(),
             dropping: Mutex::default(),
+            placed: Mutex::default(),
+            machines: Mutex::new(std::sync::Weak::new()),
         })
+    }
+
+    /// The cloud machines, which count the members' commands they run.
+    pub fn set_machines(&self, machines: std::sync::Weak<Machines>) {
+        *self.machines.lock().unwrap() = machines;
+    }
+
+    fn machines(&self) -> Option<Arc<Machines>> {
+        self.machines.lock().unwrap().upgrade()
+    }
+
+    /// Relay run `id` is over without its `exec.done`: it goes, and no
+    /// longer counts on its machine.
+    fn drop_run(&self, id: u32) {
+        let gone = self.runs.lock().unwrap().remove(&id);
+        self.release(gone.and_then(|p| p.hold));
+    }
+
+    /// The command of token `hold` no longer counts on its machine.
+    fn release(&self, hold: Option<u64>) {
+        if let (Some(token), Some(m)) = (hold, self.machines()) {
+            m.run_ended(token);
+        }
     }
 
     /// `peer.call` from member `from` on `conn`: passed on to member
@@ -133,16 +178,25 @@ impl Relay {
         // makes.
         let mut done = None;
         let mut started = None;
+        let mut ended_hold = None;
+        let mut cancelled = None;
+        // A member's command placed on a cloud machine counts there from
+        // its prepare (X63).
+        let preparing = (to_cloud && method == m::EXEC_PREPARE)
+            .then(|| self.preparing(workers, &from, &to, &params))
+            .flatten();
         match method {
             m::EXEC_START => {
                 let run = params["run"].as_u64().ok_or_else(|| RpcError::new("invalid_params", "no run"))? as u32;
                 let id = self.next.fetch_add(1, Ordering::Relaxed);
+                let hold = to_cloud.then(|| self.going_on(workers, &from, &to, &params)).flatten();
                 self.runs.lock().unwrap().insert(
                     id,
                     Passed {
                         router_id: from.clone(),
                         run,
                         runner: to.clone(),
+                        hold,
                     },
                 );
                 started = Some(id);
@@ -158,16 +212,20 @@ impl Relay {
                     .find(|(_, p)| p.router_id == from && p.run == run && p.runner == to)
                     .map(|(id, _)| *id)
                     .ok_or_else(|| RpcError::new("not_found", "no such run"))?;
+                cancelled = Some(id);
                 params["run"] = Value::from(id);
             }
             m::EXEC_DONE => {
                 let id = params["run"].as_u64().unwrap_or_default() as u32;
                 let run = {
-                    let runs = self.runs.lock().unwrap();
+                    let mut runs = self.runs.lock().unwrap();
                     let p = runs
-                        .get(&id)
+                        .get_mut(&id)
                         .filter(|p| p.runner == from && p.router_id == to)
                         .ok_or_else(|| RpcError::new("not_found", "no such run"))?;
+                    // It ended there: it stops counting once the router
+                    // has taken its changes, or failed to.
+                    ended_hold = p.hold.take();
                     p.run
                 };
                 done = Some(id);
@@ -175,12 +233,26 @@ impl Relay {
             }
             _ => {}
         }
-        // The pack the call names, sent to this host first, goes on.
+        // The pack the call names, sent to this host first, goes on. A
+        // call that goes no further counts nothing on a machine.
         if let Some(t) = params["pack"].as_u64() {
-            let pack = conn
+            let sent = conn
                 .take_pack(t as u32)
-                .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?;
-            params["pack"] = Value::from(target.send_pack(&pack)?);
+                .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))
+                .and_then(|pack| target.send_pack(&pack));
+            match sent {
+                Ok(id) => params["pack"] = Value::from(id),
+                Err(e) => {
+                    self.release(ended_hold);
+                    if let Some(hold) = preparing {
+                        self.prepared_copy(hold, &Err(e.clone()));
+                    }
+                    if let Some(id) = started {
+                        self.drop_run(id);
+                    }
+                    return Err(e);
+                }
+            }
         }
         let timeout = match method {
             m::EXEC_START | m::EXEC_CANCEL => Duration::from_secs(30),
@@ -200,7 +272,20 @@ impl Relay {
         if let (Err(e), Some(id)) = (&reply, started)
             && e.code != "timeout"
         {
-            self.runs.lock().unwrap().remove(&id);
+            self.drop_run(id);
+        }
+        self.release(ended_hold);
+        if let Some(hold) = preparing {
+            self.prepared_copy(hold, &reply);
+        }
+        // A cancelled run the cloud machine never had: nothing runs there,
+        // and no `exec.done` comes for it.
+        if to_cloud
+            && method == m::EXEC_CANCEL
+            && reply.as_ref().is_ok_and(|v| v.as_bool() == Some(false))
+            && let Some(id) = cancelled
+        {
+            self.drop_run(id);
         }
         let mut reply = reply?;
         if let Some(id) = done {
@@ -234,6 +319,104 @@ impl Relay {
             .unwrap()
             .values()
             .any(|p| p.router_id == router && p.runner == runner)
+    }
+
+    /// Member `router`'s `exec.prepare` of a command for cloud machine
+    /// `runner`: the command counts there from now. Gives its token.
+    fn preparing(&self, workers: &Workers, router: &str, runner: &str, params: &Value) -> Option<u64> {
+        let session = params["session_name"]
+            .as_str()
+            .or(params["session"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let placed = m::CloudRun {
+            session,
+            host: Some(name_of(workers, router)),
+            command: None,
+            since: moonlet_core::paths::now_ms(),
+        };
+        let hold = self.machines()?.run_started(runner, placed, Some(PREPARING_FOR))?;
+        let mut placed = self.placed.lock().unwrap();
+        // Those the machine gave up on meanwhile.
+        placed.retain(|p| p.at.elapsed() < PREPARING_FOR + PREPARED_FOR);
+        placed.push(Placed {
+            router: router.to_string(),
+            runner: runner.to_string(),
+            copy: None,
+            hold,
+            at: std::time::Instant::now(),
+        });
+        Some(hold)
+    }
+
+    /// The prepare of the command of token `hold` answered: with its copy
+    /// ready, the command waits for its start, at most [`PREPARED_FOR`];
+    /// otherwise the router runs it elsewhere, and it no longer counts.
+    fn prepared_copy(&self, hold: u64, reply: &Result<Value, RpcError>) {
+        let copy = reply
+            .as_ref()
+            .ok()
+            .filter(|v| v["state"] == "ready")
+            .and_then(|v| v["copy"].as_str());
+        let mut placed = self.placed.lock().unwrap();
+        let Some(i) = placed.iter().position(|p| p.hold == hold) else {
+            // Its router went meanwhile.
+            return;
+        };
+        let Some(copy) = copy else {
+            placed.remove(i);
+            drop(placed);
+            self.release(Some(hold));
+            return;
+        };
+        // One copy, one command at a time: an older prepare of it is over.
+        let old: Vec<u64> = placed
+            .iter()
+            .filter(|p| p.hold != hold && p.router == placed[i].router && p.runner == placed[i].runner && p.copy.as_deref() == Some(copy))
+            .map(|p| p.hold)
+            .collect();
+        placed[i].copy = Some(copy.to_string());
+        placed.retain(|p| !old.contains(&p.hold));
+        drop(placed);
+        for t in old {
+            self.release(Some(t));
+        }
+        if let Some(m) = self.machines() {
+            m.run_expires(hold, PREPARED_FOR);
+        }
+    }
+
+    /// Member `router`'s `exec.start` on cloud machine `runner`: the
+    /// command prepared for it goes on counting as it runs, or, without
+    /// one, counts from now. Gives its token.
+    fn going_on(&self, workers: &Workers, router: &str, runner: &str, params: &Value) -> Option<u64> {
+        let copy = params["copy"].as_str();
+        let found = {
+            let mut placed = self.placed.lock().unwrap();
+            placed
+                .iter()
+                .position(|p| p.router == router && p.runner == runner && p.copy.is_some() && p.copy.as_deref() == copy)
+                .map(|i| placed.remove(i).hold)
+        };
+        let session = params["session_name"].as_str().map(str::to_string);
+        let argv: Vec<String> = serde_json::from_value(params["argv"].clone()).unwrap_or_default();
+        let command = crate::heavy::quoted(&argv);
+        let m = self.machines()?;
+        // Prepared longer ago than the machine waited: it counts anew.
+        if let Some(hold) = found
+            && m.run_going(hold, session.clone(), command.clone())
+        {
+            return Some(hold);
+        }
+        let placed = m::CloudRun {
+            session: session.clone().unwrap_or_default(),
+            host: Some(name_of(workers, router)),
+            command: None,
+            since: moonlet_core::paths::now_ms(),
+        };
+        let hold = m.run_started(runner, placed, None)?;
+        m.run_going(hold, session, command);
+        Some(hold)
     }
 
     /// Output of relay run `id` from the member that runs it, on `from`:
@@ -274,15 +457,22 @@ impl Relay {
     /// stop where they run, as a worker stops one when its central host's
     /// daemon stops (X62).
     pub fn router_gone(&self, workers: &Workers, router: &str) {
-        let gone: Vec<(String, u32)> = {
+        let gone: Vec<(String, u32, Option<u64>)> = {
             let mut runs = self.runs.lock().unwrap();
             let ids: Vec<u32> = runs.iter().filter(|(_, p)| p.router_id == router).map(|(id, _)| *id).collect();
             ids.into_iter()
-                .filter_map(|id| runs.remove(&id).map(|p| (p.runner, id)))
+                .filter_map(|id| runs.remove(&id).map(|p| (p.runner, id, p.hold)))
                 .collect()
         };
         self.prepared.lock().unwrap().retain(|(r, _), _| r != router);
-        for (runner, id) in gone {
+        // Nothing of its runs there now: a cloud machine stops counting
+        // them, so a member that went never keeps one, and its billing,
+        // alive (X63).
+        self.forget_placed(|p| p.router == router);
+        for (_, _, hold) in &gone {
+            self.release(*hold);
+        }
+        for (runner, id, _) in gone {
             let Some(c) = workers.conn(&runner) else { continue };
             let cancel = m::PeerCall {
                 to: None,
@@ -301,19 +491,43 @@ impl Relay {
     /// Member `runner` went away: each router whose command it ran hears
     /// so, and runs it again itself.
     pub fn runner_gone(&self, workers: &Workers, runner: &str) {
-        let lost: Vec<(String, u32)> = {
+        let lost: Vec<(String, u32, Option<u64>)> = {
             let mut runs = self.runs.lock().unwrap();
             let ids: Vec<u32> = runs.iter().filter(|(_, p)| p.runner == runner).map(|(id, _)| *id).collect();
             ids.into_iter()
                 .filter_map(|id| runs.remove(&id))
-                .map(|p| (p.router_id, p.run))
+                .map(|p| (p.router_id, p.run, p.hold))
                 .collect()
         };
-        for (router, run) in lost {
+        self.forget_placed(|p| p.runner == runner);
+        for (router, run, hold) in lost {
+            self.release(hold);
             if let Some(c) = workers.conn(&router) {
                 c.tx.send(Frame::Json(Message::event(m::EV_EXEC_LOST, serde_json::json!({ "run": run }))));
             }
         }
     }
 
+    /// Commands placed on a cloud machine but not started, for which
+    /// `which` holds, no longer count there.
+    fn forget_placed(&self, which: impl Fn(&Placed) -> bool) {
+        let holds: Vec<u64> = {
+            let mut placed = self.placed.lock().unwrap();
+            let holds = placed.iter().filter(|p| which(p)).map(|p| p.hold).collect();
+            placed.retain(|p| !which(p));
+            holds
+        };
+        for hold in holds {
+            self.release(Some(hold));
+        }
+    }
+}
+
+/// Member `id`'s name, as the Workers page shows it.
+fn name_of(workers: &Workers, id: &str) -> String {
+    workers
+        .list()
+        .into_iter()
+        .find(|w| w.worker.id == id)
+        .map_or_else(|| id.to_string(), |w| w.worker.name)
 }

@@ -54,6 +54,12 @@ export interface CloudRow {
   running: WorkerRow["running"];
 }
 
+/** A running command's session as its row shows it: "Fix cart on Alex's
+ * MacBook Pro" when it runs for another host (X89). */
+export function runLabel(r: { session: string; host?: string }): string {
+  return r.host ? `${r.session} on ${r.host}` : r.session;
+}
+
 const osName = (os: string) => (os === "macos" ? "macOS" : os === "linux" ? "Linux" : os);
 
 function load(value: number | null | undefined, cores: number): WorkerRow["load"] {
@@ -164,7 +170,13 @@ export function workersPage(input: WorkersInput): WorkersPageView {
   });
   const cloud: CloudRow[] = machines.map((m) => {
     const w = linked.find((x) => x.id === m.worker);
-    const running = w ? runningOn(w.name) : [];
+    // The machine's own list names every command on it, members' too
+    // (X89); a central host before it has only its own jobs.
+    const running = m.runs
+      ? m.runs.map((r) => ({ session: r.session, command: r.command ?? "copying the session", since: r.since, ...(r.host ? { host: r.host } : {}) }))
+      : w
+        ? runningOn(w.name)
+        : [];
     return {
       id: m.id,
       name: m.name,

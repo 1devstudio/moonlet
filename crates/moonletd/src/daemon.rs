@@ -764,6 +764,7 @@ impl Daemon {
             move |m| emitter.emit(m),
         );
         runs.set_machines(Arc::downgrade(&machines));
+        relay.set_machines(Arc::downgrade(&machines));
         link.set_runs(Arc::downgrade(&runs));
         // Announces changes under `~/.moonlet/design` as `design.changed` (X64).
         let design_watch = {

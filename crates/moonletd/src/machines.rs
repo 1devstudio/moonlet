@@ -18,6 +18,10 @@ use crate::cloud::CloudSettings;
 use crate::mobile::Mobile;
 use crate::workers::Workers;
 
+/// The longest overflow waits after machines that did not come up, in
+/// minutes.
+const OVERFLOW_WAIT_MAX: u64 = 30;
+
 /// The largest `machine_setup` script a machine is made with.
 const SETUP_MAX: u64 = 16 * 1024;
 
@@ -107,6 +111,29 @@ struct Record {
     /// The sessions it has a routing copy of.
     #[serde(default)]
     copied: Vec<String>,
+    /// The routed commands on it, by token: placed there, by this host
+    /// or through it for a member (X89), and not ended yet. None outlives
+    /// the daemon.
+    #[serde(skip)]
+    holds: BTreeMap<u64, Hold>,
+    /// When a command placed on it last stopped counting before it ever
+    /// started there: its idle time counts from then too, but it has
+    /// still run nothing.
+    #[serde(skip)]
+    last_placed: Option<u64>,
+    /// It failed, or missed a startup step, before it was ever ready:
+    /// overflow waits before the project's next machine.
+    #[serde(default)]
+    never_up: bool,
+}
+
+/// A routed command on a machine, shown in `runs`.
+#[derive(Debug, Clone, PartialEq)]
+struct Hold {
+    run: m::CloudRun,
+    /// Given up on then, unless it started meanwhile: a command whose
+    /// routing copy was prepared but that never started.
+    expires: Option<u64>,
 }
 
 impl Record {
@@ -128,6 +155,12 @@ impl Record {
     fn set_state(&mut self, state: &str) {
         self.shown.state = state.into();
         self.shown.since = now_ms();
+    }
+
+    /// `running` and `runs` from its holds.
+    fn show_runs(&mut self) {
+        self.shown.running = self.holds.len() as u32;
+        self.shown.runs = self.holds.values().map(|h| h.run.clone()).collect();
     }
 }
 
@@ -198,6 +231,8 @@ pub struct Machines {
     gcp_tokens: Arc<moonlet_cloud::gcp_auth::Tokens>,
     /// When `tailscale status` was last asked.
     tailnet_asked: Mutex<u64>,
+    /// The next routed command's token.
+    next_hold: std::sync::atomic::AtomicU64,
     emit: Box<dyn Fn(Message) + Send + Sync>,
     me: Mutex<Weak<Machines>>,
 }
@@ -229,6 +264,7 @@ impl Machines {
             r.call_started = None;
             // No command outlives the daemon either.
             r.shown.running = 0;
+            r.shown.runs.clear();
             r.waiting = 0;
         }
         let usage = std::fs::read(dir.join("usage.json"))
@@ -259,6 +295,7 @@ impl Machines {
             net,
             gcp_tokens: Arc::default(),
             tailnet_asked: Mutex::new(0),
+            next_hold: std::sync::atomic::AtomicU64::new(1),
             emit: Box::new(emit),
             me: Mutex::new(Weak::new()),
         });
@@ -632,6 +669,7 @@ impl Machines {
                 idle_until: None,
                 for_session: session,
                 running: 0,
+                runs: Vec::new(),
                 error: None,
                 error_since: None,
                 error_at: None,
@@ -653,6 +691,9 @@ impl Machines {
             waiting: 0,
             down_after: None,
             copied: Vec::new(),
+            holds: BTreeMap::new(),
+            last_placed: None,
+            never_up: false,
         };
         {
             // The limits and the record in one step, so two calls at once
@@ -867,6 +908,7 @@ impl Machines {
                 return;
             }
             r.call_started = None;
+            r.never_up = true;
             r.set_state("failed");
             r.shown.error = Some(error.clone());
             r.shown.error_since = Some(now_ms());
@@ -991,6 +1033,7 @@ impl Machines {
                         })
                         .unwrap_or_default();
                     let why = reason.map(|r| format!(": {r}")).unwrap_or_default();
+                    self.update(&machine, |r| r.never_up = true);
                     self.remove(&machine, format!("{label} failed{why}"));
                     return;
                 }
@@ -1037,6 +1080,7 @@ impl Machines {
                         .map(|x| x.label.clone())
                 })
                 .unwrap_or_default();
+            self.update(machine, |r| r.never_up = true);
             self.remove(
                 machine,
                 format!("{label} failed: {}", s.error.unwrap_or_default()),
@@ -1078,6 +1122,7 @@ impl Machines {
     fn watch(&self) {
         let now = now_ms();
         self.watch_tailnet();
+        self.expire_holds(now);
         let workers: Vec<String> = self
             .workers
             .list()
@@ -1096,6 +1141,7 @@ impl Machines {
                         .rev()
                         .find(|s| s.state == "done")
                         .map_or("nothing".to_string(), |s| s.label.clone());
+                    self.update(&r.shown.id, |r| r.never_up = true);
                     self.remove(
                         &r.shown.id,
                         format!(
@@ -1270,9 +1316,21 @@ impl Machines {
         {
             return;
         }
-        let starting = self.records.lock().unwrap().iter().any(|r| {
-            r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
-        });
+        let (starting, wait) = {
+            let records = self.records.lock().unwrap();
+            let starting = records.iter().any(|r| {
+                r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
+            });
+            (starting, overflow_wait(&records, &key))
+        };
+        // Machines that did not come up: the next waits, rather than one
+        // more, with a new Tailscale key, on every busy command.
+        if let Some(until) = wait
+            && now_ms() < until
+        {
+            tracing::debug!("no overflow machine for {project} until {until}: the last did not come up");
+            return;
+        }
         if !starting && let Err(e) = self.up(project, None) {
             tracing::info!("no overflow machine for {project}: {}", e.message);
         }
@@ -1352,23 +1410,102 @@ impl Machines {
         self.update(id, |r| r.waiting = r.waiting.saturating_sub(1));
     }
 
-    /// A routed command started on cloud machine `worker`.
-    pub fn run_started(&self, worker: &str) {
-        if let Some(id) = self.by_worker(worker) {
+    /// Routed command `run` was placed on cloud machine `worker` (its
+    /// worker id), whoever's session it is for: the machine counts it as
+    /// running, and is not idle, until [`Machines::run_ended`] with the
+    /// token given. With `expires`, it stops counting after that long
+    /// unless [`Machines::run_going`] says it started. None when `worker`
+    /// is no machine of this host.
+    pub fn run_started(&self, worker: &str, run: m::CloudRun, expires: Option<Duration>) -> Option<u64> {
+        let id = self.by_worker(worker)?;
+        let token = self
+            .next_hold
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let expires = expires.map(|d| now_ms() + d.as_millis() as u64);
+        self.update(&id, |r| {
+            r.holds.insert(token, Hold { run, expires });
+            r.shown.idle_until = None;
+            r.show_runs();
+        });
+        Some(token)
+    }
+
+    /// The command of token `token` started: what it runs, and its
+    /// session's name when it is now known. It no longer expires. False
+    /// when it no longer counts.
+    pub fn run_going(&self, token: u64, session: Option<String>, command: String) -> bool {
+        let Some(id) = self.with_hold(token) else {
+            return false;
+        };
+        self.update(&id, |r| {
+            if let Some(h) = r.holds.get_mut(&token) {
+                h.expires = None;
+                h.run.command = Some(command);
+                if let Some(s) = session {
+                    h.run.session = s;
+                }
+            }
+            r.show_runs();
+        });
+        true
+    }
+
+    /// The command of token `token` stops counting `after` from now unless
+    /// it starts meanwhile.
+    pub fn run_expires(&self, token: u64, after: Duration) {
+        if let Some(id) = self.with_hold(token) {
+            let at = now_ms() + after.as_millis() as u64;
             self.update(&id, |r| {
-                r.shown.running += 1;
-                r.shown.idle_until = None;
+                if let Some(h) = r.holds.get_mut(&token) {
+                    h.expires = Some(at);
+                }
             });
         }
     }
 
-    /// A routed command ended on cloud machine `worker`.
-    pub fn run_ended(&self, worker: &str) {
-        if let Some(id) = self.by_worker(worker) {
+    /// The command of token `token` ended, or was lost: the machine's
+    /// idle time counts from now. A second call does nothing.
+    pub fn run_ended(&self, token: u64) {
+        if let Some(id) = self.with_hold(token) {
             self.update(&id, |r| {
-                r.shown.running = r.shown.running.saturating_sub(1);
-                r.last_end = Some(now_ms());
+                if let Some(h) = r.holds.remove(&token) {
+                    // One that never started there ran nothing: the
+                    // machine keeps the time it has before its first run.
+                    if h.run.command.is_some() {
+                        r.last_end = Some(now_ms());
+                    } else {
+                        r.last_placed = Some(now_ms());
+                    }
+                }
+                r.show_runs();
             });
+        }
+    }
+
+    /// The machine with the command of token `token`.
+    fn with_hold(&self, token: u64) -> Option<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.holds.contains_key(&token))
+            .map(|r| r.shown.id.clone())
+    }
+
+    /// Commands prepared for but never started stop counting.
+    fn expire_holds(&self, now: u64) {
+        let expired: Vec<u64> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|r| r.holds.iter())
+            .filter(|(_, h)| h.expires.is_some_and(|t| now >= t))
+            .map(|(t, _)| *t)
+            .collect();
+        for token in expired {
+            tracing::info!(token, "a command prepared on a cloud machine never started");
+            self.run_ended(token);
         }
     }
 
@@ -1647,16 +1784,33 @@ fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<
     ))
 }
 
+/// Until when overflow makes no machine for project `key`, whose last
+/// machines failed before they were ready (not one removed on request): a minute after the last one went, doubling with
+/// each such machine in a row, up to [`OVERFLOW_WAIT_MAX`] minutes. None
+/// when its last machine came up, or it has none.
+fn overflow_wait(records: &[Record], key: &str) -> Option<u64> {
+    let mut mine: Vec<&Record> = records.iter().filter(|r| r.shown.project_key == key).collect();
+    mine.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+    let never_up = |r: &Record| r.never_up && r.ready_at.is_none();
+    let failed = mine.iter().take_while(|r| never_up(r)).count() as u32;
+    let last = mine.first().filter(|r| never_up(r))?;
+    let went = last.removed_at.unwrap_or(last.shown.since);
+    let minutes = 1u64.checked_shl(failed - 1).unwrap_or(u64::MAX).min(OVERFLOW_WAIT_MAX);
+    Some(went + minutes * minute())
+}
+
 /// When `r`'s billing started: when the provider made it, or, before its
 /// create call answered, when it was asked for.
 fn billed_from(r: &Record) -> u64 {
     r.made_at.unwrap_or(r.created_at)
 }
 
-/// Since when ready machine `r` has been idle: ready, or its last command's end.
+/// Since when ready machine `r` has been idle: ready, its last command's
+/// end, or when one placed on it last stopped counting.
 fn idle_since(r: &Record) -> u64 {
     r.last_end
         .unwrap_or(0)
+        .max(r.last_placed.unwrap_or(0))
         .max(r.ready_at.unwrap_or(r.shown.since))
 }
 
