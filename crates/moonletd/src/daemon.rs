@@ -2565,7 +2565,7 @@ impl Daemon {
                 // own; any other change of the member's to them counts on
                 // that member alone (X89, X74).
                 if !r.asks.is_empty() {
-                    let made = self.sessions.vouch(&worker, &r.asks);
+                    let made = self.sessions.take_over(&worker, &r.asks);
                     if made > 0 {
                         tracing::info!(worker = %worker, "took over {made} of a member's changes to a project's approval or copied files");
                     }

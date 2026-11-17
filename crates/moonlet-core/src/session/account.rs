@@ -825,11 +825,21 @@ impl SessionManager {
             // Once is enough while no other central host's word counted
             // here since: a host that refereed itself before it joined
             // another's account takes over again when made central host.
-            let again = previous.is_some_and(|p| p != me);
+            // Under a former worker id of this host's (link.json made
+            // again), what counted then is what counts now.
+            let former = a
+                .log
+                .former()
+                .iter()
+                .filter_map(|n| log_owner(n))
+                .find(|w| *w != me && refereed_by(&a.log, w))
+                .map(String::from);
+            let previous = previous.map(String::from).or(former);
+            let again = previous.as_deref().is_some_and(|p| p != me);
             if a.log.account().is_some_and(|x| x != me) || (refereed_by(&a.log, &me) && !again) {
                 return;
             }
-            let before = previous.filter(|p| refereed_by(&a.log, p));
+            let before = previous.as_deref().filter(|p| refereed_by(&a.log, p));
             let mut log = a.log.clone();
             let mut changes = Vec::new();
             for kind in PERMISSIONS {
@@ -859,6 +869,8 @@ impl SessionManager {
             a.log = log;
             changes
         };
+        // No value changes here, so nothing here reacts as to another
+        // member's change; the members get the record and the copies.
         self.account_changed(changes);
     }
 
@@ -901,7 +913,7 @@ impl SessionManager {
     /// Only that member's own changes it already holds, to a project's
     /// approval or copied files, holding what those allow, and not passed
     /// by a later change of its own. Gives how many it made its own.
-    pub fn vouch(&self, worker: &str, asks: &[ChangeRef]) -> usize {
+    pub fn take_over(&self, worker: &str, asks: &[ChangeRef]) -> usize {
         let changes = {
             let mut account = self.account.lock().unwrap();
             let Some(a) = account.as_mut() else { return 0 };
@@ -2214,7 +2226,7 @@ mod tests {
         assert_eq!(asks.len(), 1);
         sync(&book, &mini);
         assert_eq!(air.heavy_approval(&shop()), None);
-        assert_eq!(mini.vouch("book", &asks), 1);
+        assert_eq!(mini.take_over("book", &asks), 1);
         sync(&mini, &air);
         sync(&mini, &book);
         for m in [&mini, &book, &air] {
@@ -2222,7 +2234,7 @@ mod tests {
         }
         // Taken: asked no more, and asking again changes nothing.
         assert_eq!(book.permission_asks(), vec![]);
-        assert_eq!(mini.vouch("book", &asks), 0);
+        assert_eq!(mini.take_over("book", &asks), 0);
     }
 
     #[tokio::test]
@@ -2240,9 +2252,9 @@ mod tests {
         let airs = air.permission_asks();
         sync(&book, &mini);
         sync(&air, &mini);
-        assert_eq!(mini.vouch("book", &refs(&outside)), 0);
-        assert_eq!(mini.vouch("book", &refs(&switch)), 0);
-        assert_eq!(mini.vouch("book", &airs), 0);
+        assert_eq!(mini.take_over("book", &refs(&outside)), 0);
+        assert_eq!(mini.take_over("book", &refs(&switch)), 0);
+        assert_eq!(mini.take_over("book", &airs), 0);
         assert_eq!(mini.copied_files(&shop()).2, true);
         assert_eq!(mini.worker_settings().get("air"), None);
         assert_eq!(mini.heavy_approval(&shop()), None);
@@ -2263,7 +2275,7 @@ mod tests {
         let asks = book.permission_asks();
         sync(&book, &mini);
         // The patterns, and the switch the list goes with.
-        assert_eq!(mini.vouch("book", &asks), 2);
+        assert_eq!(mini.take_over("book", &asks), 2);
         sync(&mini, &air);
         assert_eq!(air.copied_files(&shop()), (words(&[".env", "config/local.yaml"]), false, false));
     }
@@ -2328,7 +2340,7 @@ mod tests {
         book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
         let asks = book.permission_asks();
         sync(&book, &mini);
-        mini.vouch("book", &asks);
+        mini.take_over("book", &asks);
         // A switch the MacBook's daemon wrote by itself, which never counted.
         book.set_worker_settings("air", settings(Some(true), None)).unwrap();
         sync(&book, &mini);
@@ -2342,6 +2354,20 @@ mod tests {
             assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check"]), vec![])));
             assert_eq!(m.worker_settings().get("air"), None);
         }
+    }
+
+    #[tokio::test]
+    async fn a_central_host_whose_worker_id_changed_keeps_refereeing_by_what_counted() {
+        let (homes, mini, book, _air) = refereed_account().await;
+        // A switch the MacBook's daemon wrote by itself, which never counted.
+        book.set_worker_settings("air", settings(Some(true), None)).unwrap();
+        sync(&book, &mini);
+        drop(mini);
+        // studio-mini's link.json was made again, with a new worker id.
+        let mini = reload(homes[0].path(), "mini2");
+        mini.referee_permissions(None);
+        assert!(mini.permissions_refereed());
+        assert_eq!(mini.worker_settings().get("air"), None);
     }
 
     #[tokio::test]
