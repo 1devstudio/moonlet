@@ -469,7 +469,7 @@ async fn the_agent_cannot_answer_or_peek_through_moonlet_rpc() {
         assert!(!out.status.success(), "{args:?} went through");
         assert_eq!(
             String::from_utf8_lossy(&out.stderr),
-            "moonlet: forbidden: only the moonlet app answers read requests\n"
+            "moonlet: forbidden: only the moonlet app does that\n"
         );
     }
     assert_eq!(requests(&mut c, 1).await.len(), 1, "the request still waits");
@@ -539,7 +539,8 @@ async fn the_request_event_skips_cli_connections() {
         .unwrap();
     assert!(!finished(reader).0);
 
-    // Both saw `read_done`; only the app saw the request with its text.
+    // The app saw the request with its text and `read_done`; the CLI's
+    // connection hears no event at all (A6).
     async fn events_until_done(c: &mut Client) -> Vec<String> {
         let mut names = Vec::new();
         while !names.iter().any(|n| n == "terminal.read_done") {
@@ -555,7 +556,9 @@ async fn the_request_event_skips_cli_connections() {
         names
     }
     assert!(events_until_done(&mut app).await.iter().any(|n| n == "terminal.read_request"));
-    assert!(!events_until_done(&mut cli).await.iter().any(|n| n == "terminal.read_request"));
+    let heard = tokio::time::timeout(Duration::from_secs(1), cli.next_frame()).await;
+    assert!(heard.is_err(), "the CLI heard {heard:?}");
+    assert!(cli.backlog.is_empty(), "the CLI heard {:?}", cli.backlog);
 }
 
 /// Waits until shell `id` is at a prompt after a command that exited `exit`.

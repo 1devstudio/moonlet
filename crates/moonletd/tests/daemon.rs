@@ -470,7 +470,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     wait_for_socket(&socket, Duration::from_secs(15))
         .await
         .unwrap();
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let t: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -1220,8 +1220,9 @@ impl HomeDaemon {
         child
     }
 
+    /// The app: what a test sets up goes through it (A6).
     async fn client(&self) -> Client {
-        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
+        self.app().await
     }
 
     /// A connection the daemon counts as the app's: its credential is in
@@ -6564,4 +6565,67 @@ async fn the_mac_is_kept_awake_while_a_chat_is_in_the_middle_of_a_turn() {
     let pid: i32 = std::fs::read_to_string(worktree.join("claude.pid")).unwrap().trim().parse().unwrap();
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL).unwrap();
     until("hold\nrelease\nhold\nrelease\nhold\nrelease\n").await;
+}
+
+/// Audit 2026-11-15: a local connection that proves nothing is not the app,
+/// whatever client name it gives. It reaches what the `moonlet` CLI calls
+/// and nothing else: not `daemon.upgrade`, a terminal it did not make, nor
+/// another host's sessions, and it hears none of the daemon's events.
+#[tokio::test]
+async fn a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does() {
+    let d = TestDaemon::start().await;
+    let mut app = d.client().await;
+    let ws = bare_session(d.home.path(), &mut app).await;
+    let mut other = Client::connect(&d.socket, "moonlet-helper").await.unwrap();
+    let term: TerminalInfo = app
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate { cwd: d.home.path().display().to_string(), command: vec!["/bin/sh".into()], cols: 60, rows: 15, ..Default::default() },
+        )
+        .await
+        .unwrap();
+    for (method, params) in [
+        (methods::DAEMON_UPGRADE, serde_json::json!({"binary": "/nonexistent/moonletd"})),
+        (methods::TERMINAL_ATTACH, serde_json::json!({"id": term.id})),
+        ("session.forward", serde_json::json!({"session": ws.id, "method": "session.list", "params": {}})),
+        ("session.attach", serde_json::json!({"session": ws.id, "terminal": term.id})),
+        ("session.continue_here", serde_json::json!({"session": ws.id})),
+        ("git.set_settings", serde_json::json!({})),
+    ] {
+        let e = other.request::<_, serde_json::Value>(method, params).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app does that", "{method}");
+    }
+    // What the CLI calls still works under any name.
+    let listed: Vec<serde_json::Value> = other.request(methods::SESSION_LIST, serde_json::json!({})).await.unwrap();
+    assert!(listed.iter().any(|s| s["id"] == ws.id.as_str()), "{listed:?}");
+
+    // The app's new terminal is an event for the app, not for this one.
+    let made: TerminalInfo = app
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate { cwd: d.home.path().display().to_string(), command: vec!["/bin/sh".into()], cols: 60, rows: 15, ..Default::default() },
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match app.next_frame().await.unwrap() {
+                Some(Frame::Json(Message::Event { name, data })) if name == methods::EV_TERMINAL_CREATED && data["id"] == made.id => break,
+                Some(_) => {}
+                None => panic!("the app's connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("the app never heard of its terminal");
+    let heard: Vec<String> = std::mem::take(&mut other.backlog)
+        .into_iter()
+        .filter_map(|f| match f {
+            Frame::Json(Message::Event { name, .. }) => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heard, Vec::<String>::new());
+    let late = tokio::time::timeout(Duration::from_secs(1), other.next_frame()).await;
+    assert!(late.is_err(), "it heard {late:?}");
 }

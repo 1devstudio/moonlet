@@ -442,6 +442,75 @@ const WORKER_LINK_METHODS: &[&str] = &[
 /// What a member's worker link hears when it asks for anything else.
 pub(crate) const WORKER_LINK_ONLY: &str = "a member's link only does a member's work here";
 
+/// What a local connection that did not prove it is the app (X75) may
+/// call: the `moonlet` CLI an agent or the user runs, its hooks, `moonletd`'s
+/// own commands, and any other process of the user's, whatever client name
+/// it gives. What the CLI's commands send, and this host's lists that
+/// scripts read with `moonlet rpc`; nothing else. A method added later is
+/// refused to them until it is added here
+/// (docs/specs/A6-cli-and-socket-api.md, "Local callers").
+const LOCAL_METHODS: &[&str] = &[
+    // `moonletd status`, `stop`, `restart`, `upgrade` and `proxy`.
+    m::DAEMON_INFO,
+    m::DAEMON_SHUTDOWN,
+    // `moonlet notify` and the agents' hooks; `moonlet open-url` (X75).
+    m::AGENT_REPORT,
+    m::BROWSER_OPEN,
+    // `moonlet ls`, `project ls`, `session …`, `agent start`, `pane run`.
+    m::PROJECT_LIST,
+    m::SESSION_LIST,
+    m::SESSION_CREATE,
+    m::CHAT_SEND,
+    m::CHAT_STATE,
+    m::TERMINAL_LIST,
+    m::TERMINAL_CREATE,
+    m::TERMINAL_WRITE,
+    // `moonlet term ls` and `term read`, which the user approves (X31).
+    m::TERMINAL_READ_LIST,
+    m::TERMINAL_READ,
+    // `moonlet ps` and `kill` (X83).
+    m::SESSION_PROCESSES,
+    m::SESSION_KILL_PROCESSES,
+    // `moonlet exec` and the hook that routes heavy commands (X62).
+    m::EXEC_RUN,
+    m::EXEC_ROUTE,
+    m::EXEC_CANCEL,
+    // `moonlet worker cloud …` (X63).
+    m::CLOUD_MACHINES,
+    m::CLOUD_UP,
+    m::CLOUD_DOWN,
+    // `moonlet design …` (X64, X65).
+    m::DESIGN_SYSTEMS,
+    m::DESIGN_SYSTEM_CREATE,
+    m::DESIGN_SYSTEM_SYNC,
+    m::DESIGN_SYSTEM_SYNCED,
+    m::DESIGN_SYSTEM_PROGRESS,
+    m::DESIGN_SYSTEM_REMOVE,
+    m::DESIGN_LIST,
+    m::DESIGN_CREATE,
+    m::DESIGN_OPEN,
+    m::DESIGN_CHECK,
+    m::DESIGN_SNAP,
+    m::DESIGN_REMOVE,
+    // This host's lists, read by scripts through `moonlet rpc`.
+    m::WORKSPACE_LIST,
+    m::REPO_LIST,
+    m::PROJECT_IDENTITY,
+    m::WORKER_LIST,
+    m::SYNC_LIST,
+];
+
+/// What a local connection that did not prove it is the app hears when it
+/// asks for anything else.
+pub(crate) const LOCAL_APP_ONLY: &str = "only the moonlet app does that";
+
+/// Whether `conn` is a local connection that did not prove it is the app
+/// (X75), nor a phone an SSH login vouched for: decided when it connected,
+/// never from the name it gives.
+pub(crate) fn unproven_local(conn: &Conn) -> bool {
+    conn.phone.is_none() && !conn.app && !conn.routed_phone
+}
+
 /// Jobs hold commands' output: the app and paired devices read and stop
 /// them, never an agent's CLI nor a worker (X62).
 fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
@@ -461,6 +530,9 @@ fn processes_manager(conn: &Conn) -> Result<(), RpcError> {
 
 /// The name the moonlet app gives in its hello.
 pub const APP_CLIENT: &str = "moonlet-app";
+
+/// The name the phone app gives in its hello (X40).
+pub const MOBILE_CLIENT: &str = "moonlet-mobile";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -1229,6 +1301,11 @@ impl Daemon {
         // it authenticated: never the app's methods, whatever it says it is.
         if conn.worker_link && !WORKER_LINK_METHODS.contains(&method) {
             return Err(RpcError::new("forbidden", WORKER_LINK_ONLY));
+        }
+        // A local process that did not prove it is the app reaches what the
+        // `moonlet` CLI does, whatever client name it gives (X75).
+        if unproven_local(conn) && !LOCAL_METHODS.contains(&method) {
+            return Err(RpcError::new("forbidden", LOCAL_APP_ONLY));
         }
         let s = &self.terminals;
         match method {
@@ -2149,8 +2226,9 @@ impl Daemon {
             }
             m::EXEC_CANCEL => {
                 let r: m::ExecCancel = params(p)?;
-                // A member stops a command this central host runs for it (X89).
-                if conn.client == crate::link::WORKER_CLIENT {
+                // A member stops a command this central host runs for it
+                // (X89), over the tailnet.
+                if conn.client == crate::link::WORKER_CLIENT && conn.phone.is_some() {
                     return ok(self.runs.cancel_here(conn.id, r.run));
                 }
                 ok(self.runs.cancel(conn.id, r.run).await)

@@ -73,6 +73,8 @@ impl Daemon {
             .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
+            // The test sets up as the app (X75, A6).
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -127,7 +129,7 @@ async fn an_agent_opens_a_session_in_another_project() {
     let (api, web) = (d.home.path().join("code/api"), d.home.path().join("code/web"));
     git_repo(&api);
     git_repo(&web);
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let api_p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": api})).await.unwrap();
     let web_p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
     let parent: Session = c
@@ -176,7 +178,7 @@ async fn terminals_know_where_the_moonlet_cli_is() {
     use moonlet_proto::types::TerminalInfo;
     let d = Daemon::start().await;
     let out = d.home.path().join("env.txt");
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -210,7 +212,7 @@ async fn an_agent_follows_the_session_it_opened() {
     let d = Daemon::with_fake_claude().await;
     let web = d.home.path().join("code/web");
     git_repo(&web);
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
 
     let out = d.moonlet(None, &["session", "new", "web", "--agent", "claude", "Say hello"]);
@@ -254,7 +256,7 @@ async fn a_session_an_agent_opens_without_naming_an_agent_runs_one() {
     let d = Daemon::with_fake_claude().await;
     let web = d.home.path().join("code/web");
     git_repo(&web);
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let web_p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
     let parent: Session = c
         .request(
@@ -278,7 +280,7 @@ async fn moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one() {
     let d = Daemon::start().await;
     let web = d.home.path().join("code/web");
     git_repo(&web);
-    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
     let s: Session = c.request(methods::SESSION_CREATE, serde_json::json!({"project_id": p.id, "name": "Procs", "agent": "none"})).await.unwrap();
     let shell = ["/bin/sh", "-c", "/usr/bin/tail -f /dev/null & echo $! > tail.pid; read line"];

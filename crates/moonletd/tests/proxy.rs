@@ -222,7 +222,7 @@ impl Link {
 async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
     let host = Host::new();
     let home = &host.home;
-    let mut link = Link::open(&host).await;
+    let mut link = Link::over_ssh(&host, "moonlet-app").await;
     let s: TerminalInfo = link
         .call(
             methods::TERMINAL_CREATE,
@@ -261,7 +261,7 @@ async fn proxy_autostarts_daemon_and_sessions_survive_link_loss() {
     drop(link);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut link = Link::open(&host).await;
+    let mut link = Link::over_ssh(&host, "moonlet-app").await;
     let attach: AttachResult = link
         .call(
             methods::TERMINAL_ATTACH,
@@ -291,7 +291,7 @@ fn entries() -> serde_json::Value {
 async fn refused(link: &mut Link) -> bool {
     match link.try_call(methods::SIGNINS_SET, entries()).await {
         Err(e) => {
-            assert_eq!(e.message, "only the moonlet app manages sign-ins");
+            assert_eq!(e.message, "only the moonlet app does that");
             true
         }
         Ok(_) => false,
@@ -309,11 +309,11 @@ async fn the_app_over_ssh_counts_as_the_app_and_the_cli_does_not() {
         .await
         .unwrap_err();
     assert_eq!(e.code, "forbidden");
-    assert_eq!(e.message, "only the moonlet app manages sign-ins");
+    assert_eq!(e.message, "only the moonlet app does that");
 
     let mut app = Link::over_ssh(&host, "moonlet-app").await;
     let _: bool = app.call(methods::SIGNINS_SET, entries()).await;
-    let list: Vec<serde_json::Value> = cli.call(methods::SIGNINS_LIST, serde_json::json!({})).await;
+    let list: Vec<serde_json::Value> = app.call(methods::SIGNINS_LIST, serde_json::json!({})).await;
     assert_eq!(list[0]["id"], serde_json::json!("t"));
     let _: bool = app
         .call(methods::DAEMON_SHUTDOWN, serde_json::json!({}))
@@ -379,6 +379,39 @@ async fn moonletd_with_the_credential_is_the_app_only_within_an_ssh_session() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stderr), "Tailnet access is off\n");
     let _: bool = link
+        .call(methods::DAEMON_SHUTDOWN, serde_json::json!({}))
+        .await;
+}
+
+/// A paired phone the Mac routes to an SSH host comes through `moonletd
+/// proxy`, run as an SSH session's command (X40). The SSH login vouches
+/// for it, so it is not a local process that proved nothing (A6): it
+/// reaches the host's terminals as before. It is still not the host's app.
+/// The same hello from a proxy no login started proves nothing.
+#[tokio::test]
+async fn a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app() {
+    let host = Host::new();
+    let mut phone = Link::over_ssh(&host, "moonlet-mobile").await;
+    let made: TerminalInfo = phone
+        .call(
+            methods::TERMINAL_CREATE,
+            serde_json::to_value(TerminalCreate {
+                cwd: host.home.path().display().to_string(),
+                command: vec!["/bin/sh".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .await;
+    let attach = serde_json::to_value(TerminalAttach { id: made.id, cols: None, rows: None }).unwrap();
+    let _: AttachResult = phone.call(methods::TERMINAL_ATTACH, attach.clone()).await;
+    let e = phone.try_call(methods::SIGNINS_SET, entries()).await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app manages sign-ins"));
+
+    let mut direct = Link::open_as(&host, "moonlet-mobile").await;
+    let e = direct.try_call(methods::TERMINAL_ATTACH, attach).await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app does that"));
+    let _: bool = direct
         .call(methods::DAEMON_SHUTDOWN, serde_json::json!({}))
         .await;
 }

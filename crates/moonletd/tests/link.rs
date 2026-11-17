@@ -624,12 +624,12 @@ async fn a_paired_mac_cannot_set_the_central_host_directly() {
         .request::<_, Value>("link.set", elsewhere)
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = cli
         .request::<_, Value>("link.retry", json!({}))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 
     // Nothing changed.
     let info: Value = central.call("link.get", json!({})).await;
@@ -654,12 +654,12 @@ async fn only_the_macs_app_starts_or_retries_a_copy() {
     );
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, Value>("sync.start", start).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = cli
         .request::<_, Value>("sync.retry", json!({ "copy": "c1" }))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let copies: Value = cli.request("sync.list", json!({})).await.unwrap();
     assert_eq!(copies, json!([]));
 }
@@ -677,7 +677,7 @@ async fn only_the_macs_app_resolves_a_differing_file() {
     );
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, Value>("sync.resolve", params).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 }
 
 #[tokio::test]
@@ -693,7 +693,7 @@ async fn only_the_macs_app_moves_a_copys_branch() {
     );
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, Value>("sync.use_central_branch", params).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 }
 
 #[tokio::test]
@@ -709,7 +709,7 @@ async fn only_the_macs_app_stops_keeping_a_copy() {
     );
     let mut cli = Client::connect(&central.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, Value>("sync.stop", params).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sync");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 }
 
 #[tokio::test]
@@ -1015,7 +1015,7 @@ async fn a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot() {
     let mut cli = Client::connect(&remote.socket, "moonlet-cli").await.unwrap();
     for (method, params) in [("link.set", &enable), ("link.retry", &json!({})), ("link.pair", &pairing)] {
         let e = cli.request::<_, Value>(method, params.clone()).await.unwrap_err();
-        assert_eq!(e.to_string(), "forbidden: only the moonlet app manages the link", "{method}");
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app does that", "{method}");
     }
     let info: Value = remote.call("link.get", json!({})).await;
     assert_eq!(info["central"], Value::Null, "{info}");

@@ -49,6 +49,8 @@ async fn claude_hook_raises_attention_quickly() {
             .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
+            // The test listens as the app (X75, A6).
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -59,7 +61,7 @@ async fn claude_hook_raises_attention_quickly() {
         .await
         .unwrap();
 
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let moonlet = env!("CARGO_BIN_EXE_moonlet");
     let script = format!(
         "sleep 0.3; echo '{{\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission to use Bash\"}}' | '{moonlet}' hook claude; sleep 5"
@@ -133,6 +135,8 @@ async fn hook_in_a_terminal_jaunt_opened_reaches_its_terminal() {
             .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
+            // The test listens as the app (X75, A6).
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -143,7 +147,7 @@ async fn hook_in_a_terminal_jaunt_opened_reaches_its_terminal() {
         .await
         .unwrap();
 
-    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
     let moonlet = env!("CARGO_BIN_EXE_moonlet");
     let script = format!(
         "sleep 0.3; echo '{{\"hook_event_name\":\"Notification\",\"message\":\"Claude needs your permission to use Bash\"}}' | env -u MOONLET_TERMINAL_ID JAUNT_TERMINAL_ID=\"$MOONLET_TERMINAL_ID\" '{moonlet}' hook claude; sleep 5"

@@ -743,7 +743,7 @@ async fn phones_and_agents_cannot_manage_phones() {
         .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "forbidden: only the moonlet app manages phones"
+        "forbidden: only the moonlet app does that"
     );
 
     // Nor can a phone say it is the CLI.
@@ -757,19 +757,45 @@ async fn phones_and_agents_cannot_manage_phones() {
 
 /// A fake `ssh` that records its arguments and runs `moonletd proxy` against
 /// a second daemon, as the real one would on the SSH host.
+/// A fake `ssh` that runs the host's `moonletd proxy` as an SSH session's
+/// command: under a copy of this test binary named sshd, with
+/// `SSH_CONNECTION` set, so the proxy vouches for the phone it carries
+/// (X40, A6) as a real SSH login does.
 fn fake_ssh(dir: &Path, remote_home: &Path, args_file: &Path) {
     use std::os::unix::fs::PermissionsExt;
+    let sshd = dir.join("sshd");
+    std::fs::copy(std::env::current_exe().unwrap(), &sshd).unwrap();
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nMOONLET_EXIT_WITH='{}' MOONLET_HOME='{}' MOONLET_SOCK='{}' exec '{}' proxy\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nunset MOONLET_SOCK\nSSH_CONNECTION='100.64.0.7 52814 100.64.0.9 22' MOONLET_EXIT_WITH='{}' MOONLET_HOME='{}' MOONLET_TEST_SSHD_EXE='{sshd}' MOBILE_TEST_AS_SSHD='--socket {} proxy' exec '{sshd}' --exact as_sshd_runs_moonletd --nocapture --test-threads=1 2>&1 1>/dev/null\n",
         args_file.display(),
         std::process::id(),
         remote_home.display(),
         remote_home.join("run").join("d.sock").display(),
-        env!("CARGO_BIN_EXE_moonletd"),
+        sshd = sshd.display(),
     );
     let ssh = dir.join("ssh");
     std::fs::write(&ssh, script).unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// What the copy of this test binary named sshd does (see [`fake_ssh`]):
+/// runs `moonletd` with the arguments in `MOBILE_TEST_AS_SSHD` as sshd runs
+/// an SSH session's command, its stdout on this process's stderr, since
+/// the test harness writes to stdout. In a plain run it does nothing.
+#[test]
+fn as_sshd_runs_moonletd() {
+    let Some(args) = std::env::var("MOBILE_TEST_AS_SSHD").ok() else {
+        return;
+    };
+    let out = std::os::fd::AsFd::as_fd(&std::io::stderr()).try_clone_to_owned().unwrap();
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .args(args.split(' '))
+        .env_remove("MOBILE_TEST_AS_SSHD")
+        .stdout(out)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 #[tokio::test]
@@ -904,7 +930,7 @@ async fn phones_do_not_hear_design_changes() {
     let token = mac.pair(&addr).await;
     let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
     hello(&mut phone, "moonlet-mobile").await;
-    let mut app = Client::connect(&mac.socket, "test").await.unwrap();
+    let mut app = mac.app().await;
 
     let card = mac.home.path().join("design/library/systems/storefront/components/buttons/button/button.html");
     std::fs::create_dir_all(card.parent().unwrap()).unwrap();
@@ -938,7 +964,7 @@ async fn phones_do_not_hear_a_design_opened() {
     let token = mac.pair(&addr).await;
     let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
     hello(&mut phone, "moonlet-mobile").await;
-    let mut app = Client::connect(&mac.socket, "test").await.unwrap();
+    let mut app = mac.app().await;
     let ws: Value = app.request("workspace.create", json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
     let ws = ws["id"].as_str().unwrap().to_string();
     let design = mac.home.path().join("design").join(&ws).join("designs/settings-page");
@@ -1047,7 +1073,7 @@ async fn only_the_app_shares_boards_and_a_workspace_takes_its_boards_along() {
     assert_eq!(e.message, "only the moonlet app shares boards");
     let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app shares boards");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 
     let e = app.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": "nope", "snapshot": {} })).await.unwrap_err();
     assert_eq!(e.to_string(), "not_found: no workspace nope");
@@ -1135,7 +1161,7 @@ async fn a_phones_task_request_is_answered_by_the_app() {
     for name in ["moonlet-cli", "anything-else", "moonlet-app"] {
         let mut c = Client::connect(&mac.socket, name).await.unwrap();
         let e = c.request::<_, Value>("tasks.request", json!({ "workspace": "personal", "action": {} })).await.unwrap_err();
-        assert_eq!(e.to_string(), "forbidden: only a paired phone asks the app to change tasks", "{name}");
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app does that", "{name}");
     }
 }
 
@@ -1160,9 +1186,9 @@ async fn one_app_takes_a_task_request_and_agents_cannot_answer_one() {
     }
     let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = other.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let _: bool = first.request("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true, "result": {} })).await.unwrap();
     let Message::Response { error: None, .. } = asking.await.unwrap() else { panic!("not answered") };
 }
@@ -1180,9 +1206,9 @@ async fn a_process_that_only_says_it_is_the_app_does_not_act_on_tasks() {
 
     let mut forged = Client::connect(&mac.socket, "moonlet-app").await.unwrap();
     let e = forged.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app shares boards");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
     let e = forged.request::<_, bool>("tasks.answer", json!({ "request_id": 1, "ok": true })).await.unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
 
     // Nor does it count as moonlet being open for the phone.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

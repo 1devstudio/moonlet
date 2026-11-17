@@ -131,6 +131,10 @@ pub struct Conn {
     /// token, never by the client it says it is. It reaches only a
     /// member's work (`Daemon::handle`).
     pub worker_link: bool,
+    /// A paired phone another Mac routes here over SSH (X40): `moonletd
+    /// proxy`, run as an SSH session's command, vouched for it as it does
+    /// for the app (X75). Not an unproven local process (A6), nor the app.
+    pub routed_phone: bool,
 }
 
 impl Conn {
@@ -155,6 +159,7 @@ impl Conn {
             gone: std::sync::atomic::AtomicBool::new(true),
             cloud: std::sync::atomic::AtomicBool::new(false),
             worker_link: false,
+            routed_phone: false,
         })
     }
 
@@ -329,7 +334,11 @@ where
 
     // Only on the local socket: over the tailnet a device proves itself
     // with its own token.
-    let app = phone.is_none() && daemon.proves_app(app_token.as_deref(), peer_pid);
+    let proved = phone.is_none() && daemon.proves_app(app_token.as_deref(), peer_pid);
+    // A phone's hello a vouching proxy carried (X40): the SSH login proved
+    // it is the user's, but it is not this host's app (A6).
+    let routed_phone = proved && client == crate::daemon::MOBILE_CLIENT;
+    let app = proved && !routed_phone;
     let conn = Arc::new(Conn {
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),
@@ -346,6 +355,7 @@ where
         gone: std::sync::atomic::AtomicBool::new(false),
         cloud: std::sync::atomic::AtomicBool::new(false),
         worker_link,
+        routed_phone,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
     daemon.on_connect(&conn);
@@ -364,11 +374,14 @@ where
     // asks to read is for the app alone (X31), and so are a URL to open and
     // a setup question.
     // A member's worker link hears what a worker does, whatever it says.
+    let unproven = crate::daemon::unproven_local(&conn);
     let not_app = (conn.phone.is_none() && !conn.app) || worker_link;
-    let is_cli = conn.client == crate::daemon::CLI_CLIENT;
+    // A member's daemon is a worker only over the tailnet: on the local
+    // socket, saying so proves nothing.
+    let worker = conn.client == crate::link::WORKER_CLIENT && conn.phone.is_some();
     // A job's output is for the app and paired devices, as `job.output` is
-    // (X62): neither an agent's CLI nor a worker hears it.
-    let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT || worker_link;
+    // (X62): no worker hears it.
+    let no_jobs = conn.client == crate::link::WORKER_CLIENT || worker_link;
     let phone = conn.phone.is_some();
     let device = conn.phone.clone();
     // A paired phone answers setup questions too (X40); a paired Mac does not.
@@ -388,6 +401,10 @@ where
         loop {
             match events.recv().await {
                 Ok(_) if cloud => {}
+                // A local process that did not prove it is the app, such as
+                // an agent's `moonlet` CLI, hears no event: what the CLI
+                // waits for comes to its own connection (X75).
+                Ok(_) if unproven => {}
                 Ok(Message::Event { name, .. })
                     if not_app && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
                 Ok(Message::Event { name, .. })
@@ -457,13 +474,13 @@ where
                     }
                 }
                 // Output of a member's terminal this host relays (X72).
-                Frame::Output { terminal, data } if conn.client == crate::link::WORKER_CLIENT => {
+                Frame::Output { terminal, data } if worker => {
                     daemon.session_copies.relay_output(conn.id, terminal, data);
                 }
                 // A worker's routed command's output, for `moonlet exec`
                 // (X62); from anyone else, nothing.
                 Frame::RunOutput { run, stream, data } => {
-                    if conn.client == crate::link::WORKER_CLIENT {
+                    if worker {
                         // A command one member runs for another (X89),
                         // else one this host routed.
                         if let Err(data) = daemon.relay.output(&daemon.workers, conn.id, run, stream, data) {
@@ -475,7 +492,7 @@ where
                 // worker's daemon sends packs; from anyone else, or over the
                 // limits, they end the connection.
                 Frame::Pack { transfer, data } => {
-                    let refused = if conn.client != crate::link::WORKER_CLIENT {
+                    let refused = if !worker {
                         Some(RpcError::new("forbidden", "only a worker sends packs"))
                     } else {
                         let pushed = conn.packs.lock().unwrap().push(transfer, data);
@@ -496,6 +513,15 @@ where
                     if worker_link && method == moonlet_proto::methods::TERMINAL_ATTACH =>
                 {
                     let e = RpcError::new("forbidden", crate::daemon::WORKER_LINK_ONLY);
+                    let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
+                }
+                // A terminal is attached to by the app (X75): a local process
+                // that proved nothing types into this host's terminals with
+                // `moonlet pane run`, and never reads them.
+                Frame::Json(Message::Request { id, method, .. })
+                    if unproven && method == moonlet_proto::methods::TERMINAL_ATTACH =>
+                {
+                    let e = RpcError::new("forbidden", crate::daemon::LOCAL_APP_ONLY);
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
                 // Another member's terminal (X72), or sign-in (X75): its
