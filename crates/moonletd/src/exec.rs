@@ -46,6 +46,9 @@ const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
 const CENTRAL_CLOUD_WAIT: Duration = Duration::from_secs(20 * 60);
 /// How long the host that routed a run has to take its changes.
 const DONE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a runner remembers a run for another host that ended: a cancel
+/// sent after its start timed out (30 s) comes well within it.
+const ENDED_KEPT: Duration = Duration::from_secs(300);
 /// The exit status of a run moonlet lost: its runner went away mid-run and
 /// it was not run again, as when the central host's daemon stops (X62).
 const LOST: i32 = 125;
@@ -123,7 +126,7 @@ pub struct Runs {
     /// Runs for other hosts that ended lately: a cancel of one answers that
     /// it ran, so its host never runs it elsewhere as one that never
     /// started.
-    ended: Mutex<HashSet<(ClientId, u32)>>,
+    ended: Mutex<HashMap<(ClientId, u32), std::time::Instant>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
     /// Why a worker was last skipped for a project, by worker and project,
@@ -1545,7 +1548,7 @@ impl Runs {
     /// Answers whether the run started here: going (it stops now) or ended.
     pub fn cancel_here(&self, from: ClientId, run: u32) -> bool {
         let routed = self.routed.lock().unwrap();
-        if !routed.contains_key(&(from, run)) && self.ended.lock().unwrap().contains(&(from, run)) {
+        if !routed.contains_key(&(from, run)) && self.ended.lock().unwrap().contains_key(&(from, run)) {
             return true;
         }
         if !routed.contains_key(&(from, run)) {
@@ -1576,13 +1579,14 @@ struct Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        self.runs.routed.lock().unwrap().remove(&self.run);
         {
+            // Ended as it leaves `routed`, under its lock, so a cancel
+            // never finds it in neither.
+            let mut routed = self.runs.routed.lock().unwrap();
             let mut ended = self.runs.ended.lock().unwrap();
-            if ended.len() >= 256 {
-                ended.clear();
-            }
-            ended.insert(self.run);
+            ended.retain(|_, at| at.elapsed() < ENDED_KEPT);
+            ended.insert(self.run, std::time::Instant::now());
+            routed.remove(&self.run);
         }
         self.runs.serving.lock().unwrap().remove(&self.run);
         self.runs.copies_in_use.lock().unwrap().remove(&self.copy);
@@ -1974,6 +1978,12 @@ mod tests {
         // A run that took its slot here, and ended.
         runs.routed.lock().unwrap().insert((from, 42), Arc::new(Notify::new()));
         drop(Claim { runs: runs.clone(), run: (from, 42), copy: "c1".into() });
+        assert!(runs.cancel_here(from, 42));
+        // However many runs end after it.
+        for n in 100..400 {
+            runs.routed.lock().unwrap().insert((from, n), Arc::new(Notify::new()));
+            drop(Claim { runs: runs.clone(), run: (from, n), copy: format!("c{n}") });
+        }
         assert!(runs.cancel_here(from, 42));
         // The same run id from another connection is another run.
         assert!(!runs.cancel_here(from + 1, 42));
