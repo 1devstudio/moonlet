@@ -100,7 +100,7 @@ If a worker disconnects or misses 3 pings during a run, the run is dropped, and 
 
 A command listed under `rerun`, such as a test run, runs again on the session's host from the same files instead. The output says "moonlet: macbook went away. Running again on studio-mini.", and the agent gets the second run's exit status. Only list commands that are safe to run twice, and safe to overlap with a run that is still stopping: never a deploy, a migration or a publish.
 
-A worker that loses the session's host stops the command and every process it started. This happens when the link drops, when it connects again (the session's host has given the run up by then), or when the worker hears nothing from the central host for 45 seconds.
+A worker that loses the session's host stops the command and every process it started. This happens when the link drops, when it connects again (the session's host has given the run up by then), or when the worker hears nothing from the central host for 25 seconds. A session's host that hears nothing from its central host for 25 seconds gives the run up too.
 
 While a Mac runs a heavy command, for its own sessions or another host's, it does not go to sleep when idle. Closing the lid still puts it to sleep.
 
