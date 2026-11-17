@@ -10,6 +10,7 @@ mod hook;
 mod ps;
 mod session;
 mod term;
+mod worker;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -165,7 +166,8 @@ enum WorkerAction {
     },
     /// List the cloud machines: name, state and project.
     Ls,
-    /// Remove a cloud machine, once its running commands end.
+    /// Remove a cloud machine, once its running commands end; says which
+    /// those are.
     Down { name: String },
 }
 
@@ -808,6 +810,16 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                     }
                 }
                 WorkerAction::Down { name } => {
+                    // What it still runs, for whom: it goes once that ends.
+                    let all: methods::CloudMachines = c.request(methods::CLOUD_MACHINES, ()).await?;
+                    if let Some(note) = all
+                        .machines
+                        .iter()
+                        .find(|m| m.id == name || m.name == name)
+                        .and_then(worker::down_note)
+                    {
+                        print!("{note}");
+                    }
                     let down = methods::CloudDown { machine: name };
                     let _: bool = c.request(methods::CLOUD_DOWN, down).await.map_err(plain)?;
                 }

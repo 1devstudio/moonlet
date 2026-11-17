@@ -55,6 +55,14 @@ const LOST: i32 = 125;
 /// What the agent and the job hear of a run given up on and not run again.
 const LOST_NOT_AGAIN: &str = "The command may have run in part there; it was not run again.";
 
+/// `argv` as a command line, each word quoted as the shell needs.
+pub(crate) fn quoted(argv: &[String]) -> String {
+    argv.iter()
+        .map(|w| crate::heavy::quote(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// What to run, already checked.
 pub struct Command {
     pub argv: Vec<String>,
@@ -256,12 +264,7 @@ impl Runs {
         let job = self.jobs.start(Job {
             id: uuid::Uuid::new_v4().to_string(),
             session: plan.session.clone(),
-            command: plan
-                .argv
-                .iter()
-                .map(|w| crate::heavy::quote(w))
-                .collect::<Vec<_>>()
-                .join(" "),
+            command: quoted(&plan.argv),
             tool_use_id: plan.tool_use_id.clone(),
             state: JobState::Running {
                 worker: plan.host.clone(),
@@ -431,13 +434,21 @@ impl Runs {
                     .or_else(|| linked.iter().find(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
                     .unwrap_or_else(|| chosen.id.clone());
                 // This host's own machine; a member's session reaches its
-                // central host's through it (X89), which keeps their count.
+                // central host's through it (X89), whose relay counts it.
                 let machines = (chosen.kind == Kind::Cloud)
                     .then(|| self.machines())
                     .flatten()
                     .filter(|m| m.cloud_workers().contains(&chosen.id));
+                let hold = machines.as_ref().and_then(|m| {
+                    let placed = m::CloudRun {
+                        session: plan.session_name.clone(),
+                        host: None,
+                        command: Some(quoted(&plan.argv)),
+                        since: moonlet_core::paths::now_ms(),
+                    };
+                    m.run_started(&chosen.id, placed, None)
+                });
                 if let Some(m) = &machines {
-                    m.run_started(&chosen.id);
                     // Its first command of the session copies the session there.
                     if !m.has_copy(&chosen.id, &plan.session) {
                         say(format!("Copying {} to {name}…", plan.session_name));
@@ -447,7 +458,9 @@ impl Runs {
                     .remote(run, job, client, plan, &chosen, &name, workers, sync)
                     .await;
                 if let Some(m) = &machines {
-                    m.run_ended(&chosen.id);
+                    if let Some(token) = hold {
+                        m.run_ended(token);
+                    }
                     if ran.is_ok() {
                         m.copied(&chosen.id, &plan.session);
                     }
@@ -908,6 +921,7 @@ impl Runs {
             session: plan.session.clone(),
             setup: plan.setup.clone(),
             identity: plan.identity.clone(),
+            session_name: Some(plan.session_name.clone()),
         };
         sync.expect_open(worker, &plan.session);
         let prepared: ExecPrepared = self
@@ -1371,7 +1385,7 @@ impl Runs {
                 m::Serving {
                     host,
                     session: req.session_name.clone().unwrap_or(session),
-                    command: req.argv.iter().map(|w| crate::heavy::quote(w)).collect::<Vec<_>>().join(" "),
+                    command: quoted(&req.argv),
                     started_at: moonlet_core::paths::now_ms(),
                 },
             );

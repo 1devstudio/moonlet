@@ -142,6 +142,34 @@ describe("cloud machines on the Workers page (X63)", () => {
     expect(page.summary).toBe("1 command running · 1 of 6 slots in use");
   });
 
+  it("lists every command on a cloud machine, a member's included, from the machine's own runs", () => {
+    const page = workersPage({
+      workers: [worker("w7", "moonlet-shop-7k2q", { os: "linux", cores: 8, load: 5.1, rtt_ms: 21, slots: 4 })],
+      status: status({ running: [{ job: "j1", session: "s2", command: "pnpm test", worker: "moonlet-shop-7k2q", started_at: 2000 }] }),
+      me: null,
+      sessions,
+      cloud: [
+        machine({
+          worker: "w7",
+          running: 3,
+          runs: [
+            { session: "add-search", command: "pnpm test", since: 2000 },
+            { session: "Fix cart", host: "Alex's MacBook Pro", command: "pnpm build", since: 3000 },
+            { session: "big-refactor", host: "Maya's Mac", since: 4000 },
+          ],
+        }),
+      ],
+      now: 40_000,
+      cloudSessions: {},
+    });
+    expect(page.cloud[0].slots).toBe("3 of 4");
+    expect(page.cloud[0].running).toEqual([
+      { session: "add-search", command: "pnpm test", since: 2000 },
+      { session: "Fix cart", command: "pnpm build", since: 3000, host: "Alex's MacBook Pro" },
+      { session: "big-refactor", command: "copying the session", since: 4000, host: "Maya's Mac" },
+    ]);
+  });
+
   it("keeps a removed machine's line for the hour, under the empty page", () => {
     const at = new Date(2026, 9, 22, 10, 42).getTime();
     const gone = machine({ name: "moonlet-shop-4hn0", state: "removed", since: at, reason: "removed after 15 min idle" });

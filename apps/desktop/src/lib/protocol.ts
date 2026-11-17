@@ -632,13 +632,25 @@ export interface CloudMachine {
   deadline?: number | null;
   idle_until?: number | null;
   for_session?: string | null;
+  /** Its routed commands running now or being prepared there, any host's. */
   running: number;
+  /** Those commands; absent from a central host before members' counted. */
+  runs?: CloudRun[];
   error?: string | null;
   error_since?: number | null;
   error_at?: number | null;
   reason?: string | null;
   /** Its worker's id in `worker.list`, once it has registered. */
   worker?: string | null;
+}
+
+/** A routed command on a cloud machine: `host` is the member whose
+ * session it is (X89), `command` absent while its copy is prepared. */
+export interface CloudRun {
+  session: string;
+  host?: string | null;
+  command?: string | null;
+  since: number;
 }
 
 export interface CloudMachines {

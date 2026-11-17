@@ -164,7 +164,13 @@ export function workersPage(input: WorkersInput): WorkersPageView {
   });
   const cloud: CloudRow[] = machines.map((m) => {
     const w = linked.find((x) => x.id === m.worker);
-    const running = w ? runningOn(w.name) : [];
+    // The machine's own list names every command on it, members' too
+    // (X89); a central host before it has only its own jobs.
+    const running = m.runs
+      ? m.runs.map((r) => ({ session: r.session, command: r.command ?? "copying the session", since: r.since, ...(r.host ? { host: r.host } : {}) }))
+      : w
+        ? runningOn(w.name)
+        : [];
     return {
       id: m.id,
       name: m.name,

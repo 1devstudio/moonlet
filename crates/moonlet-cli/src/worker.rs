@@ -1,0 +1,83 @@
+//! `moonlet worker down` (X63): what a machine still runs, said before it
+//! is removed once those commands end.
+
+use moonlet_proto::methods::CloudMachine;
+
+/// What `moonlet worker down` says of machine `m` before it asks for its
+/// removal: the commands it runs, for which session on which host, which
+/// it waits for. None when it runs nothing, and goes at once.
+pub fn down_note(m: &CloudMachine) -> Option<String> {
+    let n = m.running.max(m.runs.len() as u32);
+    if n == 0 {
+        return None;
+    }
+    let (what, end) = if n == 1 {
+        ("1 command".to_string(), "it ends")
+    } else {
+        (format!("{n} commands"), "they end")
+    };
+    // A central host before members' commands counted names none.
+    if m.runs.is_empty() {
+        return Some(format!("{} runs {what}; it is removed once {end}.\n", m.name));
+    }
+    let mut out = format!("{} runs {what}; it is removed once {end}:\n", m.name);
+    for r in &m.runs {
+        let session = match &r.host {
+            Some(host) => format!("{} on {host}", r.session),
+            None => r.session.clone(),
+        };
+        let command = r.command.as_deref().unwrap_or("copying the session");
+        out.push_str(&format!("  {session}: {command}\n"));
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn machine(running: u32, runs: serde_json::Value) -> CloudMachine {
+        serde_json::from_value(json!({
+            "id": "m1", "name": "moonlet-shop-4hn0", "project": "shop", "project_key": " abc",
+            "provider": "fake", "type": "small", "location": "here", "state": "ready",
+            "since": 0, "steps": [], "running": running, "runs": runs
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_idle_machine_goes_without_a_word() {
+        assert_eq!(down_note(&machine(0, json!([]))), None);
+    }
+
+    #[test]
+    fn names_each_command_and_whose_session_it_is_for() {
+        let m = machine(
+            2,
+            json!([
+                { "session": "fix-cart", "command": "pnpm test", "since": 1 },
+                { "session": "Fix cart", "host": "Alex's MacBook Pro", "since": 2 }
+            ]),
+        );
+        assert_eq!(
+            down_note(&m).unwrap(),
+            "moonlet-shop-4hn0 runs 2 commands; it is removed once they end:\n  fix-cart: pnpm test\n  Fix cart on Alex's MacBook Pro: copying the session\n"
+        );
+    }
+
+    #[test]
+    fn a_central_host_that_names_no_command_still_says_it_waits() {
+        // One before members' commands counted: `runs` is absent.
+        let m: CloudMachine = serde_json::from_value(json!({
+            "id": "m1", "name": "moonlet-shop-4hn0", "project": "shop", "project_key": " abc",
+            "provider": "fake", "type": "small", "location": "here", "state": "ready",
+            "since": 0, "steps": [], "running": 1
+        }))
+        .unwrap();
+        assert_eq!(
+            down_note(&m).unwrap(),
+            "moonlet-shop-4hn0 runs 1 command; it is removed once it ends.\n"
+        );
+    }
+}
