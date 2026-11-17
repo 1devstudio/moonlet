@@ -2071,6 +2071,23 @@ async fn a_machine_that_could_not_be_made_is_not_tried_again_on_every_busy_comma
     assert_eq!(c.failed().await, 2);
 }
 
+#[tokio::test]
+async fn a_machine_removed_on_request_before_it_was_ready_does_not_hold_overflow_back() {
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    c.steer("slow-create", "3000");
+    let first = c.up().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": first["id"] })).await;
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    let all = c.machines().await;
+    assert!(
+        all["machines"].as_array().unwrap().iter().any(|m| m["id"] != first["id"] && m["state"] == "creating"),
+        "{all}"
+    );
+}
+
 impl Cloud {
     async fn jobs(&self, session: &Value) -> Vec<Value> {
         self.d
@@ -2879,10 +2896,13 @@ async fn a_members_command_stops_counting_on_its_machine_once_the_member_goes_si
 #[tokio::test]
 async fn a_members_command_counts_on_its_machine_while_its_copy_is_prepared() {
     let c = cloud().await;
+    // With 0, a machine that has run something goes as soon as it is idle.
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
     let machine = c.ready().await;
     let worker = machine["worker"].as_str().unwrap().to_string();
     // A member's daemon, by hand, that never answers the machine's calls
-    // back for the session's files: the prepare goes on.
+    // back for the session's files: the prepare goes on. It registers as
+    // the worker "intruder".
     let token = pair(&c.d, &c.addr, "Maya's Mac", DeviceKind::Desktop).await;
     let mut s = worker_link(&c.addr, &token).await;
     let identity = json!({ "origin": null, "root": c.key.trim() });
@@ -2903,11 +2923,11 @@ async fn a_members_command_counts_on_its_machine_while_its_copy_is_prepared() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(
-        shown["runs"],
-        json!([{ "session": "big-refactor", "host": "intruder", "since": shown["runs"][0]["since"] }]),
-        "{shown}"
-    );
+    let run = &shown["runs"][0];
+    assert_eq!((&run["session"], &run["host"]), (&json!("big-refactor"), &json!("intruder")), "{shown}");
+    // No command yet: its copy is being prepared.
+    assert_eq!(run["command"], Value::Null, "{shown}");
+    assert!(run["since"].as_u64().unwrap() >= machine["since"].as_u64().unwrap(), "{shown}");
     assert_eq!(shown["idle_until"], Value::Null, "{shown}");
     // The member goes: its prepare no longer counts.
     drop(s);
@@ -2920,6 +2940,14 @@ async fn a_members_command_counts_on_its_machine_while_its_copy_is_prepared() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(left["runs"], json!([]), "{left}");
+    // It ran nothing: it keeps the 5 minutes a machine gets for its first
+    // command, from now.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let kept = c.machines().await["machines"][0].clone();
+    assert_eq!(kept["state"], json!("ready"), "{kept}");
+    let until = kept["idle_until"].as_u64().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    assert!(until > now + 4 * 60_000, "{kept}");
 }
 
 #[tokio::test]

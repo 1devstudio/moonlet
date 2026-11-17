@@ -17,19 +17,33 @@ pub fn down_note(m: &CloudMachine) -> Option<String> {
         (format!("{n} commands"), "they end")
     };
     // A central host before members' commands counted names none.
+    let name = printable(&m.name);
     if m.runs.is_empty() {
-        return Some(format!("{} runs {what}; it is removed once {end}.\n", m.name));
+        return Some(format!("{name} runs {what}; it is removed once {end}.\n"));
     }
-    let mut out = format!("{} runs {what}; it is removed once {end}:\n", m.name);
+    let mut out = format!("{name} runs {what}; it is removed once {end}:\n");
     for r in &m.runs {
         let session = match &r.host {
-            Some(host) => format!("{} on {host}", r.session),
-            None => r.session.clone(),
+            Some(host) => format!("{} on {}", printable(&r.session), printable(host)),
+            None => printable(&r.session),
         };
-        let command = r.command.as_deref().unwrap_or("copying the session");
+        let command = r.command.as_deref().map_or("copying the session".into(), printable);
         out.push_str(&format!("  {session}: {command}\n"));
     }
     Some(out)
+}
+
+/// `s` safe for the terminal: names and commands come from other
+/// members, so control characters go, and line breaks and tabs become
+/// spaces.
+fn printable(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| match c {
+            '\t' | '\r' | '\n' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -63,6 +77,19 @@ mod tests {
         assert_eq!(
             down_note(&m).unwrap(),
             "moonlet-shop-4hn0 runs 2 commands; it is removed once they end:\n  fix-cart: pnpm test\n  Fix cart on Alex's MacBook Pro: copying the session\n"
+        );
+    }
+
+    #[test]
+    fn a_name_with_terminal_escapes_prints_without_them() {
+        // Session names and commands come from other members.
+        let m = machine(
+            1,
+            json!([{ "session": "x\u{1b}]0;pwned\u{7}", "host": "Mac\u{1b}[2J", "command": "make\r\nall", "since": 1 }]),
+        );
+        assert_eq!(
+            down_note(&m).unwrap(),
+            "moonlet-shop-4hn0 runs 1 command; it is removed once it ends:\n  x]0;pwned on Mac[2J: make  all\n"
         );
     }
 

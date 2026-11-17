@@ -492,6 +492,11 @@ pub fn runs_approved(argv: &[String], env: &BTreeMap<String, String>, approved: 
 
 pub use heavy::quote;
 
+/// `argv` as a command line, each word quoted as the shell needs.
+pub fn quoted(argv: &[String]) -> String {
+    argv.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ")
+}
+
 /// Why a line may not write `path`, a redirection's target, from folder
 /// `here`: the file must be in the session's `worktree` (or be
 /// `/dev/null`), and not in git's, moonlet's or Claude Code's own folders.

@@ -55,14 +55,6 @@ const LOST: i32 = 125;
 /// What the agent and the job hear of a run given up on and not run again.
 const LOST_NOT_AGAIN: &str = "The command may have run in part there; it was not run again.";
 
-/// `argv` as a command line, each word quoted as the shell needs.
-pub(crate) fn quoted(argv: &[String]) -> String {
-    argv.iter()
-        .map(|w| crate::heavy::quote(w))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// What to run, already checked.
 pub struct Command {
     pub argv: Vec<String>,
@@ -264,7 +256,7 @@ impl Runs {
         let job = self.jobs.start(Job {
             id: uuid::Uuid::new_v4().to_string(),
             session: plan.session.clone(),
-            command: quoted(&plan.argv),
+            command: crate::heavy::quoted(&plan.argv),
             tool_use_id: plan.tool_use_id.clone(),
             state: JobState::Running {
                 worker: plan.host.clone(),
@@ -443,7 +435,7 @@ impl Runs {
                     let placed = m::CloudRun {
                         session: plan.session_name.clone(),
                         host: None,
-                        command: Some(quoted(&plan.argv)),
+                        command: Some(crate::heavy::quoted(&plan.argv)),
                         since: moonlet_core::paths::now_ms(),
                     };
                     m.run_started(&chosen.id, placed, None)
@@ -1385,7 +1377,7 @@ impl Runs {
                 m::Serving {
                     host,
                     session: req.session_name.clone().unwrap_or(session),
-                    command: quoted(&req.argv),
+                    command: crate::heavy::quoted(&req.argv),
                     started_at: moonlet_core::paths::now_ms(),
                 },
             );

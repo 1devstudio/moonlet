@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { settingsToast, workerHost, workersPage } from "./workers";
+import { runLabel, settingsToast, workerHost, workersPage } from "./workers";
 import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo, WorkerSettingsEntry } from "./protocol";
 
 const worker = (id: string, name: string, extra: Partial<WorkerInfo> = {}): WorkerInfo => ({
@@ -168,6 +168,11 @@ describe("cloud machines on the Workers page (X63)", () => {
       { session: "Fix cart", command: "pnpm build", since: 3000, host: "Alex's MacBook Pro" },
       { session: "big-refactor", command: "copying the session", since: 4000, host: "Maya's Mac" },
     ]);
+  });
+
+  it("names a member's session with its host, and the central host's own alone", () => {
+    expect(runLabel({ session: "Fix cart", host: "Alex's MacBook Pro" })).toBe("Fix cart on Alex's MacBook Pro");
+    expect(runLabel({ session: "fix-cart" })).toBe("fix-cart");
   });
 
   it("keeps a removed machine's line for the hour, under the empty page", () => {

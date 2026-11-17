@@ -54,6 +54,12 @@ export interface CloudRow {
   running: WorkerRow["running"];
 }
 
+/** A running command's session as its row shows it: "Fix cart on Alex's
+ * MacBook Pro" when it runs for another host (X89). */
+export function runLabel(r: { session: string; host?: string }): string {
+  return r.host ? `${r.session} on ${r.host}` : r.session;
+}
+
 const osName = (os: string) => (os === "macos" ? "macOS" : os === "linux" ? "Linux" : os);
 
 function load(value: number | null | undefined, cores: number): WorkerRow["load"] {

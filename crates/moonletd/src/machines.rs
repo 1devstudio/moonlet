@@ -116,6 +116,15 @@ struct Record {
     /// the daemon.
     #[serde(skip)]
     holds: BTreeMap<u64, Hold>,
+    /// When a command placed on it last stopped counting before it ever
+    /// started there: its idle time counts from then too, but it has
+    /// still run nothing.
+    #[serde(skip)]
+    last_placed: Option<u64>,
+    /// It failed, or missed a startup step, before it was ever ready:
+    /// overflow waits before the project's next machine.
+    #[serde(default)]
+    never_up: bool,
 }
 
 /// A routed command on a machine, shown in `runs`.
@@ -683,6 +692,8 @@ impl Machines {
             down_after: None,
             copied: Vec::new(),
             holds: BTreeMap::new(),
+            last_placed: None,
+            never_up: false,
         };
         {
             // The limits and the record in one step, so two calls at once
@@ -897,6 +908,7 @@ impl Machines {
                 return;
             }
             r.call_started = None;
+            r.never_up = true;
             r.set_state("failed");
             r.shown.error = Some(error.clone());
             r.shown.error_since = Some(now_ms());
@@ -1021,6 +1033,7 @@ impl Machines {
                         })
                         .unwrap_or_default();
                     let why = reason.map(|r| format!(": {r}")).unwrap_or_default();
+                    self.update(&machine, |r| r.never_up = true);
                     self.remove(&machine, format!("{label} failed{why}"));
                     return;
                 }
@@ -1067,6 +1080,7 @@ impl Machines {
                         .map(|x| x.label.clone())
                 })
                 .unwrap_or_default();
+            self.update(machine, |r| r.never_up = true);
             self.remove(
                 machine,
                 format!("{label} failed: {}", s.error.unwrap_or_default()),
@@ -1127,6 +1141,7 @@ impl Machines {
                         .rev()
                         .find(|s| s.state == "done")
                         .map_or("nothing".to_string(), |s| s.label.clone());
+                    self.update(&r.shown.id, |r| r.never_up = true);
                     self.remove(
                         &r.shown.id,
                         format!(
@@ -1453,8 +1468,14 @@ impl Machines {
     pub fn run_ended(&self, token: u64) {
         if let Some(id) = self.with_hold(token) {
             self.update(&id, |r| {
-                if r.holds.remove(&token).is_some() {
-                    r.last_end = Some(now_ms());
+                if let Some(h) = r.holds.remove(&token) {
+                    // One that never started there ran nothing: the
+                    // machine keeps the time it has before its first run.
+                    if h.run.command.is_some() {
+                        r.last_end = Some(now_ms());
+                    } else {
+                        r.last_placed = Some(now_ms());
+                    }
                 }
                 r.show_runs();
             });
@@ -1764,15 +1785,13 @@ fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<
 }
 
 /// Until when overflow makes no machine for project `key`, whose last
-/// machines never came up: a minute after the last one went, doubling with
+/// machines failed before they were ready (not one removed on request): a minute after the last one went, doubling with
 /// each such machine in a row, up to [`OVERFLOW_WAIT_MAX`] minutes. None
 /// when its last machine came up, or it has none.
 fn overflow_wait(records: &[Record], key: &str) -> Option<u64> {
     let mut mine: Vec<&Record> = records.iter().filter(|r| r.shown.project_key == key).collect();
     mine.sort_by_key(|r| std::cmp::Reverse(r.created_at));
-    let never_up = |r: &Record| {
-        r.ready_at.is_none() && matches!(r.shown.state.as_str(), "failed" | "removing" | "removed")
-    };
+    let never_up = |r: &Record| r.never_up && r.ready_at.is_none();
     let failed = mine.iter().take_while(|r| never_up(r)).count() as u32;
     let last = mine.first().filter(|r| never_up(r))?;
     let went = last.removed_at.unwrap_or(last.shown.since);
@@ -1786,10 +1805,12 @@ fn billed_from(r: &Record) -> u64 {
     r.made_at.unwrap_or(r.created_at)
 }
 
-/// Since when ready machine `r` has been idle: ready, or its last command's end.
+/// Since when ready machine `r` has been idle: ready, its last command's
+/// end, or when one placed on it last stopped counting.
 fn idle_since(r: &Record) -> u64 {
     r.last_end
         .unwrap_or(0)
+        .max(r.last_placed.unwrap_or(0))
         .max(r.ready_at.unwrap_or(r.shown.since))
 }
 

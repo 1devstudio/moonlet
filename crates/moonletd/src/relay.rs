@@ -102,6 +102,13 @@ impl Relay {
         self.machines.lock().unwrap().upgrade()
     }
 
+    /// Relay run `id` is over without its `exec.done`: it goes, and no
+    /// longer counts on its machine.
+    fn drop_run(&self, id: u32) {
+        let gone = self.runs.lock().unwrap().remove(&id);
+        self.release(gone.and_then(|p| p.hold));
+    }
+
     /// The command of token `hold` no longer counts on its machine.
     fn release(&self, hold: Option<u64>) {
         if let (Some(token), Some(m)) = (hold, self.machines()) {
@@ -226,12 +233,26 @@ impl Relay {
             }
             _ => {}
         }
-        // The pack the call names, sent to this host first, goes on.
+        // The pack the call names, sent to this host first, goes on. A
+        // call that goes no further counts nothing on a machine.
         if let Some(t) = params["pack"].as_u64() {
-            let pack = conn
+            let sent = conn
                 .take_pack(t as u32)
-                .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?;
-            params["pack"] = Value::from(target.send_pack(&pack)?);
+                .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))
+                .and_then(|pack| target.send_pack(&pack));
+            match sent {
+                Ok(id) => params["pack"] = Value::from(id),
+                Err(e) => {
+                    self.release(ended_hold);
+                    if let Some(hold) = preparing {
+                        self.prepared_copy(hold, &Err(e.clone()));
+                    }
+                    if let Some(id) = started {
+                        self.drop_run(id);
+                    }
+                    return Err(e);
+                }
+            }
         }
         let timeout = match method {
             m::EXEC_START | m::EXEC_CANCEL => Duration::from_secs(30),
@@ -251,8 +272,7 @@ impl Relay {
         if let (Err(e), Some(id)) = (&reply, started)
             && e.code != "timeout"
         {
-            let gone = self.runs.lock().unwrap().remove(&id);
-            self.release(gone.and_then(|p| p.hold));
+            self.drop_run(id);
         }
         self.release(ended_hold);
         if let Some(hold) = preparing {
@@ -265,8 +285,7 @@ impl Relay {
             && reply.as_ref().is_ok_and(|v| v.as_bool() == Some(false))
             && let Some(id) = cancelled
         {
-            let gone = self.runs.lock().unwrap().remove(&id);
-            self.release(gone.and_then(|p| p.hold));
+            self.drop_run(id);
         }
         let mut reply = reply?;
         if let Some(id) = done {
@@ -381,7 +400,7 @@ impl Relay {
         };
         let session = params["session_name"].as_str().map(str::to_string);
         let argv: Vec<String> = serde_json::from_value(params["argv"].clone()).unwrap_or_default();
-        let command = crate::exec::quoted(&argv);
+        let command = crate::heavy::quoted(&argv);
         let m = self.machines()?;
         // Prepared longer ago than the machine waited: it counts anew.
         if let Some(hold) = found
