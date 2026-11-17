@@ -114,7 +114,7 @@ moonlet rpc repo.list
 moonlet rpc project.identity '{"path": "~/code/storefront"}'
 ```
 
-`moonlet rpc <method> [params]` calls any daemon method and prints the JSON result. See [Socket protocol](/docs/socket-protocol).
+`moonlet rpc <method> [params]` calls a daemon method and prints the JSON result. It reaches what the other `moonlet` commands do and this Mac's lists (`daemon.info`, `project.list`, `project.identity`, `session.list`, `workspace.list`, `terminal.list`, `repo.list`, `worker.list`, `sync.list`); anything else answers `forbidden: only the moonlet app does that`. See [Socket protocol](/docs/socket-protocol).
 
 ## moonletd
 

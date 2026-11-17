@@ -52,7 +52,7 @@ Protocol 6 is the version at the time of writing. A client must send the daemon'
 After that:
 
 - A `request` `{id, method, params}` gets exactly one `response` `{id, result}` or `{id, error}`. An error is `{code, message}`.
-- An `event` `{name, data}` is broadcast by the daemon to every connected client.
+- An `event` `{name, data}` is broadcast by the daemon to the connected clients that may hear it: never to a local client that did not prove it is the app.
 
 ```json
 {"t": "request", "id": 1, "method": "project.identity", "params": {"path": "~/code/storefront"}}
@@ -75,11 +75,11 @@ Methods are grouped by prefix. A few of them:
 
 For example, `project.identity {path}` returns the identity of any folder: its normalized origin and its root commit. `session.attach` returns the session's info and a snapshot that redraws the screen; the first Output frame after it continues exactly where the snapshot ends.
 
-Some methods answer only the Mac's own app or a paired Mac. A phone or the CLI gets `forbidden`.
+Some methods answer only the Mac's own app or a paired Mac. A phone gets `forbidden`. On the Mac's own socket, a client that does not prove it is the app, such as the CLI or a script, reaches only what the `moonlet` commands use and the Mac's lists, hears no events, and gets `forbidden` for the rest, whatever client name it gives.
 
 ## Call it from a script
 
-You rarely need to speak the protocol yourself. `moonlet rpc` opens the socket, says hello, sends one request and prints the JSON result:
+You rarely need to speak the protocol yourself. `moonlet rpc` opens the socket, says hello, sends one request and prints the JSON result. It reaches what a client that is not the app may call (see above):
 
 ```sh
 moonlet rpc repo.list
