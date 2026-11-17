@@ -91,7 +91,7 @@ pub fn set_heavy(repo: &Path, heavy: &HeavyConfig) -> Result<()> {
         os: heavy.os,
         env: trim(&heavy.env),
         outputs: heavy.outputs.iter().map(|s| s.trim().to_string()).collect(),
-        // Not written here: the file's own stay.
+        // Not written here: the file's own keys stay.
         machine_setup: None,
         rerun: Vec::new(),
     };

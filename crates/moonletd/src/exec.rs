@@ -120,6 +120,10 @@ pub struct Runs {
     /// Runs cancelled before their start arrived, so a late start never
     /// runs (X89).
     cancelled_early: Mutex<HashSet<(ClientId, u32)>>,
+    /// Runs for other hosts that ended lately: a cancel of one answers that
+    /// it ran, so its host never runs it elsewhere as one that never
+    /// started.
+    ended: Mutex<HashSet<(ClientId, u32)>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
     /// Why a worker was last skipped for a project, by worker and project,
@@ -208,6 +212,7 @@ impl Runs {
             copies_in_use: Mutex::default(),
             serving: Mutex::default(),
             cancelled_early: Mutex::default(),
+            ended: Mutex::default(),
             going: Mutex::default(),
             skips: Mutex::default(),
             base_env,
@@ -218,8 +223,7 @@ impl Runs {
 
     /// A command started or ended here: the Mac stays awake while any runs.
     fn runs_changed(&self) {
-        let runs = self.running.lock().unwrap().len() + self.routed.lock().unwrap().len();
-        self.awake.runs(runs);
+        self.awake.runs(|| self.running.lock().unwrap().len() + self.routed.lock().unwrap().len());
     }
 
     /// The cloud machines, which routing starts and sends commands to (X63).
@@ -983,7 +987,10 @@ impl Runs {
                 let reply = conn
                     .request(m::EXEC_CANCEL, serde_json::json!({ "run": run }), Duration::from_secs(10))
                     .await;
-                Some(reply.map(|v| v.as_bool() == Some(true)))
+                // Only the connection the start went on knows the run: a
+                // runner on another one has no such run whatever it ran.
+                let same = !conn.is_gone() && conn.generation() == generation;
+                Some(reply.map(|v| v.as_bool() == Some(true) || !same))
             } else {
                 None
             };
@@ -1039,8 +1046,9 @@ impl Runs {
                     return Ok((status, brought, back_ms));
                 }
                 _ = tick.tick() => {
-                    let gone = conn.is_gone()
-                        || conn.generation() != generation
+                    // Down, connected again, or silent past the limit, as
+                    // the runner judges it, so both give the run up.
+                    let gone = conn.gave_up(generation)
                         || match &conn {
                             Peer::Conn(c) => workers.conn(worker).is_none_or(|w| w.id != c.id),
                             Peer::Link(_) => false,
@@ -1348,6 +1356,8 @@ impl Runs {
                 return Err(RpcError::new("busy", "a command of the session runs here"));
             }
             routed.insert((from, req.run), cancel.clone());
+            // A host that restarted numbers its runs afresh.
+            self.ended.lock().unwrap().remove(&(from, req.run));
             let (host, session) = sync.run_copy_for(&req.copy).unwrap_or_default();
             self.serving.lock().unwrap().insert(
                 (from, req.run),
@@ -1520,8 +1530,12 @@ impl Runs {
 
     /// `exec.cancel` from the host that routed run `run` here, on the
     /// connection `from` it came on.
+    /// Answers whether the run started here: going (it stops now) or ended.
     pub fn cancel_here(&self, from: ClientId, run: u32) -> bool {
         let routed = self.routed.lock().unwrap();
+        if !routed.contains_key(&(from, run)) && self.ended.lock().unwrap().contains(&(from, run)) {
+            return true;
+        }
         if !routed.contains_key(&(from, run)) {
             // Its start may still come: it never runs then. A cancel of a
             // run that already ended lands here too; a few are kept.
@@ -1551,6 +1565,13 @@ struct Claim {
 impl Drop for Claim {
     fn drop(&mut self) {
         self.runs.routed.lock().unwrap().remove(&self.run);
+        {
+            let mut ended = self.runs.ended.lock().unwrap();
+            if ended.len() >= 256 {
+                ended.clear();
+            }
+            ended.insert(self.run);
+        }
         self.runs.serving.lock().unwrap().remove(&self.run);
         self.runs.copies_in_use.lock().unwrap().remove(&self.copy);
         self.runs.runs_changed();
@@ -1928,6 +1949,28 @@ mod tests {
             Some("/usr/bin::")
         ));
         assert!(!found("shop-tool", dir.path(), Some("/usr/bin")));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_answers_whether_the_run_started_here() {
+        // exec.cancel's answer, on a runner: a run going on here, or one
+        // that already ended, started; one never seen did not.
+        let dir = tempfile::tempdir().unwrap();
+        let runs = Runs::new(BTreeMap::new(), Arc::new(Jobs::load(dir.path().to_path_buf(), |_| {})));
+        let (from, run) = (7, 41);
+        assert!(!runs.cancel_here(from, run));
+        // A run that took its slot here, and ended.
+        runs.routed.lock().unwrap().insert((from, 42), Arc::new(Notify::new()));
+        drop(Claim { runs: runs.clone(), run: (from, 42), copy: "c1".into() });
+        assert!(runs.cancel_here(from, 42));
+        // The same run id from another connection is another run.
+        assert!(!runs.cancel_here(from + 1, 42));
+        // A run going on again under that id, as after its host restarted,
+        // is stopped.
+        let going = Arc::new(Notify::new());
+        runs.routed.lock().unwrap().insert((from, 42), going.clone());
+        assert!(runs.cancel_here(from, 42));
+        assert!(tokio::time::timeout(Duration::from_millis(100), going.notified()).await.is_ok());
     }
 
     #[test]

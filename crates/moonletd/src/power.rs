@@ -262,30 +262,34 @@ impl KeepAwake {
         KeepAwake { how, held: std::sync::Mutex::new(None) }
     }
 
-    /// `runs` heavy commands go on here now.
-    pub fn runs(&self, runs: usize) {
+    /// Heavy commands started or ended here; `runs` counts those going on.
+    /// It is counted under this lock, so two changes at once never apply
+    /// their counts out of order.
+    pub fn runs(&self, runs: impl FnOnce() -> usize) {
         let mut held = self.held.lock().unwrap();
-        match awake(held.is_some(), runs) {
+        match awake(held.is_some(), runs()) {
             Some(Awake::Hold) => {
-                *held = Some(match &self.how {
+                // One that could not be made is tried again at the next
+                // change.
+                *held = match &self.how {
                     How::Log(path) => {
                         log_line(path, "hold");
-                        0
+                        Some(0)
                     }
                     #[cfg(target_os = "macos")]
                     How::Assert => assertion::hold(),
-                    _ => 0,
-                });
+                    _ => Some(0),
+                };
             }
             Some(Awake::Release) => {
-                let id = held.take().unwrap_or_default();
+                // Only a Mac's assertion has an id to give back.
+                let _id = held.take();
                 match &self.how {
                     How::Log(path) => log_line(path, "release"),
                     #[cfg(target_os = "macos")]
-                    How::Assert => assertion::release(id),
+                    How::Assert => assertion::release(_id.unwrap_or_default()),
                     _ => {}
                 }
-                let _ = id;
             }
             None => {}
         }
@@ -322,9 +326,9 @@ mod assertion {
     /// `kIOPMAssertionLevelOn`.
     const ON: u32 = 255;
 
-    /// Holds a `PreventUserIdleSystemSleep` assertion; gives its id, 0
+    /// Holds a `PreventUserIdleSystemSleep` assertion; gives its id, none
     /// when it could not be made.
-    pub fn hold() -> u32 {
+    pub fn hold() -> Option<u32> {
         // SAFETY: plain CoreFoundation and IOKit calls on NUL-terminated
         // literals; each string made here is released here.
         unsafe {
@@ -339,9 +343,9 @@ mod assertion {
             }
             if !ok {
                 tracing::warn!("cannot keep the Mac awake for heavy commands");
-                return 0;
+                return None;
             }
-            id
+            Some(id)
         }
     }
 

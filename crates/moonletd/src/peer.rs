@@ -134,15 +134,18 @@ impl Peer {
     }
 }
 
-/// How long a runner's link may hear nothing from its central host before
-/// the host counts as gone: it pings every linked worker every 10 s, and
-/// drops one after 3 missed pings, so by then the host has given up too.
+/// How long a member's link may hear nothing from its central host before
+/// the host counts as gone. The central host pings every linked member
+/// every 10 s and drops one after 3 missed pings, 30 s or more after the
+/// last ping that member heard: a runner stops its command (and its grace
+/// of 5 s runs out) by then, before anything runs it again. Two pings lost
+/// in a row on a working link are what it costs.
 /// `MOONLET_TEST_LINK_SILENCE_MS` sets it in tests.
 pub fn silence_limit() -> Duration {
     std::env::var("MOONLET_TEST_LINK_SILENCE_MS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .map_or(Duration::from_secs(45), Duration::from_millis)
+        .map_or(Duration::from_secs(25), Duration::from_millis)
 }
 
 /// Whether a runner counts the host whose run it runs as having given the
@@ -160,7 +163,7 @@ mod tests {
 
     #[test]
     fn a_runner_gives_a_run_up_once_its_link_drops_connects_again_or_goes_silent() {
-        let limit = Duration::from_secs(45);
+        let limit = Duration::from_secs(25);
         let quiet = Duration::from_secs(9);
         // Linked on the same connection, pinged lately: the run goes on.
         assert!(!given_up(true, false, quiet, limit));
@@ -168,8 +171,8 @@ mod tests {
         assert!(given_up(false, false, quiet, limit));
         // It connected again since the run started, however quickly.
         assert!(given_up(true, true, Duration::ZERO, limit));
-        // Nothing heard for 45 s, the connection still open.
-        assert!(given_up(true, false, Duration::from_secs(45), limit));
-        assert!(!given_up(true, false, Duration::from_secs(44), limit));
+        // Nothing heard for 25 s, the connection still open.
+        assert!(given_up(true, false, Duration::from_secs(25), limit));
+        assert!(!given_up(true, false, Duration::from_secs(24), limit));
     }
 }

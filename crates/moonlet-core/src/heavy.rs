@@ -959,14 +959,9 @@ pub fn rules_block(rules: &[BashRule], command: &str, words: &[String]) -> bool 
 /// Why `[heavy]` cannot be used as written, checked when the config is
 /// read or saved.
 pub fn check(heavy: &HeavyConfig) -> Result<(), String> {
-    for c in &heavy.commands {
-        if split(c).is_none_or(|w| w.is_empty()) {
-            return Err(format!("commands: `{c}` is not a plain command"));
-        }
-    }
-    for c in &heavy.rerun {
-        if split(c).is_none_or(|w| w.is_empty()) {
-            return Err(format!("rerun: `{c}` is not a plain command"));
+    for (key, list) in [("commands", &heavy.commands), ("rerun", &heavy.rerun)] {
+        if let Some(c) = list.iter().find(|c| split(c).is_none_or(|w| w.is_empty())) {
+            return Err(format!("{key}: `{c}` is not a plain command"));
         }
     }
     for name in &heavy.env {

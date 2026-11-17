@@ -71,6 +71,11 @@ const MINI: &str = "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70";
 /// not linked yet. Its own "Tailscale address" is 127.0.0.2, so linking to
 /// 127.0.0.1 is not linking to itself.
 async fn mac_with(id: &str, name: &str, worker: Value) -> Daemon {
+    mac_env(id, name, worker, &[]).await
+}
+
+/// [`mac_with`], with more of its daemon's environment.
+async fn mac_env(id: &str, name: &str, worker: Value, extra: &[(&str, &str)]) -> Daemon {
     let home = tempfile::tempdir().unwrap();
     let mut w = json!({ "id": id, "name": name, "enabled": false });
     for (k, v) in worker.as_object().unwrap() {
@@ -86,7 +91,10 @@ async fn mac_with(id: &str, name: &str, worker: Value) -> Daemon {
         &[
             ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
             ("MOONLET_TEST_LOAD", "0.5"),
-        ],
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .collect::<Vec<_>>(),
     )
     .await
 }
@@ -143,9 +151,15 @@ async fn account() -> (Daemon, String, Daemon, Daemon) {
 
 /// [`account`], with more of the central host's environment.
 async fn account_env(extra: &[(&str, &str)]) -> (Daemon, String, Daemon, Daemon) {
-    let (mini, addr) = central_env(extra).await;
-    let book = mac(BOOK, "Alex's MacBook Pro").await;
-    let air = mac(AIR, "Alex's MacBook Air").await;
+    account_with(extra, &[]).await
+}
+
+/// [`account`], with more of the central host's environment and of each
+/// Mac's.
+async fn account_with(central: &[(&str, &str)], macs: &[(&str, &str)]) -> (Daemon, String, Daemon, Daemon) {
+    let (mini, addr) = central_env(central).await;
+    let book = mac_env(BOOK, "Alex's MacBook Pro", json!({}), macs).await;
+    let air = mac_env(AIR, "Alex's MacBook Air", json!({}), macs).await;
     link(&book, &mini, &addr, "Alex's MacBook Pro").await;
     link(&air, &mini, &addr, "Alex's MacBook Air").await;
     for d in [&mini, &book, &air] {
@@ -828,6 +842,40 @@ async fn a_runner_lost_after_its_run_started_is_not_run_again_by_default() {
             "{lost:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_member_whose_central_host_goes_silent_mid_run_ends_the_run_in_a_bounded_time() {
+    // The MacBook hears nothing from studio-mini for 1.5 s: gone.
+    let (mini, _addr, book, _air) = account_with(&[], &[("MOONLET_TEST_LINK_SILENCE_MS", "1500")]).await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let (mut c, err) = start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 30"]).await;
+    assert_eq!(err, "moonlet: running on studio-mini\n");
+    // studio-mini stops answering, its link still open.
+    let pid = nix::unistd::Pid::from_raw(mini.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut stderr = String::new();
+        loop {
+            match c.next_frame().await.unwrap().unwrap() {
+                moonlet_proto::Frame::RunOutput { stream: 2, data, .. } => stderr.push_str(&String::from_utf8_lossy(&data)),
+                moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }) if name == "exec.exited" => {
+                    break (data["status"].as_i64().unwrap(), stderr);
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    let (status, stderr) = ended.expect("the run never ended");
+    assert_eq!(status, 125);
+    assert_eq!(
+        stderr,
+        "moonlet: studio-mini went away during the run. The command may have run in part there; it was not run again.\n"
+    );
 }
 
 #[tokio::test]
