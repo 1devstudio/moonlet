@@ -1302,8 +1302,11 @@ async fn app_methods(addr: &str, token: &str, client: &str) -> Vec<(String, Stri
     let mut s = raw(addr, token, client).await;
     let mut out = Vec::new();
     for (i, (method, params)) in asks.into_iter().enumerate() {
-        let reply = ask(&mut s, i as u64 + 1, method, params).await;
-        let got = refused(&reply).unwrap_or_else(|| "ok".into());
+        let got = match ask(&mut s, i as u64 + 1, method, params).await {
+            Some(Message::Response { error: Some(e), .. }) => e.code,
+            Some(Message::Response { .. }) => "ok".into(),
+            other => panic!("{method}: no answer: {other:?}"),
+        };
         out.push((method.to_string(), got));
     }
     out
@@ -1314,7 +1317,7 @@ async fn app_methods(addr: &str, token: &str, client: &str) -> Vec<(String, Stri
 async fn registered_before(central: &Daemon, addr: &str, token: &str) {
     let mut s = raw(addr, token, "moonletd-worker").await;
     let reply = ask(&mut s, 1, "worker.register", registration(WORKER_ID, "Alex's MacBook Pro")).await;
-    assert_eq!(refused(&reply), None);
+    assert!(matches!(reply, Some(Message::Response { error: None, .. })), "{reply:?}");
     drop(s);
     eventually("the old link is gone", || async { workers(central).await.is_empty() }).await;
 }
@@ -1366,6 +1369,7 @@ async fn a_link_made_with_a_paired_macs_token_moves_to_a_worker_credential_by_it
     })
     .await;
     eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    assert_eq!(workers(&central).await[0].worker.id, "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37");
     assert!(!authenticates(&addr, &paired).await, "the old token still works");
     // One device for the Mac on the central host, as before.
     let status: moonlet_proto::methods::MobileStatus = central.call("mobile.status", json!({})).await;
@@ -1380,6 +1384,7 @@ async fn a_link_made_with_a_paired_macs_token_moves_to_a_worker_credential_by_it
     })
     .await;
     eventually("listed again", || async { workers(&central).await.len() == 1 }).await;
+    assert_eq!(workers(&central).await[0].worker.id, "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37");
     assert_eq!(link_token(&worker), moved, "it moved twice");
 }
 
@@ -1457,4 +1462,40 @@ async fn a_link_keeps_its_token_while_the_apps_host_list_cannot_be_read() {
     eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
     assert_eq!(link_token(&worker), token);
     assert!(authenticates(&addr, &token).await, "the app's token stopped working");
+}
+
+/// While a member trades its token for a worker link, its worker id stays
+/// its own: another paired Mac cannot take it between the old token's
+/// removal and the new link's registration.
+#[tokio::test]
+async fn a_worker_id_stays_the_members_while_its_link_moves() {
+    let (central, addr) = central().await;
+    let paired = pair(&central, &addr, "Alex's MacBook Pro").await;
+    registered_before(&central, &addr, &paired).await;
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        json!({ "central": null, "worker": { "id": WORKER_ID, "name": "Alex's MacBook Pro", "enabled": false } })
+            .to_string(),
+    )
+    .unwrap();
+    // A slow registration holds the moved link back from registering.
+    let worker = Daemon::start(
+        home,
+        &[("MOONLET_MOBILE_ADDRS", "127.0.0.2"), ("MOONLET_TEST_REGISTER_DELAY_MS", "3000")],
+    )
+    .await;
+    link(&worker, &addr, &paired).await;
+    eventually("the old token is gone", || async { !authenticates(&addr, &paired).await }).await;
+    assert!(workers(&central).await.is_empty(), "registered before the test could try");
+
+    let other = pair(&central, &addr, "Sam's MacBook Air").await;
+    let mut s = raw(&addr, &other, "moonletd-worker").await;
+    let taken = ask(&mut s, 1, "worker.register", registration(WORKER_ID, "Sam's MacBook Air")).await;
+    assert_eq!(refused(&taken).as_deref(), Some("forbidden"));
+    drop(s);
+    eventually("the member is listed", || async {
+        workers(&central).await.iter().any(|w| w.worker.name == "Alex's MacBook Pro")
+    })
+    .await;
 }

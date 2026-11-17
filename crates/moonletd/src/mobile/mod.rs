@@ -655,20 +655,21 @@ impl Mobile {
         let token = random_hex(32);
         let gone: Vec<String> = {
             let mut data = self.data.lock().unwrap();
-            let asker = data
+            let mut next = data.clone();
+            let asker = next
                 .devices
                 .iter()
                 .find(|d| d.id == device && d.kind == DeviceKind::Desktop && !d.worker_link)
                 .ok_or_else(|| RpcError::new("forbidden", "only a paired Mac's daemon asks for a worker link"))?;
             let name = asker.name.clone();
-            let gone: Vec<String> = data
+            let gone: Vec<String> = next
                 .devices
                 .iter()
                 .filter(|d| d.minted_by.as_deref() == Some(device))
                 .map(|d| d.id.clone())
                 .collect();
-            data.devices.retain(|d| !gone.contains(&d.id));
-            data.devices.push(StoredDevice {
+            next.devices.retain(|d| !gone.contains(&d.id));
+            next.devices.push(StoredDevice {
                 id: random_hex(8),
                 name,
                 token_sha256: sha256_hex(token.as_bytes()),
@@ -680,7 +681,11 @@ impl Mobile {
                 minted_by: Some(device.to_string()),
                 replaces: replace,
             });
-            self.save(&data);
+            // Given only once kept: a token the central host would not know
+            // after a restart would strand the member.
+            write_private(&self.file, &serde_json::to_vec_pretty(&next).unwrap())
+                .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.file.display())))?;
+            *data = next;
             gone
         };
         for id in gone {
@@ -708,8 +713,15 @@ impl Mobile {
             .and_then(|d| d.minted_by.clone())
     }
 
-    pub fn is_paired(&self, id: &str) -> bool {
-        self.data.lock().unwrap().devices.iter().any(|d| d.id == id)
+    /// Whether device `id`, or a worker link it asked for, is paired: the
+    /// worker ids `id` registered stay that Mac's while its link moves.
+    pub fn holds_ids_of(&self, id: &str) -> bool {
+        self.data
+            .lock()
+            .unwrap()
+            .devices
+            .iter()
+            .any(|d| d.id == id || d.minted_by.as_deref() == Some(id))
     }
 
     /// Removes device `id` and the worker links it asked for; returns
@@ -1143,6 +1155,18 @@ mod tests {
         let link = mobile.worker_credential("d1", false).unwrap();
         let id = by_token(&mobile, &link).unwrap().device_id;
         assert_eq!(mobile.worker_credential(&id, false).unwrap_err().code, "forbidden");
+    }
+
+    #[test]
+    fn a_worker_link_that_cannot_be_saved_is_never_given() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mobile) = with_mac();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let asked = mobile.worker_credential("d1", true);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(asked.unwrap_err().code, "internal");
+        assert_eq!(names(&mobile), ["Alex's MacBook Pro", "iPhone"]);
+        assert!(!by_token(&mobile, "tok").unwrap().worker_link);
     }
 
     #[test]

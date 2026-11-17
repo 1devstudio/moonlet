@@ -2509,7 +2509,7 @@ impl Daemon {
                 // token registered: they are the same Mac's.
                 let mac = self.mobile.minted_by(device);
                 self.workers
-                    .register(conn.clone(), device, r, |owner| mobile.is_paired(owner) && mac.as_deref() != Some(owner))?;
+                    .register(conn.clone(), device, r, |owner| mobile.holds_ids_of(owner) && mac.as_deref() != Some(owner))?;
                 self.sync.worker_linked(&id);
                 if let Some(machine) = self.machines.machine_of(device) {
                     self.machines.registered(&machine, &id);
