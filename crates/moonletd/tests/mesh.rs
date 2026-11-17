@@ -71,6 +71,11 @@ const MINI: &str = "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70";
 /// not linked yet. Its own "Tailscale address" is 127.0.0.2, so linking to
 /// 127.0.0.1 is not linking to itself.
 async fn mac_with(id: &str, name: &str, worker: Value) -> Daemon {
+    mac_env(id, name, worker, &[]).await
+}
+
+/// [`mac_with`], with more of its daemon's environment.
+async fn mac_env(id: &str, name: &str, worker: Value, extra: &[(&str, &str)]) -> Daemon {
     let home = tempfile::tempdir().unwrap();
     let mut w = json!({ "id": id, "name": name, "enabled": false });
     for (k, v) in worker.as_object().unwrap() {
@@ -86,7 +91,10 @@ async fn mac_with(id: &str, name: &str, worker: Value) -> Daemon {
         &[
             ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
             ("MOONLET_TEST_LOAD", "0.5"),
-        ],
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .collect::<Vec<_>>(),
     )
     .await
 }
@@ -143,9 +151,15 @@ async fn account() -> (Daemon, String, Daemon, Daemon) {
 
 /// [`account`], with more of the central host's environment.
 async fn account_env(extra: &[(&str, &str)]) -> (Daemon, String, Daemon, Daemon) {
-    let (mini, addr) = central_env(extra).await;
-    let book = mac(BOOK, "Alex's MacBook Pro").await;
-    let air = mac(AIR, "Alex's MacBook Air").await;
+    account_with(extra, &[]).await
+}
+
+/// [`account`], with more of the central host's environment and of each
+/// Mac's.
+async fn account_with(central: &[(&str, &str)], macs: &[(&str, &str)]) -> (Daemon, String, Daemon, Daemon) {
+    let (mini, addr) = central_env(central).await;
+    let book = mac_env(BOOK, "Alex's MacBook Pro", json!({}), macs).await;
+    let air = mac_env(AIR, "Alex's MacBook Air", json!({}), macs).await;
     link(&book, &mini, &addr, "Alex's MacBook Pro").await;
     link(&air, &mini, &addr, "Alex's MacBook Air").await;
     for d in [&mini, &book, &air] {
@@ -573,14 +587,21 @@ async fn run(d: &Daemon, session: &Value, argv: &[&str]) -> Ran {
 }
 
 const RUN_HEAVY: &str = "[heavy]\ncommands = [\"sh -c\", \"pnpm check\"]\n";
+/// [`RUN_HEAVY`], with `sh -c` marked safe to run again.
+const RERUN_HEAVY: &str = "[heavy]\ncommands = [\"sh -c\", \"pnpm check\"]\nrerun = [\"sh -c\"]\n";
 
 /// The account, with project `shop` on the MacBook and its session
 /// `Fix cart` there, its heavy commands approved. Gives the session.
 async fn book_session(book: &Daemon, repo: &std::path::Path) -> Value {
+    book_session_with(book, repo, RUN_HEAVY).await
+}
+
+/// [`book_session`], with `config` for the project.
+async fn book_session_with(book: &Daemon, repo: &std::path::Path, config: &str) -> Value {
     let project = shop_on(book, repo).await;
     std::fs::write(
         book.home.path().join("src/shop/.moonlet/config.toml"),
-        RUN_HEAVY,
+        config,
     )
     .unwrap();
     let _: Value = book
@@ -733,14 +754,29 @@ async fn a_member_without_its_central_host_runs_its_own_commands() {
     );
 }
 
-#[tokio::test]
-async fn a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host() {
-    let (mut mini, _addr, book, _air) = account().await;
+/// Which host goes away while a member's command runs elsewhere.
+#[derive(Clone, Copy, Debug)]
+enum Lost {
+    /// studio-mini, which runs the MacBook's command.
+    Runner,
+    /// The Air, which runs it through studio-mini.
+    RelayedRunner,
+    /// studio-mini, which passes it on to the Air that runs it.
+    Relay,
+}
+
+/// Runs a command of the MacBook's on studio-mini or the Air, as `lost`
+/// says, and makes that host go away once it ran there. The command says
+/// where it runs, by the daemon's home it inherits (the daemons share this
+/// machine), then takes a while. Gives its stdout, stderr and status.
+async fn lose_mid_run(lost: Lost, config: &str) -> (String, String, i64) {
+    let (mut mini, _addr, book, mut air) = account().await;
     let repo = tempfile::tempdir().unwrap();
-    let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
-    // The command says where it runs, by the daemon's home it inherits
-    // (both daemons share this machine), then takes a while.
+    let session = book_session_with(&book, repo.path(), config).await;
+    match lost {
+        Lost::Runner => mini_takes(&mini, &book, true).await,
+        Lost::RelayedRunner | Lost::Relay => only_air_takes(&mini, &book, &air).await,
+    }
     let marker = format!(
         "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
         book.home.path().display()
@@ -767,10 +803,12 @@ async fn a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sess
                 let text = String::from_utf8_lossy(&data).to_string();
                 if stream == 1 {
                     stdout.push_str(&text);
-                    // Running on studio-mini: it goes away.
                     if text.contains("there") && !stopped {
                         stopped = true;
-                        mini.stop();
+                        match lost {
+                            Lost::Runner | Lost::Relay => mini.stop(),
+                            Lost::RelayedRunner => air.stop(),
+                        }
                     }
                 } else {
                     stderr.push_str(&text);
@@ -784,7 +822,66 @@ async fn a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sess
             _ => {}
         }
     };
-    assert!(stopped, "it never ran on studio-mini: {stdout} {stderr}");
+    assert!(stopped, "it never ran elsewhere: {stdout} {stderr}");
+    (stdout, stderr, status)
+}
+
+#[tokio::test]
+async fn a_runner_lost_after_its_run_started_is_not_run_again_by_default() {
+    for lost in [Lost::Runner, Lost::RelayedRunner, Lost::Relay] {
+        let (stdout, stderr, status) = lose_mid_run(lost, RUN_HEAVY).await;
+        let runner = match lost {
+            Lost::Runner => "studio-mini",
+            Lost::RelayedRunner | Lost::Relay => "Alex's MacBook Air",
+        };
+        // It ran there only, and the agent hears it was not run again.
+        assert_eq!((stdout.as_str(), status), ("there\n", 125), "{lost:?}: {stderr}");
+        assert_eq!(
+            stderr,
+            format!("moonlet: running on {runner}\nmoonlet: {runner} went away during the run. The command may have run in part there; it was not run again.\n"),
+            "{lost:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_member_whose_central_host_goes_silent_mid_run_ends_the_run_in_a_bounded_time() {
+    // The MacBook hears nothing from studio-mini for 1.5 s: gone.
+    let (mini, _addr, book, _air) = account_with(&[], &[("MOONLET_TEST_LINK_SILENCE_MS", "1500")]).await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, &book, true).await;
+    let (mut c, err) = start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 30"]).await;
+    assert_eq!(err, "moonlet: running on studio-mini\n");
+    // studio-mini stops answering, its link still open.
+    let pid = nix::unistd::Pid::from_raw(mini.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut stderr = String::new();
+        loop {
+            match c.next_frame().await.unwrap().unwrap() {
+                moonlet_proto::Frame::RunOutput { stream: 2, data, .. } => stderr.push_str(&String::from_utf8_lossy(&data)),
+                moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }) if name == "exec.exited" => {
+                    break (data["status"].as_i64().unwrap(), stderr);
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    let (status, stderr) = ended.expect("the run never ended");
+    assert_eq!(status, 125);
+    assert_eq!(
+        stderr,
+        "moonlet: studio-mini went away during the run. The command may have run in part there; it was not run again.\n"
+    );
+}
+
+#[tokio::test]
+async fn a_runner_that_goes_away_mid_run_makes_the_command_run_again_on_the_sessions_host() {
+    // A command the project marked safe to run again.
+    let (stdout, stderr, status) = lose_mid_run(Lost::Runner, RERUN_HEAVY).await;
     assert_eq!(status, 0);
     assert_eq!(stdout, "there\nhere\n");
     assert!(
@@ -1164,53 +1261,8 @@ async fn the_central_host_passes_on_only_the_routing_methods() {
 #[tokio::test]
 async fn a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_it_again_on_the_sessions_host()
  {
-    let (mini, _addr, book, mut air) = account().await;
-    let repo = tempfile::tempdir().unwrap();
-    let session = book_session(&book, repo.path()).await;
-    only_air_takes(&mini, &book, &air).await;
-    let marker = format!(
-        "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
-        book.home.path().display()
-    );
-    let mut c = book.app().await;
-    let started: Value = c
-        .request(
-            "exec.run",
-            json!({ "session": session["id"], "argv": ["sh", "-c", marker], "cwd": session["path"], "env": {} }),
-        )
-        .await
-        .unwrap();
-    let run_id = started["run"].as_u64().unwrap();
-    let (mut stdout, mut stderr) = (String::new(), String::new());
-    let mut stopped = false;
-    let status = loop {
-        let frame = tokio::time::timeout(Duration::from_secs(90), c.next_frame())
-            .await
-            .expect("the run never ended")
-            .unwrap()
-            .unwrap();
-        match frame {
-            moonlet_proto::Frame::RunOutput { run, stream, data } if u64::from(run) == run_id => {
-                let text = String::from_utf8_lossy(&data).to_string();
-                if stream == 1 {
-                    stdout.push_str(&text);
-                    if text.contains("there") && !stopped {
-                        stopped = true;
-                        air.stop();
-                    }
-                } else {
-                    stderr.push_str(&text);
-                }
-            }
-            moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data })
-                if name == "exec.exited" && data["run"] == json!(run_id) =>
-            {
-                break data["status"].as_i64().unwrap();
-            }
-            _ => {}
-        }
-    };
-    assert!(stopped, "it never ran on the Air: {stdout} {stderr}");
+    // A command the project marked safe to run again.
+    let (stdout, stderr, status) = lose_mid_run(Lost::RelayedRunner, RERUN_HEAVY).await;
     assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
     assert!(
         stderr.contains(
@@ -1222,53 +1274,8 @@ async fn a_member_reached_through_the_central_host_that_goes_away_mid_run_runs_i
 
 #[tokio::test]
 async fn losing_the_central_host_mid_relay_runs_the_command_again_on_the_sessions_host() {
-    let (mut mini, _addr, book, air) = account().await;
-    let repo = tempfile::tempdir().unwrap();
-    let session = book_session(&book, repo.path()).await;
-    only_air_takes(&mini, &book, &air).await;
-    let marker = format!(
-        "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
-        book.home.path().display()
-    );
-    let mut c = book.app().await;
-    let started: Value = c
-        .request(
-            "exec.run",
-            json!({ "session": session["id"], "argv": ["sh", "-c", marker], "cwd": session["path"], "env": {} }),
-        )
-        .await
-        .unwrap();
-    let run_id = started["run"].as_u64().unwrap();
-    let mut stdout = String::new();
-    let mut stopped = false;
-    let status = loop {
-        let frame = tokio::time::timeout(Duration::from_secs(90), c.next_frame())
-            .await
-            .expect("the run never ended")
-            .unwrap()
-            .unwrap();
-        match frame {
-            moonlet_proto::Frame::RunOutput {
-                run,
-                stream: 1,
-                data,
-            } if u64::from(run) == run_id => {
-                let text = String::from_utf8_lossy(&data).to_string();
-                stdout.push_str(&text);
-                if text.contains("there") && !stopped {
-                    stopped = true;
-                    mini.stop();
-                }
-            }
-            moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data })
-                if name == "exec.exited" && data["run"] == json!(run_id) =>
-            {
-                break data["status"].as_i64().unwrap();
-            }
-            _ => {}
-        }
-    };
-    assert!(stopped, "it never ran on the Air: {stdout}");
+    // A command the project marked safe to run again.
+    let (stdout, _stderr, status) = lose_mid_run(Lost::Relay, RERUN_HEAVY).await;
     assert_eq!((stdout.as_str(), status), ("there\nhere\n", 0));
 }
 

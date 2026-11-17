@@ -9,7 +9,7 @@
 
 ## Summary
 
-An agent on the central host, such as the Mac mini `studio-mini`, runs `pnpm test`. When the project lists `pnpm test` as a **heavy command** and the user has approved it, moonlet runs it on the free worker with the lowest load: a linked Mac or remote host (X41, X61), the central host itself, or a cloud machine ([X63](X63-cloud-workers.md)). The worker runs it in a **routing copy** of the session's files. Before the command starts, a **fence** makes the copy hold exactly the session's files. Output streams back as it comes. After the command ends, every change it made is back in the session before the agent sees the exit status. If the worker goes away mid-run, the command runs again on the central host.
+An agent on the central host, such as the Mac mini `studio-mini`, runs `pnpm test`. When the project lists `pnpm test` as a **heavy command** and the user has approved it, moonlet runs it on the free worker with the lowest load: a linked Mac or remote host (X41, X61), the central host itself, or a cloud machine ([X63](X63-cloud-workers.md)). The worker runs it in a **routing copy** of the session's files. Before the command starts, a **fence** makes the copy hold exactly the session's files. Output streams back as it comes. After the command ends, every change it made is back in the session before the agent sees the exit status. If the worker goes away mid-run, the command may have run in part there, so moonlet does not run it again unless the project marked it safe to; the agent hears so and decides.
 
 Every routed command is a **job** of its session. The session's **Jobs** tab lists its jobs, and each one opens to show its phases, its output, what came back and where it ran, the way X42's Agents tab shows subagents.
 
@@ -25,13 +25,14 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
    [heavy]
    commands = ["pnpm test", "pnpm build"]
    outputs = ["coverage"]
+   rerun = ["pnpm test"]
    ```
 
 2. In Settings › Projects › shop (studio-mini), the **Heavy commands** section lists `pnpm test` and `pnpm build`, each marked **Not approved**, with a banner: "Approving the list lets agents run it without asking, on studio-mini, this Mac and devbox." The user clicks **Approve**. A toast reads "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox".
 3. On the MacBook, Settings › Machines › Hosts › This Mac has **Use this Mac for heavy commands** on (X41). The user approved from this Mac, so this Mac may run them too.
 4. In session `fix-cart`, the agent runs `pnpm test`. The Bash row in the chat shows a chip, **on Alex's MacBook Pro**. This Mac has no routing copy of `fix-cart` yet, so moonlet makes one and asks once: "Run shop's setup in the copy on this Mac? `pnpm install`". The user clicks **Run setup**.
 5. 457 tests pass. A snapshot file that a test updated is in the session on `studio-mini` before the agent reads the result, and so is `coverage/`.
-6. The agent runs `pnpm test` again, and the user closes the lid mid-run. The output gets the line "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.", the suite runs on `studio-mini`, and the agent gets that run's exit status.
+6. The agent runs `pnpm test` again, and the user closes the lid mid-run. `pnpm test` is listed under `rerun`, so it is safe to run again: the output gets the line "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.", the suite runs on `studio-mini`, and the agent gets that run's exit status. Had it been `pnpm build`, which is not listed, the agent would get exit status 125 and "moonlet: Alex's MacBook Pro went away during the run. The command may have run in part there; it was not run again."
 7. The session's **Jobs** tab lists both runs. The second reads "Ran again on studio-mini · exit 0". Opening it shows the timeline: started on Alex's MacBook Pro, which went away ("It missed 3 pings. That run's changes were dropped."), then ran again on studio-mini from the same files and exited 0. **↗** opens the job as a session tab with its full output.
 8. Settings › Machines › Workers, on `studio-mini`, lists each worker: load, slots in use, round trip, and the commands running there.
 
@@ -237,7 +238,11 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
 
 ### When a worker goes away
 
-- [x] A run whose worker disconnects, or misses 3 pings (X41), is abandoned. It runs again on the central host from the same fence, and the output gets "moonlet: Alex's MacBook Pro went away. Running again on studio-mini." The exit status is the second run's.
+- [x] A run whose worker disconnects, or misses 3 pings (X41), after the worker took its `exec.start` is abandoned. It may have run in part there, or still be stopping, so by default it is not run again: `moonlet exec` exits with 125, and the output gets "moonlet: Alex's MacBook Pro went away during the run. The command may have run in part there; it was not run again." The job's timeline says the same, and it ends `done` with exit 125. (`a_worker_lost_after_its_run_started_is_not_run_again_and_the_agent_hears_so`; X89's `a_runner_lost_after_its_run_started_is_not_run_again_by_default`)
+- [x] A command the project lists under `[heavy] rerun`, which says it is safe to run twice, runs again on the central host from the same fence instead, and the output gets "moonlet: Alex's MacBook Pro went away. Running again on studio-mini." The exit status is the second run's. A run stopped from the Jobs panel or by `moonlet exec`'s signal is never run again. (`a_command_marked_safe_to_run_again_runs_again_on_the_central_host`, `a_stopped_job_whose_worker_goes_away_does_not_run_again`, `a_lost_run_runs_again_only_when_rerun_lists_it`)
+- [x] A command runs on another machine, or on the central host, after a failed `exec.start` only when it is known not to have started: the worker refused the start, or a start lost on the way (timed out or cut off) was followed by an `exec.cancel`, on the connection the start went on, that the worker answered `false`, which also keeps a late start from running. A worker answers `true` for a run going on, which it stops, and for one that already ended, so a run that started and ended quickly never counts as never started. Otherwise it counts as gone mid-run, as above. (`a_failed_start_counts_as_never_started_only_when_the_runner_says_so`, `a_cancel_answers_whether_the_run_started_here`)
+- [x] A worker that comes back to a run its central host gave up on stops the command and its process group (SIGTERM, then SIGKILL after 5 s), and sends nothing back. It counts the run as given up once its link drops, once the link connects again however quickly, since the central host counts a run on a replaced connection as lost and nothing picks it up again, or once it heard nothing from the central host for 25 s, which pings every worker every 10 s: so a run whose central host cannot tell it anything still ends in a bounded time. The central host drops a worker only after 3 missed pings, 30 s or more after the last ping the worker heard, so a worker cut off silently has stopped its command, grace included, before a command marked `rerun` runs again. (`a_worker_that_comes_back_stops_a_run_its_central_host_gave_up_on`, `a_worker_whose_central_host_is_gone_stops_the_command_in_a_bounded_time`, `a_runner_gives_a_run_up_once_its_link_drops_connects_again_or_goes_silent`)
+- [x] A Mac does not go to sleep when idle while a heavy command runs on it, its own or another host's: it holds a `PreventUserIdleSystemSleep` power assertion from the first run's start to the last one's end. A closed lid still sleeps. A daemon a test started never takes one. (`the_mac_is_held_awake_from_the_first_heavy_run_to_the_last_ones_end`, `a_mac_running_another_hosts_command_is_kept_awake_until_it_ends`)
 - [x] The changes of an abandoned run never reach the session. When the worker links again, its routing copy goes back to the central host's tree before it runs anything.
 - [x] When the central host's daemon stops during a run, `moonlet exec` exits with 125 and "moonlet: lost studio-mini's daemon during the run". The worker stops the command.
 
@@ -260,8 +265,8 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
   - `lost` (the central daemon stopped, exit 125).
 - [x] A job records its **phases** with their durations: "Copy matched the session", "Ran on <worker>", "Brought back", "Exit status to Claude". It also records its **timeline**:
   - started on <worker>;
-  - <worker> went away, with why ("It missed 3 pings." or "Its link closed.") and "That run's changes were dropped.";
-  - ran again on <host>, from the same files;
+  - <worker> went away, with why ("It missed 3 pings.", "Its link closed." or "It went away as the command started."), "The command may have run in part there; it was not run again." when it was not, and "That run's changes were dropped.";
+  - ran again on <host>, from the same files, for a command listed under `rerun`;
   - exited N, and the status went to the agent.
 - [x] A job records what came back: each changed file with its added and removed line counts, each `outputs` path with its size, and each leftover from the fence (a file that changed on the central host during the run). It also records the worker as it was at the start: load, the slot it took ("1 of 2"), round trip and the routing copy's path. Of the environment, it records only the names passed to the worker, never the values.
 - [x] A job's output is kept as it streamed, stdout and stderr apart, up to 10 MiB per job. Past that, the middle is dropped and replaced by one line, "moonlet: 3.2 MB of output dropped here". After a rerun, the output of each run stays, with a separator line "──── run 2 · studio-mini ────" between them.
@@ -409,10 +414,11 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - `worker.register` gains `slots`.
 - `PROTOCOL_VERSION` goes from 5 to 6.
 - `docs/protocol.md` gets the frame kind and the methods.
+- Not running a lost run again, and a worker stopping a run it was given up on, add nothing to the protocol. A newer session's host against an older worker: the lost run is not run again by default, but an older worker that connects again within moments may still finish the run unobserved, and its `exec.done` on the new connection is ignored. An older session's host against a newer worker: the older host runs the command again, as before, and the newer worker stops its own run once its link drops, connects again or goes silent for 25 s; the two can overlap until then. A newer worker answers `exec.cancel` `true` for a run that already ended, where an older one answered `false`; older session's hosts ignore the answer. An older daemon reads a `[heavy]` table with `rerun` and ignores the key.
 
 ## Data and config
 
-- **`.moonlet/config.toml`:** a `[heavy]` table with `commands`, `os`, `env` and `outputs`. It is read by `ProjectConfig` and edited by X8's dialog.
+- **`.moonlet/config.toml`:** a `[heavy]` table with `commands`, `os`, `env` and `outputs`. It is read by `ProjectConfig` and edited by X8's dialog. `rerun`, the command prefixes safe to run again when their worker goes away mid-run, is read from the project's main checkout as the rest of the table (X90). The app does not edit it: `heavy.set` keeps it as it is, as it keeps X63's `machine_setup`. It is not part of the approval: it only ever runs an approved command again on the session's own host, which the agent could do itself, and sends nothing to another machine. Its default is empty, so a lost run is never run again unless the project says it is safe.
 - **Central host, `$MOONLET_HOME/heavy.json`:** the approval per project identity: the exact commands and the exact `env` names, saved together. Example: `{"github.com/acme/shop 4171b03…": {"commands": ["pnpm build", "pnpm test"], "env": ["CI", "NPM_TOKEN"]}}`. A routed command needs both lists to match the config. Since [X89](X89-every-host-runs-heavy-commands.md) the approval is the account state's (`heavy_approval`), once for every member; `heavy.json` only seeds it, and serves a host that shares no account.
 - **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy {commands, env}`, the lists approved for that worker, under X60's `<host> <origin> <root>` key.
 - **`link.json`:** `worker` gains `slots`, on every machine, the central host included.
@@ -429,9 +435,11 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **Outputs.** Bringing back `outputs` never follows a symbolic link on either machine, so a run cannot make the central host read or write outside the worktree through one.
 - **Lines.** The hook's `allow` covers the whole rewritten line, so a line routes only when everything in it besides the approved command is one of a few fixed parts that run nothing else: a `cd` into the worktree, approved variable names, `timeout`, writes to `/dev/null` or to files in the worktree outside `.git`, `.moonlet` and `.claude`, and `tail`, `head` or `grep` reading the command's output, with options that read no file. moonlet parses the line rather than matching its text, and the line Claude Code runs is the one moonlet built from what it parsed, every word quoted, so a word cannot mean something else to the shell. Each part is checked against the user's deny and ask rules too. The worker still gets an argument list only, and checks it against its own approval.
 - **Files.** A routing copy gets what a live copy gets (X60). An ignored `.env` stays where it is, so a command that needs it on the worker needs it there already.
+- **A lost run is not run again by itself.** Heavy commands are whatever the user approved: a test run is safe to repeat, a deploy, a migration or a publish is not, and two copies at once can fight over ports or a database. A worker can miss 3 pings under load while its command runs fine, so moonlet cannot know that a lost run did nothing. Only commands listed under `rerun` run again, and the worker stops a run it was given up on as soon as it can tell.
 
 ## Out of scope
 
+- Picking a run up again after its worker's link connects again, with its output and exit status still delivered. A reconnect counts as the run being lost on both sides, so they always agree; see X89.
 - Cloud machines: [X63](X63-cloud-workers.md).
 - Codex, background Bash calls, chained or piped commands, and commands typed into terminals by the user.
 - Takeover when the central host is unreachable (ADR 0009's last slice).
@@ -492,7 +500,11 @@ Where the tests live:
 | Environment | `only_approved_env_names_reach_the_worker` |
 | No shell, same folder | `a_routed_command_runs_without_a_shell_from_the_same_folder` |
 | Cancelling | `cancelling_stops_the_command_and_brings_its_changes_back`, `moonlet_exec_stops_the_command_when_it_is_stopped` |
-| A worker goes away | `a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host` |
+| A worker goes away: not run again by default | `a_worker_lost_after_its_run_started_is_not_run_again_and_the_agent_hears_so`, `a_failed_start_counts_as_never_started_only_when_the_runner_says_so`, `a_cancel_answers_whether_the_run_started_here` |
+| A worker goes away: `rerun` runs it again | `a_command_marked_safe_to_run_again_runs_again_on_the_central_host`, `a_lost_run_runs_again_only_when_rerun_lists_it`, `heavy_set_keeps_the_commands_marked_safe_to_run_again` |
+| A worker stops a run given up on | `a_worker_that_comes_back_stops_a_run_its_central_host_gave_up_on`, `a_worker_whose_central_host_is_gone_stops_the_command_in_a_bounded_time`, `a_runner_gives_a_run_up_once_its_link_drops_connects_again_or_goes_silent` |
+| A Mac running heavy commands stays awake | `the_mac_is_held_awake_from_the_first_heavy_run_to_the_last_ones_end`, `a_mac_running_another_hosts_command_is_kept_awake_until_it_ends` |
+| The Jobs tab after a lost run | Vitest "a job whose worker went away and that was not run again", "the rerun timeline" |
 | Abandoned changes | `an_abandoned_runs_changes_never_reach_the_session` |
 | The central daemon stops | `a_stopped_central_daemon_ends_moonlet_exec_with_125` |
 | Workers screen | `exec_status_lists_the_central_host_its_runs_and_why_workers_were_skipped`; Vitest "a worker's row from worker.list and job.list"; e2e "the Workers page says when no other machine runs heavy commands" |

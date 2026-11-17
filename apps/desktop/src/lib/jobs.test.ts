@@ -41,7 +41,7 @@ describe("the Jobs tab (X62)", () => {
 
   it("a row's second line, as in the worked examples", () => {
     expect(jobRowLine(done(1, 0, { leftovers: ["src/cart.ts"] }), 0)).toEqual({ tone: "muted", icon: "mac", text: "Alex's MacBook Pro · exit 0 · 1 leftover" });
-    const rerun = done(1, 0, { timeline: [{ at: 1, text: "Alex's MacBook Pro went away" }], worker: { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 } });
+    const rerun = done(1, 0, { timeline: [{ at: 1, text: "Alex's MacBook Pro went away" }, { at: 2, text: "Ran again on studio-mini, from the same files" }], worker: { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 } });
     expect(jobRowLine(rerun, 0)).toEqual({ tone: "blocked", icon: "rerun", text: "Ran again on studio-mini · exit 0" });
     const central = { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 };
     expect(jobRowLine(done(1, 1, { worker: central }), 0)).toEqual({ tone: "error", icon: "central", text: "studio-mini · exit 1" });
@@ -109,19 +109,43 @@ describe("the Jobs tab (X62)", () => {
       timeline: [
         { at, text: "Started on Alex's MacBook Pro" },
         { at: at + 22_000, text: "Alex's MacBook Pro went away", detail: "It missed 3 pings. That run's changes were dropped." },
+        { at: at + 22_000, text: "Ran again on studio-mini, from the same files" },
       ],
     });
     expect(phaseList(rerun, 0)).toEqual([
       { name: "Started on Alex's MacBook Pro", state: "done", took: "10:41:58", detail: null },
       { name: "Alex's MacBook Pro went away", state: "warn", took: "10:42:20", detail: "It missed 3 pings. That run's changes were dropped." },
+      { name: "Ran again on studio-mini, from the same files", state: "done", took: "10:42:20", detail: null },
     ]);
+  });
+
+  it("a job whose worker went away and that was not run again", () => {
+    const at = new Date(2026, 10, 16, 10, 41, 58).getTime();
+    const detail = "It missed 3 pings. The command may have run in part there; it was not run again. That run's changes were dropped.";
+    const lost = done(1, 125, {
+      timeline: [
+        { at, text: "Started on Alex's MacBook Pro" },
+        { at: at + 22_000, text: "Alex's MacBook Pro went away", detail },
+        { at: at + 22_000, text: "Exited 125 · status went to Claude" },
+      ],
+    });
+    expect(jobRowLine(lost, 0)).toEqual({ tone: "error", icon: "mac", text: "Alex's MacBook Pro went away · not run again · exit 125" });
+    expect(chipFromJob(lost)).toEqual({ icon: "mac", text: "on Alex's MacBook Pro", rerun: false });
+    expect(phaseList(lost, 0)).toEqual([
+      { name: "Started on Alex's MacBook Pro", state: "done", took: "10:41:58", detail: null },
+      { name: "Alex's MacBook Pro went away", state: "warn", took: "10:42:20", detail },
+      { name: "Exited 125 · status went to Claude", state: "done", took: "10:42:20", detail: null },
+    ]);
+    expect(
+      chipFromOutput("moonlet: running on Alex's MacBook Pro\nmoonlet: Alex's MacBook Pro went away during the run. The command may have run in part there; it was not run again.\n"),
+    ).toEqual({ icon: "worker", text: "on Alex's MacBook Pro", rerun: false });
   });
 });
 
 describe("routed Bash rows in the chat (X62)", () => {
   it("the chip from a job", () => {
     expect(chipFromJob(job())).toEqual({ icon: "mac", text: "on Alex's MacBook Pro", rerun: false });
-    const rerun = done(1, 0, { timeline: [{ at: 1, text: "Alex's MacBook Pro went away" }], worker: { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 } });
+    const rerun = done(1, 0, { timeline: [{ at: 1, text: "Alex's MacBook Pro went away" }, { at: 2, text: "Ran again on studio-mini, from the same files" }], worker: { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 } });
     expect(chipFromJob(rerun)).toEqual({ icon: "rerun", text: "ran again on studio-mini", rerun: true });
   });
 

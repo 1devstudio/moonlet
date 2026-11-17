@@ -46,6 +46,14 @@ const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
 const CENTRAL_CLOUD_WAIT: Duration = Duration::from_secs(20 * 60);
 /// How long the host that routed a run has to take its changes.
 const DONE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a runner remembers a run for another host that ended: a cancel
+/// sent after its start timed out (30 s) comes well within it.
+const ENDED_KEPT: Duration = Duration::from_secs(300);
+/// The exit status of a run moonlet lost: its runner went away mid-run and
+/// it was not run again, as when the central host's daemon stops (X62).
+const LOST: i32 = 125;
+/// What the agent and the job hear of a run given up on and not run again.
+const LOST_NOT_AGAIN: &str = "The command may have run in part there; it was not run again.";
 
 /// What to run, already checked.
 pub struct Command {
@@ -115,6 +123,10 @@ pub struct Runs {
     /// Runs cancelled before their start arrived, so a late start never
     /// runs (X89).
     cancelled_early: Mutex<HashSet<(ClientId, u32)>>,
+    /// Runs for other hosts that ended lately: a cancel of one answers that
+    /// it ran, so its host never runs it elsewhere as one that never
+    /// started.
+    ended: Mutex<HashMap<(ClientId, u32), std::time::Instant>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
     /// Why a worker was last skipped for a project, by worker and project,
@@ -123,6 +135,9 @@ pub struct Runs {
     /// The daemon's own environment, which commands start from.
     base_env: BTreeMap<String, String>,
     jobs: Arc<Jobs>,
+    /// Keeps the Mac awake while a command runs here, its own or another
+    /// host's.
+    awake: crate::power::KeepAwake,
 }
 
 /// Everything a run on the central host needs to know.
@@ -156,6 +171,9 @@ pub struct Plan {
     /// The project's identity, for the central host's cloud machines of
     /// it (X89).
     pub identity: Option<moonlet_proto::types::ProjectIdentity>,
+    /// The project marked the command safe to run again here when its
+    /// runner goes away mid-run (`[heavy] rerun`).
+    pub rerun: bool,
 }
 
 /// How waiting for a cloud machine ended.
@@ -197,11 +215,22 @@ impl Runs {
             copies_in_use: Mutex::default(),
             serving: Mutex::default(),
             cancelled_early: Mutex::default(),
+            ended: Mutex::default(),
             going: Mutex::default(),
             skips: Mutex::default(),
             base_env,
             jobs,
+            awake: crate::power::KeepAwake::from_env(),
         })
+    }
+
+    /// A command started or ended here: the Mac stays awake while any runs.
+    fn runs_changed(&self) {
+        // One lock at a time: `start_here` takes `routed`, then `running`.
+        self.awake.runs(|| {
+            let routed = self.routed.lock().unwrap().len();
+            routed + self.running.lock().unwrap().len()
+        });
     }
 
     /// The cloud machines, which routing starts and sends commands to (X63).
@@ -470,6 +499,22 @@ impl Runs {
                                 event(j, format!("{name} went away"), Some(why.to_string()))
                             });
                             return status;
+                        }
+                        // A run given up on may have run in part, or still
+                        // be going there: it runs again only when the
+                        // project says that is safe.
+                        if !plan.rerun {
+                            say(format!(
+                                "{name} went away during the run. {LOST_NOT_AGAIN}"
+                            ));
+                            self.jobs.update(job, |j| {
+                                event(
+                                    j,
+                                    format!("{name} went away"),
+                                    Some(format!("{why} {LOST_NOT_AGAIN} That run's changes were dropped.")),
+                                );
+                            });
+                            return LOST;
                         }
                         say(format!("{name} went away. Running again on {}.", plan.host));
                         self.jobs.update(job, |j| {
@@ -927,8 +972,13 @@ impl Runs {
             outputs: plan.outputs.clone(),
             session_name: Some(plan.session_name.clone()),
         };
-        // A link that connects again lost the run: it runs elsewhere (X89).
+        // A link that connects again lost the run (X89).
         let generation = conn.generation();
+        // Gone before the start was sent: it never reached the runner.
+        if conn.is_gone() {
+            self.remote.lock().unwrap().remove(&run);
+            return Err(Fail::Refused("gone".into(), "it went away".into()));
+        }
         let started = conn
             .request(
                 m::EXEC_START,
@@ -937,15 +987,24 @@ impl Runs {
             )
             .await;
         if let Err(e) = started {
-            // A start that timed out may still arrive: it is cancelled
-            // before the next machine runs the command, so it never runs
-            // twice (X89).
-            if e.code == "timeout" {
-                let _ = conn
+            // A start lost on the way may have been taken, or still
+            // arrive: it is cancelled before anything else runs the
+            // command (X89).
+            let cancel = if lost_on_the_way(&e.code) {
+                let reply = conn
                     .request(m::EXEC_CANCEL, serde_json::json!({ "run": run }), Duration::from_secs(10))
                     .await;
-            }
+                // Only the connection the start went on knows the run: a
+                // runner on another one has no such run whatever it ran.
+                let same = !conn.is_gone() && conn.generation() == generation;
+                Some(reply.map(|v| v.as_bool() == Some(true) || !same))
+            } else {
+                None
+            };
             self.remote.lock().unwrap().remove(&run);
+            if may_have_started(&e.code, cancel.as_ref()) {
+                return Err(Fail::Gone("It went away as the command started."));
+            }
             return Err(Fail::Refused(e.code, e.message));
         }
         let kind = if chosen.os == "macos" { "mac" } else { "host" };
@@ -994,8 +1053,9 @@ impl Runs {
                     return Ok((status, brought, back_ms));
                 }
                 _ = tick.tick() => {
-                    let gone = conn.is_gone()
-                        || conn.generation() != generation
+                    // Down, connected again, or silent past the limit, as
+                    // the runner judges it, so both give the run up.
+                    let gone = conn.gave_up(generation)
                         || match &conn {
                             Peer::Conn(c) => workers.conn(worker).is_none_or(|w| w.id != c.id),
                             Peer::Link(_) => false,
@@ -1043,6 +1103,7 @@ impl Runs {
     async fn here(self: &Arc<Self>, run: u32, job: &str, client: &Arc<Conn>, cmd: &Command) -> i32 {
         let cancel = Arc::new(Notify::new());
         self.running.lock().unwrap().insert(run, cancel.clone());
+        self.runs_changed();
         if self.stops.lock().unwrap().contains_key(&run) {
             cancel.notify_one();
         }
@@ -1050,6 +1111,7 @@ impl Runs {
         let full = || client.tx.queued() > MAX_QUEUED && !client.is_gone();
         let status = execute(cmd, &|| client.is_gone(), &full, &cancel, &send).await;
         self.running.lock().unwrap().remove(&run);
+        self.runs_changed();
         status
     }
 
@@ -1258,6 +1320,9 @@ impl Runs {
         cloud: bool,
     ) -> Result<bool, RpcError> {
         let from = host.id();
+        // The link's connection the start came on: once another replaces
+        // it, the host that routed the run has given it up (X89).
+        let started_on = host.generation();
         // A cloud machine runs what the central host that made it approved
         // (X63); any other worker keeps its own approval.
         if !cloud {
@@ -1298,6 +1363,8 @@ impl Runs {
                 return Err(RpcError::new("busy", "a command of the session runs here"));
             }
             routed.insert((from, req.run), cancel.clone());
+            // A host that restarted numbers its runs afresh.
+            self.ended.lock().unwrap().remove(&(from, req.run));
             let (host, session) = sync.run_copy_for(&req.copy).unwrap_or_default();
             self.serving.lock().unwrap().insert(
                 (from, req.run),
@@ -1314,6 +1381,7 @@ impl Runs {
                 copy: req.copy.clone(),
             }
         };
+        self.runs_changed();
         let copy = sync.run_copy_at(&req.copy, &req.tree, &req.head).await?;
         let rel = Path::new(&req.cwd);
         if rel.is_absolute()
@@ -1391,7 +1459,17 @@ impl Runs {
                     .push(&data);
                 out.is_empty() || raw(stream, out)
             };
-            let connected = || !host.is_gone();
+            // The host that routed it gave it up, or cannot be told
+            // anything: the command stops, and nothing goes back.
+            // Once given up, it stays given up: traffic that comes back on
+            // the same connection does not revive the run.
+            let abandoned = std::sync::atomic::AtomicBool::new(false);
+            let connected = || {
+                if !abandoned.load(Ordering::Relaxed) && host.gave_up(started_on) {
+                    abandoned.store(true, Ordering::Relaxed);
+                }
+                !abandoned.load(Ordering::Relaxed)
+            };
             // The link has no queue to read yet: a worker does not hold back.
             let status = execute(&cmd, &|| !connected(), &|| false, &cancel, &send).await;
             for (i, r) in rewriters.iter().enumerate() {
@@ -1467,8 +1545,12 @@ impl Runs {
 
     /// `exec.cancel` from the host that routed run `run` here, on the
     /// connection `from` it came on.
+    /// Answers whether the run started here: going (it stops now) or ended.
     pub fn cancel_here(&self, from: ClientId, run: u32) -> bool {
         let routed = self.routed.lock().unwrap();
+        if !routed.contains_key(&(from, run)) && self.ended.lock().unwrap().contains_key(&(from, run)) {
+            return true;
+        }
         if !routed.contains_key(&(from, run)) {
             // Its start may still come: it never runs then. A cancel of a
             // run that already ended lands here too; a few are kept.
@@ -1497,9 +1579,18 @@ struct Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        self.runs.routed.lock().unwrap().remove(&self.run);
+        {
+            // Ended as it leaves `routed`, under its lock, so a cancel
+            // never finds it in neither.
+            let mut routed = self.runs.routed.lock().unwrap();
+            let mut ended = self.runs.ended.lock().unwrap();
+            ended.retain(|_, at| at.elapsed() < ENDED_KEPT);
+            ended.insert(self.run, std::time::Instant::now());
+            routed.remove(&self.run);
+        }
         self.runs.serving.lock().unwrap().remove(&self.run);
         self.runs.copies_in_use.lock().unwrap().remove(&self.copy);
+        self.runs.runs_changed();
     }
 }
 
@@ -1832,6 +1923,23 @@ async fn pump(
     }
 }
 
+/// Whether an `exec.start` that failed with `code` was lost on the way, to
+/// the runner or back, rather than answered by the runner.
+fn lost_on_the_way(code: &str) -> bool {
+    matches!(code, "timeout" | "disconnected")
+}
+
+/// Whether the command of a run whose `exec.start` failed with `code` may
+/// have started on the runner, given the answer to the `exec.cancel` sent
+/// after it (`None` when none was sent). It never started only when the
+/// runner refused the start, or answered the cancel that it has no such
+/// run, which also keeps a late start from running. Anything else, a
+/// cancel that found the run going or got no answer, may have run in part,
+/// so the command is not run anywhere else by itself (X89).
+fn may_have_started(code: &str, cancel: Option<&Result<bool, RpcError>>) -> bool {
+    lost_on_the_way(code) && !matches!(cancel, Some(Ok(false)))
+}
+
 /// The error `exec.run` gives a call it refuses.
 pub fn refused(reason: &str) -> RpcError {
     RpcError::new("not_routable", reason.to_string())
@@ -1857,5 +1965,50 @@ mod tests {
             Some("/usr/bin::")
         ));
         assert!(!found("shop-tool", dir.path(), Some("/usr/bin")));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_answers_whether_the_run_started_here() {
+        // exec.cancel's answer, on a runner: a run going on here, or one
+        // that already ended, started; one never seen did not.
+        let dir = tempfile::tempdir().unwrap();
+        let runs = Runs::new(BTreeMap::new(), Arc::new(Jobs::load(dir.path().to_path_buf(), |_| {})));
+        let (from, run) = (7, 41);
+        assert!(!runs.cancel_here(from, run));
+        // A run that took its slot here, and ended.
+        runs.routed.lock().unwrap().insert((from, 42), Arc::new(Notify::new()));
+        drop(Claim { runs: runs.clone(), run: (from, 42), copy: "c1".into() });
+        assert!(runs.cancel_here(from, 42));
+        // However many runs end after it.
+        for n in 100..400 {
+            runs.routed.lock().unwrap().insert((from, n), Arc::new(Notify::new()));
+            drop(Claim { runs: runs.clone(), run: (from, n), copy: format!("c{n}") });
+        }
+        assert!(runs.cancel_here(from, 42));
+        // The same run id from another connection is another run.
+        assert!(!runs.cancel_here(from + 1, 42));
+        // A run going on again under that id, as after its host restarted,
+        // is stopped.
+        let going = Arc::new(Notify::new());
+        runs.routed.lock().unwrap().insert((from, 42), going.clone());
+        assert!(runs.cancel_here(from, 42));
+        assert!(tokio::time::timeout(Duration::from_millis(100), going.notified()).await.is_ok());
+    }
+
+    #[test]
+    fn a_failed_start_counts_as_never_started_only_when_the_runner_says_so() {
+        let lost = || Err(RpcError::new("disconnected", "connection closed"));
+        // The runner refused it: the next machine may run it.
+        for code in ["busy", "not_approved", "missing_tool", "stopped", "invalid_params", "unsupported"] {
+            assert!(!may_have_started(code, None), "{code}");
+        }
+        // Lost on the way, and the cancel after it found no such run there,
+        // nor will a late start run.
+        assert!(!may_have_started("timeout", Some(&Ok(false))));
+        assert!(!may_have_started("disconnected", Some(&Ok(false))));
+        // The cancel found it going, or got no answer: it may have run.
+        assert!(may_have_started("timeout", Some(&Ok(true))));
+        assert!(may_have_started("timeout", Some(&lost())));
+        assert!(may_have_started("disconnected", Some(&lost())));
     }
 }

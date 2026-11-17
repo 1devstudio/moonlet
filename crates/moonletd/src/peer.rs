@@ -109,11 +109,70 @@ impl Peer {
         }
     }
 
+    /// On a runner: whether the host that routed a run here, which came on
+    /// the link's connection `started` ([`Peer::generation`]), may have
+    /// given it up. It has then counted the run as lost, so the run stops
+    /// rather than go on unobserved (X89).
+    pub fn gave_up(&self, started: Option<u64>) -> bool {
+        match self {
+            Peer::Conn(c) => c.is_gone(),
+            Peer::Link(h) | Peer::Relay(h, _) => given_up(
+                !self.is_gone(),
+                Some(h.connection()) != started,
+                h.silent_for(),
+                silence_limit(),
+            ),
+        }
+    }
+
     /// A cloud machine's connection, which gets only the files of a run.
     pub fn is_cloud(&self) -> bool {
         match self {
             Peer::Conn(c) => c.cloud.load(std::sync::atomic::Ordering::Relaxed),
             Peer::Link(_) | Peer::Relay(..) => false,
         }
+    }
+}
+
+/// How long a member's link may hear nothing from its central host before
+/// the host counts as gone. The central host pings every linked member
+/// every 10 s and drops one after 3 missed pings, 30 s or more after the
+/// last ping that member heard: a runner stops its command (and its grace
+/// of 5 s runs out) by then, before anything runs it again. Two pings lost
+/// in a row on a working link are what it costs.
+/// `MOONLET_TEST_LINK_SILENCE_MS` sets it in tests.
+pub fn silence_limit() -> Duration {
+    std::env::var("MOONLET_TEST_LINK_SILENCE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(25), Duration::from_millis)
+}
+
+/// Whether a runner counts the host whose run it runs as having given the
+/// run up (X89): the link is down, it connected again since the run started
+/// (the host counts a run on a replaced connection as lost, and nothing
+/// picks it up again), or it heard nothing for `limit`, as a host that went
+/// away without closing the link leaves it.
+pub fn given_up(connected: bool, reconnected: bool, silent: Duration, limit: Duration) -> bool {
+    !connected || reconnected || silent >= limit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_runner_gives_a_run_up_once_its_link_drops_connects_again_or_goes_silent() {
+        let limit = Duration::from_secs(25);
+        let quiet = Duration::from_secs(9);
+        // Linked on the same connection, pinged lately: the run goes on.
+        assert!(!given_up(true, false, quiet, limit));
+        // The link is down.
+        assert!(given_up(false, false, quiet, limit));
+        // It connected again since the run started, however quickly.
+        assert!(given_up(true, true, Duration::ZERO, limit));
+        // Nothing heard for 25 s, the connection still open.
+        assert!(given_up(true, false, Duration::from_secs(25), limit));
+        assert!(!given_up(true, false, Duration::from_secs(24), limit));
     }
 }

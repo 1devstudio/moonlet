@@ -1819,22 +1819,14 @@ async fn a_copy_that_cannot_match_in_time_refuses_not_fenced() {
     assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
 }
 
-#[tokio::test]
-async fn a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host() {
-    let (c, mac) = linked().await;
-    // On the Mac the run leaves a mark in its copy; on the central host
-    // it does not.
-    let (mut client, run) = c
-        .start(
-            &[
-                "sh",
-                "-c",
-                "case \"$PWD\" in */runs/*) echo mac > from-mac.txt;; esac; echo started; sleep 3; echo finished",
-            ],
-            &c.worktree.clone(),
-            json!({}),
-        )
-        .await;
+/// [`RUN_CONFIG`], with `sh -c` marked safe to run again.
+const RERUN_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\", \"shop-tool\"]\nenv = [\"CI\"]\noutputs = [\"coverage\"]\nrerun = [\"sh -c\"]\n";
+
+/// Starts `argv` on the Mac, waits for its `started` line, then stops the
+/// Mac's daemon (SIGSTOP) until the central host gives the run up. Gives
+/// what came back after `started`, and the Mac's pid to SIGCONT.
+async fn lose_the_mac_mid_run(c: &Central, mac: &Daemon, argv: &[&str]) -> (Ran, nix::unistd::Pid) {
+    let (mut client, run) = c.start(argv, &c.worktree.clone(), json!({})).await;
     let mut said = Vec::new();
     loop {
         match client.next_frame().await.unwrap().unwrap() {
@@ -1853,7 +1845,64 @@ async fn a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_cent
     );
     let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
-    let ran = collect(client, run).await;
+    (collect(client, run).await, pid)
+}
+
+#[tokio::test]
+async fn a_worker_lost_after_its_run_started_is_not_run_again_and_the_agent_hears_so() {
+    let (c, mac) = linked().await;
+    let (ran, pid) = lose_the_mac_mid_run(
+        &c,
+        &mac,
+        &["sh", "-c", "echo started; sleep 3; echo finished"],
+    )
+    .await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(
+        ran,
+        Ran {
+            stdout: "".into(),
+            stderr: "moonlet: Alex's MacBook Pro went away during the run. The command may have run in part there; it was not run again.\n".into(),
+            status: 125,
+        }
+    );
+    let job = jobs(&c).await[0].clone();
+    let texts: Vec<&str> = job["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Started on Alex's MacBook Pro",
+            "Alex's MacBook Pro went away",
+            "Exited 125 · status went to Claude",
+        ]
+    );
+    assert_eq!(
+        job["timeline"][1]["detail"],
+        json!("It missed 3 pings. The command may have run in part there; it was not run again. That run's changes were dropped.")
+    );
+    assert_eq!(job["state"], json!({ "kind": "done", "exit": 125 }));
+}
+
+#[tokio::test]
+async fn a_command_marked_safe_to_run_again_runs_again_on_the_central_host() {
+    let (c, mac) = linked_with(RERUN_CONFIG, &[], true).await;
+    // On the Mac the run leaves a mark in its copy; on the central host
+    // it does not.
+    let (ran, pid) = lose_the_mac_mid_run(
+        &c,
+        &mac,
+        &[
+            "sh",
+            "-c",
+            "case \"$PWD\" in */runs/*) echo mac > from-mac.txt;; esac; echo started; sleep 3; echo finished",
+        ],
+    )
+    .await;
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
     assert_eq!(ran.status, 0);
     assert_eq!(
@@ -1861,6 +1910,81 @@ async fn a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_cent
         "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.\nmoonlet: running on studio-mini\n"
     );
     assert_eq!(ran.stdout, "started\nfinished\n");
+}
+
+#[tokio::test]
+async fn a_worker_that_comes_back_stops_a_run_its_central_host_gave_up_on() {
+    let (c, mac) = linked().await;
+    let marker = tempfile::tempdir().unwrap();
+    let after = marker.path().join("after");
+    let command = format!("echo started; sleep 3; touch {}", after.display());
+    // The command goes on while the Mac's daemon is stopped, and the
+    // central host gives the run up.
+    let (ran, pid) = lose_the_mac_mid_run(&c, &mac, &["sh", "-c", &command]).await;
+    assert_eq!(ran.status, 125, "{ran:?}");
+    // The Mac comes back before the command's end: it stops it.
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(!after.exists(), "the given-up command went on on the Mac");
+}
+
+#[tokio::test]
+async fn a_worker_whose_central_host_is_gone_stops_the_command_in_a_bounded_time() {
+    // The Mac hears nothing from its central host for 1.5 s: gone.
+    let (c, _mac) = linked_as(&[("MOONLET_TEST_LINK_SILENCE_MS", "1500")]).await;
+    let marker = tempfile::tempdir().unwrap();
+    let after = marker.path().join("after");
+    let command = format!("echo started; sleep 5; touch {}", after.display());
+    let (mut client, _run) = c.start(&["sh", "-c", &command], &c.worktree.clone(), json!({})).await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    // The central host stops answering, its link still open: nothing can
+    // tell the Mac it gave up.
+    let pid = nix::unistd::Pid::from_raw(c.daemon.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    let went_on = after.exists();
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert!(!went_on, "the command went on on the Mac");
+}
+
+#[tokio::test]
+async fn a_mac_running_another_hosts_command_is_kept_awake_until_it_ends() {
+    // What the Mac would do with its power assertion, written down rather
+    // than done: a test never keeps this machine awake.
+    let log = tempfile::tempdir().unwrap();
+    let awake = log.path().join("awake");
+    let (c, _mac) = linked_as(&[("MOONLET_TEST_AWAKE_LOG", awake.to_str().unwrap())]).await;
+    let read = || std::fs::read_to_string(&awake).unwrap_or_default();
+    assert_eq!(read(), "");
+    let (mut client, run) = c
+        .start(&["sh", "-c", "echo started; sleep 1"], &c.worktree.clone(), json!({}))
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    assert_eq!(read(), "hold\n");
+    assert_eq!(collect(client, run).await.status, 0);
+    for _ in 0..100 {
+        if read() == "hold\nrelease\n" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(read(), "hold\nrelease\n");
 }
 
 #[tokio::test]
@@ -1884,10 +2008,10 @@ async fn an_abandoned_runs_changes_never_reach_the_session() {
     }
     let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
-    // Run again on the central host, where it writes the file itself.
+    // Given up, and not run again.
     let ran = collect(client, run).await;
-    assert_eq!(ran.status, 0);
-    std::fs::remove_file(c.worktree.join("from-mac.txt")).unwrap();
+    assert_eq!(ran.status, 125);
+    assert!(!c.worktree.join("from-mac.txt").exists());
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
     // The Mac links again; the abandoned run's file goes with its copy's
     // return to the fence, and never reaches the session.
@@ -2274,7 +2398,7 @@ async fn a_jobs_log_goes_with_the_job() {
 
 #[tokio::test]
 async fn a_jobs_phases_and_timeline_after_a_rerun() {
-    let (c, mac) = linked().await;
+    let (c, mac) = linked_with(RERUN_CONFIG, &[], true).await;
     let (mut client, run) = c
         .start(
             &["sh", "-c", "echo started; sleep 3"],
@@ -2457,7 +2581,8 @@ async fn a_job_still_going_on_is_kept_past_the_limit() {
 
 #[tokio::test]
 async fn a_stopped_job_whose_worker_goes_away_does_not_run_again() {
-    let (c, mac) = linked().await;
+    // Even a command marked safe to run again.
+    let (c, mac) = linked_with(RERUN_CONFIG, &[], true).await;
     let (mut client, run) = c
         .start(
             &["sh", "-c", "echo started; sleep 3; echo finished"],

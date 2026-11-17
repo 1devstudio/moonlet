@@ -99,7 +99,7 @@ commands = ["pnpm test", "pnpm build"]
 outputs = ["coverage"]
 ```
 
-It also takes `os` (`"any"`, `"macos"` or `"linux"`) and `env`, the environment variables passed through to the machine that runs the command. Listing a command is not enough: you approve the list in the project's **Heavy commands** section before anything is routed. [Heavy commands](/docs/heavy-commands) explains routing and approval.
+It also takes `os` (`"any"`, `"macos"` or `"linux"`), `env`, the environment variables passed through to the machine that runs the command, and `rerun`, the commands that are safe to run again when the machine running one goes away mid-run. Listing a command is not enough: you approve the list in the project's **Heavy commands** section before anything is routed. [Heavy commands](/docs/heavy-commands) explains routing and approval.
 
 ## Where moonlet keeps its own data
 

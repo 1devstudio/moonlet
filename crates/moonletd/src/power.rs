@@ -211,6 +211,155 @@ pub fn on_yield(y: &Yielded) -> OnYield {
     OnYield::Take
 }
 
+/// A change to the power assertion that keeps the Mac awake for heavy
+/// commands (X62, X89).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Awake {
+    Hold,
+    Release,
+}
+
+/// What to do with the assertion when `runs` heavy commands go on here,
+/// this host's own and other hosts' routed to it, and it is `held` now:
+/// it is held from the first run's start to the last one's end, so idle
+/// sleep never stops a run midway. A closed lid still sleeps.
+pub fn awake(held: bool, runs: usize) -> Option<Awake> {
+    match (held, runs > 0) {
+        (false, true) => Some(Awake::Hold),
+        (true, false) => Some(Awake::Release),
+        _ => None,
+    }
+}
+
+/// Keeps the Mac awake while heavy commands run on it ([`awake`]).
+pub struct KeepAwake {
+    how: How,
+    /// The assertion held now, by its id (0 when only written down).
+    held: std::sync::Mutex<Option<u32>>,
+}
+
+enum How {
+    /// A power assertion that prevents idle system sleep.
+    Assert,
+    /// `MOONLET_TEST_AWAKE_LOG`: `hold` and `release` lines in a file.
+    Log(std::path::PathBuf),
+    /// Neither: a daemon a test started (`MOONLET_EXIT_WITH`, e2e's
+    /// `MOONLET_E2E_ROOT`) never keeps the machine running the tests awake;
+    /// nor does a host that is not a Mac.
+    Off,
+}
+
+impl KeepAwake {
+    pub fn from_env() -> Self {
+        let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
+        let how = if let Some(log) = var("MOONLET_TEST_AWAKE_LOG") {
+            How::Log(log.into())
+        } else if cfg!(target_os = "macos") && var("MOONLET_EXIT_WITH").is_none() && var("MOONLET_E2E_ROOT").is_none() {
+            How::Assert
+        } else {
+            How::Off
+        };
+        KeepAwake { how, held: std::sync::Mutex::new(None) }
+    }
+
+    /// Heavy commands started or ended here; `runs` counts those going on.
+    /// It is counted under this lock, so two changes at once never apply
+    /// their counts out of order.
+    pub fn runs(&self, runs: impl FnOnce() -> usize) {
+        let mut held = self.held.lock().unwrap();
+        match awake(held.is_some(), runs()) {
+            Some(Awake::Hold) => {
+                // One that could not be made is tried again at the next
+                // change.
+                *held = match &self.how {
+                    How::Log(path) => {
+                        log_line(path, "hold");
+                        Some(0)
+                    }
+                    #[cfg(target_os = "macos")]
+                    How::Assert => assertion::hold(),
+                    _ => Some(0),
+                };
+            }
+            Some(Awake::Release) => {
+                // Only a Mac's assertion has an id to give back.
+                let _id = held.take();
+                match &self.how {
+                    How::Log(path) => log_line(path, "release"),
+                    #[cfg(target_os = "macos")]
+                    How::Assert => assertion::release(_id.unwrap_or_default()),
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn log_line(path: &std::path::Path, line: &str) {
+    use std::io::Write;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
+    if let Ok(mut f) = file {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod assertion {
+    use std::ffi::{c_char, c_void};
+
+    type CFStringRef = *const c_void;
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOPMAssertionCreateWithName(kind: CFStringRef, level: u32, name: CFStringRef, id: *mut u32) -> i32;
+        fn IOPMAssertionRelease(id: u32) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithCString(alloc: *const c_void, s: *const c_char, encoding: u32) -> CFStringRef;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const UTF8: u32 = 0x0800_0100;
+    /// `kIOPMAssertionLevelOn`.
+    const ON: u32 = 255;
+
+    /// Holds a `PreventUserIdleSystemSleep` assertion; gives its id, none
+    /// when it could not be made.
+    pub fn hold() -> Option<u32> {
+        // SAFETY: plain CoreFoundation and IOKit calls on NUL-terminated
+        // literals; each string made here is released here.
+        unsafe {
+            let kind = CFStringCreateWithCString(std::ptr::null(), c"PreventUserIdleSystemSleep".as_ptr(), UTF8);
+            let name = CFStringCreateWithCString(std::ptr::null(), c"moonlet runs a heavy command".as_ptr(), UTF8);
+            let mut id = 0u32;
+            let ok = !kind.is_null() && !name.is_null() && IOPMAssertionCreateWithName(kind, ON, name, &mut id) == 0;
+            for s in [kind, name] {
+                if !s.is_null() {
+                    CFRelease(s);
+                }
+            }
+            if !ok {
+                tracing::warn!("cannot keep the Mac awake for heavy commands");
+                return None;
+            }
+            Some(id)
+        }
+    }
+
+    pub fn release(id: u32) {
+        if id != 0 {
+            // SAFETY: `id` is an assertion `hold` made and nothing else
+            // released.
+            unsafe {
+                IOPMAssertionRelease(id);
+            }
+        }
+    }
+}
+
 /// Listens for the Mac's sleep and wake, for the daemon's life.
 pub fn spawn(daemon: Arc<Daemon>) {
     #[cfg(target_os = "macos")]
@@ -331,6 +480,19 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mac_is_held_awake_from_the_first_heavy_run_to_the_last_ones_end() {
+        // Nothing runs: nothing held.
+        assert_eq!(awake(false, 0), None);
+        // A run starts: held.
+        assert_eq!(awake(false, 1), Some(Awake::Hold));
+        // A second one, or one of two ending: still held, once.
+        assert_eq!(awake(true, 2), None);
+        assert_eq!(awake(true, 1), None);
+        // The last one ends: released.
+        assert_eq!(awake(true, 0), Some(Awake::Release));
+    }
 
     #[test]
     fn on_waking_only_chats_of_sessions_still_this_members_and_not_taken_go_on() {

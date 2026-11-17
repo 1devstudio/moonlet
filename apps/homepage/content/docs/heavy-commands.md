@@ -22,6 +22,7 @@ commands = ["pnpm test", "pnpm build"]
 os = "any"
 env = ["CI"]
 outputs = ["coverage"]
+rerun = ["pnpm test"]
 ```
 
 | Key | Meaning |
@@ -30,8 +31,9 @@ outputs = ["coverage"]
 | `os` | `"any"` (the default), `"macos"` or `"linux"`. Workers on another system are skipped. |
 | `env` | Names of environment variables passed to the worker. No other variable crosses machines. |
 | `outputs` | Ignored paths, such as `coverage`, brought back after a run. Up to 1 GiB. |
+| `rerun` | Command prefixes that are safe to run again when the worker running one goes away mid-run. None by default. |
 
-The **Heavy commands** section of **Settings › Projects › shop (studio-mini)** edits the same keys. See [Project config](/docs/project-config) for the rest of the file.
+The **Heavy commands** section of **Settings › Projects › shop (studio-mini)** edits the same keys, except `rerun`, which you edit in the file. See [Project config](/docs/project-config) for the rest of the file.
 
 ## Approve the list
 
@@ -94,6 +96,12 @@ The session's **Jobs** tab, after **Agents**, lists its jobs newest first. Each 
 
 ## When a worker goes away
 
-If a worker disconnects or misses 3 pings during a run, the run is dropped and runs again on the central host from the same files. The output says "moonlet: macbook went away. Running again on studio-mini.", and the agent gets the second run's exit status. The dropped run's changes never reach the session.
+If a worker disconnects or misses 3 pings during a run, the run is dropped, and its changes never reach the session. The command may have run in part on the worker, so moonlet does not run it again. The command exits with status 125 and the line "moonlet: macbook went away during the run. The command may have run in part there; it was not run again." The agent decides what to do next.
+
+A command listed under `rerun`, such as a test run, runs again on the session's host from the same files instead. The output says "moonlet: macbook went away. Running again on studio-mini.", and the agent gets the second run's exit status. Only list commands that are safe to run twice, and safe to overlap with a run that is still stopping: never a deploy, a migration or a publish.
+
+A worker that loses the session's host stops the command and every process it started. This happens when the link drops, when it connects again (the session's host has given the run up by then), or when the worker hears nothing from the central host for 25 seconds. A session's host that hears nothing from its central host for 25 seconds gives the run up too.
+
+While a Mac runs a heavy command, for its own sessions or another host's, it does not go to sleep when idle. Closing the lid still puts it to sleep.
 
 If the central host's daemon stops during a run, the command exits with status 125.
