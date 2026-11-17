@@ -71,7 +71,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     let (r, w) = stream.into_split();
-                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid, false).await {
+                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid, false, false).await {
                         tracing::debug!("connection ended: {e:#}");
                     }
                 });
@@ -127,6 +127,10 @@ pub struct Conn {
     gone: std::sync::atomic::AtomicBool,
     /// A cloud machine's connection (X63).
     pub cloud: std::sync::atomic::AtomicBool,
+    /// A member's worker link: decided when it authenticated with its
+    /// token, never by the client it says it is. It reaches only a
+    /// member's work (`Daemon::handle`).
+    pub worker_link: bool,
 }
 
 impl Conn {
@@ -150,6 +154,7 @@ impl Conn {
             next_transfer: AtomicU32::new(1),
             gone: std::sync::atomic::AtomicBool::new(true),
             cloud: std::sync::atomic::AtomicBool::new(false),
+            worker_link: false,
         })
     }
 
@@ -254,6 +259,7 @@ pub async fn handle_connection<R, W>(
     phone: Option<String>,
     peer_pid: Option<u32>,
     cloud: bool,
+    worker_link: bool,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -298,7 +304,7 @@ where
             if method == moonlet_proto::methods::DAEMON_UPDATE && phone.is_some() =>
         {
             let device = phone.as_deref().unwrap_or_default();
-            let (reply, handoff) = match daemon.update_from(None, Some(device), params).await {
+            let (reply, handoff) = match daemon.update_from(None, Some(device), worker_link, params).await {
                 Ok((v, handoff)) => (Message::ok(id, v), Some(handoff)),
                 Err(e) => (Message::err(id, e), None),
             };
@@ -339,6 +345,7 @@ where
         next_transfer: AtomicU32::new(1),
         gone: std::sync::atomic::AtomicBool::new(false),
         cloud: std::sync::atomic::AtomicBool::new(false),
+        worker_link,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
     daemon.on_connect(&conn);
@@ -356,11 +363,12 @@ where
     // `moonlet` CLI or any other process of the user's. The text an agent
     // asks to read is for the app alone (X31), and so are a URL to open and
     // a setup question.
-    let not_app = conn.phone.is_none() && !conn.app;
+    // A member's worker link hears what a worker does, whatever it says.
+    let not_app = (conn.phone.is_none() && !conn.app) || worker_link;
     let is_cli = conn.client == crate::daemon::CLI_CLIENT;
     // A job's output is for the app and paired devices, as `job.output` is
     // (X62): neither an agent's CLI nor a worker hears it.
-    let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
+    let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT || worker_link;
     let phone = conn.phone.is_some();
     let device = conn.phone.clone();
     // A paired phone answers setup questions too (X40); a paired Mac does not.
@@ -443,7 +451,8 @@ where
                 Frame::Input { terminal, data } => {
                     // A terminal of another member this client follows
                     // through this host (X72), else one of this host's.
-                    if !cloud && !daemon.session_copies.relay_input(conn.id, terminal, data.clone()) {
+                    // Neither for a cloud machine nor a member's link.
+                    if !cloud && !worker_link && !daemon.session_copies.relay_input(conn.id, terminal, data.clone()) {
                         let _ = daemon.terminals.write(terminal, data);
                     }
                 }
@@ -481,6 +490,12 @@ where
                     if cloud && method == moonlet_proto::methods::TERMINAL_ATTACH =>
                 {
                     let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
+                    let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
+                }
+                Frame::Json(Message::Request { id, method, .. })
+                    if worker_link && method == moonlet_proto::methods::TERMINAL_ATTACH =>
+                {
+                    let e = RpcError::new("forbidden", crate::daemon::WORKER_LINK_ONLY);
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
                 // Another member's terminal (X72), or sign-in (X75): its

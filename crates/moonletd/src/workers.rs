@@ -237,11 +237,10 @@ impl Workers {
         }
     }
 
-    /// Whether worker id `id` belongs to paired device `device`: the Mac
-    /// whose daemon links as `id` and whose app reaches this host with the
-    /// same pairing (X75).
-    pub fn owned_by(&self, id: &str, device: &str) -> bool {
-        self.owners.lock().unwrap().get(id).is_some_and(|d| d == device)
+    /// The paired device worker id `id` belongs to: the device its Mac's
+    /// daemon links with.
+    pub fn owner(&self, id: &str) -> Option<String> {
+        self.owners.lock().unwrap().get(id).cloned()
     }
 
     /// The connection of the linked worker `id` (X60).

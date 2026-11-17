@@ -4,6 +4,8 @@
 //! `url.insteadOf` rule for `https://git.invalid/acme/shop.git`; the
 //! central host keeps that URL, so the project has an origin identity.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -2732,6 +2734,8 @@ async fn a_copy_waits_while_another_host_is_the_central_host() {
     let central = central().await;
     let worker = worker(&central.origin).await;
     let token = pair_with(&central).await;
+    // The app's own token, which it hands the link again below (X41).
+    common::keep_in_app_hosts(worker.home.path(), &central.addr, &token);
     let studio_mini =
         json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
     let _: Value = worker.call("link.set", studio_mini.clone()).await;
@@ -2790,6 +2794,8 @@ async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later()
     let central = central().await;
     let worker = worker(&central.origin).await;
     let token = pair_with(&central).await;
+    // The app's own token, which it hands the link again below (X41).
+    common::keep_in_app_hosts(worker.home.path(), &central.addr, &token);
     let studio_mini =
         json!({ "central": { "name": "studio-mini", "addrs": [central.addr], "token": token } });
     let _: Value = worker.call("link.set", studio_mini.clone()).await;

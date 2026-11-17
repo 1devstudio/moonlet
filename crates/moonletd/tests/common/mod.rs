@@ -146,6 +146,18 @@ pub async fn raw(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream
     s
 }
 
+/// Puts `token` for studio-mini at `addr` in the host list of the app
+/// whose home is `home` (X57), as the app keeps the token it paired with
+/// before it hands it to its daemon's link (X41).
+pub fn keep_in_app_hosts(home: &Path, addr: &str, token: &str) {
+    std::fs::write(
+        home.join("app-hosts.json"),
+        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": token }] })
+            .to_string(),
+    )
+    .unwrap();
+}
+
 /// What a worker's daemon sends to register as `id`.
 pub fn registration(id: &str, name: &str) -> Value {
     json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] })

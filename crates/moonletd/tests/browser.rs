@@ -203,7 +203,8 @@ async fn linked_book_and_token(central: &Daemon, addr: &str) -> (Daemon, String)
 }
 
 /// Member `name` (worker `id`, listening on `ip`), linked to `central`,
-/// and the token it links with.
+/// and its app's token, which the app handed its daemon to link with (X41):
+/// the link trades it for a worker link of its own, and the app keeps it.
 async fn linked_member(
     central: &Daemon,
     addr: &str,
@@ -220,6 +221,7 @@ async fn linked_member(
     .unwrap();
     let member = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", ip)]).await;
     let token = pair(central, addr, name, DeviceKind::Desktop).await;
+    keep_in_app_hosts(member.home.path(), addr, &token);
     let _: Value = member
         .call(
             "link.set",

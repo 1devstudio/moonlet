@@ -387,6 +387,61 @@ const CLOUD_METHODS: &[&str] = &[
     m::SESSION_FILES_FETCH,
 ];
 
+/// What a member's worker link may call on its central host: what a
+/// member's daemon sends over its link, and nothing else, whatever client
+/// it says it is. A method added later is refused to links until it is
+/// added here (docs/specs/X41-worker-link-and-project-identity.md).
+const WORKER_LINK_METHODS: &[&str] = &[
+    // The link (X41, X68): liveness, registration, the account.
+    m::DAEMON_INFO,
+    m::WORKER_REGISTER,
+    m::ACCOUNT_SYNC,
+    // Keeping projects in sync (X60), and routing copies (X89).
+    m::SESSION_LIST,
+    m::PROJECT_LIST,
+    m::SYNC_OPEN,
+    m::SYNC_FETCH,
+    m::SYNC_OFFER,
+    m::SYNC_CLOSE,
+    m::SYNC_CLOSING,
+    m::SYNC_UPDATE,
+    // The member's sessions in the account (X72), and their files (X74).
+    m::SESSION_OPEN,
+    m::SESSION_OFFER,
+    m::SESSION_CHAT,
+    m::SESSION_TRANSCRIPT,
+    m::SESSION_CHECKPOINT,
+    m::SESSION_EVENT,
+    m::SESSION_TAKE,
+    m::SESSION_GIVE_BACK,
+    m::SESSION_TRANSCRIPT_FETCH,
+    m::SESSION_YIELD,
+    m::SESSION_PIN,
+    m::SESSION_FILES,
+    m::SESSION_FILES_FETCH,
+    m::FILES_CHECKOUT,
+    // Design copies (X71).
+    m::DESIGN_OFFER,
+    m::DESIGN_FETCH,
+    // Where the user is, URLs and sign-ins between members (X75).
+    m::PRESENCE_ACTIVE,
+    m::BROWSER_ROUTE,
+    m::TUNNEL_OPEN,
+    m::SIGNINS_HERE,
+    // Heavy commands between members (X89).
+    m::PEER_CALL,
+    m::WORKER_STATUS,
+    m::WORKER_PEERS,
+    m::CLOUD_OVERFLOW,
+    m::EXEC_PREPARE,
+    m::EXEC_START,
+    m::EXEC_CANCEL,
+    m::EXEC_DONE,
+];
+
+/// What a member's worker link hears when it asks for anything else.
+pub(crate) const WORKER_LINK_ONLY: &str = "a member's link only does a member's work here";
+
 /// Jobs hold commands' output: the app and paired devices read and stop
 /// them, never an agent's CLI nor a worker (X62).
 fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
@@ -936,8 +991,9 @@ impl Daemon {
     /// Refuses all but the Mac's app and a paired Mac over the tailnet
     /// (X61): never a phone, nor an agent's CLI.
     fn app_or_paired_mac(&self, conn: &Conn, what: &str) -> Result<(), RpcError> {
-        // A paired Mac's daemon linked as a worker is not its app.
-        if conn.client == crate::link::WORKER_CLIENT {
+        // A paired Mac's daemon linked as a worker is not its app; with a
+        // worker link's token, nor is anything that says it is.
+        if conn.client == crate::link::WORKER_CLIENT || conn.worker_link {
             return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
         }
         let Some(device) = conn.phone.as_deref() else {
@@ -1071,6 +1127,7 @@ impl Daemon {
     /// it must have proved it is the app with its credential (X75).
     pub fn is_app(&self, conn: &Conn) -> bool {
         conn.client == APP_CLIENT
+            && !conn.worker_link
             && match conn.phone.as_deref() {
                 None => conn.app,
                 Some(d) => self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop),
@@ -1141,15 +1198,17 @@ impl Daemon {
     /// `daemon.update` (X69) from `client` (unknown before `hello`) on paired
     /// `device`'s connection, or on the local socket without one. Only the
     /// Mac's own app and a paired Mac may ask: never a phone, an agent's CLI
-    /// or a worker's link. The caller starts the handoff once its reply is on
+    /// or a worker's link, whether it says so or authenticated as one
+    /// (`worker_link`). The caller starts the handoff once its reply is on
     /// its way.
     pub async fn update_from(
         self: &Arc<Self>,
         client: Option<&str>,
         device: Option<&str>,
+        worker_link: bool,
         p: Value,
     ) -> Result<(moonlet_proto::types::DaemonUpdated, crate::update::Handoff), RpcError> {
-        if client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
+        if worker_link || client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
             return Err(RpcError::new("forbidden", "update moonlet from the app"));
         }
         if device.is_some_and(|d| self.mobile.kind_of(d) != Some(moonlet_proto::methods::DeviceKind::Desktop)) {
@@ -1165,6 +1224,11 @@ impl Daemon {
         // machine is being removed, but the connection stays a cloud one.
         if conn.cloud.load(Ordering::Relaxed) && !CLOUD_METHODS.contains(&method) {
             return Err(RpcError::new("forbidden", "a cloud machine only runs heavy commands"));
+        }
+        // A member's worker link reaches only a member's work, decided when
+        // it authenticated: never the app's methods, whatever it says it is.
+        if conn.worker_link && !WORKER_LINK_METHODS.contains(&method) {
+            return Err(RpcError::new("forbidden", WORKER_LINK_ONLY));
         }
         let s = &self.terminals;
         match method {
@@ -1214,7 +1278,7 @@ impl Daemon {
                 if conn.phone.is_none() && !conn.app {
                     return Err(RpcError::new("forbidden", "update moonlet from the app"));
                 }
-                let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), p).await?;
+                let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), conn.worker_link, p).await?;
                 // The connection's writer sends the reply after this returns.
                 handoff.start_after(crate::update::REPLY_GRACE);
                 ok(reply)
@@ -1394,8 +1458,9 @@ impl Daemon {
             m::MOBILE_HOSTS => ok(self.mobile.hosts()),
             m::MOBILE_UNPAIR => match &conn.phone {
                 Some(device) => {
-                    self.mobile.unpair(device)?;
-                    self.workers.forget_device(device);
+                    for gone in self.mobile.unpair(device)? {
+                        self.workers.forget_device(&gone);
+                    }
                     ok(true)
                 }
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
@@ -2304,6 +2369,22 @@ impl Daemon {
                 }
                 ok(routed)
             }
+            // A paired Mac's daemon trades the token it links with for one
+            // that is only a worker link.
+            m::WORKER_CREDENTIAL => {
+                // Tests only: a central host from before worker links.
+                if std::env::var_os("MOONLET_TEST_BEFORE_WORKER_LINKS").is_some() {
+                    return Err(RpcError::new("unknown_method", format!("unknown method {method}")));
+                }
+                let refused = || RpcError::new("forbidden", "only a paired Mac's daemon asks for a worker link");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                if conn.cloud.load(Ordering::Relaxed) {
+                    return Err(refused());
+                }
+                let r: m::WorkerCredential = params(p)?;
+                let token = self.mobile.worker_credential(device, r.replace)?;
+                ok(m::WorkerCredentialGiven { token })
+            }
             m::WORKER_LIST => ok(self.workers.list()),
             m::WORKER_SETTINGS => ok(self.worker_settings()),
             // Turning a host on lets it run other hosts' agents' commands:
@@ -2424,7 +2505,11 @@ impl Daemon {
                 }
                 let id = r.id.clone();
                 let mobile = self.mobile.clone();
-                self.workers.register(conn.clone(), device, r, |owner| mobile.is_paired(owner))?;
+                // A Mac's worker link takes over the worker ids its paired
+                // token registered: they are the same Mac's.
+                let mac = self.mobile.minted_by(device);
+                self.workers
+                    .register(conn.clone(), device, r, |owner| mobile.holds_ids_of(owner) && mac.as_deref() != Some(owner))?;
                 self.sync.worker_linked(&id);
                 if let Some(machine) = self.machines.machine_of(device) {
                     self.machines.registered(&machine, &id);
@@ -2553,8 +2638,9 @@ impl Daemon {
             }
             m::MOBILE_REVOKE => {
                 let r: m::IdRef = params(p)?;
-                self.mobile.revoke(&r.id)?;
-                self.workers.forget_device(&r.id);
+                for gone in self.mobile.revoke(&r.id)? {
+                    self.workers.forget_device(&gone);
+                }
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
@@ -5845,7 +5931,12 @@ impl Daemon {
         let me = self.link.info().worker.id;
         let theirs = match conn.phone.as_deref() {
             None => by == me,
-            Some(device) => self.workers.owned_by(&by, device),
+            // The Mac whose daemon links as `by`: with the app's pairing,
+            // or with the worker link that pairing asked for.
+            Some(device) => self
+                .workers
+                .owner(&by)
+                .is_some_and(|o| o == device || self.mobile.minted_by(&o).as_deref() == Some(device)),
         };
         if !theirs || r.member == me {
             return Err(refused());
