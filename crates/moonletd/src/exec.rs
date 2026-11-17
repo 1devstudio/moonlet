@@ -1345,6 +1345,16 @@ impl Runs {
                     "not an approved heavy command here",
                 ));
             }
+            // And what this host's own checkout of the project lists, when
+            // it has one that lists heavy commands (X89, X90).
+            if let Some(own) = sync.own_heavy_list(&req.copy)
+                && !crate::heavy::runs_approved(&req.argv, &req.env, Some(&own))
+            {
+                return Err(RpcError::new(
+                    "not_approved",
+                    "not a heavy command this host's own checkout of the project lists",
+                ));
+            }
         }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
         let load = crate::link::load().unwrap_or(0.0);

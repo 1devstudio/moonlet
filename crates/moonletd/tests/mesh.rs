@@ -862,6 +862,24 @@ async fn a_member_that_writes_another_hosts_switch_does_not_turn_it_on() {
 }
 
 #[tokio::test]
+async fn a_runner_with_its_own_checkout_runs_only_what_that_checkout_lists_too() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    // studio-mini's own checkout of shop lists only `pnpm check`.
+    let _ = shop_on(&mini, repo.path()).await;
+    mini_takes(&mini, true).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+    // Once it lists `sh -c` too, it runs it.
+    std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), RUN_HEAVY).unwrap();
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(ran.stderr.starts_with("moonlet: running on studio-mini\n"), "{}", ran.stderr);
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+}
+
+#[tokio::test]
 async fn a_host_with_heavy_commands_off_takes_none_from_other_hosts() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
