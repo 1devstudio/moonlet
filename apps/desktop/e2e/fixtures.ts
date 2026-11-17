@@ -176,6 +176,7 @@ const s = require("node:net").connect(sock, () => s.write(Buffer.concat([
   frame({ t: "request", id: 1, method, params: JSON.parse(params) }),
 ])));
 let buf = Buffer.alloc(0);
+let done = false;
 s.on("data", (d) => {
   buf = Buffer.concat([buf, d]);
   while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
@@ -183,15 +184,17 @@ s.on("data", (d) => {
     const msg = buf[4] === 1 ? JSON.parse(buf.subarray(5, 4 + len).toString()) : null;
     buf = buf.subarray(4 + len);
     if (msg?.t === "response" && msg.id === 1) {
+      done = true;
       s.destroy();
-      if (msg.error) { process.stderr.write(msg.error.code + ": " + msg.error.message + "\\n"); process.exit(1); }
-      process.stdout.write(JSON.stringify(msg.result ?? null));
-      process.exit(0);
+      // Exit once the output has drained: a pipe on macOS is written asynchronously.
+      if (msg.error) process.stderr.write(msg.error.code + ": " + msg.error.message + "\\n", () => process.exit(1));
+      else process.stdout.write(JSON.stringify(msg.result ?? null), () => process.exit(0));
+      return;
     }
   }
 });
 s.on("error", (e) => { process.stderr.write(String(e) + "\\n"); process.exit(1); });
-s.on("close", () => { process.stderr.write("the daemon closed the connection\\n"); process.exit(1); });
+s.on("close", () => { if (!done) { process.stderr.write("the daemon closed the connection\\n"); process.exit(1); } });
 `;
 
 /** The workspaces and sections on the app's daemon. A spec that links it
