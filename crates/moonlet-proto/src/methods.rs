@@ -722,6 +722,8 @@ pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
 /// A host's Claude settings after a change: the whole `ClaudeSettings` (X103).
 pub const EV_CLAUDE_SETTINGS_CHANGED: &str = "claude.settings_changed";
+/// A host's power settings after a change: the whole `PowerSettings` (X73).
+pub const EV_POWER_SETTINGS_CHANGED: &str = "power.settings_changed";
 /// A project's base branch was fast-forwarded by `git.pull_base`, by any
 /// client: [`BasePulled`](crate::types::BasePulled) (X13). Another host's
 /// pull reaches this host's app only through it.

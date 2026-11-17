@@ -220,16 +220,22 @@ pub enum Agent<'a> {
 }
 
 /// Whether `agent` is in the middle of a turn, which keeps the Mac from
-/// idle sleep (X73): a chat that works, waiting on a tool it runs among it,
-/// or that has a subagent running that does not ask the user; an agent in
-/// a terminal tab that works. One that waits for the user (an ask, a plan
-/// to approve) or is idle, done or failed does not, nor does one whose
-/// process is gone.
+/// idle sleep (X73): a chat that works, waiting on a tool it runs among it;
+/// one whose main turn runs while only its subagents ask (any ask makes a
+/// chat `blocked`, and a background subagent's leaves the main agent at
+/// work); one with a subagent running that does not ask the user; an agent
+/// in a terminal tab that works. One that waits for the user (the main
+/// agent's ask, a plan to approve, a subagent's ask after the turn ended)
+/// or is idle, done or failed does not, nor does one whose process is
+/// gone.
 pub fn mid_turn(agent: Agent) -> bool {
     match agent {
         Agent::Chat(st) => {
             let asks = |id: &str| st.pending.iter().any(|p| p.agent.as_deref() == Some(id));
-            st.status == "working" || st.subagents.iter().any(|a| a.status == "running" && !asks(&a.id))
+            let main_asks = st.pending.iter().any(|p| p.agent.is_none());
+            st.status == "working"
+                || (st.status == "blocked" && st.turn_started_at.is_some() && !main_asks)
+                || st.subagents.iter().any(|a| a.status == "running" && !asks(&a.id))
         }
         Agent::Tab(info) => {
             use moonlet_proto::types::{AgentState, TerminalKind};
@@ -251,9 +257,11 @@ pub enum Awake {
 /// the middle of a turn ([`mid_turn`]), with "Keep this Mac awake while
 /// agents work" `on`, and it is `held` now: it is held from the first one's
 /// start to the last one's end, so idle sleep never stops one midway. Off,
-/// nothing holds it. A closed lid still sleeps.
+/// turns do not hold it; heavy runs still do, as before the switch, so a
+/// run another host routed here is never cut off. A closed lid still
+/// sleeps.
 pub fn awake(held: bool, on: bool, runs: usize, turns: usize) -> Option<Awake> {
-    match (held, on && runs + turns > 0) {
+    match (held, runs > 0 || (on && turns > 0)) {
         (false, true) => Some(Awake::Hold),
         (true, false) => Some(Awake::Release),
         _ => None,
@@ -329,7 +337,8 @@ impl KeepAwake {
     fn change(&self, f: impl FnOnce(&mut Held)) {
         let mut h = self.state.lock().unwrap();
         f(&mut h);
-        match awake(h.id.is_some(), h.on && !h.stopped, h.runs, h.turns) {
+        let (runs, turns) = if h.stopped { (0, 0) } else { (h.runs, h.turns) };
+        match awake(h.id.is_some(), h.on, runs, turns) {
             Some(Awake::Hold) => {
                 // One that could not be made is tried again at the next
                 // change.
@@ -559,9 +568,11 @@ mod tests {
 
     /// Agents' turns hold the Mac as heavy runs do, from the first one's
     /// start to the last one's end; "Keep this Mac awake while agents
-    /// work" off, nothing does, and turning it off lets go at once.
+    /// work" off, turns do not, and turning it off lets go at once. Heavy
+    /// runs hold it either way, as before the switch: another host's routed
+    /// run is never cut off by it.
     #[test]
-    fn turns_and_heavy_runs_hold_the_mac_awake_only_while_the_setting_is_on() {
+    fn turns_hold_the_mac_awake_only_while_the_setting_is_on_and_heavy_runs_always() {
         // (held, on, heavy runs, turns) → what to do.
         let cases = [
             ((false, true, 0, 1), Some(Awake::Hold)),
@@ -571,11 +582,13 @@ mod tests {
             ((true, true, 1, 0), None),
             // The last turn ends, nothing else runs: released.
             ((true, true, 0, 0), Some(Awake::Release)),
-            // Off: turns and runs alike leave the Mac free to idle sleep.
+            // Off: turns leave the Mac free to idle sleep…
             ((false, false, 0, 2), None),
-            ((false, false, 2, 0), None),
-            // Turned off while held: released at once.
-            ((true, false, 1, 1), Some(Awake::Release)),
+            // …heavy runs still hold it.
+            ((false, false, 2, 0), Some(Awake::Hold)),
+            ((true, false, 1, 1), None),
+            // Turned off while held for turns alone: released at once.
+            ((true, false, 0, 1), Some(Awake::Release)),
             // Turned back on mid-turn: held again.
             ((false, true, 0, 1), Some(Awake::Hold)),
         ];
@@ -619,7 +632,32 @@ mod tests {
             (chat(serde_json::json!({ "status": "idle", "queued": [{ "id": "q1", "text": "and the tests" }] })), false),
             // A background subagent goes on after the main turn ended.
             (chat(serde_json::json!({ "status": "done", "subagents": running })), true),
-            // A subagent that asks waits for the user too…
+            // A background subagent asks while the main turn goes on (any ask
+            // makes the chat `blocked`): still at work.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "turn_started_at": 1794576000000_u64,
+                    "subagents": running,
+                    "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+                })),
+                true,
+            ),
+            // The main agent asks too: the turn waits for the user.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "turn_started_at": 1794576000000_u64,
+                    "subagents": running,
+                    "pending": [
+                        { "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" },
+                        { "id": "p1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }
+                    ]
+                })),
+                false,
+            ),
+            // A subagent that asks after the main turn ended waits for the
+            // user too…
             (
                 chat(serde_json::json!({
                     "status": "blocked",

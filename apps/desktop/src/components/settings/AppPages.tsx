@@ -194,7 +194,7 @@ function Sleep() {
         <SwitchRow
           setting="keep-awake"
           label="Keep this Mac awake while agents work"
-          hint="While an agent is mid-turn or a heavy command runs, this Mac doesn't sleep when left idle. The display can still turn off, and closing the lid still puts it to sleep."
+          hint="While an agent is mid-turn, this Mac doesn't sleep when left idle. The display can still turn off, and closing the lid still puts it to sleep."
           on={!!settings?.keep_awake}
           disabled={!settings}
           onChange={set}

@@ -483,7 +483,7 @@ pub struct ClaudeSettings {
 #[serde(default)]
 pub struct PowerSettings {
     /// Keep this Mac from idle sleep while an agent is in the middle of a
-    /// turn or a heavy command runs here.
+    /// turn here. Heavy commands keep it awake either way.
     pub keep_awake: bool,
 }
 

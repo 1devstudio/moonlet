@@ -409,7 +409,7 @@ export interface ClaudeSettings {
 
 /** A host's power settings, kept by its daemon in `~/.moonlet/power.toml` (X73). */
 export interface PowerSettings {
-  /** No idle sleep while an agent is mid-turn or a heavy command runs on the host. */
+  /** No idle sleep while an agent is mid-turn on the host (heavy runs hold it either way). */
   keep_awake: boolean;
 }
 

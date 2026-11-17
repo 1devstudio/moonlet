@@ -7260,8 +7260,16 @@ impl Daemon {
             }
             m::POWER_SETTINGS => ok(moonlet_core::power_settings::load(&moonlet_core::power_settings::path())),
             m::POWER_SET_SETTINGS => {
-                let saved = moonlet_core::power_settings::update(&moonlet_core::power_settings::path(), p).map_err(internal)?;
-                self.awake.set_on(saved.keep_awake);
+                // Saved and applied under one lock, so two quick changes
+                // apply in the order they were saved.
+                static SET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+                let saved = {
+                    let _set = SET.lock().unwrap_or_else(|e| e.into_inner());
+                    let saved = moonlet_core::power_settings::update(&moonlet_core::power_settings::path(), p).map_err(internal)?;
+                    self.awake.set_on(saved.keep_awake);
+                    saved
+                };
+                self.terminals.emit(Message::event(m::EV_POWER_SETTINGS_CHANGED, &saved));
                 ok(saved)
             }
             m::CLAUDE_SETTINGS => ok(moonlet_core::claude_settings::load(&moonlet_core::claude_settings::path())),
