@@ -605,11 +605,15 @@ impl Mobile {
         }
     }
 
-    pub fn revoke(&self, id: &str) -> Result<(), RpcError> {
-        self.forget(id)?;
-        self.close_device(id);
+    /// Removes device `id`, and the worker links it asked for: removing a
+    /// Mac cuts its member's link too. Returns every device removed.
+    pub fn revoke(&self, id: &str) -> Result<Vec<String>, RpcError> {
+        let gone = self.forget(id)?;
+        for d in &gone {
+            self.close_device(d);
+        }
         self.changed();
-        Ok(())
+        Ok(gone)
     }
 
     /// A cloud machine being removed (X63): its token stops working at once,
@@ -622,9 +626,14 @@ impl Mobile {
 
     /// A paired device removes itself (X57). Its token stops working at once;
     /// its connections close a moment later, once the reply has gone out.
-    pub fn unpair(self: &Arc<Self>, id: &str) -> Result<(), RpcError> {
-        self.forget(id)?;
+    /// The worker links it asked for go with it, at once. Returns every
+    /// device removed.
+    pub fn unpair(self: &Arc<Self>, id: &str) -> Result<Vec<String>, RpcError> {
+        let gone = self.forget(id)?;
         self.changed();
+        for d in gone.iter().filter(|d| *d != id) {
+            self.close_device(d);
+        }
         let me = Arc::downgrade(self);
         let id = id.to_string();
         tokio::spawn(async move {
@@ -633,7 +642,7 @@ impl Mobile {
                 me.close_device(&id);
             }
         });
-        Ok(())
+        Ok(gone)
     }
 
     /// A token that only links a member, for paired Mac `device`, whose
@@ -703,15 +712,23 @@ impl Mobile {
         self.data.lock().unwrap().devices.iter().any(|d| d.id == id)
     }
 
-    fn forget(&self, id: &str) -> Result<(), RpcError> {
+    /// Removes device `id` and the worker links it asked for; returns
+    /// their ids, `id` first.
+    fn forget(&self, id: &str) -> Result<Vec<String>, RpcError> {
         let mut data = self.data.lock().unwrap();
-        let before = data.devices.len();
-        data.devices.retain(|d| d.id != id);
-        if data.devices.len() == before {
+        if !data.devices.iter().any(|d| d.id == id) {
             return Err(RpcError::new("not_found", format!("no paired device {id}")));
         }
+        let mut gone = vec![id.to_string()];
+        gone.extend(
+            data.devices
+                .iter()
+                .filter(|d| d.minted_by.as_deref() == Some(id))
+                .map(|d| d.id.clone()),
+        );
+        data.devices.retain(|d| !gone.contains(&d.id));
         self.save(&data);
-        Ok(())
+        Ok(gone)
     }
 
     pub fn close_device(&self, id: &str) {
@@ -1126,6 +1143,15 @@ mod tests {
         let link = mobile.worker_credential("d1", false).unwrap();
         let id = by_token(&mobile, &link).unwrap().device_id;
         assert_eq!(mobile.worker_credential(&id, false).unwrap_err().code, "forbidden");
+    }
+
+    #[test]
+    fn removing_a_mac_removes_the_worker_link_it_asked_for() {
+        let (_dir, mobile) = with_mac();
+        let link = mobile.worker_credential("d1", false).unwrap();
+        mobile.revoke("d1").unwrap();
+        assert!(by_token(&mobile, &link).is_none(), "the Mac's link still works");
+        assert_eq!(names(&mobile), ["iPhone"]);
     }
 
     #[test]

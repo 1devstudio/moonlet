@@ -1458,8 +1458,9 @@ impl Daemon {
             m::MOBILE_HOSTS => ok(self.mobile.hosts()),
             m::MOBILE_UNPAIR => match &conn.phone {
                 Some(device) => {
-                    self.mobile.unpair(device)?;
-                    self.workers.forget_device(device);
+                    for gone in self.mobile.unpair(device)? {
+                        self.workers.forget_device(&gone);
+                    }
                     ok(true)
                 }
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
@@ -2371,6 +2372,10 @@ impl Daemon {
             // A paired Mac's daemon trades the token it links with for one
             // that is only a worker link.
             m::WORKER_CREDENTIAL => {
+                // Tests only: a central host from before worker links.
+                if std::env::var_os("MOONLET_TEST_BEFORE_WORKER_LINKS").is_some() {
+                    return Err(RpcError::new("unknown_method", format!("unknown method {method}")));
+                }
                 let refused = || RpcError::new("forbidden", "only a paired Mac's daemon asks for a worker link");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
                 if conn.cloud.load(Ordering::Relaxed) {
@@ -2633,8 +2638,9 @@ impl Daemon {
             }
             m::MOBILE_REVOKE => {
                 let r: m::IdRef = params(p)?;
-                self.mobile.revoke(&r.id)?;
-                self.workers.forget_device(&r.id);
+                for gone in self.mobile.revoke(&r.id)? {
+                    self.workers.forget_device(&gone);
+                }
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),

@@ -281,7 +281,7 @@ async fn turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_h
     let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
     // The app's token, which it hands the link again (X41).
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
-    apps_token(&worker, &addr, &token);
+    keep_in_app_hosts(worker.home.path(), &addr, &token);
     link(&worker, &addr, &token).await;
     eventually("the worker is listed", || async {
         workers(&central).await.len() == 1
@@ -320,6 +320,8 @@ async fn turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_h
         workers(&central).await.len() == 1
     })
     .await;
+    // Set again with the app's token, the link traded it for its own again.
+    assert_ne!(link_token(&worker), token);
 
     central.restart().await;
     eventually("the worker links to the restarted central host", || async {
@@ -1255,17 +1257,6 @@ async fn slots_out_of_range_in_link_json_read_as_two() {
     }
 }
 
-/// Puts `token` in the host list of `worker`'s app, as the app keeps the
-/// token it paired with (X57) before it hands it to the link (X41).
-fn apps_token(worker: &Daemon, addr: &str, token: &str) {
-    std::fs::write(
-        worker.home.path().join("app-hosts.json"),
-        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": token }] })
-            .to_string(),
-    )
-    .unwrap();
-}
-
 /// The token `worker` keeps in its `link.json` for its central host.
 fn link_token(worker: &Daemon) -> String {
     let file = std::fs::read(worker.home.path().join("link.json")).unwrap();
@@ -1400,7 +1391,7 @@ async fn a_link_set_with_the_apps_own_token_leaves_the_app_its_token() {
     let (central, addr) = central().await;
     let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
     let apps = pair(&central, &addr, "Alex's MacBook Pro").await;
-    apps_token(&worker, &addr, &apps);
+    keep_in_app_hosts(worker.home.path(), &addr, &apps);
     registered_before(&central, &addr, &apps).await;
     link(&worker, &addr, &apps).await;
     eventually("the link has a credential of its own", || async {
@@ -1409,8 +1400,61 @@ async fn a_link_set_with_the_apps_own_token_leaves_the_app_its_token() {
     .await;
     eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
     let link = link_token(&worker);
+    // What a paired Mac's app got before this change (captured on main).
     let app = app_methods(&addr, &apps, "moonlet-app").await;
-    assert!(app.iter().all(|(_, got)| got != "forbidden"), "{app:?}");
+    let before: Vec<(String, String)> = [
+        ("terminal.create", "ok"),
+        ("terminal.attach", "ok"),
+        ("fs.read", "ok"),
+        ("cloud.set", "ok"),
+        ("heavy.approve", "not_found"),
+        ("daemon.update", "not_newer"),
+    ]
+    .into_iter()
+    .map(|(m, got)| (m.to_string(), got.to_string()))
+    .collect();
+    assert_eq!(app, before);
     let linked = app_methods(&addr, &link, "moonlet-app").await;
     assert!(linked.iter().all(|(_, got)| got == "forbidden"), "{linked:?}");
+}
+
+/// A central host from before worker links does not know
+/// `worker.credential`: the member keeps linking with its paired token,
+/// and asks again once the central host has updated.
+#[tokio::test]
+async fn a_member_keeps_its_paired_token_with_a_central_host_from_before_worker_links() {
+    let (mut central, addr) = listening("127.0.0.1", |_| {}).await;
+    central.stop();
+    central.env.push(("MOONLET_TEST_BEFORE_WORKER_LINKS".into(), "1".into()));
+    central.restart().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let paired = pair(&central, &addr, "Alex's MacBook Pro").await;
+    link(&worker, &addr, &paired).await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    assert_eq!(link_token(&worker), paired);
+
+    // The central host updates: the member moves on its next link.
+    central.stop();
+    central.env.retain(|(k, _)| k != "MOONLET_TEST_BEFORE_WORKER_LINKS");
+    central.restart().await;
+    eventually("the link has a credential of its own", || async {
+        link_token(&worker) != paired
+    })
+    .await;
+    eventually("listed again", || async { workers(&central).await.len() == 1 }).await;
+    assert!(!authenticates(&addr, &paired).await, "the old token still works");
+}
+
+/// A host list of the app's that is there but cannot be read may hold the
+/// token: the link keeps it, rather than end the app's way in.
+#[tokio::test]
+async fn a_link_keeps_its_token_while_the_apps_host_list_cannot_be_read() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    std::fs::write(worker.home.path().join("app-hosts.json"), "{ not json").unwrap();
+    link(&worker, &addr, &token).await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    assert_eq!(link_token(&worker), token);
+    assert!(authenticates(&addr, &token).await, "the app's token stopped working");
 }

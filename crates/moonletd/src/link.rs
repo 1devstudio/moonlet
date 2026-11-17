@@ -952,8 +952,13 @@ impl WorkerLink {
     /// central host from before worker links, or one that refuses, keeps
     /// the paired token in use.
     async fn take_worker_link(self: &Arc<Self>, host: &Arc<Host>) -> bool {
-        if self.store.lock().unwrap().worker_link() {
-            return false;
+        {
+            // Nothing to trade: no central host, a worker link already, or
+            // a cloud machine's token, which is only a cloud machine's (X63).
+            let store = self.store.lock().unwrap();
+            if store.central().is_none() || store.worker_link() || store.worker().cloud {
+                return false;
+            }
         }
         // One move at a time: a second ask would make the central host drop
         // the worker link the first one is saving. The move registers.
@@ -962,10 +967,12 @@ impl WorkerLink {
         }
         let moved = self.move_to_worker_link(host).await;
         self.moving.store(false, Ordering::SeqCst);
-        // A link made meanwhile by `link.set` left its registration to
-        // this move.
-        if moved && !self.is_current(host) {
+        // A link made meanwhile, by this move or by `link.set`, left its
+        // registration to this move, which may have failed with its old
+        // connection.
+        if !self.is_current(host) {
             self.register_again();
+            return true;
         }
         moved
     }
@@ -974,7 +981,6 @@ impl WorkerLink {
         let was = {
             let store = self.store.lock().unwrap();
             match store.central() {
-                // A cloud machine's token is only a cloud machine's (X63).
                 Some(c) if !store.worker_link() && !store.worker().cloud => c.token.clone(),
                 _ => return false,
             }
@@ -982,7 +988,24 @@ impl WorkerLink {
         // This Mac's app keeps a token of its own to reach the host (X57),
         // which may be the one it handed to the link (X41): that one stays
         // the app's. One the link alone holds goes once the new one works.
-        let apps = moonlet_core::ssh::saved_hosts().tailnet.iter().any(|t| t.token == was);
+        // A host list that is there but cannot be read may hold it: the
+        // link keeps the paired token rather than end the app's.
+        let file = moonlet_core::ssh::saved_hosts_file();
+        let hosts = match std::fs::read(&file) {
+            Ok(b) => match serde_json::from_slice::<moonlet_core::ssh::SavedHosts>(&b) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!("the link keeps this Mac's paired token: cannot read {}: {e}", file.display());
+                    return false;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => moonlet_core::ssh::SavedHosts::default(),
+            Err(e) => {
+                tracing::warn!("the link keeps this Mac's paired token: cannot read {}: {e}", file.display());
+                return false;
+            }
+        };
+        let apps = hosts.tailnet.iter().any(|t| t.token == was);
         let ask = serde_json::to_value(m::WorkerCredential { replace: !apps }).unwrap();
         let given = match host.request(m::WORKER_CREDENTIAL, ask).await {
             Ok(v) => match serde_json::from_value::<m::WorkerCredentialGiven>(v) {

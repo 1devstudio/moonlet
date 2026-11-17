@@ -221,12 +221,7 @@ async fn linked_member(
     .unwrap();
     let member = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", ip)]).await;
     let token = pair(central, addr, name, DeviceKind::Desktop).await;
-    std::fs::write(
-        member.home.path().join("app-hosts.json"),
-        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": token }] })
-            .to_string(),
-    )
-    .unwrap();
+    keep_in_app_hosts(member.home.path(), addr, &token);
     let _: Value = member
         .call(
             "link.set",
