@@ -217,6 +217,9 @@ pub struct Daemon {
     pub machines: Arc<crate::machines::Machines>,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
+    /// Keeps this Mac from idle sleep while heavy commands run on it or its
+    /// agents are in the middle of a turn (X62, X73).
+    pub awake: Arc<crate::power::KeepAwake>,
     /// Routed commands passed between two members (X89).
     pub relay: Arc<crate::relay::Relay>,
     /// Every session's routed commands, with their output (X62).
@@ -751,7 +754,9 @@ impl Daemon {
             moonlet_core::paths::home().join("jobs"),
             move |m| emitter.emit(m),
         ));
-        let runs = crate::exec::Runs::new(terminals.base_env().clone(), jobs.clone());
+        let keep_awake = moonlet_core::power_settings::load(&moonlet_core::power_settings::path()).keep_awake;
+        let awake = Arc::new(crate::power::KeepAwake::from_env(keep_awake));
+        let runs = crate::exec::Runs::new(terminals.base_env().clone(), jobs.clone(), awake.clone());
         let cloud = Arc::new(crate::cloud::CloudSettings::load(&moonlet_core::paths::home()));
         let emitter = terminals.clone();
         let machines = crate::machines::Machines::new(
@@ -838,6 +843,7 @@ impl Daemon {
             cloud,
             machines,
             runs,
+            awake,
             relay,
             jobs,
             clones,
@@ -6486,6 +6492,62 @@ impl Daemon {
         });
     }
 
+    /// Keeps this Mac from idle sleep while any of its agents is in the
+    /// middle of a turn (X73, [`crate::power::mid_turn`]): its chats by their
+    /// `chat.state`, its agent tabs by `terminal.updated`, each let go of as
+    /// it ends, exits or is removed. All of them are looked at again as the
+    /// watch starts, after a restart or a live upgrade among it, and after
+    /// it missed events. Runs for the daemon's life.
+    pub fn keep_awake_for_turns(self: &Arc<Self>) {
+        use crate::power::{Agent, mid_turn};
+        use moonlet_proto::types::TerminalInfo;
+        let mut events = self.terminals.subscribe_events();
+        let d = self.clone();
+        let now = move || -> std::collections::HashSet<moonlet_proto::TerminalId> {
+            let chats = d.chats.summaries().into_iter().filter(|(_, st)| mid_turn(Agent::Chat(st))).map(|(id, _)| id);
+            let tabs = d.terminals.list().into_iter().filter(|t| mid_turn(Agent::Tab(t))).map(|t| t.id);
+            chats.chain(tabs).collect()
+        };
+        let d = self.clone();
+        tokio::spawn(async move {
+            let mut at_work = now();
+            d.awake.turns(at_work.len());
+            loop {
+                match events.recv().await {
+                    Ok(Message::Event { name, data }) => {
+                        let changed = match name.as_str() {
+                            m::EV_CHAT_STATE => match serde_json::from_value::<m::ChatStateEvent>(data) {
+                                Ok(e) if mid_turn(Agent::Chat(&e.state)) => at_work.insert(e.id),
+                                Ok(e) => at_work.remove(&e.id),
+                                Err(_) => false,
+                            },
+                            // A chat's own terminal goes by its chat state.
+                            m::EV_TERMINAL_UPDATED | m::EV_TERMINAL_EXITED => match serde_json::from_value::<TerminalInfo>(data) {
+                                Ok(t) if t.chat => false,
+                                Ok(t) if mid_turn(Agent::Tab(&t)) => at_work.insert(t.id),
+                                Ok(t) => at_work.remove(&t.id),
+                                Err(_) => false,
+                            },
+                            m::EV_TERMINAL_REMOVED => {
+                                serde_json::from_value::<m::TerminalRef>(data).is_ok_and(|r| at_work.remove(&r.id))
+                            }
+                            _ => false,
+                        };
+                        if changed {
+                            d.awake.turns(at_work.len());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        at_work = now();
+                        d.awake.turns(at_work.len());
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+    }
+
     /// The designs a turn of an agent changes: a workspace design's agent's
     /// own design, or every session design of a session's agent's session.
     async fn designs_of_turn(&self, of: &TurnOf) -> Vec<DesignAt> {
@@ -7195,6 +7257,12 @@ impl Daemon {
             m::CLAUDE_MODELS => {
                 let r: m::ClaudeModels = params(p)?;
                 ok(self.chats.claude_models(r.workspace.as_deref()).await)
+            }
+            m::POWER_SETTINGS => ok(moonlet_core::power_settings::load(&moonlet_core::power_settings::path())),
+            m::POWER_SET_SETTINGS => {
+                let saved = moonlet_core::power_settings::update(&moonlet_core::power_settings::path(), p).map_err(internal)?;
+                self.awake.set_on(saved.keep_awake);
+                ok(saved)
             }
             m::CLAUDE_SETTINGS => ok(moonlet_core::claude_settings::load(&moonlet_core::claude_settings::path())),
             m::CLAUDE_SET_SETTINGS => {

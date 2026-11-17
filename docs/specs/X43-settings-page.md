@@ -35,6 +35,7 @@ Settings move out of the 600 px modal into a full-window page with a left nav. A
 
 - [x] **General › Updates:** `moonlet <version>` with its update status and "Check now"; `Claude Code <version>` with its status and "Update to X" when one is available; a switch "Check for updates automatically". Existing behaviour from X35/X36 is unchanged.
 - [x] **General › Background daemon:** a switch "Start the moonlet daemon at login" (S1b, with its confirm when turning off a loaded daemon) and a status line: "Running under launchd · <plist path>", "Installed but not loaded · <plist path>" or "Not installed: moonletd runs while moonlet is open".
+- [x] **General › Sleep:** a switch "Keep this Mac awake while agents work", on by default, kept by this Mac's daemon in `power.toml` and applied at once (X73, `settings-page.e2e.ts` › "keeps this Mac awake while agents work until switched off, in the daemon's power.toml (X73)").
 - [x] **Appearance › Text:** "Font size" with − and + buttons and a number field, clamped to 9–24 (X37), and a live sample of sans and mono text at that size.
 - [x] **Appearance › Editor and diffs:** "Colour theme of files and diffs" (X26) with a code sample.
 - [x] **Terminal:** "Font family"; "New shells" as two radio cards, Blocks (default) and Classic; switches "Use Option as Meta" and "Let programs write to the clipboard"; "Rendering › GPU rendering".

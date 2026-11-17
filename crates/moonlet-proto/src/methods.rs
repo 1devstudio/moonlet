@@ -214,6 +214,11 @@ pub const CLAUDE_SETTINGS: &str = "claude.settings";
 /// Changes some of the host's Claude settings: a partial `ClaudeSettings` →
 /// the whole, as saved (X103).
 pub const CLAUDE_SET_SETTINGS: &str = "claude.set_settings";
+/// The host's power settings (X73): `{}` → `PowerSettings`.
+pub const POWER_SETTINGS: &str = "power.settings";
+/// Changes some of the host's power settings: a partial `PowerSettings` →
+/// the whole, as saved (X73). It applies at once.
+pub const POWER_SET_SETTINGS: &str = "power.set_settings";
 /// The models Claude Code offers in a workspace's Claude profile (X105):
 /// [`ClaudeModels`] → `Vec<ClaudeModel>`, empty when Claude cannot say.
 pub const CLAUDE_MODELS: &str = "claude.models";

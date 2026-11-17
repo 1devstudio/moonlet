@@ -12,6 +12,7 @@ The user works on the MacBook, closes its lid and leaves with the phone. Today t
 
 With this spec, a session's agent runs where the user works, and moves on its own:
 - **When the owner goes to sleep,** its daemon stops its agents, sends a last checkpoint and hands its busy sessions to the central host: those with a turn running, an ask open or a message queued in a structured chat. The central host continues each from there. A turn that was cut off continues, with a note to the agent; an ask stays open there, and a queued message runs there. An idle session stays where it is, so a short idle sleep with the lid open moves nothing.
+- **While an agent is in the middle of a turn,** the Mac does not idle sleep at all, so a user who steps away from an open MacBook finds the work done, not frozen or moved. A closed lid still sleeps, and the session moves as above.
 - **When the user types into a session in the app on another member,** that member takes the session over once the current turn ends, and the message runs there.
 - **The phone never moves a session.** Its messages reach the owner through the central host (X72). Only when the owner has been unreachable for 30 s, asleep or not, does a phone message make the central host take the session over.
 
@@ -52,6 +53,18 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - [ ] The member that gives a session up keeps its worktree as a copy, where it is and a git worktree still, kept in sync as X72's copy on the central host is. Only the files it changed since the last checkpoint go to `sync-leftovers`; the new owner's files then replace them in the worktree (`a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner`). A file changed there after that keeps its version. A worktree on another branch keeps its files: its copy pauses first, as X60's copies do (`a_lost_session_whose_worktree_is_on_another_branch_pauses_its_copy_and_leaves_its_files`). One with commits the new owner lacks keeps them and goes on as X60's copies do (2026-11-14; until then it paused). Ahead of the new owner, its commits and the files changed there since go to the session there, on top of the new owner's uncommitted files; a file both changed differs and keeps each side's version, so nothing in the worktree is overwritten, and the gap is in leftovers too (`a_lost_session_whose_worktree_has_commits_of_its_own_sends_them_to_the_new_owner`). The new owner decides each reconciliation from then on. The central host keeps its copy whoever owns the session.
 - [ ] Every member that keeps a copy of a session gets its chat, transcript and checkpoints as the central host does (X72). This covers a copy it gave up and a copy kept in sync (X60). So that member can continue the session without the central host.
 - [ ] Cloud machines never own a session.
+
+### No idle sleep in the middle of a turn
+
+- [ ] While any agent on this Mac is in the middle of a turn, the Mac does not idle sleep: the daemon holds a `PreventUserIdleSystemSleep` power assertion from the first turn's start to the last one's end, the one PR #665 holds for heavy runs (X62, X89), shared by both (`moonletd` `power::tests::turns_and_heavy_runs_hold_the_mac_awake_only_while_the_setting_is_on`, `the_mac_is_held_awake_from_the_first_heavy_run_to_the_last_ones_end`; `tests/daemon.rs` `the_mac_is_kept_awake_while_a_chat_is_in_the_middle_of_a_turn`). In the middle of a turn means (`power::tests::only_an_agent_in_the_middle_of_a_turn_holds_the_mac_awake`):
+  - a structured chat whose state is `working`, which includes a turn waiting on a tool its agent runs (a build, a test run, a heavy command);
+  - a structured chat with a subagent running that does not itself wait for an answer, such as a background subagent after the main turn ended, or a second subagent while another one asks;
+  - an agent in a terminal tab (PTY) whose state is working, by its hooks or, without hooks, by its output until it goes quiet.
+- [ ] A chat that waits for the user does not hold the Mac: an ask open (a permission, a question, a plan to approve, from the main agent or a subagent), idle, done or failed. An idle sleep is then fine, and with a central host the session is handed over at the sleep notice as above, so the phone can answer there. A message queued in an idle chat goes at once, and the turn it starts holds the Mac.
+- [ ] Only idle sleep is held off. A closed lid, Apple menu › Sleep and a low battery still sleep the Mac, and the hand-over above happens as before. The display still sleeps.
+- [ ] **Keep this Mac awake while agents work** in Settings › General, on by default, turns it off for this Mac only (each host keeps its own `power.toml`; it does not sync between members). Turned off, nothing holds the Mac awake, heavy runs included; a change applies at once and lets go of an assertion already held (`the_mac_is_kept_awake_while_a_chat_is_in_the_middle_of_a_turn`; `moonlet-core` `power_settings::tests::keeping_the_mac_awake_is_on_without_a_file_and_off_once_turned_off`; `settingsSearch.test.ts` › "finds keeping the Mac awake by sleep and awake (X73)"; `settings-page.e2e.ts` › "keeps this Mac awake while agents work until switched off, in the daemon's power.toml (X73)").
+- [ ] The assertion is never left held: it ends with the last turn, when a chat's agent process dies mid-turn (its state turns to `error`), when the daemon stops, and on a live upgrade (S3) the old daemon lets go as it hands over and the new one holds it again from its own agents' states (`the_mac_is_kept_awake_while_a_chat_is_in_the_middle_of_a_turn`; `tests/upgrade.rs` `an_agent_at_work_keeps_the_mac_awake_across_an_upgrade_until_the_daemon_stops`). macOS also drops a process's assertions when it exits.
+- [ ] A daemon a test starts never holds the machine running the tests awake (`MOONLET_EXIT_WITH`, `MOONLET_E2E_ROOT`); `MOONLET_TEST_AWAKE_LOG` writes `hold` and `release` lines to a file instead.
 
 ### When the owner goes to sleep
 
@@ -220,6 +233,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - The session menu: a **Where it runs** submenu with **Bring to this Mac** and **Run only on** each member, **Move now** (while a turn runs), **Unpin**.
 - The phone, for an unreachable owner's session whose turn was running: a line above the composer, "MacBook is not reachable · fix-cart was working", with **Continue on studio-mini**.
 - The readiness mark: a small hollow triangle after the session's name, in the muted colour.
+- Settings › General › **Sleep**: one switch, **Keep this Mac awake while agents work**, on by default, with the hint "While an agent is mid-turn or a heavy command runs, this Mac doesn't sleep when left idle. The display can still turn off, and closing the lid still puts it to sleep." It is disabled while the daemon has not answered, or is too old to know the setting.
 
 ## Protocol and RPCs
 
@@ -237,6 +251,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - `session.ready` → `[{session, ready, reason?}]`: on the central host.
 - Event `session.moved {session, from, to, epoch, reason}`.
 - The session record gains `epoch` and `pinned`.
+- `power.settings` → `PowerSettings {keep_awake}` and `power.set_settings {keep_awake?}` → the whole, as saved, applied at once: app → its own daemon. A daemon from before answers neither, and the app shows the switch disabled.
 
 ## Data and config
 
@@ -244,6 +259,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - `$MOONLET_HOME/moves.json` on each member: sessions it handed over before a sleep and has not yet heard answered, `{"sessions": {"<id>": <epoch>}, "withdrawn": {"<id>": <epoch>}}`; `withdrawn` holds those whose agents went on here with no answer, never sent again, kept until the central host is heard from. Written whole: into a file beside it, flushed to the disk, then renamed over it, so a crash leaves the old file or the new one (`moonletd` `moves::tests::a_hand_over_is_kept_across_a_restart_until_it_is_answered`, `a_write_cut_off_by_a_crash_leaves_the_last_whole_file`).
 - `$MOONLET_HOME/takes.json` on each member: the sessions it asked the central host for (`session.take`) and has neither taken in nor handed back, `{"sessions": {"<id>": {"epoch": <asked at>, "at": <ms>}}}`. Written whole, as `moves.json` is, before the take is sent; cleared when the session is taken in, handed back, refused, or the record shows it was never given (`moonletd` `takes::tests::a_take_is_kept_across_a_restart_until_it_is_settled`).
 - Forked transcripts sit beside the transcript in the profile's `projects/` folder.
+- `$MOONLET_HOME/power.toml` on each host: `keep_awake = false` once the switch is turned off; missing, or not parsing, means on.
 
 ## Security considerations
 
@@ -258,6 +274,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - Moving after idle time with the lid open (ADR 0015: rejected).
 - Continuing a cut-off turn with no sleep notice and nobody acting (ADR 0015's open question).
 - Copied files (X74) and sign-ins (X75).
+- Holding off idle sleep on a Linux member (a systemd `sleep:idle` inhibitor would do it, but a headless Linux host has no user idle sleep to hold off in practice, so it is left out).
 
 ## Test plan
 
@@ -333,6 +350,8 @@ Sessions stuck on the central host (2026-11-14). After the 2026-11-13 sleep, sev
 - A bring keeps every commit: ahead, the session comes with this Mac's; diverged, this Mac's go on `<branch>-this-mac`, which the answer names (`kept_on`).
 - The app says why a session can't come, and keeps the message until the user sends it there or tries again.
 - `owner.reachable` for a session the central host runs reads this Mac's link to it.
+
+- **No idle sleep mid-turn** (2026-11-17, from the 2026-11-15 architecture audit). Until then nothing kept the Mac awake during a turn: an idle sleep with the lid open froze a running turn and, with a central host, handed it over. `power::KeepAwake` now holds one assertion for heavy runs (`Runs`) and turns (`Daemon::keep_awake_for_turns`, which follows `chat.state`, `terminal.updated`, `.exited` and `.removed`, and looks at every chat and tab again at its start and after missing events), and lets go for good in `server::serve` as the daemon stops or hands over. The decision is the pure `power::mid_turn` and `power::awake`. The switch's file and RPCs follow X103's `claude.toml`. Not done: telling the user in the app that the Mac is being kept awake; a remote host's switch has no UI, as with X103.
 
 A bring right after a copy is made in place, before the central host has opened it, can answer `not_found: no such copy` (seen once in a loaded test run of `typing_on_the_member_brings_the_session_back_from_the_central_host`). **Try again** brings it.
 
