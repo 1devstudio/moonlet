@@ -67,6 +67,10 @@ function makeWorld(root: string): World {
       PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
       MOONLET_HOME: home,
       MOONLET_BIN_DIR: BIN_DIR,
+      // The harness's own requests come as the app (X75): a daemon started
+      // with this takes a Node that sends its app credential for the app.
+      // `moonlet rpc` reaches only what the CLI does (A6).
+      MOONLET_TEST_APP_EXE: process.execPath,
       MOONLET_E2E_ROOT: root,
       // Phones (X39) reach the scratch daemon on loopback, not Tailscale.
       MOONLET_MOBILE_ADDRS: "127.0.0.1",
@@ -142,9 +146,53 @@ export function tearDown(w: World) {
 }
 
 export function rpc<T = unknown>(w: World, method: string, params: object): T {
-  const out = execFileSync(join(BIN_DIR, "moonlet"), ["rpc", method, JSON.stringify(params)], { env: w.env, stdio: "pipe" });
+  const out = execFileSync(process.execPath, ["-e", APP_RPC, daemonSock(w), appTokenOf(w.home), String(protocolOf(w.env)), method, JSON.stringify(params)], {
+    env: w.env,
+    stdio: "pipe",
+  });
   return JSON.parse(out.toString() || "null") as T;
 }
+
+/** The app credential (X75) the daemon of `home` (its `MOONLET_HOME`) wrote. */
+export const appTokenOf = (home: string) => readFileSync(join(home, "run", "app-token"), "utf8").trim();
+
+const protocols = new Map<string, number>();
+/** The protocol of the daemon `env` points `moonletd status` at. */
+function protocolOf(env: NodeJS.ProcessEnv): number {
+  const key = env.MOONLET_SOCK ?? env.MOONLET_HOME ?? "";
+  if (!protocols.has(key)) protocols.set(key, (JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number }).protocol);
+  return protocols.get(key)!;
+}
+
+/** One request as this Mac's app, run by a Node child so `rpc` stays
+ *  synchronous: argv is the socket, the app credential, the protocol, the
+ *  method and its JSON params. Prints the result's JSON; an error goes to
+ *  stderr and exits 1. */
+const APP_RPC = `
+const [sock, token, protocol, method, params] = process.argv.slice(1);
+const frame = (m) => { const j = Buffer.from(JSON.stringify(m)); const h = Buffer.alloc(5); h.writeUInt32BE(j.length + 1, 0); h.writeUInt8(1, 4); return Buffer.concat([h, j]); };
+const s = require("node:net").connect(sock, () => s.write(Buffer.concat([
+  frame({ t: "hello", protocol: Number(protocol), client: "moonlet-app", app_token: token }),
+  frame({ t: "request", id: 1, method, params: JSON.parse(params) }),
+])));
+let buf = Buffer.alloc(0);
+s.on("data", (d) => {
+  buf = Buffer.concat([buf, d]);
+  while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
+    const len = buf.readUInt32BE(0);
+    const msg = buf[4] === 1 ? JSON.parse(buf.subarray(5, 4 + len).toString()) : null;
+    buf = buf.subarray(4 + len);
+    if (msg?.t === "response" && msg.id === 1) {
+      s.destroy();
+      if (msg.error) { process.stderr.write(msg.error.code + ": " + msg.error.message + "\\n"); process.exit(1); }
+      process.stdout.write(JSON.stringify(msg.result ?? null));
+      process.exit(0);
+    }
+  }
+});
+s.on("error", (e) => { process.stderr.write(String(e) + "\\n"); process.exit(1); });
+s.on("close", () => { process.stderr.write("the daemon closed the connection\\n"); process.exit(1); });
+`;
 
 /** The workspaces and sections on the app's daemon. A spec that links it
  * with another daemon takes one first, as the members of an account share
@@ -179,15 +227,16 @@ export function jsonFrame(msg: object): Buffer {
   return Buffer.concat([head, json]);
 }
 
-/** One request to a second scratch daemon over its socket `sock`, as any
- *  client may send it. `env` points `moonletd status` at that daemon.
- *  With `appToken`, the daemon's own app credential (X75, from
- *  `<its MOONLET_HOME>/run/app-token`), the request comes as that Mac's
- *  app, as for what only the app manages, such as its link. The daemon
- *  takes it so only when it was started with `MOONLET_TEST_APP_EXE`
- *  naming this Node, the seam the daemon's own tests use. */
+/** One request to a second scratch daemon over its socket `sock`, as that
+ *  Mac's app: with the daemon's own app credential (X75), `appToken` or
+ *  else the one in `<env's MOONLET_HOME>/run/app-token`. `env` points
+ *  `moonletd status` at that daemon. The daemon takes it for the app only
+ *  when it was started with `MOONLET_TEST_APP_EXE` naming this Node, as
+ *  the world's environment does, the seam the daemon's own tests use; a
+ *  local client that proves nothing reaches only what the CLI does (A6). */
 export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: string, params: object = {}, appToken?: string): Promise<T> {
-  const { protocol } = JSON.parse(execFileSync(join(BIN_DIR, "moonletd"), ["status"], { env }).toString()) as { protocol: number };
+  if (appToken === undefined && env.MOONLET_HOME) appToken = appTokenOf(env.MOONLET_HOME);
+  const protocol = protocolOf(env);
   const hello = appToken ? { t: "hello", protocol, client: "moonlet-app", app_token: appToken } : { t: "hello", protocol, client: "e2e" };
   return new Promise((resolve, reject) => {
     const s = connect(sock, () => s.write(Buffer.concat([jsonFrame(hello), jsonFrame({ t: "request", id: 1, method, params })])));
