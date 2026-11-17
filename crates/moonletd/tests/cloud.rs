@@ -2020,6 +2020,58 @@ async fn overflow_starts_no_second_machine_while_one_is_starting() {
 }
 
 impl Cloud {
+    /// Machines that could not be made, removed ones included.
+    async fn failed(&self) -> usize {
+        let all = self.machines().await;
+        all["machines"]
+            .as_array()
+            .into_iter()
+            .chain(all["removed"].as_array())
+            .flatten()
+            .filter(|m| m["state"] == "failed")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_machine_that_could_not_be_made_is_not_tried_again_on_every_busy_command() {
+    // The central host is busy, and a minute lasts 5 s here.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100"), ("MOONLET_TEST_CLOUD_MINUTE_MS", "5000")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    // No Tailscale credential: every machine fails before it is made.
+    c.steer("tailnet-key", "");
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    for _ in 0..50 {
+        if c.failed().await == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(c.failed().await, 1);
+    // The next busy commands run here and leave the cloud alone.
+    for _ in 0..3 {
+        let ran = c.run(&s, &["sh", "run.sh"]).await;
+        assert_eq!(ran_on(&ran), "studio-mini");
+    }
+    assert_eq!(c.failed().await, 1);
+    // A minute after the failure it is tried once more, then two minutes.
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    for _ in 0..50 {
+        if c.failed().await == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(c.failed().await, 2);
+    tokio::time::sleep(Duration::from_millis(5500)).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.failed().await, 2);
+}
+
+impl Cloud {
     async fn jobs(&self, session: &Value) -> Vec<Value> {
         self.d
             .call("job.list", json!({ "session": session["id"] }))

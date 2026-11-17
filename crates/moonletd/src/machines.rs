@@ -18,6 +18,10 @@ use crate::cloud::CloudSettings;
 use crate::mobile::Mobile;
 use crate::workers::Workers;
 
+/// The longest overflow waits after machines that did not come up, in
+/// minutes.
+const OVERFLOW_WAIT_MAX: u64 = 30;
+
 /// The largest `machine_setup` script a machine is made with.
 const SETUP_MAX: u64 = 16 * 1024;
 
@@ -1297,9 +1301,21 @@ impl Machines {
         {
             return;
         }
-        let starting = self.records.lock().unwrap().iter().any(|r| {
-            r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
-        });
+        let (starting, wait) = {
+            let records = self.records.lock().unwrap();
+            let starting = records.iter().any(|r| {
+                r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
+            });
+            (starting, overflow_wait(&records, &key))
+        };
+        // Machines that did not come up: the next waits, rather than one
+        // more, with a new Tailscale key, on every busy command.
+        if let Some(until) = wait
+            && now_ms() < until
+        {
+            tracing::debug!("no overflow machine for {project} until {until}: the last did not come up");
+            return;
+        }
         if !starting && let Err(e) = self.up(project, None) {
             tracing::info!("no overflow machine for {project}: {}", e.message);
         }
@@ -1745,6 +1761,23 @@ fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<
         billing,
         minute(),
     ))
+}
+
+/// Until when overflow makes no machine for project `key`, whose last
+/// machines never came up: a minute after the last one went, doubling with
+/// each such machine in a row, up to [`OVERFLOW_WAIT_MAX`] minutes. None
+/// when its last machine came up, or it has none.
+fn overflow_wait(records: &[Record], key: &str) -> Option<u64> {
+    let mut mine: Vec<&Record> = records.iter().filter(|r| r.shown.project_key == key).collect();
+    mine.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+    let never_up = |r: &Record| {
+        r.ready_at.is_none() && matches!(r.shown.state.as_str(), "failed" | "removing" | "removed")
+    };
+    let failed = mine.iter().take_while(|r| never_up(r)).count() as u32;
+    let last = mine.first().filter(|r| never_up(r))?;
+    let went = last.removed_at.unwrap_or(last.shown.since);
+    let minutes = 1u64.checked_shl(failed - 1).unwrap_or(u64::MAX).min(OVERFLOW_WAIT_MAX);
+    Some(went + minutes * minute())
 }
 
 /// When `r`'s billing started: when the provider made it, or, before its
