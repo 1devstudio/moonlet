@@ -40,7 +40,7 @@ A paired desktop, like a phone, cannot manage the remote's devices, so it cannot
 
 **Versions.** The app does not pin the remote to its own version, because it no longer installs it. When the protocol versions differ, the host shows which side to update, "Update moonlet on studio-mini" or "Update moonlet on this Mac", instead of R2's install button. A daemon already answers a mismatched `hello` with `protocol_mismatch`. The pairing spec also has the tailnet listener report the daemon's version, so the app can say which side is older.
 
-**Workers.** A worker's daemon links to the central host over the same tailnet connection, with the token of the Mac it runs on. Only machines that something connects to need their listener on: the central host, and any host the app or a phone opens. A laptop that only works as a worker keeps it off.
+**Workers.** A worker's daemon links to the central host over the same tailnet connection, first with the token of the Mac it runs on. Since 2026-11-17 it trades that token, over the link, for a worker link of its own, which reaches only a member's work on the central host (X41, "The link's own credential"). Only machines that something connects to need their listener on: the central host, and any host the app or a phone opens. A laptop that only works as a worker keeps it off.
 
 **SSH hosts stay.** Hosts added over SSH (R1–R4) keep working as they do, under an advanced option. Features that span machines (the worker link, live copies, routing) build on the tailnet connection only.
 
