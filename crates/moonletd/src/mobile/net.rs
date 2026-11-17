@@ -306,6 +306,16 @@ async fn forward_from_phone(
             write_frame(&mut *reply.lock().await, &Frame::Json(err)).await?;
             continue;
         }
+        // The phone's hello goes as a phone's, whatever name it gives: the
+        // host's proxy vouches for the app's name as the app (X75, A6).
+        let frame = match frame {
+            Frame::Json(Message::Hello { protocol, .. }) => Frame::Json(Message::Hello {
+                protocol,
+                client: crate::daemon::MOBILE_CLIENT.into(),
+                app_token: None,
+            }),
+            other => other,
+        };
         write_frame(to, &frame).await?;
     }
     Ok(())

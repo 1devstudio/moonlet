@@ -1319,7 +1319,7 @@ impl Daemon {
             m::DAEMON_SHUTDOWN => {
                 // Only the host itself: a paired device would end every
                 // session here.
-                if conn.phone.is_some() {
+                if conn.phone.is_some() || conn.routed_phone {
                     return Err(RpcError::new("forbidden", "stop moonletd on its own machine"));
                 }
                 // Stopping mid-handoff would drop the sessions on their way
@@ -1336,7 +1336,7 @@ impl Daemon {
             }
             m::DAEMON_UPGRADE => {
                 // Only the host itself: `binary` is any program on this machine.
-                if conn.phone.is_some() {
+                if conn.phone.is_some() || conn.routed_phone {
                     return Err(RpcError::new("forbidden", "upgrade moonletd on its own machine"));
                 }
                 #[derive(serde::Deserialize)]

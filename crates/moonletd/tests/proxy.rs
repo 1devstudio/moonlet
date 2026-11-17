@@ -407,6 +407,14 @@ async fn a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app() {
     let _: AttachResult = phone.call(methods::TERMINAL_ATTACH, attach.clone()).await;
     let e = phone.try_call(methods::SIGNINS_SET, entries()).await.unwrap_err();
     assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app manages sign-ins"));
+    // Nor stops or swaps the host's daemon, as no paired device may.
+    let e = phone
+        .try_call(methods::DAEMON_UPGRADE, serde_json::json!({ "binary": "/nonexistent/moonletd" }))
+        .await
+        .unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "upgrade moonletd on its own machine"));
+    let e = phone.try_call(methods::DAEMON_SHUTDOWN, serde_json::json!({})).await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "stop moonletd on its own machine"));
 
     let mut direct = Link::open_as(&host, "moonlet-mobile").await;
     let e = direct.try_call(methods::TERMINAL_ATTACH, attach).await.unwrap_err();

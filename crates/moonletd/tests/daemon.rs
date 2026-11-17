@@ -6595,7 +6595,13 @@ async fn a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does()
         let e = other.request::<_, serde_json::Value>(method, params).await.unwrap_err();
         assert_eq!(e.to_string(), "forbidden: only the moonlet app does that", "{method}");
     }
-    // What the CLI calls still works under any name.
+    // What the CLI calls still works under any name, typing into this
+    // host's terminals with `moonlet pane run` included.
+    let typed: bool = other
+        .request(methods::TERMINAL_WRITE, serde_json::json!({"id": term.id, "data": "echo typed\r"}))
+        .await
+        .unwrap();
+    assert!(typed);
     let listed: Vec<serde_json::Value> = other.request(methods::SESSION_LIST, serde_json::json!({})).await.unwrap();
     assert!(listed.iter().any(|s| s["id"] == ws.id.as_str()), "{listed:?}");
 
@@ -6628,4 +6634,17 @@ async fn a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does()
     assert_eq!(heard, Vec::<String>::new());
     let late = tokio::time::timeout(Duration::from_secs(1), other.next_frame()).await;
     assert!(late.is_err(), "it heard {late:?}");
+}
+
+/// Audit 2026-11-15: a member's daemon sends packs only over the tailnet.
+/// On the local socket, a connection that says it is one is not, and a
+/// pack from it ends the connection.
+#[tokio::test]
+async fn a_local_connection_named_as_a_worker_sends_no_pack() {
+    let d = TestDaemon::start().await;
+    let mut posing = Client::connect(&d.socket, "moonletd-worker").await.unwrap();
+    posing.send(&Frame::Pack { transfer: 1, data: vec![1, 2, 3] }).await.unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), posing.next_frame()).await.expect("no answer").unwrap();
+    let Some(Frame::Json(Message::Response { id: 0, error: Some(e), .. })) = answer else { panic!("{answer:?}") };
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only a worker sends packs"));
 }

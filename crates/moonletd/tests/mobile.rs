@@ -886,6 +886,16 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
     };
     assert_eq!(e.message, "stop moonletd on its own machine");
 
+    // A phone that names itself the app on the host is still a phone there:
+    // the Mac sends its hello as the phone's.
+    let (mut posing, _) = auth(&addr, json!({ "token": token, "route": "devbox" })).await;
+    hello(&mut posing, "moonlet-app").await;
+    let entries = json!({ "entries": [{ "id": "t", "name": "t", "login": "true", "check": "true" }] });
+    let Message::Response { error: Some(e), .. } = call_with(&mut posing, 1, "signins.set", entries).await else {
+        panic!("a routed phone that said it was the app changed the host's sign-ins")
+    };
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app manages sign-ins"));
+
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
         &addr,
