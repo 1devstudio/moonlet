@@ -223,7 +223,11 @@ impl Runs {
 
     /// A command started or ended here: the Mac stays awake while any runs.
     fn runs_changed(&self) {
-        self.awake.runs(|| self.running.lock().unwrap().len() + self.routed.lock().unwrap().len());
+        // One lock at a time: `start_here` takes `routed`, then `running`.
+        self.awake.runs(|| {
+            let routed = self.routed.lock().unwrap().len();
+            routed + self.running.lock().unwrap().len()
+        });
     }
 
     /// The cloud machines, which routing starts and sends commands to (X63).
@@ -1454,7 +1458,15 @@ impl Runs {
             };
             // The host that routed it gave it up, or cannot be told
             // anything: the command stops, and nothing goes back.
-            let connected = || !host.gave_up(started_on);
+            // Once given up, it stays given up: traffic that comes back on
+            // the same connection does not revive the run.
+            let abandoned = std::sync::atomic::AtomicBool::new(false);
+            let connected = || {
+                if !abandoned.load(Ordering::Relaxed) && host.gave_up(started_on) {
+                    abandoned.store(true, Ordering::Relaxed);
+                }
+                !abandoned.load(Ordering::Relaxed)
+            };
             // The link has no queue to read yet: a worker does not hold back.
             let status = execute(&cmd, &|| !connected(), &|| false, &cancel, &send).await;
             for (i, r) in rewriters.iter().enumerate() {
