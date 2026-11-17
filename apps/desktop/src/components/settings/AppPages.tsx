@@ -174,18 +174,19 @@ function Daemon() {
  * daemon in `power.toml`; `null` while unread or when the daemon is too old. */
 function Sleep() {
   const [settings, setSettings] = useState<PowerSettings | null>(null);
-  useEffect(() => {
+  const load = () =>
     void rpc<PowerSettings>("local", M.powerSettings)
       .then(setSettings)
       .catch(() => setSettings(null));
-  }, []);
+  useEffect(load, []);
   const set = (keep_awake: boolean) => {
     setSettings({ keep_awake });
     void rpc<PowerSettings>("local", M.powerSetSettings, { keep_awake })
       .then(setSettings)
       .catch((e) => {
         errorToast(e);
-        setSettings({ keep_awake: !keep_awake });
+        // What the daemon kept, not a guess: two quick changes may both fail.
+        load();
       });
   };
   return (
