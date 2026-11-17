@@ -344,6 +344,8 @@ fn run_daemon(
         mobile::spawn(daemon.clone());
         // A design's snapshot when its agent ends a turn (X65).
         daemon.snapshot_agent_turns();
+        // No idle sleep while an agent is in the middle of a turn (X73).
+        daemon.keep_awake_for_turns();
         // Design systems kept per workspace move into the library (X95),
         // before their copies are looked at.
         daemon.move_systems_to_library().await;

@@ -6488,3 +6488,80 @@ async fn a_session_designs_page_comes_as_one_file_by_its_session_alone() {
         .unwrap();
     assert_eq!(page, serde_json::json!({"html": "<img src=\"data:image/png;base64,AQID\">", "missing": []}));
 }
+
+/// A `claude` that notes its pid in `claude.pid` and holds a turn whose
+/// message says `HOLD-NOW` until a file `release` is in its folder.
+const HOLDING_CLAUDE: &str = r#"#!/bin/sh
+wait_for() { i=0; while [ ! -f "$1" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; }
+echo $$ > claude.pid
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) wait_for release; rm -f release ;; esac
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X73: while a chat is in the middle of a turn, the Mac does not idle
+/// sleep; the hold ends with the turn, with its agent's process, or as soon
+/// as "Keep this Mac awake while agents work" is turned off, which this
+/// host keeps in `power.toml`. What the Mac would do with its power
+/// assertion is written down rather than done: a test never keeps this
+/// machine awake.
+#[tokio::test]
+async fn the_mac_is_kept_awake_while_a_chat_is_in_the_middle_of_a_turn() {
+    use moonlet_proto::types::Session;
+    let log = tempfile::tempdir().unwrap();
+    let awake = log.path().join("awake");
+    let d = fake_claude_daemon_with(HOLDING_CLAUDE, vec![("MOONLET_TEST_AWAKE_LOG".into(), awake.display().to_string())]).await;
+    let read = || std::fs::read_to_string(&awake).unwrap_or_default();
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Checkout", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let worktree = std::path::PathBuf::from(&session.path);
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let chat = terminals.iter().find(|t| t.chat && t.session_id.as_deref() == Some(session.id.as_str())).expect("the session's chat").id;
+    let send = async |c: &mut Client| {
+        let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": chat, "text": "HOLD-NOW fix the cart"})).await.unwrap();
+    };
+    let until = async |want: &str| {
+        for _ in 0..100 {
+            if read() == want {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(read(), want);
+    };
+    // An idle chat holds nothing.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(read(), "");
+
+    // A turn starts: held; it ends: released.
+    send(&mut c).await;
+    until("hold\n").await;
+    std::fs::write(worktree.join("release"), "").unwrap();
+    turn_over(&mut c, chat.into()).await;
+    until("hold\nrelease\n").await;
+
+    // Turned off mid-turn: released at once; on again: held again.
+    send(&mut c).await;
+    until("hold\nrelease\nhold\n").await;
+    let off: serde_json::Value = c.request(methods::POWER_SET_SETTINGS, serde_json::json!({"keep_awake": false})).await.unwrap();
+    assert_eq!(off, serde_json::json!({"keep_awake": false}));
+    until("hold\nrelease\nhold\nrelease\n").await;
+    assert_eq!(std::fs::read_to_string(d.home.path().join(".moonlet/power.toml")).unwrap(), "keep_awake = false\n");
+    let saved: serde_json::Value = c.request(methods::POWER_SETTINGS, serde_json::json!({})).await.unwrap();
+    assert_eq!(saved, serde_json::json!({"keep_awake": false}));
+    let _: serde_json::Value = c.request(methods::POWER_SET_SETTINGS, serde_json::json!({"keep_awake": true})).await.unwrap();
+    until("hold\nrelease\nhold\nrelease\nhold\n").await;
+
+    // Its agent's process dies mid-turn: released.
+    let pid: i32 = std::fs::read_to_string(worktree.join("claude.pid")).unwrap().trim().parse().unwrap();
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL).unwrap();
+    until("hold\nrelease\nhold\nrelease\nhold\nrelease\n").await;
+}

@@ -477,6 +477,22 @@ pub struct ClaudeSettings {
     pub chrome: bool,
 }
 
+/// A host's power settings (X73), kept by its daemon in
+/// `~/.moonlet/power.toml`. Missing keys take their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PowerSettings {
+    /// Keep this Mac from idle sleep while an agent is in the middle of a
+    /// turn here. Heavy commands keep it awake either way.
+    pub keep_awake: bool,
+}
+
+impl Default for PowerSettings {
+    fn default() -> Self {
+        PowerSettings { keep_awake: true }
+    }
+}
+
 /// Where new session branches start (X55).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

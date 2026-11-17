@@ -214,6 +214,11 @@ pub const CLAUDE_SETTINGS: &str = "claude.settings";
 /// Changes some of the host's Claude settings: a partial `ClaudeSettings` →
 /// the whole, as saved (X103).
 pub const CLAUDE_SET_SETTINGS: &str = "claude.set_settings";
+/// The host's power settings (X73): `{}` → `PowerSettings`.
+pub const POWER_SETTINGS: &str = "power.settings";
+/// Changes some of the host's power settings: a partial `PowerSettings` →
+/// the whole, as saved (X73). It applies at once.
+pub const POWER_SET_SETTINGS: &str = "power.set_settings";
 /// The models Claude Code offers in a workspace's Claude profile (X105):
 /// [`ClaudeModels`] → `Vec<ClaudeModel>`, empty when Claude cannot say.
 pub const CLAUDE_MODELS: &str = "claude.models";
@@ -717,6 +722,8 @@ pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
 /// A host's Claude settings after a change: the whole `ClaudeSettings` (X103).
 pub const EV_CLAUDE_SETTINGS_CHANGED: &str = "claude.settings_changed";
+/// A host's power settings after a change: the whole `PowerSettings` (X73).
+pub const EV_POWER_SETTINGS_CHANGED: &str = "power.settings_changed";
 /// A project's base branch was fast-forwarded by `git.pull_base`, by any
 /// client: [`BasePulled`](crate::types::BasePulled) (X13). Another host's
 /// pull reaches this host's app only through it.

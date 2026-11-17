@@ -1,9 +1,12 @@
 // The settings page (X43): it opens over the sessions at General, its nav
 // moves between pages, a change is kept, and Esc goes back unless a field
-// or a dialog over the page has it.
+// or a dialog over the page has it. This Mac's sleep switch (X73) is kept by
+// its daemon.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { closeSettings, fill, openSettings, sel } from "../fixtures";
+import { closeSettings, fill, openSettings, sel, world } from "../fixtures";
 
 const meta = sel.settingsSwitch("Use Option as Meta");
 const checked = async (xpath: string) => (await $(xpath).getAttribute("aria-checked")) === "true";
@@ -127,6 +130,30 @@ describe("settings page", () => {
 
     await openSettings("Terminal");
     await expect($(meta)).toHaveAttribute("aria-checked", "false");
+    await closeSettings();
+  });
+
+  it("keeps this Mac awake while agents work until switched off, in the daemon's power.toml (X73)", async () => {
+    const awake = sel.settingsSwitch("Keep this Mac awake while agents work");
+    const saved = () => {
+      try {
+        return readFileSync(join(world().home, "power.toml"), "utf8");
+      } catch {
+        return "";
+      }
+    };
+    await openSettings("General");
+    await expect($(awake)).toHaveAttribute("aria-checked", "true");
+    await $(awake).click();
+    await expect($(awake)).toHaveAttribute("aria-checked", "false");
+    await browser.waitUntil(() => saved() === "keep_awake = false\n", { timeoutMsg: "power.toml never said keep_awake = false" });
+    await closeSettings();
+
+    await openSettings("General");
+    await expect($(awake)).toHaveAttribute("aria-checked", "false");
+    await $(awake).click();
+    await expect($(awake)).toHaveAttribute("aria-checked", "true");
+    await browser.waitUntil(() => saved() === "keep_awake = true\n", { timeoutMsg: "power.toml never said keep_awake = true" });
     await closeSettings();
   });
 

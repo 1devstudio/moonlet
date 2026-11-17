@@ -349,3 +349,65 @@ async fn systemd_hears_ready_and_follows_the_upgrade() {
     let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
     let _ = nix_kill(after.pid);
 }
+
+/// X73 across S3: an agent tab in the middle of a turn keeps the Mac from
+/// idle sleep through a live upgrade, held by the new daemon once the old
+/// one let go, and the hold ends when that daemon stops. What the Mac
+/// would do with its power assertion is written down, by both daemons in
+/// turn, rather than done: a test never keeps this machine awake.
+#[tokio::test]
+async fn an_agent_at_work_keeps_the_mac_awake_across_an_upgrade_until_the_daemon_stops() {
+    use moonlet_proto::types::{AgentState, TerminalKind};
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let awake = home.path().join("awake");
+    let read = || std::fs::read_to_string(&awake).unwrap_or_default();
+    let until = async |holds: usize, releases: usize| {
+        let counts = || {
+            let log = read();
+            (log.lines().filter(|l| *l == "hold").count(), log.lines().filter(|l| *l == "release").count())
+        };
+        for _ in 0..100 {
+            if counts() == (holds, releases) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(counts(), (holds, releases), "{}", read());
+    };
+    let _old = Kill(moonletd(home.path(), &socket, &["daemon"]).env("MOONLET_TEST_AWAKE_LOG", &awake).spawn().unwrap());
+    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let tab: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command: vec!["/bin/sh".into()],
+                kind: TerminalKind::Agent,
+                agent: Some("claude".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let report = |state: AgentState| methods::AgentReport { terminal: tab.id, state, message: None, source: moonlet_proto::types::StateSource::Hook, agent: Some("claude".into()) };
+    let _: bool = c.request(methods::AGENT_REPORT, report(AgentState::Working)).await.unwrap();
+    until(1, 0).await;
+    assert_eq!(read(), "hold\n");
+    drop(c);
+
+    let status = moonletd(home.path(), &socket, &["upgrade"]).env("MOONLET_TEST_AWAKE_LOG", &awake).status().unwrap();
+    assert!(status.success(), "moonletd upgrade failed");
+    // The old daemon let go as it handed over; the new one holds.
+    until(2, 1).await;
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let after: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
+    let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert_eq!(list.iter().find(|t| t.id == tab.id).map(|t| t.agent_state), Some(AgentState::Working));
+
+    // The daemon stops: let go.
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+    until(2, 2).await;
+    let _ = nix_kill(after.pid);
+}

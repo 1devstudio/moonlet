@@ -86,6 +86,13 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("start new branches", git)[0]).toMatchObject({ value: "origin/main", setting: "git-start-from" });
   });
 
+  it("finds keeping the Mac awake by sleep and awake (X73)", () => {
+    for (const q of ["sleep", "awake", "caffeinate"]) {
+      expect(searchSettings(q, ctx)[0]).toMatchObject({ path: "App › General › Sleep", route: { page: "general" }, setting: "keep-awake" });
+    }
+    expect(shown("keep this")).toEqual([["Keep this Mac awake while agents work", "App › General › Sleep", ""]]);
+  });
+
   it("finds Claude in Chrome by chrome and browser (X103)", () => {
     for (const q of ["chrome", "browser", "--chrome"]) {
       expect(searchSettings(q, ctx)[0]).toMatchObject({ before: expect.any(String), path: "App › Agents", route: { page: "agents" }, setting: "claude-chrome" });

@@ -81,6 +81,9 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
             _ = shutdown.wait_for(|stop| *stop) => break,
         }
     }
+    // Stopped or handed over (S3): this daemon never holds the Mac awake
+    // again; a new one holds it as its own agents need it.
+    daemon.awake.stop();
     daemon.chats.shutdown().await;
     // Only remove the socket if it is still ours (an upgraded daemon may own it now).
     // After a handoff the socket path belongs to the new daemon.

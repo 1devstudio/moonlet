@@ -136,8 +136,8 @@ pub struct Runs {
     base_env: BTreeMap<String, String>,
     jobs: Arc<Jobs>,
     /// Keeps the Mac awake while a command runs here, its own or another
-    /// host's.
-    awake: crate::power::KeepAwake,
+    /// host's, as while agents work (the daemon's own).
+    awake: Arc<crate::power::KeepAwake>,
 }
 
 /// Everything a run on the central host needs to know.
@@ -200,7 +200,7 @@ enum Fail {
 }
 
 impl Runs {
-    pub fn new(base_env: BTreeMap<String, String>, jobs: Arc<Jobs>) -> Arc<Self> {
+    pub fn new(base_env: BTreeMap<String, String>, jobs: Arc<Jobs>, awake: Arc<crate::power::KeepAwake>) -> Arc<Self> {
         Arc::new(Self {
             next: AtomicU32::new(0),
             machines: Mutex::new(std::sync::Weak::new()),
@@ -220,7 +220,7 @@ impl Runs {
             skips: Mutex::default(),
             base_env,
             jobs,
-            awake: crate::power::KeepAwake::from_env(),
+            awake,
         })
     }
 
@@ -1978,7 +1978,7 @@ mod tests {
         // exec.cancel's answer, on a runner: a run going on here, or one
         // that already ended, started; one never seen did not.
         let dir = tempfile::tempdir().unwrap();
-        let runs = Runs::new(BTreeMap::new(), Arc::new(Jobs::load(dir.path().to_path_buf(), |_| {})));
+        let runs = Runs::new(BTreeMap::new(), Arc::new(Jobs::load(dir.path().to_path_buf(), |_| {})), Arc::new(crate::power::KeepAwake::from_env(true)));
         let (from, run) = (7, 41);
         assert!(!runs.cancel_here(from, run));
         // A run that took its slot here, and ended.

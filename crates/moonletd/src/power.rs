@@ -211,8 +211,41 @@ pub fn on_yield(y: &Yielded) -> OnYield {
     OnYield::Take
 }
 
-/// A change to the power assertion that keeps the Mac awake for heavy
-/// commands (X62, X89).
+/// An agent on this Mac, as the daemon last heard of it.
+pub enum Agent<'a> {
+    /// A structured chat (X6), by its state.
+    Chat(&'a moonlet_proto::types::ChatState),
+    /// A terminal tab, by what its hooks or its output last said.
+    Tab(&'a moonlet_proto::types::TerminalInfo),
+}
+
+/// Whether `agent` is in the middle of a turn, which keeps the Mac from
+/// idle sleep (X73): a chat that works, waiting on a tool it runs among it;
+/// one whose main turn runs while only its subagents ask (any ask makes a
+/// chat `blocked`, and a background subagent's leaves the main agent at
+/// work); one with a subagent running that does not ask the user; an agent
+/// in a terminal tab that works. One that waits for the user (the main
+/// agent's ask, a plan to approve, a subagent's ask after the turn ended)
+/// or is idle, done or failed does not, nor does one whose process is
+/// gone.
+pub fn mid_turn(agent: Agent) -> bool {
+    match agent {
+        Agent::Chat(st) => {
+            let asks = |id: &str| st.pending.iter().any(|p| p.agent.as_deref() == Some(id));
+            let main_asks = st.pending.iter().any(|p| p.agent.is_none());
+            st.status == "working"
+                || (st.status == "blocked" && st.turn_started_at.is_some() && !main_asks)
+                || st.subagents.iter().any(|a| a.status == "running" && !asks(&a.id))
+        }
+        Agent::Tab(info) => {
+            use moonlet_proto::types::{AgentState, TerminalKind};
+            info.kind == TerminalKind::Agent && !info.chat && info.exit.is_none() && info.agent_state == AgentState::Working
+        }
+    }
+}
+
+/// A change to the power assertion that keeps the Mac from idle sleep for
+/// heavy commands (X62, X89) and agents' turns (X73).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Awake {
     Hold,
@@ -220,22 +253,36 @@ pub enum Awake {
 }
 
 /// What to do with the assertion when `runs` heavy commands go on here,
-/// this host's own and other hosts' routed to it, and it is `held` now:
-/// it is held from the first run's start to the last one's end, so idle
-/// sleep never stops a run midway. A closed lid still sleeps.
-pub fn awake(held: bool, runs: usize) -> Option<Awake> {
-    match (held, runs > 0) {
+/// this host's own and other hosts' routed to it, and `turns` agents are in
+/// the middle of a turn ([`mid_turn`]), with "Keep this Mac awake while
+/// agents work" `on`, and it is `held` now: it is held from the first one's
+/// start to the last one's end, so idle sleep never stops one midway. Off,
+/// turns do not hold it; heavy runs still do, as before the switch, so a
+/// run another host routed here is never cut off. A closed lid still
+/// sleeps.
+pub fn awake(held: bool, on: bool, runs: usize, turns: usize) -> Option<Awake> {
+    match (held, runs > 0 || (on && turns > 0)) {
         (false, true) => Some(Awake::Hold),
         (true, false) => Some(Awake::Release),
         _ => None,
     }
 }
 
-/// Keeps the Mac awake while heavy commands run on it ([`awake`]).
+/// Keeps the Mac awake while heavy commands run on it or agents work
+/// ([`awake`]).
 pub struct KeepAwake {
     how: How,
+    state: std::sync::Mutex<Held>,
+}
+
+struct Held {
     /// The assertion held now, by its id (0 when only written down).
-    held: std::sync::Mutex<Option<u32>>,
+    id: Option<u32>,
+    runs: usize,
+    turns: usize,
+    on: bool,
+    /// The daemon stops: never held again.
+    stopped: bool,
 }
 
 enum How {
@@ -250,7 +297,8 @@ enum How {
 }
 
 impl KeepAwake {
-    pub fn from_env() -> Self {
+    /// With "Keep this Mac awake while agents work" `on` or off.
+    pub fn from_env(on: bool) -> Self {
         let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
         let how = if let Some(log) = var("MOONLET_TEST_AWAKE_LOG") {
             How::Log(log.into())
@@ -259,19 +307,42 @@ impl KeepAwake {
         } else {
             How::Off
         };
-        KeepAwake { how, held: std::sync::Mutex::new(None) }
+        let state = Held { id: None, runs: 0, turns: 0, on, stopped: false };
+        KeepAwake { how, state: std::sync::Mutex::new(state) }
     }
 
     /// Heavy commands started or ended here; `runs` counts those going on.
     /// It is counted under this lock, so two changes at once never apply
     /// their counts out of order.
     pub fn runs(&self, runs: impl FnOnce() -> usize) {
-        let mut held = self.held.lock().unwrap();
-        match awake(held.is_some(), runs()) {
+        self.change(|h| h.runs = runs());
+    }
+
+    /// `turns` agents are in the middle of a turn here now.
+    pub fn turns(&self, turns: usize) {
+        self.change(|h| h.turns = turns);
+    }
+
+    /// "Keep this Mac awake while agents work" turned on or off: at once.
+    pub fn set_on(&self, on: bool) {
+        self.change(|h| h.on = on);
+    }
+
+    /// The daemon stops, or hands over to a new one (S3): let go for good.
+    /// The new daemon holds it again as its own agents need it.
+    pub fn stop(&self) {
+        self.change(|h| h.stopped = true);
+    }
+
+    fn change(&self, f: impl FnOnce(&mut Held)) {
+        let mut h = self.state.lock().unwrap();
+        f(&mut h);
+        let (runs, turns) = if h.stopped { (0, 0) } else { (h.runs, h.turns) };
+        match awake(h.id.is_some(), h.on, runs, turns) {
             Some(Awake::Hold) => {
                 // One that could not be made is tried again at the next
                 // change.
-                *held = match &self.how {
+                h.id = match &self.how {
                     How::Log(path) => {
                         log_line(path, "hold");
                         Some(0)
@@ -283,7 +354,7 @@ impl KeepAwake {
             }
             Some(Awake::Release) => {
                 // Only a Mac's assertion has an id to give back.
-                let _id = held.take();
+                let _id = h.id.take();
                 match &self.how {
                     How::Log(path) => log_line(path, "release"),
                     #[cfg(target_os = "macos")]
@@ -333,7 +404,7 @@ mod assertion {
         // literals; each string made here is released here.
         unsafe {
             let kind = CFStringCreateWithCString(std::ptr::null(), c"PreventUserIdleSystemSleep".as_ptr(), UTF8);
-            let name = CFStringCreateWithCString(std::ptr::null(), c"moonlet runs a heavy command".as_ptr(), UTF8);
+            let name = CFStringCreateWithCString(std::ptr::null(), c"moonlet keeps this Mac awake while agents work".as_ptr(), UTF8);
             let mut id = 0u32;
             let ok = !kind.is_null() && !name.is_null() && IOPMAssertionCreateWithName(kind, ON, name, &mut id) == 0;
             for s in [kind, name] {
@@ -342,7 +413,7 @@ mod assertion {
                 }
             }
             if !ok {
-                tracing::warn!("cannot keep the Mac awake for heavy commands");
+                tracing::warn!("cannot keep the Mac awake while agents work");
                 return None;
             }
             Some(id)
@@ -483,15 +554,168 @@ mod tests {
 
     #[test]
     fn the_mac_is_held_awake_from_the_first_heavy_run_to_the_last_ones_end() {
+        let on = true;
         // Nothing runs: nothing held.
-        assert_eq!(awake(false, 0), None);
+        assert_eq!(awake(false, on, 0, 0), None);
         // A run starts: held.
-        assert_eq!(awake(false, 1), Some(Awake::Hold));
+        assert_eq!(awake(false, on, 1, 0), Some(Awake::Hold));
         // A second one, or one of two ending: still held, once.
-        assert_eq!(awake(true, 2), None);
-        assert_eq!(awake(true, 1), None);
+        assert_eq!(awake(true, on, 2, 0), None);
+        assert_eq!(awake(true, on, 1, 0), None);
         // The last one ends: released.
-        assert_eq!(awake(true, 0), Some(Awake::Release));
+        assert_eq!(awake(true, on, 0, 0), Some(Awake::Release));
+    }
+
+    /// Agents' turns hold the Mac as heavy runs do, from the first one's
+    /// start to the last one's end; "Keep this Mac awake while agents
+    /// work" off, turns do not, and turning it off lets go at once. Heavy
+    /// runs hold it either way, as before the switch: another host's routed
+    /// run is never cut off by it.
+    #[test]
+    fn turns_hold_the_mac_awake_only_while_the_setting_is_on_and_heavy_runs_always() {
+        // (held, on, heavy runs, turns) → what to do.
+        let cases = [
+            ((false, true, 0, 1), Some(Awake::Hold)),
+            ((true, true, 0, 3), None),
+            ((true, true, 1, 1), None),
+            // The last turn ends while a heavy run goes on: still held.
+            ((true, true, 1, 0), None),
+            // The last turn ends, nothing else runs: released.
+            ((true, true, 0, 0), Some(Awake::Release)),
+            // Off: turns leave the Mac free to idle sleep…
+            ((false, false, 0, 2), None),
+            // …heavy runs still hold it.
+            ((false, false, 2, 0), Some(Awake::Hold)),
+            ((true, false, 1, 1), None),
+            // Turned off while held for turns alone: released at once.
+            ((true, false, 0, 1), Some(Awake::Release)),
+            // Turned back on mid-turn: held again.
+            ((false, true, 0, 1), Some(Awake::Hold)),
+        ];
+        for ((held, on, runs, turns), then) in cases {
+            assert_eq!(awake(held, on, runs, turns), then, "held {held}, on {on}, {runs} runs, {turns} turns");
+        }
+    }
+
+    /// An agent in the middle of a turn holds the Mac awake; one waiting
+    /// for the user does not, so an idle sleep may come and, with a central
+    /// host, the phone can answer it there.
+    #[test]
+    fn only_an_agent_in_the_middle_of_a_turn_holds_the_mac_awake() {
+        let chat = |v: serde_json::Value| -> moonlet_proto::types::ChatState { serde_json::from_value(v).unwrap() };
+        let running = serde_json::json!([{ "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "running", "started_at": 1794576000000_u64 }]);
+        let chats = [
+            // Thinking, writing, or waiting on a tool it runs (a build, a
+            // heavy command): at work.
+            (chat(serde_json::json!({ "status": "working", "turn_started_at": 1794576000000_u64 })), true),
+            // Waiting for the user: a permission, a question, a plan.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "turn_started_at": 1794576000000_u64,
+                    "pending": [{ "id": "p1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }]
+                })),
+                false,
+            ),
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "pending": [{ "id": "a1", "tool": "Bash", "summary": "rm -rf dist", "input": {} }]
+                })),
+                false,
+            ),
+            (chat(serde_json::json!({ "status": "idle" })), false),
+            (chat(serde_json::json!({ "status": "done" })), false),
+            (chat(serde_json::json!({ "status": "error" })), false),
+            // A message waits in the queue of an idle chat: it goes at once,
+            // and the turn it starts holds the Mac.
+            (chat(serde_json::json!({ "status": "idle", "queued": [{ "id": "q1", "text": "and the tests" }] })), false),
+            // A background subagent goes on after the main turn ended.
+            (chat(serde_json::json!({ "status": "done", "subagents": running })), true),
+            // A background subagent asks while the main turn goes on (any ask
+            // makes the chat `blocked`): still at work.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "turn_started_at": 1794576000000_u64,
+                    "subagents": running,
+                    "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+                })),
+                true,
+            ),
+            // The main agent asks too: the turn waits for the user.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "turn_started_at": 1794576000000_u64,
+                    "subagents": running,
+                    "pending": [
+                        { "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" },
+                        { "id": "p1", "tool": "ExitPlanMode", "summary": "Plan", "input": {} }
+                    ]
+                })),
+                false,
+            ),
+            // A subagent that asks after the main turn ended waits for the
+            // user too…
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "subagents": running,
+                    "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+                })),
+                false,
+            ),
+            // …but while another subagent still runs, work goes on.
+            (
+                chat(serde_json::json!({
+                    "status": "blocked",
+                    "subagents": [
+                        { "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "running", "started_at": 1794576000000_u64 },
+                        { "id": "t2", "tool_use_id": "toolu_2", "description": "Tests", "status": "running", "started_at": 1794576000000_u64 }
+                    ],
+                    "pending": [{ "id": "q2", "tool": "AskUserQuestion", "summary": "Which colours?", "input": {}, "agent": "t1" }]
+                })),
+                true,
+            ),
+            (
+                chat(serde_json::json!({
+                    "status": "done",
+                    "subagents": [{ "id": "t1", "tool_use_id": "toolu_1", "description": "Explore", "status": "stopped", "started_at": 1794576000000_u64 }]
+                })),
+                false,
+            ),
+        ];
+        for (st, holds) in &chats {
+            assert_eq!(mid_turn(Agent::Chat(st)), *holds, "{st:?}");
+        }
+
+        let tab = |kind: &str, state: &str, exit: Option<serde_json::Value>, chat: bool| -> moonlet_proto::types::TerminalInfo {
+            let mut v = serde_json::json!({
+                "id": 7, "kind": kind, "title": "claude", "cwd": "/tmp", "command": ["claude"], "agent": "claude",
+                "agent_state": state, "cols": 80, "rows": 24, "pid": 4242, "chat": chat, "created_at": 0, "last_output_at": 0
+            });
+            if let Some(e) = exit {
+                v["exit"] = e;
+            }
+            serde_json::from_value(v).unwrap()
+        };
+        let tabs = [
+            // An agent in a terminal tab, by its hooks or its output.
+            (tab("agent", "working", None, false), true),
+            (tab("agent", "blocked", None, false), false),
+            (tab("agent", "idle", None, false), false),
+            (tab("agent", "done", None, false), false),
+            // Its process is gone.
+            (tab("agent", "working", Some(serde_json::json!({ "code": null, "signal": 9 })), false), false),
+            // A shell is no agent.
+            (tab("shell", "working", None, false), false),
+            // A chat's own terminal: its chat state says.
+            (tab("agent", "working", None, true), false),
+        ];
+        for (info, holds) in &tabs {
+            assert_eq!(mid_turn(Agent::Tab(info)), *holds, "{:?} {:?} {:?}", info.kind, info.agent_state, info.exit);
+        }
     }
 
     #[test]

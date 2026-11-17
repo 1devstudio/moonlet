@@ -7,6 +7,7 @@ pub mod app_token;
 pub mod bundle;
 pub mod chat;
 pub mod claude_settings;
+pub mod power_settings;
 pub mod claude_update;
 pub mod client;
 pub mod commands;

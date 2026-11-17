@@ -15,7 +15,7 @@ import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
 import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
-import { M, type ClaudeSettings, type DaemonService } from "../../lib/protocol";
+import { M, type ClaudeSettings, type DaemonService, type PowerSettings } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -170,12 +170,48 @@ function Daemon() {
   );
 }
 
+/** This Mac's "Keep this Mac awake while agents work" (X73), kept by its
+ * daemon in `power.toml`; `null` while unread or when the daemon is too old. */
+function Sleep() {
+  const [settings, setSettings] = useState<PowerSettings | null>(null);
+  const load = () =>
+    void rpc<PowerSettings>("local", M.powerSettings)
+      .then(setSettings)
+      .catch(() => setSettings(null));
+  useEffect(load, []);
+  const set = (keep_awake: boolean) => {
+    setSettings({ keep_awake });
+    void rpc<PowerSettings>("local", M.powerSetSettings, { keep_awake })
+      .then(setSettings)
+      .catch((e) => {
+        errorToast(e);
+        // What the daemon kept, not a guess: two quick changes may both fail.
+        load();
+      });
+  };
+  return (
+    <Section title="Sleep">
+      <Card>
+        <SwitchRow
+          setting="keep-awake"
+          label="Keep this Mac awake while agents work"
+          hint="While an agent is mid-turn, this Mac doesn't sleep when left idle. The display can still turn off, and closing the lid still puts it to sleep."
+          on={!!settings?.keep_awake}
+          disabled={!settings}
+          onChange={set}
+        />
+      </Card>
+    </Section>
+  );
+}
+
 export function GeneralPage() {
   return (
     <>
-      <PageHeading title="General">Versions and updates, and how moonlet's background daemon starts.</PageHeading>
+      <PageHeading title="General">Versions and updates, how moonlet's background daemon starts, and sleep.</PageHeading>
       <Updates />
       <Daemon />
+      <Sleep />
     </>
   );
 }

@@ -407,6 +407,12 @@ export interface ClaudeSettings {
   chrome: boolean;
 }
 
+/** A host's power settings, kept by its daemon in `~/.moonlet/power.toml` (X73). */
+export interface PowerSettings {
+  /** No idle sleep while an agent is mid-turn on the host (heavy runs hold it either way). */
+  keep_awake: boolean;
+}
+
 /** A host's Git settings, kept by its daemon in `~/.moonlet/git.toml` (X55). */
 export interface GitSettings {
   /** Put before every branch a new session derives from its name; empty for none. */
@@ -1560,6 +1566,10 @@ export const M = {
   gitSetSettings: "git.set_settings",
   claudeSettings: "claude.settings",
   claudeSetSettings: "claude.set_settings",
+  /** The host's power settings (X73): `{}` → `PowerSettings`. */
+  powerSettings: "power.settings",
+  /** A partial `PowerSettings` → the whole, as saved; applies at once (X73). */
+  powerSetSettings: "power.set_settings",
   /** The models Claude Code offers in a workspace's Claude profile (X105): `{workspace?}` → `ClaudeModel[]`. */
   claudeModels: "claude.models",
   gitUnpushed: "git.unpushed",
