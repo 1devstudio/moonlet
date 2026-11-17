@@ -376,9 +376,7 @@ where
     // A member's worker link hears what a worker does, whatever it says.
     let unproven = crate::daemon::unproven_local(&conn);
     let not_app = (conn.phone.is_none() && !conn.app) || worker_link;
-    // A member's daemon is a worker only over the tailnet: on the local
-    // socket, saying so proves nothing.
-    let worker = conn.client == crate::link::WORKER_CLIENT && conn.phone.is_some();
+    let worker = crate::daemon::tailnet_worker(&conn);
     // A job's output is for the app and paired devices, as `job.output` is
     // (X62): no worker hears it.
     let no_jobs = conn.client == crate::link::WORKER_CLIENT || worker_link;

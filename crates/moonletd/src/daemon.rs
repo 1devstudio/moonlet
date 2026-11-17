@@ -511,6 +511,12 @@ pub(crate) fn unproven_local(conn: &Conn) -> bool {
     conn.phone.is_none() && !conn.app && !conn.routed_phone
 }
 
+/// Whether `conn` is a member's daemon: one says so only over the
+/// tailnet; on the local socket, saying so proves nothing.
+pub(crate) fn tailnet_worker(conn: &Conn) -> bool {
+    conn.client == crate::link::WORKER_CLIENT && conn.phone.is_some()
+}
+
 /// Jobs hold commands' output: the app and paired devices read and stop
 /// them, never an agent's CLI nor a worker (X62).
 fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
@@ -2228,7 +2234,7 @@ impl Daemon {
                 let r: m::ExecCancel = params(p)?;
                 // A member stops a command this central host runs for it
                 // (X89), over the tailnet.
-                if conn.client == crate::link::WORKER_CLIENT && conn.phone.is_some() {
+                if tailnet_worker(conn) {
                     return ok(self.runs.cancel_here(conn.id, r.run));
                 }
                 ok(self.runs.cancel(conn.id, r.run).await)

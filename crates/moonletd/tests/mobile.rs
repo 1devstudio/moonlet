@@ -755,9 +755,7 @@ async fn phones_and_agents_cannot_manage_phones() {
     );
 }
 
-/// A fake `ssh` that records its arguments and runs `moonletd proxy` against
-/// a second daemon, as the real one would on the SSH host.
-/// A fake `ssh` that runs the host's `moonletd proxy` as an SSH session's
+/// A fake `ssh` that records its arguments and runs the host's `moonletd proxy` as an SSH session's
 /// command: under a copy of this test binary named sshd, with
 /// `SSH_CONNECTION` set, so the proxy vouches for the phone it carries
 /// (X40, A6) as a real SSH login does.
