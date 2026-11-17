@@ -3240,6 +3240,13 @@ pub struct AccountSync {
     /// none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now_ms: Option<u64>,
+    /// The member's own changes, made for its app, that it asks the central
+    /// host to make its own: a change to a project's approved heavy
+    /// commands or copied files counts on the other members only once the
+    /// central host made it (X89, X74). A central host from before ignores
+    /// them, and a member from before sends none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<crate::types::ChangeRef>,
 }
 
 /// `account.sync`'s reply: the changes the member lacks, and what the

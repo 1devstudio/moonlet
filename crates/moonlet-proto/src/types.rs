@@ -1643,6 +1643,14 @@ pub struct Change {
     pub op: ChangeOp,
 }
 
+/// A change by its log and number (X68): the one change log `member`
+/// made under `seq`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ChangeRef {
+    pub member: String,
+    pub seq: u64,
+}
+
 /// What a [`Change`] does to its record (X68).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

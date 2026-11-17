@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap as Map, BTreeSet};
 
-use moonlet_proto::types::{Change, ProjectIdentity};
+use moonlet_proto::types::{Change, ChangeOp, ChangeRef, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
@@ -47,6 +47,99 @@ const HEAVY_APPROVAL: RecordKind = RecordKind::HeavyApproval;
 /// The one field of an approval: `{commands, env}`, so the two lists of
 /// one approval always go together.
 const APPROVED: &str = "approved";
+
+/// The central host that referees the records acting as permissions, by
+/// its worker id (X89).
+const REFEREE: RecordKind = RecordKind::Referee;
+/// The records that act as permissions: whether a host takes other hosts'
+/// heavy commands, which heavy commands are approved, and which files go
+/// between members although git ignores them (X89, X74).
+const PERMISSIONS: [RecordKind; 3] = [WORKER, HEAVY_APPROVAL, PROJECT_FILES];
+/// The permissions a member asks its central host to make its own, once
+/// its app made one: those of a project, for the whole account. A host's
+/// worker settings are its own and the central host's to change.
+const ASKED: [RecordKind; 2] = [HEAVY_APPROVAL, PROJECT_FILES];
+
+/// Who refereeing permissions in `log` counts as: this member, and the
+/// central host that referees them; `None` while the central host wrote no
+/// [`REFEREE`] record of its own, when every member's change counts, as
+/// before X89's records had an author rule.
+fn permission_gate(log: &Log) -> Option<(Option<&str>, &str)> {
+    let referee = log.account().or_else(|| log_owner(log.member()))?;
+    refereed_by(log, referee).then(|| (log_owner(log.member()), referee))
+}
+
+/// Whether worker `referee` wrote its own [`REFEREE`] record in `log`.
+fn refereed_by(log: &Log, referee: &str) -> bool {
+    log.changes_of(REFEREE).any(|c| c.id == referee && log_owner(&c.stamp.member) == Some(referee))
+}
+
+/// Whether change `c` to a permission record counts for member `me`, whose
+/// central host is `referee`: the central host's changes always do; a
+/// host's worker settings count from that host too, and a project's
+/// approval and copied files from `me`, whose own app made them.
+fn permission_counts(c: &Change, me: Option<&str>, referee: &str) -> bool {
+    let Some(author) = log_owner(&c.stamp.member) else { return false };
+    if author == referee {
+        return true;
+    }
+    if c.kind == WORKER.as_str() {
+        author == c.id
+    } else {
+        Some(author) == me
+    }
+}
+
+/// The records of permission `kind` in `log`, counting only the changes
+/// [`permission_counts`] takes once the central host referees them.
+fn permission_records(log: &Log, kind: RecordKind) -> Map<String, Record> {
+    match permission_gate(log) {
+        None => log.records(kind),
+        Some((me, referee)) => log.records_where(kind, |c| permission_counts(c, me, referee)),
+    }
+}
+
+/// For each field of each record of `kind`, the change that gives it its
+/// value among those `keep` takes, and the records deleted by one of them.
+fn latest_where<'a>(
+    log: &'a Log,
+    kind: RecordKind,
+    keep: impl Fn(&Change) -> bool,
+) -> (Map<(String, String), &'a Change>, BTreeSet<String>) {
+    let mut latest: Map<(String, String), &Change> = Map::new();
+    let mut deleted = BTreeSet::new();
+    for c in log.changes_of(kind).filter(|c| keep(c)) {
+        match &c.op {
+            ChangeOp::Set { field, .. } => {
+                let slot = latest.entry((c.id.clone(), field.clone())).or_insert(c);
+                if c.stamp > slot.stamp {
+                    *slot = c;
+                }
+            }
+            ChangeOp::Delete => {
+                deleted.insert(c.id.clone());
+            }
+        }
+    }
+    latest.retain(|(id, _), _| !deleted.contains(id));
+    (latest, deleted)
+}
+
+/// Whether permission change `c` holds what its kind allows: a project's
+/// approval as two lists of names, its copied files as patterns X74 takes
+/// and a switch. Anything else is never made the central host's own.
+fn permission_fits(c: &Change) -> bool {
+    let ChangeOp::Set { field, value } = &c.op else { return false };
+    let names = |v: Option<&Value>| v.and_then(Value::as_array).is_some_and(|l| l.iter().all(Value::is_string));
+    match (c.kind.as_str(), field.as_str()) {
+        (k, APPROVED) if k == HEAVY_APPROVAL.as_str() => names(value.get("commands")) && names(value.get("env")),
+        (k, "patterns") if k == PROJECT_FILES.as_str() => {
+            value.as_array().is_some_and(|l| l.iter().all(|p| p.as_str().is_some_and(|p| crate::copied_files::check_pattern(p).is_ok())))
+        }
+        (k, "cloud") if k == PROJECT_FILES.as_str() => value.is_boolean(),
+        _ => false,
+    }
+}
 
 /// A member's worker settings as the account holds them (X89): each `None`
 /// until set, which reads as off and 2 slots.
@@ -414,10 +507,13 @@ impl SessionManager {
     /// because none were set.
     pub fn copied_files(&self, identity: &ProjectIdentity) -> (Vec<String>, bool, bool) {
         let record = identity_key(identity)
-            .and_then(|key| self.with_log(|log| Some(log.records(PROJECT_FILES).remove(&key)?)));
+            .and_then(|key| self.with_log(|log| Some(permission_records(log, PROJECT_FILES).remove(&key)?)));
         let cloud = record.as_ref().and_then(|r| r.get("cloud")?.as_bool()).unwrap_or(false);
-        let patterns: Option<Vec<String>> =
-            record.as_ref().and_then(|r| serde_json::from_value(r.get("patterns")?.clone()).ok());
+        // Only patterns X74 takes, whoever wrote them.
+        let patterns: Option<Vec<String>> = record
+            .as_ref()
+            .and_then(|r| serde_json::from_value::<Vec<String>>(r.get("patterns")?.clone()).ok())
+            .map(|p| p.into_iter().filter(|p| crate::copied_files::check_pattern(p).is_ok()).collect());
         match patterns {
             Some(p) => (p, cloud, false),
             None => (crate::copied_files::DEFAULT.iter().map(|s| s.to_string()).collect(), cloud, true),
@@ -437,7 +533,7 @@ impl SessionManager {
         let changes = {
             let mut account = self.account.lock().unwrap();
             let a = account.as_mut().context("copied files are kept in the account: pair a Mac first")?;
-            let now = a.log.records(PROJECT_FILES).remove(&key).unwrap_or_default();
+            let now = permission_records(&a.log, PROJECT_FILES).remove(&key).unwrap_or_default();
             let mut log = a.log.clone();
             let changes: Vec<Change> = [("patterns", json!(patterns)), ("cloud", json!(cloud))]
                 .into_iter()
@@ -447,6 +543,7 @@ impl SessionManager {
             if changes.is_empty() {
                 return Ok(());
             }
+            ask(&mut log, &changes);
             write_private(&a.path, &log)?;
             a.log = log;
             changes
@@ -458,7 +555,7 @@ impl SessionManager {
     /// Every member's worker settings (X89), by worker id.
     pub fn worker_settings(&self) -> Map<String, WorkerSettings> {
         self.with_log(|log| {
-            log.records(WORKER)
+            permission_records(log, WORKER)
                 .into_iter()
                 .map(|(id, r)| {
                     let settings = WorkerSettings {
@@ -488,7 +585,7 @@ impl SessionManager {
         let changes = {
             let mut account = self.account.lock().unwrap();
             let a = account.as_mut().context("worker settings are kept in the account: pair a Mac first")?;
-            let now = a.log.records(WORKER).remove(worker).unwrap_or_default();
+            let now = permission_records(&a.log, WORKER).remove(worker).unwrap_or_default();
             let mut log = a.log.clone();
             let fields = [("heavy", set.heavy.map(|h| json!(h))), ("slots", set.slots.map(|n| json!(n)))];
             let changes: Vec<Change> = fields
@@ -524,7 +621,7 @@ impl SessionManager {
     /// approved once for every member; none until approved.
     pub fn heavy_approval(&self, identity: &ProjectIdentity) -> Option<(Vec<String>, Vec<String>)> {
         let key = identity_key(identity)?;
-        let r = self.with_log(|log| log.records(HEAVY_APPROVAL).remove(&key))?;
+        let r = self.with_log(|log| permission_records(log, HEAVY_APPROVAL).remove(&key))?;
         let lists = r.get(APPROVED)?;
         let list = |f: &str| serde_json::from_value::<Vec<String>>(lists.get(f)?.clone()).ok();
         Some((list("commands")?, list("env")?))
@@ -550,7 +647,7 @@ impl SessionManager {
         let changes = {
             let mut account = self.account.lock().unwrap();
             let a = account.as_mut().context("approvals are kept in the account")?;
-            let now = a.log.records(HEAVY_APPROVAL).remove(&key);
+            let now = permission_records(&a.log, HEAVY_APPROVAL).remove(&key);
             if oldest && now.is_some() {
                 return Ok(());
             }
@@ -571,6 +668,7 @@ impl SessionManager {
             if changes.is_empty() {
                 return Ok(());
             }
+            ask(&mut log, &changes);
             write_private(&a.path, &log)?;
             a.log = log;
             changes
@@ -706,6 +804,139 @@ impl SessionManager {
         self.emit_sessions();
         self.account_changed(changes);
         true
+    }
+
+    /// Makes this host, its account's central host, the referee of the
+    /// records that act as permissions (X89, X74): once, and again after
+    /// another central host's word counted here (`previous`). It first makes its
+    /// own every value of them that counts here now, each with the time and
+    /// counter of the change that gave it, so nothing anyone set changes,
+    /// then writes its [`REFEREE`] record. From then on, on every member, a
+    /// host's worker settings count only from that host and the central
+    /// host, and a project's approval and copied files only from the
+    /// central host and the member reading them. `previous` is the central
+    /// host whose word counted here until now; without one, or when it
+    /// never refereed them, every member's did.
+    pub fn referee_permissions(&self, previous: Option<&str>) {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return };
+            let Some(me) = log_owner(a.log.member()).map(String::from) else { return };
+            // Once is enough while no other central host's word counted
+            // here since: a host that refereed itself before it joined
+            // another's account takes over again when made central host.
+            let again = previous.is_some_and(|p| p != me);
+            if a.log.account().is_some_and(|x| x != me) || (refereed_by(&a.log, &me) && !again) {
+                return;
+            }
+            let before = previous.filter(|p| refereed_by(&a.log, p));
+            let mut log = a.log.clone();
+            let mut changes = Vec::new();
+            for kind in PERMISSIONS {
+                let (old, old_deleted) = latest_where(&a.log, kind, |c| before.is_none_or(|p| permission_counts(c, Some(&me), p)));
+                let (new, new_deleted) = latest_where(&a.log, kind, |c| permission_counts(c, Some(&me), &me));
+                for ((id, field), c) in &old {
+                    let ChangeOp::Set { value, .. } = &c.op else { continue };
+                    let same = new
+                        .get(&(id.clone(), field.clone()))
+                        .is_some_and(|n| matches!(&n.op, ChangeOp::Set { value: v, .. } if v == value));
+                    if !same {
+                        changes.push(log.set_at(c.stamp.ms, c.stamp.n, kind, id, field, value.clone()));
+                    }
+                }
+                for id in old_deleted.difference(&new_deleted) {
+                    if let Some(c) = a.log.changes_of(kind).filter(|c| c.id == *id && c.op == ChangeOp::Delete).min_by(|x, y| x.stamp.cmp(&y.stamp)) {
+                        changes.push(log.delete_at(c.stamp.ms, c.stamp.n, kind, id));
+                    }
+                }
+            }
+            let now = now_ms();
+            changes.push(log.set(now, REFEREE, &me, "since", json!(now)));
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot referee the account's permissions: {e:#}");
+                return;
+            }
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+    }
+
+    /// Whether this member's central host referees the records that act as
+    /// permissions ([`Self::referee_permissions`]).
+    pub fn permissions_refereed(&self) -> bool {
+        self.with_log(|log| permission_gate(log).is_some())
+    }
+
+    /// This member's own changes, made for its app, that its central host
+    /// has not made its own yet: asked again with each `account.sync`
+    /// (X89, X74). One it made its own, or that a later change of its
+    /// passed, is asked no more. None without a central host.
+    pub fn permission_asks(&self) -> Vec<ChangeRef> {
+        let mut account = self.account.lock().unwrap();
+        let Some(a) = account.as_mut() else { return Vec::new() };
+        let Some(referee) = a.log.account().map(String::from) else { return Vec::new() };
+        let me = a.log.member().to_string();
+        let pending: Vec<ChangeRef> = a
+            .log
+            .asks()
+            .iter()
+            .filter(|r| r.member == me && a.log.get(&r.member, r.seq).is_some_and(|c| !taken_over(&a.log, c, &referee)))
+            .cloned()
+            .collect();
+        if pending.len() != a.log.asks().len() {
+            let mut log = a.log.clone();
+            log.set_asks(pending.clone());
+            match write_private(&a.path, &log) {
+                Ok(()) => a.log = log,
+                Err(e) => tracing::warn!("cannot save what this member asks its central host: {e:#}"),
+            }
+        }
+        pending
+    }
+
+    /// On the central host: makes its own the changes member `worker`
+    /// asks it to (`account.sync`'s `asks`), each with the time and counter
+    /// of the member's change, so the latest change still wins (X89, X74).
+    /// Only that member's own changes it already holds, to a project's
+    /// approval or copied files, holding what those allow, and not passed
+    /// by a later change of its own. Gives how many it made its own.
+    pub fn vouch(&self, worker: &str, asks: &[ChangeRef]) -> usize {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return 0 };
+            let Some(me) = log_owner(a.log.member()).map(String::from) else { return 0 };
+            if a.log.account().is_some_and(|x| x != me) {
+                return 0;
+            }
+            let mut log = a.log.clone();
+            let mut changes = Vec::new();
+            for r in asks {
+                let Some(c) = a.log.get(&r.member, r.seq) else { continue };
+                let Some(kind) = ASKED.into_iter().find(|k| k.as_str() == c.kind) else { continue };
+                if log_owner(&r.member) != Some(worker) || !permission_fits(c) || taken_over(&log, c, &me) {
+                    continue;
+                }
+                let ChangeOp::Set { field, value } = &c.op else { continue };
+                changes.push(log.set_at(c.stamp.ms, c.stamp.n, kind, &c.id, field, value.clone()));
+            }
+            if changes.is_empty() {
+                return 0;
+            }
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot take over a member's account changes: {e:#}");
+                return 0;
+            }
+            a.log = log;
+            changes
+        };
+        let applied = self.account.lock().unwrap().as_ref().map(|a| a.applied.clone()).unwrap_or_default();
+        for f in applied {
+            f(&changes);
+        }
+        let n = changes.len();
+        self.account_changed(changes);
+        n
     }
 
     /// Each member's name as it calls itself, by worker id (X71).
@@ -1042,6 +1273,41 @@ impl SessionManager {
         }
         taken
     }
+}
+
+/// Whether the central host `referee` made, in `log`, a change to the
+/// field of `c` (or deleted its record) at `c`'s time or later: `c` was
+/// made its own, or can no longer win.
+fn taken_over(log: &Log, c: &Change, referee: &str) -> bool {
+    let field = |op: &ChangeOp| match op {
+        ChangeOp::Set { field, .. } => Some(field.clone()),
+        ChangeOp::Delete => None,
+    };
+    log.changes_of_kind(&c.kind).any(|d| {
+        d.id == c.id
+            && log_owner(&d.stamp.member) == Some(referee)
+            && (d.op == ChangeOp::Delete || field(&d.op) == field(&c.op))
+            && (d.stamp.ms, d.stamp.n) >= (c.stamp.ms, c.stamp.n)
+    })
+}
+
+/// Adds `changes`, this member's own made for its app, to what it asks its
+/// central host to make its own (X89, X74), in place of any earlier ask
+/// for the same field: only the latest of them could still win.
+fn ask(log: &mut Log, changes: &[Change]) {
+    let field = |c: &Change| match &c.op {
+        ChangeOp::Set { field, .. } => Some((c.kind.clone(), c.id.clone(), field.clone())),
+        ChangeOp::Delete => None,
+    };
+    let new: BTreeSet<_> = changes.iter().filter_map(field).collect();
+    let mut asks: Vec<ChangeRef> = log
+        .asks()
+        .iter()
+        .filter(|r| log.get(&r.member, r.seq).and_then(field).is_some_and(|f| !new.contains(&f)))
+        .cloned()
+        .collect();
+    asks.extend(changes.iter().map(|c| ChangeRef { member: c.stamp.member.clone(), seq: c.seq }));
+    log.set_asks(asks);
 }
 
 /// A workspace as account fields. Its profile goes by name, as each member
@@ -1844,7 +2110,6 @@ mod tests {
     async fn a_heavy_approval_on_one_member_is_every_members() {
         let (_a, book) = member("book").await;
         let (_b, mini) = member("mini").await;
-        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(mini.heavy_approval(&shop()), None);
         book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["CI"])).unwrap();
         sync(&book, &mini);
@@ -1876,11 +2141,213 @@ mod tests {
         assert_eq!(old.worker_settings().get("air"), None);
     }
 
+    /// studio-mini, the central host, and two members linked to it, once
+    /// studio-mini referees the records that act as permissions.
+    async fn refereed_account() -> ([tempfile::TempDir; 3], Arc<SessionManager>, Arc<SessionManager>, Arc<SessionManager>) {
+        let (a, mini) = member("mini").await;
+        let (b, book) = member("book").await;
+        let (c, air) = member("air").await;
+        book.set_central_account(Some("mini".into()));
+        air.set_central_account(Some("mini".into()));
+        mini.referee_permissions(None);
+        sync(&mini, &book);
+        sync(&mini, &air);
+        ([a, b, c], mini, book, air)
+    }
+
+    #[tokio::test]
+    async fn a_switch_another_member_writes_does_not_turn_a_host_on() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        // The MacBook's daemon writes the Air's switch on by itself.
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        sync(&book, &mini);
+        sync(&mini, &air);
+        assert_eq!(air.worker_settings().get("air"), None);
+        assert_eq!(mini.worker_settings().get("air"), None);
+        // The central host's change, made for an app, counts; so does the
+        // Air's own.
+        mini.set_worker_settings("air", settings(Some(true), None)).unwrap();
+        air.set_worker_settings("air", settings(None, Some(3))).unwrap();
+        sync(&mini, &air);
+        sync(&mini, &book);
+        for m in [&mini, &book, &air] {
+            assert_eq!(m.worker_settings().get("air"), Some(&settings(Some(true), Some(3))));
+        }
+    }
+
+    /// A change of member `m`'s own to project `shop`'s `field`, written
+    /// into its log by something other than its app: it asks nothing.
+    fn written_by_itself(m: &SessionManager, kind: &str, field: &str, value: serde_json::Value) -> Change {
+        let (name, count) = m.own_log().unwrap();
+        Change {
+            stamp: moonlet_proto::types::Stamp { ms: now_ms() + 5, n: 0, member: name },
+            seq: count + 1,
+            kind: kind.into(),
+            id: "git.invalid/acme/shop|4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a".into(),
+            op: moonlet_proto::types::ChangeOp::Set { field: field.into(), value },
+        }
+    }
+
+    fn words(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn an_approval_a_member_writes_without_its_app_counts_on_no_other_member() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        let unasked = written_by_itself(&book, "heavy_approval", "approved", serde_json::json!({ "commands": ["curl"], "env": [] }));
+        book.apply_account(vec![unasked]);
+        assert_eq!(book.permission_asks(), vec![]);
+        sync(&book, &mini);
+        sync(&mini, &air);
+        assert_eq!(mini.heavy_approval(&shop()), None);
+        assert_eq!(air.heavy_approval(&shop()), None);
+        // On the MacBook itself, its own word counts.
+        assert_eq!(book.heavy_approval(&shop()), Some((words(&["curl"]), vec![])));
+    }
+
+    #[tokio::test]
+    async fn an_approval_made_in_a_members_app_counts_everywhere_once_the_central_host_takes_it() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &words(&["CI"])).unwrap();
+        let asks = book.permission_asks();
+        assert_eq!(asks.len(), 1);
+        sync(&book, &mini);
+        assert_eq!(air.heavy_approval(&shop()), None);
+        assert_eq!(mini.vouch("book", &asks), 1);
+        sync(&mini, &air);
+        sync(&mini, &book);
+        for m in [&mini, &book, &air] {
+            assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check"]), words(&["CI"]))));
+        }
+        // Taken: asked no more, and asking again changes nothing.
+        assert_eq!(book.permission_asks(), vec![]);
+        assert_eq!(mini.vouch("book", &asks), 0);
+    }
+
+    #[tokio::test]
+    async fn the_central_host_takes_only_a_members_own_asks_for_what_a_project_allows() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        let refs = |c: &Change| vec![moonlet_proto::types::ChangeRef { member: c.stamp.member.clone(), seq: c.seq }];
+        // A pattern X74 refuses, and a host's switch: never taken.
+        let outside = written_by_itself(&book, "project_files", "patterns", serde_json::json!(["../../.ssh/id_ed25519"]));
+        book.apply_account(vec![outside.clone()]);
+        let mut switch = written_by_itself(&book, "worker", "heavy", serde_json::json!(true));
+        switch.id = "air".into();
+        book.apply_account(vec![switch.clone()]);
+        // The Air's change, asked for by the MacBook.
+        air.set_heavy_approval(&shop(), &words(&["curl"]), &[]).unwrap();
+        let airs = air.permission_asks();
+        sync(&book, &mini);
+        sync(&air, &mini);
+        assert_eq!(mini.vouch("book", &refs(&outside)), 0);
+        assert_eq!(mini.vouch("book", &refs(&switch)), 0);
+        assert_eq!(mini.vouch("book", &airs), 0);
+        assert_eq!(mini.copied_files(&shop()).2, true);
+        assert_eq!(mini.worker_settings().get("air"), None);
+        assert_eq!(mini.heavy_approval(&shop()), None);
+    }
+
+    #[tokio::test]
+    async fn copied_files_a_member_writes_without_its_app_are_not_taken() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        let unasked = written_by_itself(&book, "project_files", "patterns", serde_json::json!(["*.pem"]));
+        book.apply_account(vec![unasked]);
+        sync(&book, &mini);
+        sync(&mini, &air);
+        for m in [&mini, &air] {
+            assert_eq!(m.copied_files(&shop()), (words(&[".env", ".env.*"]), false, true));
+        }
+        // Made in the MacBook's app, and taken by the central host.
+        book.set_copied_files(&shop(), &words(&[".env", "config/local.yaml"]), false).unwrap();
+        let asks = book.permission_asks();
+        sync(&book, &mini);
+        // The patterns, and the switch the list goes with.
+        assert_eq!(mini.vouch("book", &asks), 2);
+        sync(&mini, &air);
+        assert_eq!(air.copied_files(&shop()), (words(&[".env", "config/local.yaml"]), false, false));
+    }
+
+    #[tokio::test]
+    async fn permissions_set_before_the_central_host_referees_them_still_count() {
+        let (_a, mini) = member("mini").await;
+        let (_b, book) = member("book").await;
+        let (_c, air) = member("air").await;
+        book.set_central_account(Some("mini".into()));
+        air.set_central_account(Some("mini".into()));
+        // Before the update, the MacBook set the Air's switch and approved
+        // shop, and the Air later turned its own slots down.
+        book.set_worker_settings("air", settings(Some(true), Some(4))).unwrap();
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
+        book.set_copied_files(&shop(), &words(&[".env", "*.pem"]), true).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        air.set_worker_settings("air", settings(None, Some(2))).unwrap();
+        sync(&book, &mini);
+        sync(&air, &mini);
+        sync(&book, &mini);
+        let expect = |m: &SessionManager| {
+            assert_eq!(m.worker_settings().get("air"), Some(&settings(Some(true), Some(2))));
+            assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check"]), vec![])));
+            assert_eq!(m.copied_files(&shop()), (words(&[".env", "*.pem"]), true, false));
+        };
+        // Members updated first: nothing is refereed yet, so all count.
+        for m in [&mini, &book, &air] {
+            expect(m);
+        }
+        // The central host updates, and a new member joins afterwards.
+        mini.referee_permissions(None);
+        let (_d, studio) = member("studio").await;
+        studio.set_central_account(Some("mini".into()));
+        for m in [&book, &air, &studio] {
+            sync(&mini, m);
+            assert!(m.permissions_refereed());
+            expect(m);
+        }
+        expect(&mini);
+        // From now on, the MacBook's daemon turning the Air off counts on
+        // no other member.
+        book.set_worker_settings("air", settings(Some(false), None)).unwrap();
+        sync(&book, &mini);
+        sync(&mini, &air);
+        assert_eq!(air.worker_settings().get("air"), Some(&settings(Some(true), Some(2))));
+    }
+
+    #[tokio::test]
+    async fn a_new_central_host_keeps_what_the_old_one_counted_and_nothing_else() {
+        // The Air refereed itself once, as every host with no central host
+        // does at its first start, before it joined studio-mini's account.
+        let (_a, mini) = member("mini").await;
+        let (_b, book) = member("book").await;
+        let (_c, air) = member("air").await;
+        air.referee_permissions(None);
+        book.set_central_account(Some("mini".into()));
+        air.set_central_account(Some("mini".into()));
+        mini.referee_permissions(None);
+        sync(&mini, &book);
+        sync(&mini, &air);
+        book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
+        let asks = book.permission_asks();
+        sync(&book, &mini);
+        mini.vouch("book", &asks);
+        // A switch the MacBook's daemon wrote by itself, which never counted.
+        book.set_worker_settings("air", settings(Some(true), None)).unwrap();
+        sync(&book, &mini);
+        sync(&mini, &air);
+        // The user makes the Air the central host.
+        air.set_central_account(None);
+        air.referee_permissions(Some("mini"));
+        book.set_central_account(Some("air".into()));
+        sync(&air, &book);
+        for m in [&air, &book] {
+            assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check"]), vec![])));
+            assert_eq!(m.worker_settings().get("air"), None);
+        }
+    }
+
     #[tokio::test]
     async fn two_approvals_made_apart_never_mix_their_lists() {
         let (_a, book) = member("book").await;
         let (_b, mini) = member("mini").await;
-        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         // Both start from one approval, with no env name.
         book.set_heavy_approval(&shop(), &words(&["pnpm check"]), &[]).unwrap();
         sync(&book, &mini);
