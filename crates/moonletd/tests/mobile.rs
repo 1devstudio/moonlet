@@ -487,19 +487,24 @@ async fn paired_devices_cannot_stop_or_upgrade_the_daemon() {
     };
     let before: DaemonInfo = app.request("daemon.info", json!({})).await.unwrap();
 
-    for (token, client) in [(&phone_token, "moonlet-mobile"), (&desktop_token, "moonlet-app")] {
+    // A phone is refused both as it is everything the phone app does not
+    // send (X40); a paired Mac, by the methods themselves.
+    for (token, client, upgrading, stopping) in [
+        (&phone_token, "moonlet-mobile", "a phone does not do that", "a phone does not do that"),
+        (&desktop_token, "moonlet-app", "upgrade moonletd on its own machine", "stop moonletd on its own machine"),
+    ] {
         let (mut device, _) = auth(&addr, json!({ "token": token })).await;
         hello(&mut device, client).await;
         let upgrade = call_with(&mut device, 1, "daemon.upgrade", json!({ "binary": "/nonexistent/moonletd" })).await;
         let Message::Response { error: Some(e), .. } = upgrade else {
             panic!("daemon.upgrade worked from {client}: {upgrade:?}")
         };
-        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "upgrade moonletd on its own machine"));
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", upgrading));
         let shutdown = call(&mut device, 2, "daemon.shutdown").await;
         let Message::Response { error: Some(e), .. } = shutdown else {
             panic!("daemon.shutdown worked from {client}: {shutdown:?}")
         };
-        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "stop moonletd on its own machine"));
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", stopping));
     }
 
     // The same daemon still serves.
@@ -727,7 +732,7 @@ async fn phones_and_agents_cannot_manage_phones() {
         let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
             panic!("{method} worked from a phone")
         };
-        assert_eq!(e.message, "manage phones from the Mac", "{method}");
+        assert_eq!(e.message, "a phone does not do that", "{method}");
     }
     // A phone may list the hosts it can reach.
     let hosts = call(&mut phone, 4, "mobile.hosts").await;
@@ -757,6 +762,61 @@ async fn phones_and_agents_cannot_manage_phones() {
 
 /// A fake `ssh` that records its arguments and runs the host's `moonletd proxy` as an SSH session's
 /// command: under a copy of this test binary named sshd, with
+/// Every method the phone app sends (X40, "What a phone may call"), but
+/// `gh.whoami`, which runs the real `gh`.
+const PHONE_APP_SENDS: &[&str] = &[
+    "daemon.info", "mobile.hosts", "account.get", "workspace.list", "workspace.merge", "profile.list",
+    "project.list", "project.config", "section.list", "session.list", "sync.list", "git.settings",
+    "claude.models", "presence.active", "session.create", "session.update", "session.archive",
+    "session.continue_here", "session.forward", "session.attach", "session.detach", "chat.summaries",
+    "chat.state", "chat.send", "chat.send_now", "chat.unqueue", "chat.interrupt", "chat.permission",
+    "chat.aside", "chat.stop_agent", "chat.settings", "terminal.list", "terminal.create",
+    "terminal.attach", "terminal.detach", "terminal.read_requests", "terminal.read_answer",
+    "git.status", "git.base_status", "git.diff", "git.log", "git.stage", "git.unstage", "git.revert",
+    "git.apply_patch", "git.commit", "git.branches", "git.pull_base", "git.unpushed", "git.push",
+    "gh.prs", "gh.pr_context", "gh.pr_status", "gh.pr_stack", "gh.pr_create", "job.list",
+    "job.stayed", "job.output", "job.stop", "job.stop_all", "job.run_here", "exec.setups",
+    "sync.run_setup", "sync.skip_setup", "tasks.app", "tasks.snapshot", "tasks.request",
+];
+
+#[tokio::test]
+async fn a_phone_reaches_only_what_the_phone_app_sends() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+
+    // What the app sends gets through to the method itself, which may
+    // still refuse params given as null.
+    for (id, method) in (1..).zip(PHONE_APP_SENDS) {
+        let reply = call_with(&mut phone, id, method, Value::Null).await;
+        if let Message::Response { error: Some(e), .. } = &reply {
+            assert_ne!(e.message, "a phone does not do that", "{method}");
+        }
+    }
+    // Anything else is refused before it runs, a method the daemon does not
+    // know yet included: one added later is a phone's only once listed.
+    let heavy = json!({ "project": mac.home.path(), "heavy": ["sh"] });
+    for (id, method, params) in [
+        (100, "heavy.set", heavy),
+        (101, "git.set_settings", json!({ "push_on_commit": true })),
+        (102, "link.join", json!({ "central": { "name": "elsewhere", "addrs": ["100.64.0.99:7655"], "token": "t" } })),
+        (103, "session.move", json!({ "session": "s", "to": "w" })),
+        (104, "worker.settings_set", json!({ "worker": "w", "enabled": true })),
+        (105, "phone.added_later", json!({})),
+    ] {
+        let Message::Response { error: Some(e), .. } = call_with(&mut phone, id, method, params).await else {
+            panic!("{method} worked from a phone")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
+    // The app on the same Mac still may.
+    let mut app = mac.app().await;
+    let e = app.request::<_, Value>("phone.added_later", json!({})).await.unwrap_err();
+    assert!(e.to_string().starts_with("unknown_method"), "{e}");
+}
+
 /// `SSH_CONNECTION` set, so the proxy vouches for the phone it carries
 /// (X40, A6) as a real SSH login does.
 fn fake_ssh(dir: &Path, remote_home: &Path, args_file: &Path) {
@@ -885,6 +945,27 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         panic!("daemon.shutdown worked through a route")
     };
     assert_eq!(e.message, "stop moonletd on its own machine");
+    // Nor anything else that is not a phone's (X40): joining the host to
+    // another central host, its sign-ins, moving its sessions, its worker
+    // settings, answering for it whether an agent may read a terminal, or
+    // a method added later.
+    for (id, method) in [
+        (13, "link.join"),
+        (14, "signins.approve"),
+        (15, "signins.run"),
+        (16, "session.move"),
+        (17, "worker.settings_set"),
+        (18, "phone.added_later"),
+    ] {
+        let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
+            panic!("{method} worked through a route")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
+    let Message::Response { error: Some(e), .. } = call(&mut phone, 19, "terminal.read_answer").await else {
+        panic!("terminal.read_answer worked through a route")
+    };
+    assert_eq!(e.code, "forbidden");
 
     // A phone that names itself the app on the host is still a phone there:
     // the Mac sends its hello as the phone's.
@@ -894,7 +975,7 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
     let Message::Response { error: Some(e), .. } = call_with(&mut posing, 1, "signins.set", entries).await else {
         panic!("a routed phone that said it was the app changed the host's sign-ins")
     };
-    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app manages sign-ins"));
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"));
 
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
@@ -925,7 +1006,7 @@ async fn phones_cannot_reach_design_systems() {
         let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
             panic!("{method} worked from a phone")
         };
-        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "manage design systems from the Mac"), "{method}");
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
     }
 }
 
@@ -1078,7 +1159,7 @@ async fn only_the_app_shares_boards_and_a_workspace_takes_its_boards_along() {
     let Message::Response { error: Some(e), .. } = call_with(&mut phone, 1, "tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await else {
         panic!("a phone shared boards")
     };
-    assert_eq!(e.message, "only the moonlet app shares boards");
+    assert_eq!(e.message, "a phone does not do that");
     let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap_err();
     assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
@@ -1144,7 +1225,7 @@ async fn a_phones_task_request_is_answered_by_the_app() {
 
     // Another phone cannot answer it.
     let Message::Response { error: Some(e), .. } = call_with(&mut phone2, 3, "tasks.answer", json!({ "request_id": id, "ok": true })).await else { panic!("a phone answered") };
-    assert_eq!(e.message, "only the moonlet app answers task requests");
+    assert_eq!(e.message, "a phone does not do that");
 
     let _: bool = app.request("tasks.answer", json!({ "request_id": id, "ok": true, "result": { "moved": "Done" } })).await.unwrap();
     let Message::Response { result: Some(r), error: None, .. } = asking.await.unwrap() else { panic!("no result") };

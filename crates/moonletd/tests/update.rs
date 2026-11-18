@@ -361,7 +361,7 @@ async fn a_paired_mac_may_update_its_host_but_a_phone_and_an_agent_may_not() {
     let pid = host.pid().await;
 
     let mut phone = host.paired("phone").await;
-    assert_eq!(refused(&update_over(&mut phone, 1, "9.9.9").await), ("forbidden".into(), "update moonlet from a Mac".into()));
+    assert_eq!(refused(&update_over(&mut phone, 1, "9.9.9").await), ("forbidden".into(), "a phone does not do that".into()));
     let mut cli = Client::connect(&host.socket, "moonlet-cli").await.unwrap();
     let e = cli.request::<_, Value>("daemon.update", json!({ "version": "9.9.9" })).await.unwrap_err();
     assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");

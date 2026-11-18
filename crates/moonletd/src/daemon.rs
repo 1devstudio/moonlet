@@ -504,6 +504,102 @@ const LOCAL_METHODS: &[&str] = &[
 /// asks for anything else.
 pub(crate) const LOCAL_APP_ONLY: &str = "only the moonlet app does that";
 
+/// What a paired phone may call (X40): what the phone app sends, its own
+/// screens' calls and those of the desktop code it shares, and nothing
+/// else. The same list holds on the host it paired with, on an SSH host
+/// the Mac routes it to, and on the member a central host forwards its
+/// request to. A method added later is refused to phones until it is
+/// added here (docs/specs/X40-mobile-app.md, "What a phone may call").
+pub(crate) const PHONE_METHODS: &[&str] = &[
+    // The host, its lists, and where the user is (Hosts, the session list).
+    m::DAEMON_INFO,
+    m::MOBILE_HOSTS,
+    m::ACCOUNT_GET,
+    m::WORKSPACE_LIST,
+    m::WORKSPACE_MERGE,
+    m::PROFILE_LIST,
+    m::PROJECT_LIST,
+    m::PROJECT_CONFIG,
+    m::SECTION_LIST,
+    m::SESSION_LIST,
+    m::SYNC_LIST,
+    m::GIT_SETTINGS,
+    m::CLAUDE_MODELS,
+    m::PRESENCE_ACTIVE,
+    // Sessions: new session, linking a task, archive, continue here, and
+    // another member's sessions through the central host (X72).
+    m::SESSION_CREATE,
+    m::SESSION_UPDATE,
+    m::SESSION_ARCHIVE,
+    m::SESSION_CONTINUE_HERE,
+    m::SESSION_FORWARD,
+    m::SESSION_ATTACH,
+    m::SESSION_DETACH,
+    // Chat, asks and the plan.
+    m::CHAT_SUMMARIES,
+    m::CHAT_STATE,
+    m::CHAT_SEND,
+    m::CHAT_SEND_NOW,
+    m::CHAT_UNQUEUE,
+    m::CHAT_INTERRUPT,
+    m::CHAT_PERMISSION,
+    m::CHAT_ASIDE,
+    m::CHAT_STOP_AGENT,
+    m::CHAT_SETTINGS,
+    // Terminals, and the agents' requests to read one (X31).
+    m::TERMINAL_LIST,
+    m::TERMINAL_CREATE,
+    m::TERMINAL_ATTACH,
+    m::TERMINAL_DETACH,
+    m::TERMINAL_READ_REQUESTS,
+    m::TERMINAL_READ_ANSWER,
+    // Changes and the PR.
+    m::GIT_STATUS,
+    m::GIT_BASE_STATUS,
+    m::GIT_DIFF,
+    m::GIT_LOG,
+    m::GIT_STAGE,
+    m::GIT_UNSTAGE,
+    m::GIT_REVERT,
+    m::GIT_APPLY_PATCH,
+    m::GIT_COMMIT,
+    m::GIT_BRANCHES,
+    m::GIT_PULL_BASE,
+    m::GIT_UNPUSHED,
+    m::GIT_PUSH,
+    m::GH_PRS,
+    m::GH_PR_CONTEXT,
+    m::GH_PR_STATUS,
+    m::GH_PR_STACK,
+    m::GH_PR_CREATE,
+    m::GH_WHOAMI,
+    // Jobs (X62).
+    m::JOB_LIST,
+    m::JOB_STAYED,
+    m::JOB_OUTPUT,
+    m::JOB_STOP,
+    m::JOB_STOP_ALL,
+    m::JOB_RUN_HERE,
+    // Setup approvals (X40's setup approvers, X60, X62).
+    m::EXEC_SETUPS,
+    m::SYNC_RUN_SETUP,
+    m::SYNC_SKIP_SETUP,
+    // Tasks, through the Mac's app (X76).
+    m::TASKS_APP,
+    m::TASKS_SNAPSHOT,
+    m::TASKS_REQUEST,
+];
+
+/// What a phone hears when it asks for anything else.
+pub(crate) const PHONE_REFUSED: &str = "a phone does not do that";
+
+/// Whether `conn` is a paired phone's, decided when it connected: over the
+/// tailnet from its device's kind, routed here over SSH by the proxy's
+/// vouching (A6), or a request a central host passed on from one (X72).
+pub(crate) fn phone_caller(conn: &Conn) -> bool {
+    conn.paired_phone || conn.routed_phone
+}
+
 /// Whether `conn` is a local connection that did not prove it is the app
 /// (X75), nor a phone an SSH login vouched for: decided when it connected,
 /// never from the name it gives.
@@ -1312,6 +1408,12 @@ impl Daemon {
         // `moonlet` CLI does, whatever client name it gives (X75).
         if unproven_local(conn) && !LOCAL_METHODS.contains(&method) {
             return Err(RpcError::new("forbidden", LOCAL_APP_ONLY));
+        }
+        // A paired phone reaches what the phone app sends (X40), here, on
+        // an SSH host the Mac routes it to, and on a member a central host
+        // passes its request on to (X72).
+        if phone_caller(conn) && !PHONE_METHODS.contains(&method) {
+            return Err(RpcError::new("forbidden", PHONE_REFUSED));
         }
         let s = &self.terminals;
         match method {
@@ -5197,8 +5299,15 @@ impl Daemon {
     /// `session.forward` on the central host (X72): the request goes to the
     /// member that owns the session while it is linked. Otherwise reads are
     /// answered from this host's copy, and the rest with `owner_offline`.
-    async fn forward(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward) -> HandlerResult {
+    async fn forward(self: &Arc<Self>, conn: &Arc<Conn>, mut r: m::SessionForward) -> HandlerResult {
         use crate::session_copies::scope;
+        // A phone's request gets a phone's rules here, and goes on marked
+        // as that phone's so the owner gives it them too (X40, X72). The
+        // mark is this host's to set, never the client's.
+        r.phone = phone_caller(conn).then(|| conn.phone.clone().unwrap_or_default());
+        if r.phone.is_some() && !PHONE_METHODS.contains(&r.method.as_str()) {
+            return Err(RpcError::new("forbidden", PHONE_REFUSED));
+        }
         let record = self
             .sessions
             .session_records()
@@ -5362,7 +5471,8 @@ impl Daemon {
 
     /// A request the central host passes on for one of this member's
     /// sessions (X72): only what [`scope`] lets through, aimed at that
-    /// session, handled as for a paired device, never as the Mac's app.
+    /// session, handled as for a paired device, never as the Mac's app,
+    /// and as for a phone when the central host says a phone sent it.
     pub async fn forwarded(self: &Arc<Self>, r: m::SessionForward) -> HandlerResult {
         use crate::session_copies::{only_terminals, scope};
         let s = self
@@ -5375,7 +5485,13 @@ impl Daemon {
         // A file named in a forwarded call stays inside the worktree, links
         // resolved, so a link in the session can't reach the rest of the Mac.
         crate::session_copies::files_inside(&p, Path::new(&s.path))?;
-        let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
+        // From one of the central host's phones: a phone's rules here too,
+        // on top of what reaches a session on another member.
+        let id = self.terminals.new_client_id();
+        let conn = match &r.phone {
+            Some(_) => Conn::detached_phone(id, "moonlet-forwarded", Some("forwarded".to_string())),
+            None => Conn::detached(id, "moonlet-forwarded", Some("forwarded".to_string())),
+        };
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
         Ok(only_terminals(&r.method, reply, &s.terminals))
     }
