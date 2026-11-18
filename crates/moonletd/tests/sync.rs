@@ -3750,6 +3750,30 @@ async fn sessions_made_while_the_link_was_down_get_copies_once_it_is_back_unless
     keeps(&worker, &[&second]).await;
 }
 
+/// A Mac's link that connected just before tailnet access was turned off
+/// and says who it is after: it gets no `unauthorized`, which the link
+/// takes as a refusal it never tries again, so it would stay off once
+/// access is back. The connection closes, as all of them do.
+#[tokio::test]
+async fn a_link_connecting_as_tailnet_access_turns_off_is_closed_not_refused() {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let central = central().await;
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
+    let token = moonlet_link::tailnet::pair(&[central.addr.clone()], &p.code, "Alex's MacBook Pro", DeviceKind::Desktop)
+        .await
+        .unwrap()
+        .token;
+    let mut s = tokio::net::TcpStream::connect(&central.addr).await.unwrap();
+    // Taken in by the listener before access goes off.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    link_off(&central).await;
+    let auth = Message::Auth { token: Some(token), pair: None, device: None, route: None, kind: None };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.unwrap();
+    let refused = matches!(&got, Ok(Some(Frame::Json(Message::Response { error: Some(e), .. }))) if e.code == "unauthorized");
+    assert!(!refused, "{got:?}");
+}
+
 #[tokio::test]
 async fn sessions_made_while_the_link_was_down_get_no_copy_when_keep_new_is_off() {
     let central = central().await;

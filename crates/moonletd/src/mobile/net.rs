@@ -167,6 +167,12 @@ async fn serve_phone(
         _ => None,
     };
     let Some(authed) = authed else {
+        // Taken in just before access was turned off: closed, as every
+        // connection then is, with no refusal a Mac's link or a phone
+        // would keep after access is back on.
+        if !daemon.mobile.is_enabled() {
+            return Ok(());
+        }
         tokio::time::sleep(FAIL_DELAY).await;
         let _ = write_frame(
             &mut stream,
