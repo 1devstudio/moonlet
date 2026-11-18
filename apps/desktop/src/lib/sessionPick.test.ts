@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Section, Session, Workspace } from "./protocol";
-import { clickPick, moveTargets, pickLine, shownPick } from "./sessionPick";
+import type { ClaudeProfile, Section, Session, TerminalInfo, Workspace } from "./protocol";
+import { clickPick, escClearsPick, moveConfirm, moveTargets, pickedSessions, pickLine, shownPick } from "./sessionPick";
 
 // The sidebar's rows top to bottom, as `host/session` keys.
 const rows = ["local/fix-checkout", "local/add-search", "local/dark-mode", "local/old-cart", "local/refund", "local/webhooks"];
@@ -92,33 +92,93 @@ const ses = (id: string, project: string, workspace: string, extra: Partial<Sess
   ...extra,
 });
 
+describe("pickedSessions (X106)", () => {
+  it("are the picked sessions the hosts still list, in the picks' order", () => {
+    const sessions = { local: [ses("dark-mode", "storefront", "personal"), ses("refund", "payments", "personal")], "studio-mini": [ses("webhooks", "payments", "personal")] };
+    const pick = { keys: ["studio-mini/webhooks", "local/dark-mode", "local/gone"], anchor: null };
+    expect(pickedSessions(pick, sessions)).toEqual([
+      { host: "studio-mini", ws: sessions["studio-mini"][0] },
+      { host: "local", ws: sessions.local[0] },
+    ]);
+  });
+});
+
+describe("escClearsPick (X106)", () => {
+  it("Esc clears the picks, except for a field, a terminal or an editor", () => {
+    document.body.innerHTML = '<button id="row"></button><input id="find"><div class="xterm"><textarea id="term"></textarea></div><div class="monaco-editor"><span id="code"></span></div><div contenteditable="true" id="edit"></div>';
+    const at = (id: string) => document.getElementById(id);
+    expect(escClearsPick(at("row"))).toBe(true);
+    expect(escClearsPick(null)).toBe(true);
+    expect(escClearsPick(at("find"))).toBe(false);
+    expect(escClearsPick(at("term"))).toBe(false);
+    expect(escClearsPick(at("code"))).toBe(false);
+    expect(escClearsPick(at("edit"))).toBe(false);
+  });
+});
+
 describe("moveTargets (X106)", () => {
   const sections = [section("acme", ["storefront", "payments"]), section("client", ["storefront", "payments"]), section("research", ["storefront"])];
   const workspaces = [ws("personal", "Personal", ["acme"]), ws("client", "Acme client", ["client"], "work"), ws("research", "Research", ["research"])];
   const projects = [{ id: "storefront", name: "storefront", path: "/storefront", base_branch: "main" }, { id: "payments", name: "payments-api", path: "/payments-api", base_branch: "main" }];
-  const local = { host: "local", workspaces, sections, projects };
+  const profiles: ClaudeProfile[] = [{ id: "work", name: "Work profile", path: "/p/work", created_at: 0 }];
+  const local = { host: "local", workspaces, sections, projects, profiles };
 
   it("move targets are the workspaces holding every picked project", () => {
     const picked = [
-      { host: "local", session: ses("dark-mode", "storefront", "personal") },
-      { host: "local", session: ses("refund", "payments", "personal") },
+      { host: "local", ws: ses("dark-mode", "storefront", "personal") },
+      { host: "local", ws: ses("refund", "payments", "personal") },
     ];
     expect(moveTargets(picked, [local])).toEqual({
       disabled: null,
       targets: [
-        { id: "personal", name: "Personal", color: "blue", profile: null, current: true, disabled: "They are in Personal" },
-        { id: "client", name: "Acme client", color: "blue", profile: "work", current: false, disabled: null },
+        { id: "personal", name: "Personal", color: "blue", profile: null, note: null, current: true, disabled: "They are in Personal" },
+        // Another Claude profile than Personal's: named, as moving asks first.
+        { id: "client", name: "Acme client", color: "blue", profile: "work", note: "Work profile", current: false, disabled: null },
         // Research has storefront, not payments: Refund would show nowhere.
-        { id: "research", name: "Research", color: "blue", profile: null, current: false, disabled: "payments-api is not in Research" },
+        { id: "research", name: "Research", color: "blue", profile: null, note: null, current: false, disabled: "payments-api is not in Research" },
       ],
     });
   });
 
+  it("a workspace one member lacks the project in is disabled, by the same workspace id on every member (X68)", () => {
+    // studio-mini has the workspaces under the same ids, its Research without payments.
+    const mini = { host: "studio-mini", workspaces, sections: [section("acme", ["storefront", "payments"]), section("client", ["storefront"]), section("research", ["storefront"])], projects, profiles };
+    const picked = [
+      { host: "local", ws: ses("dark-mode", "storefront", "personal") },
+      { host: "studio-mini", ws: ses("webhooks", "payments", "personal") },
+    ];
+    expect(moveTargets(picked, [local, mini]).targets.map((t) => [t.name, t.disabled])).toEqual([
+      ["Personal", "They are in Personal"],
+      ["Acme client", "payments-api is not in Acme client"],
+      ["Research", "payments-api is not in Research"],
+    ]);
+  });
+
   it("a picked session another Mac runs disables Move to", () => {
     const picked = [
-      { host: "local", session: ses("dark-mode", "storefront", "personal") },
-      { host: "local", session: ses("theirs", "storefront", "personal", { owner: { worker: "w-air", name: "studio-air", reachable: true } }) },
+      { host: "local", ws: ses("dark-mode", "storefront", "personal") },
+      { host: "local", ws: ses("theirs", "storefront", "personal", { owner: { worker: "w-air", name: "studio-air", reachable: true } }) },
     ];
     expect(moveTargets(picked, [local]).disabled).toBe("theirs runs on studio-air");
+  });
+});
+
+describe("moveConfirm (X106)", () => {
+  const term = (id: number, session_id: string): TerminalInfo =>
+    ({ id, kind: "agent", title: "claude", cwd: "/w", command: [], session_id, agent: "claude", agent_state: "working", cols: 80, rows: 24, pid: 1, last_output_at: 0, created_at: 0 }) as TerminalInfo;
+  const workspaces = [ws("personal", "Personal", ["acme"]), ws("client", "Acme client", ["client"], "work"), ws("research", "Research", ["research"])];
+  const profiles = [{ id: "work", name: "Work profile", path: "/p/work", created_at: 0, account: null, hooks_installed: true }];
+  const sessions = [ses("dark-mode", "storefront", "personal"), ses("refund", "payments", "personal")];
+  const picked = sessions.map((s) => ({ host: "local", ws: s }));
+  const target = (id: string, profile: string | null) => ({ id, name: id, color: "blue" as const, profile, note: null, current: false, disabled: null });
+
+  it("asks before Claude agents in the picked sessions switch profiles, as moving a section does (X33)", () => {
+    const local = { host: "local", workspaces, profiles, sessions, terminals: [term(7, "refund")] };
+    expect(moveConfirm(picked, target("client", "work"), [local])).toBe(
+      "1 session in this workspace has an agent. A running agent keeps its account until it restarts, then signs in with Work profile and starts a new conversation.",
+    );
+    // The same profile, or no agent running: nothing to ask.
+    expect(moveConfirm(picked, target("research", null), [local])).toBeNull();
+    expect(moveConfirm(picked, target("client", "work"), [{ ...local, terminals: [] }])).toBeNull();
   });
 });

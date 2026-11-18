@@ -11,6 +11,8 @@ import { stoppedByStopAll } from "./sessionProcesses";
  * null when the host could not say, or was not asked. */
 export interface BulkArchiveItem {
   name: string;
+  /** Where its work is, as the prompt names it: "this Mac", or the host's label. */
+  where: string;
   state: AgentState | null;
   plan: ArchivePlan;
   work: UnpushedWork | null;
@@ -60,19 +62,33 @@ function branchLine(items: BulkArchiveItem[], checked: boolean): string {
   return ` ${deleted} of their branches ${deleted === 1 ? "is" : "are"} deleted, the others kept.`;
 }
 
+/** What the push first saves (the design's line under the list): the one
+ * session's work and where, or how many have work only on their host. */
+function lostLine(items: BulkArchiveItem[], push: string): string {
+  const lost = items.flatMap((i) => {
+    const here = onlyHere(i);
+    return here ? [{ i, here }] : [];
+  });
+  if (!lost.length) return "";
+  const canPush = lost.every((l) => l.here.canPush);
+  const one = lost[0];
+  const work = [...(one.here.files ? [plural(one.here.files, "uncommitted file", "uncommitted files")] : []), ...(one.here.commits ? [plural(one.here.commits, "commit", "commits")] : [])].join(" and ");
+  const what = lost.length === 1 ? `${one.i.name} has ${work} only on ${one.i.where}` : `${lost.length} sessions have work only on their host`;
+  return canPush ? ` ${what}: ${push} saves them to origin first.` : ` ${what}: commit them to push them first.`;
+}
+
 /** The confirm for archiving `items` at once (X106). */
 export function bulkArchivePrompt(items: BulkArchiveItem[]): ConfirmOptions & { sessions: BulkSession[] } {
   const lost = items.map(onlyHere).filter((x) => x !== null);
   const deletes = (checked: boolean) => items.some((i) => archiveFlags(i.plan, checked).delete_branch);
+  const push = `Push ${lost.length}, then archive all`;
   return {
     title: `Archive ${items.length} sessions`,
-    message: (checked) => `${folderLine(items)}${branchLine(items, checked)}`,
+    message: (checked) => `${folderLine(items)}${branchLine(items, checked)}${lostLine(items, push)}`,
     action: lost.length ? "Archive anyway" : `Archive ${items.length}`,
     variant: (checked) => (lost.length || deletes(checked) ? "danger" : "primary"),
     ...(items.some((i) => i.plan.branch === "ask") && { checkbox: { label: "Also delete the branches" } }),
-    ...(lost.length > 0 && {
-      alt: lost.every((l) => l.canPush) ? { label: `Push ${lost.length}, then archive all` } : { label: `Push ${lost.length}, then archive all`, disabled: "Commit the changes first" },
-    }),
+    ...(lost.length > 0 && { alt: lost.every((l) => l.canPush) ? { label: push } : { label: push, disabled: "Commit the changes first" } }),
     sessions: items.map((i) => ({ name: i.name, state: i.state, ...note(i) })),
   };
 }

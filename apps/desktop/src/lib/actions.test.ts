@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { archiveSession, restoreSession, runAction } from "./actions";
+import { archiveSession, archiveSessions, restoreSession, runAction } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
 import { answerConfirm, type ConfirmOptions } from "./confirm";
@@ -39,6 +39,49 @@ const ws: Session = {
 const answers = (archive: unknown, unpushed: unknown = { files: [], commits: 0, upstream: null }) =>
   daemon.rpc.mockImplementation(async (_host: string, method: string) => (method === "git.unpushed" ? unpushed : method === "session.archive" ? archive : true));
 const archived = () => daemon.rpc.mock.calls.filter((c) => c[1] === "session.archive");
+
+describe("archiveSessions (X106)", () => {
+  const s2: Session = { ...ws, id: "s2", name: "s2", branch: "moonlet/s2", path: "/w/s2" };
+  beforeEach(() => {
+    daemon.rpc.mockReset();
+    useStore.setState({ sessions: { local: [ws, s2] }, selected: null, toasts: [], archiving: {}, gitSettings: { local: { ...DEFAULT_GIT_SETTINGS } }, prs: {}, pick: { keys: ["local/s1", "local/s2"], anchor: "local/s2" } });
+    reply = { ok: true, checked: false, alt: true };
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("pushes those with work only here first, and leaves one whose push failed", async () => {
+    // s1 has 2 commits not pushed, and its push fails; s2 has nothing to push.
+    daemon.rpc.mockImplementation(async (_h: string, method: string, params: { path?: string }) => {
+      if (method === "git.unpushed") return params.path === "/w/s1" ? { files: [], commits: 2, upstream: "origin/moonlet/s1" } : { files: [], commits: 0, upstream: null };
+      if (method === "git.push") throw new Error("rejected: non-fast-forward");
+      if (method === "session.processes") return { processes: [], leftovers: [] };
+      return true;
+    });
+    const done = archiveSessions([
+      { host: "local", ws },
+      { host: "local", ws: s2 },
+    ]);
+    await vi.runAllTimersAsync();
+    await done;
+    expect(asked?.title).toBe("Archive 2 sessions");
+    expect(asked?.alt).toEqual({ label: "Push 1, then archive all" });
+    expect(daemon.rpc.mock.calls.filter((c) => c[1] === "git.push").map((c) => c[2].path)).toEqual(["/w/s1"]);
+    expect(archived().map((c) => c[2].id)).toEqual(["s2"]);
+    // Confirmed: the picks are done with.
+    expect(useStore.getState().pick).toEqual({ keys: [], anchor: null });
+  });
+
+  it("asks one picked session as Archive does for one", async () => {
+    answers(undefined);
+    reply = { ok: true, checked: false };
+    const done = archiveSessions([{ host: "local", ws }]);
+    await vi.runAllTimersAsync();
+    await done;
+    expect(asked?.title).toBe("Archive session");
+    expect(archived().map((c) => c[2].id)).toEqual(["s1"]);
+  });
+});
 
 describe("archiveSession", () => {
   beforeEach(() => {

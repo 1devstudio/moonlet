@@ -111,7 +111,8 @@ export interface Settings {
   sharedNotices?: string[];
 }
 
-export const sesKey = (host: string, id: string) => `${host}/${id}`;
+export { parseSesKey, sesKey } from "./sesKey";
+import { sesKey } from "./sesKey";
 export const termKey = (host: string, id: number) => `${host}:${id}`;
 import { hostPath } from "./hostPath";
 export { hostPath };

@@ -47,9 +47,14 @@ describe("Select several sessions (X106)", () => {
   });
 
   it("⌘-click picks rows without opening them, and Esc clears them", async () => {
+    // Pick two is open; ⌘-clicking the others leaves it open.
+    await $(sel.sessionRow("Pick two")).click();
+    await expect($(`${sel.sessionRow("Pick two")}[@aria-current="true"]`)).toBeExisting();
     await modClick(sel.sessionRow("Pick one"), { metaKey: true });
     await modClick(sel.sessionRow("Pick three"), { metaKey: true });
     await expect($(bar("2 selected"))).toBeDisplayed();
+    await expect($(`${sel.sessionRow("Pick two")}[@aria-current="true"]`)).toBeExisting();
+    await expect($(`${sel.sessionRow("Pick one")}[@aria-current="true"]`)).not.toBeExisting();
     await expect($(picked("Pick one"))).toBeExisting();
     await expect($(picked("Pick three"))).toBeExisting();
     await expect($(picked("Pick two"))).not.toBeExisting();

@@ -10,7 +10,7 @@ import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, archiveSessions, moveSessions, openProjectSettings, restoreSession, visibleSessionOrder } from "../lib/actions";
-import { clickPick, moveTargets, NO_PICK, pickLine, shownPick, type HostPlaces } from "../lib/sessionPick";
+import { clickPick, escClearsPick, moveTargets, NO_PICK, pickedSessions, pickLine, shownPick, type HostPlaces, type PickedSession } from "../lib/sessionPick";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
@@ -481,51 +481,46 @@ function PickBox({ on }: { on: boolean }) {
   );
 }
 
-/** The picked sessions (X106), as `{ host, ws }`, the order kept. */
-function pickedTargets(): { host: string; ws: Session }[] {
-  const st = useStore.getState();
-  return st.pick.keys.flatMap((k) => {
-    const at = k.lastIndexOf("/");
-    const host = k.slice(0, at);
-    const ws = (st.sessions[host] ?? []).find((x) => x.id === k.slice(at + 1));
-    return ws ? [{ host, ws }] : [];
-  });
-}
+/** The picked sessions the hosts still list (X106). */
+const pickedTargets = (): PickedSession[] => pickedSessions(useStore.getState().pick, useStore.getState().sessions);
 
 function hostPlaces(): HostPlaces[] {
   const st = useStore.getState();
-  return Object.keys(st.hosts).map((host) => ({ host, workspaces: st.workspaces[host] ?? [], sections: st.sections[host] ?? [], projects: st.projects[host] ?? [] }));
+  return Object.keys(st.hosts).map((host) => ({ host, workspaces: st.workspaces[host] ?? [], sections: st.sections[host] ?? [], projects: st.projects[host] ?? [], profiles: st.profiles[host] ?? [] }));
 }
 
 /** Move to's workspaces for the picked sessions (X106), as menu items. */
-function moveItems(targets: { host: string; ws: Session }[]): { disabled: string | null; items: MenuItem[] } {
-  const st = useStore.getState();
-  const { disabled, targets: places } = moveTargets(targets.map((t) => ({ host: t.host, session: t.ws })), hostPlaces());
-  const host = targets[0]?.host ?? "local";
-  const from = st.workspaces[host]?.find((w) => w.id === targets[0]?.ws.workspace_id)?.claude_profile ?? null;
-  const items = places.map(
+function moveItems(picked: PickedSession[]): { disabled: string | null; items: MenuItem[] } {
+  const { disabled, targets } = moveTargets(picked, hostPlaces());
+  const items = targets.map(
     (t): MenuItem => ({
       label: t.name,
       icon: <WorkspaceMark name={t.name} color={t.color} size={14} />,
       checked: t.current,
       disabled: t.disabled ?? undefined,
-      // Another Claude profile: Move asks first when agents run (X33).
-      hint: t.profile !== from ? ((st.profiles[host] ?? []).find((p) => p.id === t.profile)?.name ?? (t.profile ? undefined : "Default")) : undefined,
-      onSelect: () => void moveSessions(targets, t),
+      hint: t.note ?? undefined,
+      onSelect: () => void moveSessions(picked, t),
     }),
   );
   return { disabled, items };
 }
 
-/** The right-click menu of a picked row while several are picked (X106). */
-function bulkItems(targets: { host: string; ws: Session }[]): MenuItem[] {
-  const move = moveItems(targets);
+const markReadItem = (picked: PickedSession[]): MenuItem => ({
+  label: "Mark as read",
+  icon: <Eye size={14} className="text-muted" />,
+  onSelect: () => markRead(picked.map((p) => ({ host: p.host, id: p.ws.id }))),
+});
+
+/** The right-click menu of a picked row (X106): it acts on every pick. */
+function bulkItems(picked: PickedSession[]): MenuItem[] {
+  const move = moveItems(picked);
+  const n = picked.length === 1 ? "1 session" : `${picked.length} sessions`;
   return [
-    { kind: "label", label: `${targets.length} sessions` },
-    { label: "Mark as read", icon: <Eye size={14} className="text-muted" />, onSelect: () => markRead(targets.map((t) => ({ host: t.host, id: t.ws.id }))) },
+    { kind: "label", label: n },
+    markReadItem(picked),
     { kind: "submenu", label: "Move to workspace", icon: <FolderInput size={14} className="text-muted" />, items: move.items, disabled: move.disabled ?? undefined },
     { kind: "divider" },
-    { label: `Archive ${targets.length} sessions`, icon: <Archive size={14} className="text-muted" />, onSelect: () => void archiveSessions(targets) },
+    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} className="text-muted" />, onSelect: () => void archiveSessions(picked) },
   ];
 }
 
@@ -533,10 +528,18 @@ function bulkItems(targets: { host: string; ws: Session }[]): MenuItem[] {
  * Archive, Move to and ⋯ (Mark as read). */
 function PickBar() {
   const keys = useStore((st) => st.pick.keys);
+  const sessions = useStore((st) => st.sessions);
   const projects = useStore((st) => st.projects);
-  const targets = useMemo(pickedTargets, [keys]);
-  const line = pickLine(targets.map((t) => (projects[t.host] ?? []).find((p) => p.id === t.ws.project_id)?.name ?? t.ws.project_id));
-  const move = moveItems(targets);
+  const picked = useMemo(() => pickedSessions({ keys, anchor: null }, sessions), [keys, sessions]);
+  const line = pickLine(picked.map((p) => (projects[p.host] ?? []).find((x) => x.id === p.ws.project_id)?.name ?? p.ws.project_id));
+  const move = moveItems(picked);
+  const moveButton = (open?: () => void) => (
+    <Button size="sm" disabled={!!move.disabled} title={move.disabled ?? undefined} onClick={open}>
+      <FolderInput size={13} />
+      Move to
+      <ChevronDown size={12} />
+    </Button>
+  );
   return (
     <div role="toolbar" aria-label={line.count} className="mx-2 mb-2 rounded-xl border border-border-strong bg-[#232323] p-2 shadow-2xl">
       <div className="flex items-center gap-2 pb-2 pl-1">
@@ -547,34 +550,16 @@ function PickBar() {
         </IconButton>
       </div>
       <div className="flex items-center gap-1.5">
-        <Button size="sm" onClick={() => void archiveSessions(targets)}>
+        <Button size="sm" onClick={() => void archiveSessions(picked)}>
           <Archive size={13} />
           Archive
         </Button>
-        {move.disabled ? (
-          <Button size="sm" disabled title={move.disabled}>
-            <FolderInput size={13} />
-            Move to
-            <ChevronDown size={12} />
-          </Button>
-        ) : (
-          <Menu
-            side="top"
-            items={[{ kind: "label", label: `Move ${targets.length} to workspace` }, ...move.items]}
-            trigger={(open) => (
-              <Button size="sm" onClick={open}>
-                <FolderInput size={13} />
-                Move to
-                <ChevronDown size={12} />
-              </Button>
-            )}
-          />
-        )}
+        {move.disabled ? moveButton() : <Menu side="top" items={[{ kind: "label", label: `Move ${picked.length} to workspace` }, ...move.items]} trigger={moveButton} />}
         <Menu
           side="top"
           align="right"
           width={180}
-          items={[{ label: "Mark as read", icon: <Eye size={14} className="text-muted" />, onSelect: () => markRead(targets.map((t) => ({ host: t.host, id: t.ws.id }))) }]}
+          items={[markReadItem(picked)]}
           trigger={(open) => (
             <IconButton title="More actions" className="ml-auto h-6 w-6" onClick={open}>
               <MoreHorizontal size={15} />
@@ -889,8 +874,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const central = useSync((st) => st.central);
   const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
-  // A picked row among several acts on all of them (X106).
-  const bulk = useStore((st) => !!s && st.pick.keys.length > 1 && st.pick.keys.includes(sesKey(host, s.id)));
+  // A picked row acts on every pick (X106).
+  const bulk = useStore((st) => !!s && st.pick.keys.includes(sesKey(host, s.id)));
   const items = bulk ? bulkItems(pickedTargets()) : s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   // Another member's session, through its copy here, cannot be renamed (X88).
   const renames = !!s && !s.owner && !bulk;
@@ -1171,8 +1156,7 @@ export function Sidebar() {
     if (!picking || rowMenu) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || useStore.getState().confirm) return;
-      const t = e.target instanceof HTMLElement ? e.target : null;
-      if (t?.closest("input, textarea, select, [contenteditable='true'], .xterm, .monaco-editor")) return;
+      if (!escClearsPick(e.target instanceof Element ? e.target : null)) return;
       useStore.setState({ pick: NO_PICK });
     };
     window.addEventListener("keydown", onKey);
