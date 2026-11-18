@@ -76,8 +76,8 @@ impl Tailnet {
         Tailnet { own, members }
     }
 
-    /// This tailnet's peers with `own` as this machine's addresses, for the
-    /// test seam.
+    /// This tailnet's members, with `own` as this machine's addresses and
+    /// members too, for the test seam.
     pub fn with_own(self, own: Vec<IpAddr>) -> Tailnet {
         Tailnet::new(own, self.members)
     }

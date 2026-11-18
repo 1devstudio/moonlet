@@ -1,14 +1,21 @@
 //! Test seams: environment variables that only tests set, to stand in for
-//! Tailscale, the app, sshd, a clock or a timer. A release build drops them
-//! from its own environment before it starts, so a copy installed for real
-//! behaves the same whatever environment it is started with. Debug builds,
-//! which the tests and the e2e app run, keep them.
+//! Tailscale, the app, sshd, a cloud provider, a clock or a timer. A release
+//! build drops them from its own environment before it starts, so in a copy
+//! installed for real they do nothing, whoever starts it with them. Debug
+//! builds, which the tests and the e2e app run, keep them.
 
 /// Seams outside the `MOONLET_TEST_` prefix.
-const NAMED: [&str; 3] = [
+const NAMED: [&str; 7] = [
     "MOONLET_MOBILE_ADDRS",
     "MOONLET_TAILSCALE",
     "MOONLET_TAILSCALE_CALLS",
+    // Claude Code's managed settings, whose deny rules a heavy command keeps (X62).
+    "MOONLET_CLAUDE_MANAGED_SETTINGS",
+    // The fake cloud provider and where its machines' setup is (X63).
+    "MOONLET_CLOUD_FAKE",
+    "MOONLET_MACHINE_SETUP_DIR",
+    // git reaching an https origin on this machine (X60).
+    "MOONLET_SYNC_LOCAL_ORIGINS",
 ];
 
 /// Whether the variable `name` is a test seam.
@@ -53,8 +60,12 @@ pub unsafe fn drop_in_release() {
 mod tests {
     use super::*;
 
-    const ENV: [&str; 9] = [
+    const ENV: [&str; 13] = [
         "PATH",
+        "MOONLET_CLAUDE_MANAGED_SETTINGS",
+        "MOONLET_CLOUD_FAKE",
+        "MOONLET_MACHINE_SETUP_DIR",
+        "MOONLET_SYNC_LOCAL_ORIGINS",
         "MOONLET_HOME",
         "MOONLET_SOCK",
         "MOONLET_TEST_APP_EXE",
@@ -70,6 +81,10 @@ mod tests {
         assert_eq!(
             dropped(ENV, true),
             [
+                "MOONLET_CLAUDE_MANAGED_SETTINGS",
+                "MOONLET_CLOUD_FAKE",
+                "MOONLET_MACHINE_SETUP_DIR",
+                "MOONLET_SYNC_LOCAL_ORIGINS",
                 "MOONLET_TEST_APP_EXE",
                 "MOONLET_TEST_SSHD_EXE",
                 "MOONLET_TEST_UNREACHABLE_MS",

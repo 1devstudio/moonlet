@@ -733,7 +733,7 @@ async fn a_device_that_joins_the_tailnet_later_is_let_in_without_a_restart() {
     // The phone joins the tailnet. The daemon asks Tailscale again for a
     // peer it does not know, at most every 2 seconds.
     std::fs::write(dir.path().join("status.json"), running("100.101.102.103", &["100.88.1.20"])).unwrap();
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(mac.pair(&addr).await.len(), 64);
 }
 
@@ -765,8 +765,10 @@ async fn without_the_tailscale_command_nothing_listens_and_settings_says_so() {
 #[tokio::test]
 async fn only_an_address_tailscale_reports_is_listened_on() {
     // Tailscale reports an address no interface here has, so nothing
-    // listens, not even on another address of this machine in
-    // 100.64.0.0/10 (where it has one).
+    // listens. On a machine with an interface in 100.64.0.0/10, the range
+    // alone would have listened there; the unit test
+    // `an_address_tailscale_does_not_report_is_not_listened_on` covers that
+    // case on every machine.
     let dir = tempfile::tempdir().unwrap();
     let tailscale = fake_tailscale(dir.path(), &running("100.100.99.1", &[]));
     let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", &tailscale)]).await;

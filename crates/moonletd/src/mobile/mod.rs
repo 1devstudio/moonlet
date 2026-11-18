@@ -536,7 +536,7 @@ impl Mobile {
             },
         };
         let mut seen = self.seen.lock().unwrap();
-        let changed = !seen.asked || seen.tailnet != tailnet || seen.missing != missing;
+        let changed = !seen.asked || seen.tailnet != tailnet || seen.listen != listen || seen.missing != missing;
         *seen = Seen {
             asked: true,
             tailnet,
@@ -554,13 +554,18 @@ impl Mobile {
 
     /// Whether a connection from `peer` comes from a device of this tailnet.
     /// A peer the last answer does not list makes the daemon ask again, at
-    /// most every [`ASK_AGAIN`].
+    /// most every [`ASK_AGAIN`]. While another ask runs, such a peer is
+    /// refused at once instead of waiting for it, so a burst of unknown
+    /// peers never holds the places of connections waiting for their
+    /// `auth`; a device that just joined connects on its next try.
     pub async fn lets_in(&self, peer: IpAddr) -> bool {
         let known = |seen: &Seen| seen.tailnet.as_ref().is_some_and(|t| t.lets_in(peer));
         if known(&self.seen.lock().unwrap()) {
             return true;
         }
-        let _one = self.asking.lock().await;
+        let Ok(_one) = self.asking.try_lock() else {
+            return false;
+        };
         {
             let seen = self.seen.lock().unwrap();
             if known(&seen) {
