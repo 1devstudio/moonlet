@@ -1089,8 +1089,9 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
     reset_index(worktree, Some(branch), to).await
 }
 
-/// `git reset -q` in `worktree` while it still has `branch` checked out,
-/// or with no branch named, while its `HEAD` is still at `to`. It waits up
+/// `git reset -q` in `worktree` while its `HEAD` is still at `to`, on
+/// `branch` when one is named, or else on no other branch than when the
+/// move began, `was` (none: detached). It waits up
 /// to 5 s for another git (an editor's or a terminal's `git status`) to
 /// let the staging area's lock go: the branch has moved already, and its
 /// staging area must follow, unless another branch was checked out
@@ -1098,13 +1099,9 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
 async fn reset_index(worktree: &Path, branch: Option<&str>, to: &str) -> Result<()> {
     let until = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let still = match branch {
-            Some(b) => self::branch(worktree).await?.as_deref() == Some(b),
-            None => {
-                let head = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
-                String::from_utf8_lossy(&head).trim() == to
-            }
-        };
+        let head = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
+        let still = String::from_utf8_lossy(&head).trim() == to
+            && self::branch(worktree).await?.as_deref() == branch;
         if !still {
             return Ok(());
         }
@@ -1124,8 +1121,9 @@ async fn reset_index(worktree: &Path, branch: Option<&str>, to: &str) -> Result<
 pub async fn reset_branch(worktree: &Path, from: &str, to: &str) -> Result<()> {
     commit_id(from)?;
     commit_id(to)?;
+    let on = self::branch(worktree).await?;
     git_env(worktree, &[], &["update-ref", "HEAD", to, from], None).await?;
-    reset_index(worktree, None, to).await
+    reset_index(worktree, on.as_deref(), to).await
 }
 
 /// Makes an empty repository at `dir`, unless one is there: a routing

@@ -199,13 +199,24 @@ pub async fn take(
     // What may be written is recorded as the owner's before it is: a
     // daemon stopped half way still knows it had those from the owner, so
     // the owner deleting one later deletes it here. The record is
-    // narrowed to what was taken once the take is done.
+    // narrowed to what was taken once the take is done. Only what this
+    // checkout takes: a manifest it refuses writes nothing.
+    let sent: Vec<(String, u64)> = manifest
+        .iter()
+        .map(|e| (e.path.clone(), e.bytes.as_ref().map_or(0, |b| b.len() as u64)))
+        .collect();
+    let takes = files::receivable(dir, patterns, &sent).await?;
     let had = {
         let _one = received_lock().lock().unwrap();
         let mut all = load_received(home);
         let had = all.get(copy).cloned().unwrap_or_default();
         let mut ahead = had.clone();
-        ahead.extend(manifest.iter().filter(|e| e.bytes.is_some()).map(|e| e.path.clone()));
+        ahead.extend(
+            manifest
+                .iter()
+                .filter(|e| e.bytes.is_some() && takes.contains(&e.path))
+                .map(|e| e.path.clone()),
+        );
         if ahead != had {
             all.insert(copy.to_string(), ahead);
             files::write(home, RECEIVED, &serde_json::to_vec(&all)?)?;
@@ -767,5 +778,28 @@ mod tests {
             .map(|e| std::fs::read_to_string(e.unwrap().path().join(".env")).unwrap())
             .collect();
         assert_eq!(kept, ["A=1\n"]);
+    }
+
+    /// A take refused for a path off the list writes nothing and counts
+    /// nothing as the owner's: a file of that name the checkout has of its
+    /// own stays when the owner's next list leaves it out.
+    #[tokio::test]
+    async fn a_take_refused_for_a_path_off_the_list_leaves_a_file_of_that_name_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = checkout("A=1\n");
+        std::fs::write(dir.path().join("notes.txt"), "mine\n").unwrap();
+        let patterns = vec![".env".to_string()];
+        let notes = Entry {
+            path: "notes.txt".into(),
+            sha: files::sha(b"theirs\n"),
+            bytes: Some(b"theirs\n".to_vec()),
+        };
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &[notes], true)
+            .await
+            .unwrap_err();
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &[], true)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("notes.txt")).unwrap(), "mine\n");
     }
 }
