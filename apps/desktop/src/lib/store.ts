@@ -47,6 +47,7 @@ import { type GitCheck, gitCheckDue } from "./gitPoll";
 import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
+import type { SessionPick } from "./sessionPick";
 import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import type { TaskRequestEvent } from "./tasksRelay";
@@ -323,6 +324,8 @@ interface State extends UiPersist {
   stripDismissed: Record<string, number>;
   /** Sessions (`sesKey`) whose sidebar row plays the archive loader (X21). */
   archiving: Record<string, Archiving>;
+  /** The sessions picked in the sidebar with ⌘- and ⇧-click (X106). */
+  pick: SessionPick;
 }
 
 // One store per page, even when Vite hot-reloads this module: a fresh copy
@@ -373,6 +376,7 @@ function makeStore() {
   jobDetail: null,
   stripDismissed: {},
   archiving: {},
+  pick: { keys: [], anchor: null },
   }));
 }
 export const useStore = (g.__moonletStore ??= makeStore());
@@ -755,6 +759,18 @@ export function selectSession(host: string, id: string, keepMode = false) {
   void refreshGit(host, id);
   // Another member's session, through its copy here (X88).
   if (parseCopyHost(host)) void loadCopy(host);
+}
+
+/** Mark as read (X106): every terminal of `sessions` read, as opening each
+ * would make its focused one, without opening any. */
+export function markRead(sessions: { host: string; id: string }[]) {
+  set((s) => {
+    const unread = { ...s.unread };
+    for (const x of sessions) for (const t of sessionTerminals(s, x.host, x.id)) delete unread[termKey(x.host, t.id)];
+    return { unread };
+  });
+  for (const x of sessions) doneBursts.seen(sesKey(x.host, x.id));
+  updateBadge();
 }
 
 /** Every host's workspaces, local first, as the switcher lists them (X32). */

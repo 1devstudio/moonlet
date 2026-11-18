@@ -3,7 +3,8 @@ import { ShieldAlert } from "lucide-react";
 import { answerConfirm, confirmView, type PendingConfirm } from "../lib/confirm";
 import type { UnpushedView } from "../lib/gitSettings";
 import { useStore } from "../lib/store";
-import { ConfirmDialog } from "./ui";
+import type { BulkSession } from "../lib/confirmOptions";
+import { ConfirmDialog, StateGlyph, cx } from "./ui";
 
 /** Shows the open confirm request (X23). */
 export function ConfirmHost() {
@@ -37,11 +38,12 @@ function OpenConfirm({ pending }: { pending: PendingConfirm }) {
       alt={o.alt}
       onAlt={() => answerConfirm(true, checked, true)}
       checking={o.checking}
-      width={o.unpushed ? 520 : undefined}
+      width={o.sessions ? 560 : o.unpushed ? 520 : undefined}
       onConfirm={() => answerConfirm(true, checked)}
       onCancel={() => answerConfirm(false, checked)}
     >
       {o.code && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-[#1a1a1a] px-3 py-2 font-mono ui-text-12.5 text-fg">{o.code}</pre>}
+      {o.sessions && <SessionList sessions={o.sessions} />}
       {o.unpushed && <UnpushedBox view={o.unpushed} />}
     </ConfirmDialog>
   );
@@ -69,5 +71,20 @@ function UnpushedBox({ view }: { view: UnpushedView }) {
       )}
       <span className="ui-text-12 text-muted">{view.summary}</span>
     </div>
+  );
+}
+
+/** The sessions a bulk archive takes, each with its note (X106). */
+function SessionList({ sessions }: { sessions: BulkSession[] }) {
+  return (
+    <ul aria-label="Sessions" className="mt-3 flex max-h-[260px] flex-col overflow-y-auto rounded-md border border-border bg-[#1a1a1a]">
+      {sessions.map((x, i) => (
+        <li key={i} className={cx("flex h-8 shrink-0 items-center gap-2.5 border-border px-3", i > 0 && "border-t")}>
+          <span className="flex w-[15px] shrink-0 justify-center">{x.state && x.state !== "idle" && <StateGlyph state={x.state} size={15} />}</span>
+          <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{x.name}</span>
+          {x.note && <span className={cx("shrink-0 ui-text-11.5", x.warn ? "text-blocked" : "text-faint")}>{x.note}</span>}
+        </li>
+      ))}
+    </ul>
   );
 }

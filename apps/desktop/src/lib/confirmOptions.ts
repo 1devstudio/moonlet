@@ -2,6 +2,7 @@
 // so the phone app shares them without the desktop's store.
 
 import { archiveFlags, type ArchivePlan, type UnpushedView } from "./gitSettings";
+import type { AgentState } from "./protocol";
 
 export type ConfirmVariant = "primary" | "danger";
 
@@ -20,11 +21,22 @@ export interface ConfirmOptions {
   alt?: { label: string; disabled?: string };
   /** Work only on this machine that the action would remove (X55). */
   unpushed?: UnpushedView;
+  /** The sessions a bulk archive takes, each with a note (X106). */
+  sessions?: BulkSession[];
   /** A command shown exactly, in a code block under the message, such as a setup to approve (X60). */
   code?: string;
   /** Shown while the modal waits for what it should ask, such as "Checking
    * for unpushed work…" (X55): until then it can only be cancelled. */
   checking?: string;
+}
+
+/** One session in a bulk archive's list (X106): its state glyph, and what
+ * archiving it would take or stop; `warn` notes are amber. */
+export interface BulkSession {
+  name: string;
+  state: AgentState | null;
+  note: string;
+  warn: boolean;
 }
 
 export interface ConfirmResult {

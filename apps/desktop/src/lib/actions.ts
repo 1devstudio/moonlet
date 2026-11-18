@@ -15,6 +15,9 @@ import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
+import { bulkArchivePrompt, type BulkArchiveItem } from "./bulkArchive";
+import { runningClaudeAgents, switchConfirm } from "./profiles";
+import { NO_PICK, type MoveTarget } from "./sessionPick";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { setMode, toggleMode } from "./mode";
@@ -375,23 +378,10 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const c = target ?? current();
   if (!c) return;
   const s = useStore.getState();
-  const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
-  const git = gitSettingsOf(s.gitSettings, c.host);
-  const pr = s.prs[sesKey(c.host, c.ws.id)];
-  const plan = archivePlan(git, pr?.state, c.ws.branch, base);
+  const { git, plan, params, found } = archiveLookup(c);
   // Work only on this machine that the archive would take (X55).
   // A copy's work is on the member running it (X88).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.ws.owner?.name ?? c.host);
-  const params = unpushedParams(c.ws, pr);
-  // What still runs in it, beyond its tabs, is named and stopped too (X83);
-  // a daemon that cannot say archives as before.
-  const found = Promise.all([
-    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
-    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
-      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
-      () => null,
-    ),
-  ]);
   // The prompt opens at once and fills in what the host found (X55).
   const prompt = found.then(([work, running]) => {
     const view = work && unpushedView(work, plan, c.ws.branch, where);
@@ -401,8 +391,6 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const answer = await askConfirm({ ...archivePrompt(c.ws.name, plan), checking }, prompt);
   if (!answer) return;
   const [, running] = await found;
-  // A daemon that cannot list processes cannot stop them either.
-  const stops = running !== null;
   const flags = archiveFlags(plan, answer.checked, !!answer.alt);
   if (answer.alt) {
     try {
@@ -412,6 +400,85 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
       return;
     }
   }
+  // A daemon that cannot list processes cannot stop them either.
+  await runArchive(c, flags, running !== null);
+}
+
+/** What archiving session `c` would do by its host's Git settings (X55),
+ * and what the host finds: its work only there (when the settings warn) and
+ * what still runs in it beyond its tabs (X83), each null when it can't say. */
+function archiveLookup(c: { host: string; ws: Session }) {
+  const s = useStore.getState();
+  const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
+  const git = gitSettingsOf(s.gitSettings, c.host);
+  const pr = s.prs[sesKey(c.host, c.ws.id)];
+  const plan = archivePlan(git, pr?.state, c.ws.branch, base);
+  const params = unpushedParams(c.ws, pr);
+  const found = Promise.all([
+    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
+    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
+      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
+      () => null,
+    ),
+  ]);
+  return { git, plan, params, found };
+}
+
+/** Archive for several sessions at once (X106): one confirm listing them
+ * all, then each archives as Archive does for one. With **Push N, then
+ * archive all**, those with work only on their host are pushed first; one
+ * whose push fails stays. */
+export async function archiveSessions(targets: { host: string; ws: Session }[]) {
+  if (!targets.length) return;
+  const s = useStore.getState();
+  const looked = targets.map((c) => ({ c, ...archiveLookup(c), state: sessionState(s, c.host, c.ws.id) }));
+  const item = (l: (typeof looked)[number], work: UnpushedWork | null, running: SessionProcesses | null): BulkArchiveItem => ({ name: l.c.ws.name, state: l.state, plan: l.plan, work, running });
+  const found = Promise.all(looked.map((l) => l.found));
+  const prompt = found.then((all) => bulkArchivePrompt(looked.map((l, i) => item(l, all[i][0], all[i][1]))));
+  const checking = looked.some((l) => l.git.warn_unpushed) ? "Checking for unpushed work…" : "Checking what still runs…";
+  const answer = await askConfirm({ ...bulkArchivePrompt(looked.map((l) => item(l, null, null))), checking }, prompt);
+  if (!answer) return;
+  useStore.setState({ pick: NO_PICK });
+  const all = await found;
+  await Promise.all(
+    looked.map(async (l, i) => {
+      const [work, running] = all[i];
+      const pushes = !!answer.alt && !!work && !!unpushedView(work, l.plan, l.c.ws.branch, "");
+      if (pushes) {
+        try {
+          await rpc(l.c.host, M.gitPush, l.params);
+        } catch (e) {
+          errorToast(e);
+          return;
+        }
+      }
+      await runArchive(l.c, archiveFlags(l.plan, answer.checked, pushes), running !== null);
+    }),
+  );
+}
+
+/** Move to workspace for picked sessions (X106): asks first when Claude
+ * agents running in them would switch profiles (X33), as moving a section
+ * does, then moves each; one refused is a toast, the others move. */
+export async function moveSessions(targets: { host: string; ws: Session }[], to: MoveTarget) {
+  const st = useStore.getState();
+  const hosts = [...new Set(targets.map((t) => t.host))];
+  const message = hosts
+    .map((host) => {
+      const mine = targets.filter((t) => t.host === host);
+      const from = st.workspaces[host]?.find((w) => w.id === mine[0].ws.workspace_id);
+      const agents = runningClaudeAgents(st.sessions[host] ?? [], Object.values(st.terminals[host] ?? {}), mine.map((t) => t.ws.id));
+      return switchConfirm(from?.claude_profile ?? null, to.profile, agents, st.profiles[host] ?? []);
+    })
+    .find((m) => m !== null);
+  if (message && !(await askConfirm({ title: "Change Claude profile", message, action: `Move to ${to.name}` }))) return;
+  useStore.setState({ pick: NO_PICK });
+  await Promise.all(targets.map((t) => rpc(t.host, M.sessionUpdate, { id: t.ws.id, workspace_id: to.id }).catch(errorToast)));
+}
+
+/** Archives session `c` once confirmed (X21, X83): stops what it runs when
+ * `stops`, plays its row's scene and folds it away. */
+async function runArchive(c: { host: string; ws: Session }, flags: ReturnType<typeof archiveFlags>, stops: boolean) {
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;

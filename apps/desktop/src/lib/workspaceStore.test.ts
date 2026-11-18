@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { focusTerminal, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
+import { focusTerminal, markRead, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
 import { openDiffTab, visibleSessionOrder } from "./actions";
 import type { Section, Session, TerminalInfo, Workspace } from "./protocol";
 
@@ -83,6 +83,17 @@ describe("sessionNeedsYou", () => {
     expect(sessionNeedsYou(s, "local", "s2")).toBe(false);
     useStore.setState({ unread: { "local:7": "done" } });
     expect(sessionNeedsYou(useStore.getState(), "local", "s2")).toBe(true);
+  });
+});
+
+describe("markRead (X106)", () => {
+  it("clears the unread marks of every picked session's terminals without opening them", () => {
+    useStore.setState({ unread: { "local:7": "done", "local:9": "done", "local:8": "error" } });
+    markRead([{ host: "local", id: "s2" }, { host: "local", id: "s3" }]);
+    // s1's terminal 8 keeps its mark; the open session stays s1.
+    expect(useStore.getState().unread).toEqual({ "local:8": "error" });
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
+    expect(sessionNeedsYou(useStore.getState(), "local", "s2")).toBe(false);
   });
 });
 
