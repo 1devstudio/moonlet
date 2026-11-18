@@ -2071,6 +2071,17 @@ impl SessionManager {
 
     pub fn update(&self, req: SessionUpdate) -> Result<Session> {
         self.mutate(|st| {
+            // Only to a workspace that lists it (X106): `ensure` would put a
+            // session anywhere else back.
+            if let Some(to) = &req.workspace_id {
+                let project = st.sessions.iter().find(|w| w.id == req.id).context("no such session")?.project_id.clone();
+                if !st.workspaces.iter().any(|w| &w.id == to) {
+                    bail!("no such workspace");
+                }
+                if !st.holds_project(to, &project, None) {
+                    bail!("the project is not in this workspace");
+                }
+            }
             let w = st
                 .sessions
                 .iter_mut()
@@ -2089,6 +2100,9 @@ impl SessionManager {
             if let Some(task) = req.task {
                 w.task_unlinked = task.is_none();
                 w.task = task;
+            }
+            if let Some(to) = req.workspace_id {
+                w.workspace_id = Some(to);
             }
             Ok(())
         })?;
@@ -4356,6 +4370,48 @@ mod tests {
         let kept = mgr.create_section(&personal.id, "Side projects").unwrap();
         mgr.section_add_project(&kept.id, &path).await.unwrap();
         mgr.move_section(&alone.id, &work.id).unwrap();
+        assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(personal.id.as_str()));
+    }
+
+    fn move_to(mgr: &SessionManager, id: &str, workspace: &str) -> Result<Session> {
+        mgr.update(SessionUpdate { id: id.into(), name: None, layout: None, task: None, workspace_id: Some(workspace.into()) })
+    }
+
+    /// X106: Move to workspace puts the session in a workspace that has a
+    /// section with its project, and leaves its name alone.
+    #[tokio::test]
+    async fn a_session_moves_to_a_workspace_that_holds_its_project() {
+        let (repo, _home, mgr) = setup().await;
+        let personal = mgr.list_workspaces()[0].clone();
+        let path = repo.path().display().to_string();
+        let r = mgr.add_project(&path).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let work = workspace(&mgr, "Acme", vec![]);
+        let shop = mgr.create_section(&work.id, "Shop").unwrap();
+        mgr.section_add_project(&shop.id, &path).await.unwrap();
+
+        let moved = move_to(&mgr, &s.id, &work.id).unwrap();
+
+        assert_eq!(moved.workspace_id.as_deref(), Some(work.id.as_str()));
+        assert_eq!(moved.name, s.name);
+        assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(work.id.as_str()));
+        assert_ne!(personal.id, work.id);
+    }
+
+    /// X106: a workspace with no section holding the session's project would
+    /// show it nowhere, and one that does not exist is no place at all.
+    #[tokio::test]
+    async fn a_session_is_not_moved_to_a_workspace_without_its_project() {
+        let (repo, _home, mgr) = setup().await;
+        let personal = mgr.list_workspaces()[0].clone();
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let empty = workspace(&mgr, "Acme", vec![]);
+
+        let err = move_to(&mgr, &s.id, &empty.id).unwrap_err();
+        assert_eq!(err.to_string(), "the project is not in this workspace");
+        let err = move_to(&mgr, &s.id, "no-such-workspace").unwrap_err();
+        assert_eq!(err.to_string(), "no such workspace");
         assert_eq!(mgr.session(&s.id).unwrap().workspace_id.as_deref(), Some(personal.id.as_str()));
     }
 

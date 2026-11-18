@@ -3850,7 +3850,7 @@ mod tests {
         mini.apply_account(vec![forged]);
         assert_eq!(mini.session_records()[&session.id]["owner"], serde_json::json!("mini"));
         // The MacBook no longer records it: a rename there stays there.
-        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None })
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None, workspace_id: None })
             .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
@@ -4091,6 +4091,34 @@ mod tests {
         assert_eq!((&r["name"], &r["owner"]), (&serde_json::json!("Fix cart"), &serde_json::json!("mini")));
     }
 
+    /// X106: a session moved to another workspace is listed there on every
+    /// member, its record following the move.
+    #[tokio::test]
+    async fn a_session_moved_to_another_workspace_moves_on_every_member() {
+        let shop = repo_named("shop").await;
+        let path = shop.path().display().to_string();
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book.section_add_project(&mine.id, &path).await.unwrap();
+        let session = book
+            .create_session(SessionCreate { name: Some("Fix cart".into()), agent: Some("none".into()), cols: 80, rows: 24, ..SessionCreate::new(&p.id) })
+            .await
+            .unwrap();
+        let acme = book
+            .create_workspace(WorkspaceCreate { name: "Acme".into(), color: moonlet_proto::types::WorkspaceColor::Blue, move_sections: vec![], claude_profile: None })
+            .unwrap();
+        let client = book.create_section(&acme.id, "Client").unwrap();
+        book.section_add_project(&client.id, &path).await.unwrap();
+        sync(&book, &mini);
+
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: None, layout: None, task: None, workspace_id: Some(acme.id.clone()) })
+            .unwrap();
+        sync(&book, &mini);
+
+        assert_eq!(mini.session_records()[&session.id]["workspace"], serde_json::json!(acme.id));
+    }
+
     #[tokio::test]
     async fn another_members_word_on_who_owns_a_session_never_stops_its_owner_recording_it() {
         let (_h1, book) = member("book").await;
@@ -4109,6 +4137,7 @@ mod tests {
             name: Some("Renamed on the MacBook".into()),
             layout: None,
             task: None,
+            workspace_id: None,
         })
         .unwrap();
         sync(&book, &mini);
@@ -4191,6 +4220,7 @@ mod tests {
             name: Some("Renamed on the MacBook".into()),
             layout: None,
             task: None,
+            workspace_id: None,
         })
         .unwrap();
         sync(&book, &mini);
@@ -4234,6 +4264,7 @@ mod tests {
             name: Some("Renamed on the MacBook".into()),
             layout: None,
             task: None,
+            workspace_id: None,
         })
         .unwrap();
         sync(&book, &mini);
