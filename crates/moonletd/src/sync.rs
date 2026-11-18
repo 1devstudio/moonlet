@@ -4679,7 +4679,11 @@ fn leftovers_folder(root: &Path, name: &str) -> PathBuf {
 /// stopped in the same second never share one.
 pub(crate) fn make_leftovers_folder(root: &Path, name: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
-    let first = leftovers_folder(root, name);
+    make_numbered_folder(leftovers_folder(root, name))
+}
+
+/// Makes folder `first`, or `first-2`, `first-3`… when it is taken.
+fn make_numbered_folder(first: PathBuf) -> std::io::Result<PathBuf> {
     let mut folder = first.clone();
     let mut n = 2;
     loop {
@@ -4934,18 +4938,14 @@ mod tests {
 
     #[test]
     fn two_leftovers_folders_made_at_once_are_two() {
+        // Within one second, as the stamp in the name counts seconds.
         let root = tempfile::tempdir().unwrap();
-        let a = make_leftovers_folder(root.path(), "fix-cart").unwrap();
-        let b = make_leftovers_folder(root.path(), "fix-cart").unwrap();
-        assert_ne!(a, b);
+        let first = root.path().join("fix-cart-20261021-184500");
+        let a = make_numbered_folder(first.clone()).unwrap();
+        let b = make_numbered_folder(first).unwrap();
+        assert_eq!(a, root.path().join("fix-cart-20261021-184500"));
+        assert_eq!(b, root.path().join("fix-cart-20261021-184500-2"));
         assert!(a.is_dir() && b.is_dir());
-        let a_name = a.file_name().unwrap().to_string_lossy().to_string();
-        assert!(
-            b.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(&a_name)
-        );
     }
 
     #[test]

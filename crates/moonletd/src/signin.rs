@@ -822,16 +822,24 @@ srv.serve_forever()
         let got = String::from_utf8_lossy(&got.unwrap()).to_string();
         assert!(got.ends_with("You are now authenticated"), "{got:?}");
         // The browser goes back to [::1] on the Mac: the forward is there.
-        let free = std::net::TcpListener::bind("[::1]:0").unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
-        let pass: Pass = std::sync::Arc::new(|_| {
-            Box::pin(async { Ok(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()) })
-        });
-        Forwards::default()
-            .open(port, "3c9a5e71-0d2b-4f86-a1c4-9e7b2d5f8a03", pass)
-            .await
-            .unwrap();
+        // It binds 127.0.0.1 as well, which a port free on [::1] may not
+        // be: another port then, as a sign-in's own command picks one.
+        let forwards = Forwards::default();
+        let mut port = 0;
+        for _ in 0..20 {
+            let free = std::net::TcpListener::bind("[::1]:0").unwrap();
+            port = free.local_addr().unwrap().port();
+            drop(free);
+            let pass: Pass = std::sync::Arc::new(|_| {
+                Box::pin(async { Ok(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()) })
+            });
+            match forwards.open(port, "3c9a5e71-0d2b-4f86-a1c4-9e7b2d5f8a03", pass).await {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => port = 0,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_ne!(port, 0, "no port free on both loopbacks");
         let mut s = tokio::net::TcpStream::connect(("::1", port)).await.unwrap();
         s.write_all(b"GET /?code=4 HTTP/1.1\r\nHost: [::1]\r\n\r\n")
             .await

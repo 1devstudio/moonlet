@@ -6106,6 +6106,10 @@ async fn systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts
     let first: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme app", "color": "clay"})).await.unwrap();
     let second: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme site", "color": "clay"})).await.unwrap();
     drop(c);
+    // The old layout is written with the daemon stopped, as an older
+    // version left it: a running one moves design folders as it follows
+    // its workspaces.
+    d.stop();
     let design = d.home.path().join(".moonlet/design");
     for ws in [&first.id, &second.id] {
         let dir = design.join(ws).join("systems/acme-web");
@@ -6117,7 +6121,7 @@ async fn systems_kept_per_workspace_move_into_the_library_when_the_daemon_starts
     std::fs::create_dir_all(pricing.join("pages")).unwrap();
     std::fs::write(pricing.join("design.toml"), "name = \"Pricing\"\nsystem = \"acme-web\"\n").unwrap();
 
-    d.restart().await;
+    d.start_again().await;
 
     let mut c = d.client().await;
     let systems: Vec<serde_json::Value> = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": second.id})).await.unwrap();

@@ -875,6 +875,7 @@ async fn a_restarted_worker_resumes_its_copy() {
 
 #[tokio::test]
 async fn a_copy_not_made_yet_waits_after_a_restart_while_its_host_is_away() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let mut worker = worker(&origin(scratch.path())).await;
     // A central host nobody answers for.
@@ -1531,6 +1532,7 @@ async fn worker_of_fake(
 
 #[tokio::test]
 async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
+    let _gate = GATE.read().await;
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let gate = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1573,6 +1575,7 @@ async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
 
 #[tokio::test]
 async fn an_update_naming_no_object_id_is_refused() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let (_worker, reply) = worker_of_fake(scratch.path(), Update::BadId).await;
     let got = reply.lock().unwrap().clone().unwrap();
@@ -1638,6 +1641,7 @@ async fn worker_turned_away(
 
 #[tokio::test]
 async fn an_offer_the_central_host_turns_away_is_made_again_until_it_is_taken() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let (worker, copy, taken) = worker_turned_away(scratch.path(), 2).await;
     let c = PathBuf::from(&copy.path);
@@ -1661,6 +1665,7 @@ async fn an_offer_the_central_host_turns_away_is_made_again_until_it_is_taken() 
 
 #[tokio::test]
 async fn an_edit_made_while_an_update_waits_is_offered_not_overwritten() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(
@@ -2188,6 +2193,7 @@ enum OfferAnswer {
 
 #[tokio::test]
 async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_coming_back() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(
@@ -2236,6 +2242,7 @@ async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_
 
 #[tokio::test]
 async fn a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_branch() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(

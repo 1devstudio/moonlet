@@ -370,8 +370,10 @@ impl KeepAwake {
 fn log_line(path: &std::path::Path, line: &str) {
     use std::io::Write;
     let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
+    // One write: `writeln!` makes two, and a reader, or another daemon
+    // writing the same log, can come between them.
     if let Ok(mut f) = file {
-        let _ = writeln!(f, "{line}");
+        let _ = f.write_all(format!("{line}\n").as_bytes());
     }
 }
 

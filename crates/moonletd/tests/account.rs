@@ -863,7 +863,9 @@ async fn design_systems_follow_a_workspace_merged_on_another_member_and_on_start
     assert!(!mini.home.path().join("design").join(&minis).exists());
 
     // A system left under the merged id, as v0.1.33's merges left them,
-    // moves when the daemon starts.
+    // moves when the daemon starts. Written with it stopped: a running one
+    // moves the merged id's folders away as it follows the merge.
+    mini.stop();
     let left = mini.home.path().join("design").join(&minis).join("systems/billing");
     std::fs::create_dir_all(&left).unwrap();
     std::fs::write(left.join("config.toml"), "name = \"Billing\"\ncreated_at = 1\n").unwrap();
@@ -1125,7 +1127,9 @@ async fn a_central_host_that_lost_its_design_store_gets_every_tree_again_when_th
         systems(&mini, &books).await == ["acme-web"]
     })
     .await;
-    // studio-mini loses its design folder, store and copy alike.
+    // studio-mini loses its design folder, store and copy alike, while it
+    // is stopped: a running one keeps writing its store.
+    mini.stop();
     std::fs::remove_dir_all(mini.home.path().join("design")).unwrap();
     mini.restart().await;
     listening_again(&mini, &addr).await;

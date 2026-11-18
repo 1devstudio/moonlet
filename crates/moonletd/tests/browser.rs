@@ -426,16 +426,21 @@ async fn linked_book_one_along(central: &Daemon, addr: &str) -> Daemon {
 
 /// Two free ports in a row, below the range the system hands out to
 /// other tests' listeners, so none of those takes the second meanwhile.
+/// Each test of this file gets its own pair, and a run in another
+/// checkout starts elsewhere; free means free on both loopbacks, as a
+/// sign-in's forward binds both.
 fn two_free_ports() -> u16 {
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    for n in 0..5000u32 {
-        let port = 20_000 + ((seed / 7 + n * 2) % 9_998) as u16;
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-            && std::net::TcpListener::bind(("127.0.0.1", port + 1)).is_ok()
-        {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let free = |port: u16| {
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+            && std::net::TcpListener::bind(("::1", port))
+                .map_or_else(|e| e.kind() != std::io::ErrorKind::AddrInUse, |_| true)
+    };
+    let start = std::process::id().wrapping_mul(2_654_435_761) % 4_999;
+    for _ in 0..5000u32 {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let port = 20_000 + (((start + n) % 4_999) * 2) as u16;
+        if free(port) && free(port + 1) {
             return port;
         }
     }

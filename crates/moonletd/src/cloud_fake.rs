@@ -315,12 +315,22 @@ impl Provider for Fake {
     }
 
     async fn destroy(&self, id: &str) -> Result<(), CloudError> {
-        if let Some(n) = self
-            .steer("fail-destroy")
-            .and_then(|v| v.parse::<u32>().ok())
-            && n > 0
-        {
-            let _ = std::fs::write(self.dir.join("fail-destroy"), (n - 1).to_string());
+        // One destroy at a time takes a failure, and the count is replaced
+        // whole: never read half written, by another destroy or a test.
+        let failing = {
+            static COUNT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _one = COUNT.lock().unwrap();
+            match self.steer("fail-destroy").and_then(|v| v.parse::<u32>().ok()) {
+                Some(n) if n > 0 => {
+                    let tmp = self.dir.join(".fail-destroy.tmp");
+                    let _ = std::fs::write(&tmp, (n - 1).to_string())
+                        .and_then(|()| std::fs::rename(&tmp, self.dir.join("fail-destroy")));
+                    true
+                }
+                _ => false,
+            }
+        };
+        if failing {
             return Err(CloudError::Provider("503 Service Unavailable".into()));
         }
         let dir = self.machine(id);
