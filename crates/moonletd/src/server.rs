@@ -125,6 +125,9 @@ pub struct Conn {
     next_transfer: AtomicU32,
     /// Set once the connection has ended.
     gone: std::sync::atomic::AtomicBool,
+    /// When the client last sent a frame (ms): a link that carries frames
+    /// is busy, not silent, though a ping's answer is late (X73).
+    heard: AtomicU64,
     /// A cloud machine's connection (X63).
     pub cloud: std::sync::atomic::AtomicBool,
     /// A member's worker link: decided when it authenticated with its
@@ -162,6 +165,7 @@ impl Conn {
             packs: Mutex::new(PackAssembler::default()),
             next_transfer: AtomicU32::new(1),
             gone: std::sync::atomic::AtomicBool::new(true),
+            heard: AtomicU64::new(0),
             cloud: std::sync::atomic::AtomicBool::new(false),
             worker_link: false,
             routed_phone: false,
@@ -243,6 +247,11 @@ impl Conn {
     /// The pack the client sent as `transfer`, once it is whole; once.
     pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
         self.packs.lock().unwrap().take(transfer)
+    }
+
+    /// When the client last sent a frame (ms since the epoch, X73).
+    pub fn heard_at(&self) -> u64 {
+        self.heard.load(Ordering::Relaxed)
     }
 
     /// The connection has ended.
@@ -368,6 +377,7 @@ where
         packs: Mutex::new(PackAssembler::default()),
         next_transfer: AtomicU32::new(1),
         gone: std::sync::atomic::AtomicBool::new(false),
+        heard: AtomicU64::new(moonlet_core::paths::now_ms()),
         cloud: std::sync::atomic::AtomicBool::new(false),
         worker_link,
         routed_phone,
@@ -478,6 +488,7 @@ where
                 },
                 _ = conn.closed.notified() => break,
             };
+            conn.heard.store(moonlet_core::paths::now_ms(), Ordering::Relaxed);
             match frame {
                 Frame::Input { terminal, data } => {
                     // A terminal of another member this client follows

@@ -4500,9 +4500,13 @@ impl Daemon {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
         // Checked again with no wait before the record changes: a member
-        // that linked again, or said it is awake, meanwhile keeps it (X73).
+        // that linked again, or said it is awake, meanwhile keeps it. One
+        // asleep stays so until the record names this host: its word that
+        // it is back waits for that, so the account it asks for next says
+        // the session moved (X73).
         let owner = text("owner").unwrap_or_default();
-        if only_unreachable && self.workers.conn(&owner).is_some() && !self.workers.asleep(&owner) {
+        let _asleep = if only_unreachable { self.workers.hold_asleep(&owner) } else { None };
+        if only_unreachable && self.workers.conn(&owner).is_some() && _asleep.is_none() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
         let adopted = self
@@ -4988,8 +4992,10 @@ impl Daemon {
                 // wake, up to 5 s: never the link's state or records from
                 // before the sleep, when it may have taken a session. What
                 // it gave another member is let go of, not woken. With no
-                // answer, the agents go on, as offline work does (ADR 0014).
-                let heard = self.link.sync_now(std::time::Duration::from_secs(5)).await;
+                // answer, the agents go on, as offline work does (ADR 0014),
+                // but not before the central host, which heard this Mac
+                // was going to sleep, would have waited 30 s (X73).
+                let heard = self.link.sync_now(self.link.wake_wait()).await;
                 if !heard {
                     tracing::info!("no word from the central host after the wake; agents go on by this Mac's records");
                 }

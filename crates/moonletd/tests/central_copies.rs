@@ -2660,6 +2660,75 @@ async fn with_no_sleep_notice_the_30_s_wait_holds(mini_extra: &[(&str, &str)], b
 }
 
 #[tokio::test]
+async fn continue_on_the_central_host_takes_an_idle_session_at_once_after_the_macs_sleep_notice() {
+    let origin = Origin::new();
+    let (mini, book, network, made, _agent) = idle_session_through_a_network(&origin, &[], &[]).await;
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+    network.cut(true);
+    within(Duration::from_secs(10), "the MacBook listed asleep", || async {
+        listed_owner(&mini, &made).await["asleep"] == json!(true)
+    })
+    .await;
+
+    let continued = mini
+        .try_call("session.continue_here", json!({ "session": made["id"] }))
+        .await
+        .unwrap();
+    assert_eq!(continued["id"], made["id"], "{continued}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "studio-mini runs it now");
+}
+
+#[tokio::test]
+async fn a_mac_removed_while_it_said_it_sleeps_is_no_longer_listed_asleep() {
+    let origin = Origin::new();
+    let (mini, book, network, made, agent) = idle_session_through_a_network(&origin, &[], &[]).await;
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+    network.cut(true);
+    within(Duration::from_secs(10), "the MacBook listed asleep", || async {
+        listed_owner(&mini, &made).await["asleep"] == json!(true)
+    })
+    .await;
+
+    // The user removes the MacBook in studio-mini's settings.
+    let status: Value = mini.call("mobile.status", json!({})).await;
+    for d in status["devices"].as_array().unwrap() {
+        if d["name"].as_str().is_some_and(|n| n.contains("MacBook")) {
+            let _: Value = mini.call("mobile.revoke", json!({ "id": d["id"] })).await;
+        }
+    }
+    let owner = listed_owner(&mini, &made).await;
+    assert!(owner.get("asleep").is_none(), "{owner}");
+    let refused = forward(&mini, &made, "chat.send", json!({ "id": agent, "text": "Again" }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("not_yet"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_mac_that_wakes_away_from_the_central_host_soon_after_its_notice_keeps_its_agents_stopped_for_the_30_s() {
+    let origin = Origin::new();
+    // The central host's wait as the MacBook knows it: 8 s here.
+    let (_mini, book, network, _made, agent) =
+        idle_session_through_a_network(&origin, &[], &[("MOONLET_TEST_UNREACHABLE_MS", "8000")]).await;
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+    let slept = std::time::Instant::now();
+    network.cut(true);
+
+    // The lid opens at once, away from studio-mini: the agents stay
+    // stopped while studio-mini may still take the session over, as long
+    // as it would have waited without the notice, not the wake's 5 s.
+    let _: Value = book.call("power.simulate", json!({ "event": "wake" })).await;
+    assert!(slept.elapsed() >= Duration::from_millis(7500), "agents went on after {:?}", slept.elapsed());
+    // Then they go on, as offline work does.
+    let _: Value = book.call("chat.send", json!({ "id": agent, "text": "Offline" })).await;
+    within(Duration::from_secs(30), "a turn after waking", || async {
+        agent_log(&book, "claude-user").contains("Offline")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_mac_from_before_says_nothing_at_sleep_and_the_30_s_wait_holds() {
     with_no_sleep_notice_the_30_s_wait_holds(&[], &[("MOONLET_TEST_BEFORE_SLEEP_NOTICE", "1")]).await;
 }

@@ -316,8 +316,12 @@ impl Workers {
     /// sleep and does not answer is asleep from then on.
     pub async fn answers(&self, id: &str, conn: &Conn) -> bool {
         let wait = self.ping_every.clamp(Duration::from_secs(1), Duration::from_secs(3));
+        let sent = now_ms();
         let answered = conn.request(m::WORKER_PING, serde_json::json!({}), wait).await.is_ok();
-        if self.current(id, conn.id) {
+        // A ping late behind a frame the worker was sending meanwhile, as
+        // a pack in its sleep's hold, says nothing of its sleep.
+        let busy = !answered && conn.heard_at() >= sent;
+        if self.current(id, conn.id) && !busy {
             self.hear(id, Heard::Ping { answered });
         }
         answered
@@ -362,8 +366,18 @@ impl Workers {
     /// wait; one that still answers is in the middle of its sleep's hold,
     /// or did not sleep, and is reachable.
     pub fn asleep(&self, id: &str) -> bool {
+        self.hold_asleep(id).is_some()
+    }
+
+    /// Holds what this host knows of worker `id`'s sleep while it is
+    /// [`Self::asleep`], so nothing heard of it changes that until the
+    /// hold is dropped (X73): a session taken over under it has its new
+    /// owner recorded before the waking worker's word is answered, and so
+    /// before the worker asks who owns it. None while it is not asleep.
+    pub fn hold_asleep(&self, id: &str) -> Option<std::sync::MutexGuard<'_, HashMap<String, Sleep>>> {
+        let sleeping = self.sleeping.lock().unwrap();
         let linked = self.list.lock().unwrap().contains_key(id);
-        self.sleeping.lock().unwrap().get(id).is_some_and(|m| m.silent || !linked)
+        sleeping.get(id).is_some_and(|m| m.silent || !linked).then_some(sleeping)
     }
 
     /// [`Self::asleep`], after a ping to a worker that said it is going to
@@ -458,8 +472,12 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
             Err(e) => {
                 missed += 1;
                 // One ping missed can be a busy link, as in the middle of
-                // a sleep's hold; two in a row are a silent one (X73).
+                // a sleep's hold, and so can one missed behind a frame the
+                // worker was sending meanwhile; two in a row with nothing
+                // heard are a silent one (X73).
+                let sent_ms = now_ms().saturating_sub(sent.elapsed().as_millis() as u64);
                 if missed >= 2
+                    && conn.heard_at() < sent_ms
                     && let Some(w) = workers.upgrade()
                     && w.current(&id, conn.id)
                 {
