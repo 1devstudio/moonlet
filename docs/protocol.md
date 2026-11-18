@@ -6,7 +6,7 @@
 
 - **Local:** Unix socket at `~/.moonlet/run/moonletd.sock`. The directory is `0700` and the socket is `0600`. The daemon also checks that the peer's uid matches its own.
 - **Remote:** `ssh <host> ~/.moonlet/bin/moonletd proxy` bridges stdio to the remote daemon's socket and starts that daemon if it is not running. The daemon outlives the SSH connection.
-- **Tailnet (X39, X57):** TCP port 47428 on the host's Tailscale addresses only, as its local Tailscale reports them, while tailnet access is on. Paired phones and Macs connect here; a connection from an address that is not a device of the tailnet is closed before anything is read. The first frame must be `auth`, at most 64 KiB; see Messages. At most 32 connections wait for their `auth` at once.
+- **Tailnet (X39, X57):** TCP port 47428 on the host's Tailscale addresses only, as its local Tailscale reports them, while tailnet access is on. Paired phones and Macs connect here; a connection from an address that the daemon's last `tailscale status` answer does not list for a device of the tailnet is closed before anything is read (an unknown address makes it ask again, at most every 2 s). The first frame must be `auth`, at most 64 KiB; see Messages. At most 32 connections wait for their `auth` at once.
 
 ## Framing
 

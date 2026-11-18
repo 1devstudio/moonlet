@@ -3029,6 +3029,8 @@ pub struct MobileStatus {
     pub enabled: bool,
     pub port: u16,
     /// Tailscale runs and reports an address this machine's interfaces have.
+    /// Also true while access is on and Tailscale has not been asked yet,
+    /// with nothing listening, which Settings shows as "Starting…".
     pub tailscale: bool,
     /// No `tailscale` command was found to ask (X39): Settings says that
     /// instead of "not running".

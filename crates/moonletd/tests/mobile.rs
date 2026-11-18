@@ -653,12 +653,12 @@ async fn bad_auth_is_refused_without_saying_why() {
 /// which starts as `status`. Returns its path.
 fn fake_tailscale(dir: &Path, status: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
-    let json = dir.join("status.json");
-    std::fs::write(&json, status).unwrap();
+    std::fs::write(dir.join("status.json"), status).unwrap();
     let path = dir.join("tailscale");
+    // The status file sits beside the stub, so no path needs quoting.
     std::fs::write(
         &path,
-        format!("#!/bin/sh\n[ \"$1 $2\" = \"status --json\" ] || exit 2\ncat '{}'\n", json.display()),
+        "#!/bin/sh\n[ \"$1 $2\" = \"status --json\" ] || exit 2\ncat \"$(dirname \"$0\")/status.json\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -737,11 +737,21 @@ async fn a_device_that_joins_the_tailnet_later_is_let_in_without_a_restart() {
     assert_eq!(mac.pair(&addr).await.len(), 64);
 }
 
-/// Waits a little for the listener, then returns the status.
-async fn status_after_a_while(mac: &Mac) -> MobileStatus {
+/// Turns access on and returns the status once Tailscale was asked (it
+/// says "Starting…" until then), within 10 seconds.
+async fn status_once_asked(mac: &Mac) -> MobileStatus {
     let mut app = mac.app().await;
     let _: MobileStatus = app.request("mobile.set_enabled", json!({ "enabled": true })).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let mut st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+    for _ in 0..200 {
+        if !st.tailscale || !st.listening.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        st = app.request("mobile.status", json!({})).await.unwrap();
+    }
+    // Nothing binds later either.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     app.request("mobile.status", json!({})).await.unwrap()
 }
 
@@ -751,14 +761,14 @@ async fn without_tailscale_running_nothing_listens() {
     let stopped = running("100.101.102.103", &["100.88.1.20"]).replace(r#""Running""#, r#""Stopped""#);
     let tailscale = fake_tailscale(dir.path(), &stopped);
     let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", &tailscale)]).await;
-    let st = status_after_a_while(&mac).await;
+    let st = status_once_asked(&mac).await;
     assert_eq!((st.tailscale, st.tailscale_missing, st.listening.len()), (false, false, 0), "{st:?}");
 }
 
 #[tokio::test]
 async fn without_the_tailscale_command_nothing_listens_and_settings_says_so() {
     let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", "/nonexistent/tailscale")]).await;
-    let st = status_after_a_while(&mac).await;
+    let st = status_once_asked(&mac).await;
     assert_eq!((st.tailscale, st.tailscale_missing, st.listening.len()), (false, true, 0), "{st:?}");
 }
 
@@ -772,7 +782,7 @@ async fn only_an_address_tailscale_reports_is_listened_on() {
     let dir = tempfile::tempdir().unwrap();
     let tailscale = fake_tailscale(dir.path(), &running("100.100.99.1", &[]));
     let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", &tailscale)]).await;
-    let st = status_after_a_while(&mac).await;
+    let st = status_once_asked(&mac).await;
     assert_eq!((st.tailscale, st.listening.len()), (false, 0), "{st:?}");
 }
 
@@ -782,9 +792,9 @@ async fn a_large_frame_before_auth_is_refused_at_once() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
     let mut s = TcpStream::connect(&addr).await.unwrap();
-    // A header announcing 1 MiB, the start of a body, and nothing more.
-    s.write_all(&[0, 0x10, 0, 0, 1, b'{']).await.unwrap();
-    assert!(closed_within(&mut s, Duration::from_secs(3)).await, "the daemon waited for a 1 MiB auth frame");
+    // A header announcing one byte over 64 KiB, and no body.
+    s.write_all(&[0, 1, 0, 1]).await.unwrap();
+    assert!(closed_within(&mut s, Duration::from_secs(3)).await, "the daemon waited for a 65 537-byte auth frame");
     // An auth of a normal size still works.
     assert_eq!(mac.pair(&addr).await.len(), 64);
 }
@@ -801,6 +811,10 @@ async fn only_32_connections_wait_for_auth_at_once() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mut extra = TcpStream::connect(&addr).await.unwrap();
     assert!(closed_within(&mut extra, Duration::from_secs(3)).await, "a 33rd connection waited for auth");
+    // The first 32 still wait.
+    for (i, s) in waiting.iter_mut().enumerate() {
+        assert!(!closed_within(s, Duration::from_millis(20)).await, "connection {i} was closed");
+    }
     drop(waiting);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(mac.pair(&addr).await.len(), 64);

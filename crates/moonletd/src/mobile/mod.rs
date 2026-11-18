@@ -105,7 +105,13 @@ fn tailscale_program() -> Option<PathBuf> {
     if let Some(stub) = std::env::var_os("MOONLET_TAILSCALE") {
         return Some(stub.into());
     }
-    find_tailscale(std::env::var_os("PATH").as_deref(), |p| p.is_file())
+    find_tailscale(std::env::var_os("PATH").as_deref(), runnable)
+}
+
+/// A file this user may run: one without the execute bits hides no later one.
+fn runnable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 /// How long `tailscale status --json` may take.
@@ -576,6 +582,8 @@ impl Mobile {
             }
         }
         if self.ask_locked().await {
+            // The listener binds what Tailscale now reports.
+            self.kick.notify_one();
             self.changed();
         }
         known(&self.seen.lock().unwrap())
@@ -691,7 +699,7 @@ impl Mobile {
             let mut data = self.data.lock().unwrap();
             if enabled && !data.enabled {
                 // What Tailscale said before is old news.
-                self.seen.lock().unwrap().asked = false;
+                *self.seen.lock().unwrap() = Seen::default();
             }
             data.enabled = enabled;
             self.save(&data);

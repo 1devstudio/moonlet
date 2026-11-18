@@ -462,9 +462,16 @@ mod tests {
         // before anything else is read or allocated.
         let mut big: &[u8] = &[0, 1, 0, 1];
         assert!(matches!(read_frame_max(&mut big, 64 * 1024).await, Err(ProtoError::TooLarge(65537))));
-        // A frame within it reads as usual.
-        let bytes = encode_frame(&Frame::Json(Message::Request { id: 1, method: "auth".into(), params: json!({}) })).unwrap();
-        let mut small: &[u8] = &bytes;
-        assert!(matches!(read_frame_max(&mut small, 64 * 1024).await, Ok(Some(Frame::Json(_)))));
+        // A frame within it reads as usual: a JSON frame (kind 1).
+        let json = br#"{"t":"request","id":7,"method":"x.y","params":{"a":1}}"#;
+        let mut wire = vec![0, 0, 0, (json.len() + 1) as u8, 1];
+        wire.extend_from_slice(json);
+        let mut small: &[u8] = &wire;
+        match read_frame_max(&mut small, 64 * 1024).await {
+            Ok(Some(Frame::Json(Message::Request { id, method, params }))) => {
+                assert_eq!((id, method.as_str(), params), (7, "x.y", json!({ "a": 1 })));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
