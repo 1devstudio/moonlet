@@ -63,3 +63,16 @@ A paired desktop, like a phone, cannot manage the remote's devices, so it cannot
   1. a desktop pairs with a remote host over the tailnet, and the phone's dial-and-auth code moves into `moonlet-link` for both apps ([X57](../specs/X57-tailnet-hosts.md));
   2. the Linux install script and its release assets ([X58](../specs/X58-linux-install-script.md));
   3. X41 on the tailnet connection, then the rest of ADR 0009.
+
+## Open items
+
+### Who answers at the listener (2026-11-18)
+
+Since 2026-11-18 the daemon binds its listener only on the addresses its local Tailscale reports, and lets in only the addresses Tailscale lists for this tailnet's devices ([X39](../specs/X39-phone-pairing-and-link.md), "Listener"). A client still trusts the address it was given: it dials the host's `ip:port`, and its first frame carries its device token to whoever answers there. Clients dial only Tailscale addresses (or loopback for a pasted link), so this rests on the address belonging to the paired host.
+
+**Planned:** the host proves that it is the paired host before the client sends its token, with nothing new to keep and no pairing again.
+
+- The host already stores the SHA-256 of each device token, and the client holds the token, so both can compute that hash. The client opens with a challenge, its device id and a random nonce; the host answers with a keyed hash of both sides' nonces under the token's hash, and its own nonce. The client checks it and only then sends the token, as today. A host that cannot answer never sees the token.
+- **Compatibility.** A host from before answers the challenge as any other non-`auth` first frame, with `unauthorized`, and closes. A newer client then connects the old way, so a newer client with an older host, and an older client with a newer host, still connect, without that protection. To keep a downgrade from undoing it, the client records per host that it once answered the challenge (`app-hosts.json`, `link.json`, the phone's store) and from then on refuses a host that does not.
+- **Scope.** It changes the first exchange of `moonlet-link` (desktop and worker link) and of the phone app, and what each keeps per host. That is a protocol change larger than the listener fix, so it is its own slice, with its own spec criteria and tests in `crates/moonlet-link/tests/tailnet.rs` and `crates/moonletd/tests/mobile.rs`.
+- **Pairing** sends a one-time code, not a token: one use, 5 minutes, 5 wrong attempts. Tying the code to the host (for example the host's answer proving it knows the code before the client takes the token) can follow in the same slice.
