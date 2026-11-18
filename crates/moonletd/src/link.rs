@@ -442,6 +442,12 @@ pub struct WorkerLink {
     /// Why the account does not sync with the central host now (X68):
     /// `too_large` once an exchange could not fit one message.
     not_syncing: Mutex<Option<String>>,
+    /// The link whose first account exchange is done: until then an item
+    /// this member owned may have moved while it was away, and only the
+    /// exchange says (X71).
+    in_step: Mutex<Weak<Host>>,
+    /// Told once a link's first account exchange is done.
+    on_in_step: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// The copies this Mac keeps, which the link serves (X60).
     sync: std::sync::OnceLock<Weak<crate::sync::LiveCopies>>,
     /// Routed commands this machine runs for its central host (X62).
@@ -481,6 +487,8 @@ impl WorkerLink {
             account_loop: AtomicU64::new(0),
             clocks: Mutex::new(Clocks::default()),
             not_syncing: Mutex::new(None),
+            in_step: Mutex::new(Weak::new()),
+            on_in_step: std::sync::OnceLock::new(),
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
@@ -1126,7 +1134,10 @@ impl WorkerLink {
             let synced = self.sync_account(&host, !checked).await;
             checked |= synced.is_ok();
             match synced {
-                Ok(()) => self.set_not_syncing(None),
+                Ok(()) => {
+                    self.set_not_syncing(None);
+                    self.in_step_on(&host);
+                }
                 // A central host from before X68, or one whose account
                 // could not be read, has none to share; one that takes this
                 // machine for no member shares none with it.
@@ -1134,6 +1145,7 @@ impl WorkerLink {
                     tracing::info!("the central host shares no account: {}", e.message);
                     // Nor does it say anything of the account's size now.
                     self.set_not_syncing(None);
+                    self.in_step_on(&host);
                     return;
                 }
                 // What it would send does not fit one message: a central
@@ -1143,6 +1155,7 @@ impl WorkerLink {
                 Err(e) if e.code == "too_large" => {
                     tracing::warn!("the account does not sync with the central host until it links again: {}", e.message);
                     self.set_not_syncing(Some("too_large"));
+                    self.in_step_on(&host);
                     return;
                 }
                 Err(e) => tracing::warn!("cannot sync the account: {}", e.message),
@@ -1159,6 +1172,32 @@ impl WorkerLink {
 
     /// Whether `host` is still this link's connection: a reply from a
     /// former central host is not taken in.
+    /// Whether this member's account is in step with its central host's
+    /// for the link it has now: its first exchange on that link is done.
+    /// With no central host set there is nothing to wait for.
+    pub fn account_in_step(&self) -> bool {
+        let Some(host) = self.host.lock().unwrap().clone() else { return true };
+        self.in_step.lock().unwrap().upgrade().is_some_and(|h| Arc::ptr_eq(&h, &host))
+    }
+
+    /// Calls `f` each time a link's first account exchange is done.
+    pub fn on_account_in_step(&self, f: impl Fn() + Send + Sync + 'static) {
+        let _ = self.on_in_step.set(Box::new(f));
+    }
+
+    /// The first exchange on `host` is done, or there is none to make.
+    fn in_step_on(&self, host: &Arc<Host>) {
+        if !self.is_current(host) {
+            return;
+        }
+        let was = std::mem::replace(&mut *self.in_step.lock().unwrap(), Arc::downgrade(host));
+        if !was.upgrade().is_some_and(|h| Arc::ptr_eq(&h, host))
+            && let Some(f) = self.on_in_step.get()
+        {
+            f();
+        }
+    }
+
     fn is_current(&self, host: &Arc<Host>) -> bool {
         self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, host))
     }

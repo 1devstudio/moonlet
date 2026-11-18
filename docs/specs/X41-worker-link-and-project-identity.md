@@ -93,7 +93,7 @@ Added 2026-11-17, after a security audit: the link used to authenticate with the
 - [x] The central host sends `worker.ping` over each worker's connection every 10 s. This is the first request that goes from the central host to a worker. `rtt_ms` is the last round trip in milliseconds. (`a_linked_worker_is_listed_on_the_central_host_with_its_projects`, `the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`)
 - [x] Requests from the central host to a worker are numbered from 1. Id 0 stays reserved for an error that ends the link, which `moonlet-link` reports as the host's failure. (`the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices`, `a_request_from_the_daemon_gets_the_handlers_answer_with_the_same_id`)
 - [x] A worker that misses 3 pings in a row is disconnected and removed from `worker.list`, about 30 s after it stops answering. A sleeping laptop does not close its connection, so the pings are what notice a closed lid. (`a_worker_that_stops_answering_pings_is_dropped`)
-- [x] A worker whose connection closes is removed from `worker.list` at once. (`turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
+- [x] A worker whose connection closes is removed from `worker.list` at once. A `worker.register` that arrives as its connection closes is refused, so no worker stays listed on a connection that is gone until its pings fail (2026-11-18; `a_worker_registering_on_a_connection_that_closed_is_not_listed`). (`turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
 
 ### Project identity
 

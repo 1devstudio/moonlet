@@ -228,7 +228,7 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
 
 ### Output, exit status, cancelling
 
-- [x] The first stderr line is "moonlet: running on Alex's MacBook Pro". The command's stdout and stderr then stream to `moonlet exec`'s stdout and stderr, each in order, with no TTY, as Claude Code's Bash tool runs commands.
+- [x] The first stderr line is "moonlet: running on Alex's MacBook Pro", also when the command printed before the worker answered its start: the worker starts it before it answers, so the central host says where the command runs with whichever comes first: the worker's answer, the command's first output, or its end (2026-11-18; until then that output could come first, on a loaded machine; `running_on_comes_before_what_the_command_printed_before_its_start_was_answered`, with `MOONLET_TEST_EXEC_START_REPLY_MS` delaying the worker's answer). The command's stdout and stderr then stream to `moonlet exec`'s stdout and stderr, each in order, with no TTY, as Claude Code's Bash tool runs commands.
 - [x] The exit status is the command's own. A command ended by signal N gives 128 + N.
 - [x] stdin is `/dev/null`.
 - [x] The command runs with the worker's login environment, plus `MOONLET_ROUTED=1`, `MOONLET_SESSION` and the variables named in `[heavy] env`, taken from `moonlet exec`'s environment. No other variable crosses machines.

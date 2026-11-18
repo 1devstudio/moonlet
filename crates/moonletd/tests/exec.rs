@@ -1213,6 +1213,21 @@ async fn approve_on(c: &Central, mac: &Daemon) {
         .await;
 }
 
+/// The worker starts the command before it answers the start: whatever
+/// the command prints by then still comes after "running on".
+#[tokio::test]
+async fn running_on_comes_before_what_the_command_printed_before_its_start_was_answered() {
+    let (c, _mac) = linked_as(&[("MOONLET_TEST_EXEC_START_REPLY_MS", "1500")]).await;
+    assert_eq!(
+        c.run(&["sh", "run.sh", "3"]).await,
+        Ran {
+            stdout: "out\n".into(),
+            stderr: "moonlet: running on Alex's MacBook Pro\nerr\n".into(),
+            status: 3,
+        }
+    );
+}
+
 #[tokio::test]
 async fn a_routing_copy_lives_under_runs_and_not_in_sync_list() {
     let (c, mac) = linked().await;

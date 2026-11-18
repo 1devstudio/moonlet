@@ -701,6 +701,11 @@ impl Mobile {
         }
     }
 
+    /// Whether tailnet access is on.
+    pub fn is_enabled(&self) -> bool {
+        self.data.lock().unwrap().enabled
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
         {
             let mut data = self.data.lock().unwrap();

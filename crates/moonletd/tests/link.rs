@@ -188,10 +188,9 @@ async fn a_linked_worker_is_listed_on_the_central_host_with_its_projects() {
             break;
         }
     }
-    let got: LinkInfo = worker.call("link.get", json!({})).await;
-    assert!(matches!(got.state, LinkState::Connected { .. }), "{got:?}");
-    assert_eq!(got.central.unwrap().name, "studio-mini");
-
+    // The first connection, on the paired token, trades it for the
+    // link's own and connects again (X41): listed with a round trip, the
+    // worker is on the connection that stays.
     eventually("the worker is listed with a round trip", || async {
         workers(&central)
             .await
@@ -199,6 +198,9 @@ async fn a_linked_worker_is_listed_on_the_central_host_with_its_projects() {
             .is_some_and(|w| w.rtt_ms.is_some())
     })
     .await;
+    let got: LinkInfo = worker.call("link.get", json!({})).await;
+    assert!(matches!(got.state, LinkState::Connected { .. }), "{got:?}");
+    assert_eq!(got.central.unwrap().name, "studio-mini");
     let list: Value = central.call("worker.list", json!({})).await;
     assert!(!list.to_string().contains("token"), "{list}");
     let w = &serde_json::from_value::<Vec<WorkerInfo>>(list).unwrap()[0];
@@ -316,11 +318,13 @@ async fn turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_h
     );
 
     link(&worker, &addr, &token).await;
-    eventually("the worker is back", || async {
-        workers(&central).await.len() == 1
+    // Set again with the app's token, the link trades it for its own
+    // again, and is back on that.
+    eventually("the worker is back on a token of its own", || async {
+        link_token(&worker) != token
+            && workers(&central).await.first().is_some_and(|w| w.rtt_ms.is_some())
     })
     .await;
-    // Set again with the app's token, the link traded it for its own again.
     assert_ne!(link_token(&worker), token);
 
     central.restart().await;

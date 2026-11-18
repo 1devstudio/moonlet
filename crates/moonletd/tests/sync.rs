@@ -875,6 +875,7 @@ async fn a_restarted_worker_resumes_its_copy() {
 
 #[tokio::test]
 async fn a_copy_not_made_yet_waits_after_a_restart_while_its_host_is_away() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let mut worker = worker(&origin(scratch.path())).await;
     // A central host nobody answers for.
@@ -1531,6 +1532,7 @@ async fn worker_of_fake(
 
 #[tokio::test]
 async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
+    let _gate = GATE.read().await;
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let gate = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1573,6 +1575,7 @@ async fn an_update_that_fails_leaves_the_copy_as_it_was_not_syncing() {
 
 #[tokio::test]
 async fn an_update_naming_no_object_id_is_refused() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let (_worker, reply) = worker_of_fake(scratch.path(), Update::BadId).await;
     let got = reply.lock().unwrap().clone().unwrap();
@@ -1638,6 +1641,7 @@ async fn worker_turned_away(
 
 #[tokio::test]
 async fn an_offer_the_central_host_turns_away_is_made_again_until_it_is_taken() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let (worker, copy, taken) = worker_turned_away(scratch.path(), 2).await;
     let c = PathBuf::from(&copy.path);
@@ -1661,6 +1665,7 @@ async fn an_offer_the_central_host_turns_away_is_made_again_until_it_is_taken() 
 
 #[tokio::test]
 async fn an_edit_made_while_an_update_waits_is_offered_not_overwritten() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(
@@ -2188,6 +2193,7 @@ enum OfferAnswer {
 
 #[tokio::test]
 async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_coming_back() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(
@@ -2236,6 +2242,7 @@ async fn a_pause_for_another_reason_outlasts_the_session_leaving_its_branch_and_
 
 #[tokio::test]
 async fn a_pause_for_another_reason_outlasts_the_session_coming_back_to_its_branch() {
+    let _gate = GATE.read().await;
     let scratch = tempfile::tempdir().unwrap();
     let origin = origin(scratch.path());
     git(
@@ -3748,6 +3755,30 @@ async fn sessions_made_while_the_link_was_down_get_copies_once_it_is_back_unless
     keeps(&worker, &[&second]).await;
     tokio::time::sleep(Duration::from_secs(4)).await;
     keeps(&worker, &[&second]).await;
+}
+
+/// A Mac's link that connected just before tailnet access was turned off
+/// and says who it is after: it gets no `unauthorized`, which the link
+/// takes as a refusal it never tries again, so it would stay off once
+/// access is back. The connection closes, as all of them do.
+#[tokio::test]
+async fn a_link_connecting_as_tailnet_access_turns_off_is_closed_not_refused() {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    let central = central().await;
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
+    let token = moonlet_link::tailnet::pair(&[central.addr.clone()], &p.code, "Alex's MacBook Pro", DeviceKind::Desktop)
+        .await
+        .unwrap()
+        .token;
+    let mut s = tokio::net::TcpStream::connect(&central.addr).await.unwrap();
+    // Taken in by the listener before access goes off.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    link_off(&central).await;
+    let auth = Message::Auth { token: Some(token), pair: None, device: None, route: None, kind: None };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    // Closed, with nothing sent back.
+    let got = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.unwrap();
+    assert!(matches!(got, Ok(None) | Err(_)), "{got:?}");
 }
 
 #[tokio::test]

@@ -234,14 +234,19 @@ async fn worker_settings_set_on_the_central_host_reach_the_host_they_name() {
         || async { own(&mini).await == (true, 2) },
     )
     .await;
-    assert_eq!(
-        settings(&air).await,
-        vec![
-            row(AIR, "Alex's MacBook Air", true, 4),
-            row(BOOK, "Alex's MacBook Pro", false, 2),
-            row(MINI, "studio-mini", true, 2),
-        ]
-    );
+    // studio-mini's own switch reaches the Air through the account, after
+    // studio-mini took it.
+    let want = vec![
+        row(AIR, "Alex's MacBook Air", true, 4),
+        row(BOOK, "Alex's MacBook Pro", false, 2),
+        row(MINI, "studio-mini", true, 2),
+    ];
+    within(
+        Duration::from_secs(10),
+        "the Air hears studio-mini's switch",
+        || async { settings(&air).await == want },
+    )
+    .await;
 }
 
 #[tokio::test]

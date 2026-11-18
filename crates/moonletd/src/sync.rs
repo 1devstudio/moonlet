@@ -4934,18 +4934,22 @@ mod tests {
 
     #[test]
     fn two_leftovers_folders_made_at_once_are_two() {
-        let root = tempfile::tempdir().unwrap();
-        let a = make_leftovers_folder(root.path(), "fix-cart").unwrap();
-        let b = make_leftovers_folder(root.path(), "fix-cart").unwrap();
-        assert_ne!(a, b);
-        assert!(a.is_dir() && b.is_dir());
-        let a_name = a.file_name().unwrap().to_string_lossy().to_string();
-        assert!(
-            b.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(&a_name)
-        );
+        // Two made within one second, as the name's stamp counts seconds:
+        // a pair that straddles a second has two stamps, and is made again.
+        for _ in 0..5 {
+            let root = tempfile::tempdir().unwrap();
+            let a = make_leftovers_folder(root.path(), "fix-cart").unwrap();
+            let b = make_leftovers_folder(root.path(), "fix-cart").unwrap();
+            let name = |p: &Path| p.file_name().unwrap().to_string_lossy().to_string();
+            assert!(name(&a).starts_with("fix-cart-"), "{a:?}");
+            if !name(&b).ends_with("-2") {
+                continue;
+            }
+            assert_eq!(name(&b), format!("{}-2", name(&a)));
+            assert!(a.is_dir() && b.is_dir());
+            return;
+        }
+        panic!("five pairs each straddled a second");
     }
 
     #[test]

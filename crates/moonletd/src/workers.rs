@@ -142,6 +142,9 @@ impl Workers {
         paired: impl Fn(&str) -> bool,
     ) -> Result<(), RpcError> {
         let id = worker.id.clone();
+        if conn.is_gone() {
+            return Err(RpcError::new("disconnected", "the connection closed"));
+        }
         // One worker per connection: a second id would leave the first
         // listed against a connection that no longer speaks for it.
         if self
@@ -172,6 +175,12 @@ impl Workers {
         }
         let old = {
             let mut list = self.list.lock().unwrap();
+            // A connection that closed as the register came in: its
+            // close is marked before `disconnected` takes this lock, so
+            // either that drops the entry or this never makes it.
+            if conn.is_gone() {
+                return Err(RpcError::new("disconnected", "the connection closed"));
+            }
             // Registering again on the same connection keeps what its pings
             // measured; a new connection starts afresh.
             let kept = list
@@ -350,5 +359,34 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
         // Wait out the rest of the interval after a quick reply.
         let rest = every.saturating_sub(sent.elapsed());
         tokio::time::sleep(rest).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A register that comes in as its connection closes, as one sent just
+    /// before a link is turned off: it is refused, and lists nothing, or the
+    /// central host would list a worker nothing can reach until its pings
+    /// fail.
+    #[tokio::test]
+    async fn a_worker_registering_on_a_connection_that_closed_is_not_listed() {
+        let home = tempfile::tempdir().unwrap();
+        let workers = Arc::new(Workers::new(home.path().join("worker-owners.json"), |_| {}));
+        let closed = crate::server::Conn::detached(7, "moonlet-worker", None);
+        let worker: WorkerRegister = serde_json::from_value(serde_json::json!({
+            "id": "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37",
+            "name": "Alex's MacBook Pro",
+            "os": "macos",
+            "arch": "arm64",
+            "cores": 10,
+            "version": "0.1.43",
+            "projects": [],
+        }))
+        .unwrap();
+        let refused = workers.register(closed, "d1", worker, |_| true).unwrap_err();
+        assert_eq!(refused.code, "disconnected");
+        assert!(workers.list().is_empty(), "{:?}", workers.list());
     }
 }

@@ -847,12 +847,17 @@ fn stop_in_give(stage: &str) {
 
 /// Puts session `s`'s worktree back on the session's own branch when a
 /// give cut off half way (X73) left it on the copy's (`moonlet-copy/<id>`)
-/// and no branch of the session's name is left.
-async fn own_branch_back(s: &moonlet_proto::types::Session) {
+/// and no branch of the session's name is left. A copy's branch left
+/// beside the session's own, checked out nowhere, is dropped when the
+/// session's branch has all its commits; with commits of its own it is
+/// kept, and the error says so: a give cannot move the branch onto it.
+/// Run under the session's `giving` lock: git's rename is not atomic, and
+/// two at once on one worktree leave both branches.
+async fn own_branch_back(s: &moonlet_proto::types::Session) -> Result<(), String> {
     let path = Path::new(&s.path);
     let copy_branch = crate::session_copies::copy_branch(&s.id);
     if s.branch.is_empty() || s.branch == copy_branch {
-        return;
+        return Ok(());
     }
     let on_copy = moonlet_core::git::current_branch(path).await.is_ok_and(|b| b == copy_branch);
     if on_copy && !moonlet_core::sync::branch_exists(path, &s.branch).await {
@@ -860,6 +865,29 @@ async fn own_branch_back(s: &moonlet_proto::types::Session) {
             Ok(_) => tracing::info!(session = %s.id, "put the worktree back on {} after a give cut off", s.branch),
             Err(e) => tracing::warn!(session = %s.id, "cannot put the worktree back on {}: {e:#}", s.branch),
         }
+        return Ok(());
+    }
+    if on_copy
+        || !moonlet_core::sync::branch_exists(path, &copy_branch).await
+        || moonlet_core::sync::checked_out(path, &copy_branch).await.is_some()
+    {
+        return Ok(());
+    }
+    let tip = |b: String| async move {
+        let out = moonlet_core::git::git(path, &["rev-parse", "--verify", &format!("refs/heads/{b}")]).await.ok()?;
+        Some(String::from_utf8_lossy(&out).trim().to_string())
+    };
+    let (Some(left), Some(own)) = (tip(copy_branch.clone()).await, tip(s.branch.clone()).await) else {
+        return Ok(());
+    };
+    if moonlet_core::sync::is_ancestor(path, &left, &own).await.unwrap_or(false) {
+        match moonlet_core::git::git(path, &["branch", "-D", &copy_branch]).await {
+            Ok(_) => tracing::info!(session = %s.id, "dropped {copy_branch}, left beside {}", s.branch),
+            Err(e) => tracing::warn!(session = %s.id, "cannot drop {copy_branch}: {e:#}"),
+        }
+        Ok(())
+    } else {
+        Err(format!("{copy_branch} has commits {} does not: merge or delete it first", s.branch))
     }
 }
 
@@ -4291,7 +4319,9 @@ impl Daemon {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
         if let Ok(s) = self.sessions.session(&r.session) {
-            own_branch_back(&s).await;
+            if let Err(e) = own_branch_back(&s).await {
+                tracing::warn!(session = %r.session, "{e}");
+            }
             self.session_copies.forget_given(&r.session, worker);
             if !self.sessions.set_session_owner(&r.session, &me, epoch + 1, None) {
                 return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
@@ -4507,7 +4537,7 @@ impl Daemon {
         let s = self.sessions.session(&r.session).map_err(internal)?;
         // A give cut off after it moved the branch left the worktree on the
         // copy's own: on the session's again first.
-        own_branch_back(&s).await;
+        own_branch_back(&s).await.map_err(|e| RpcError::new("refused", e))?;
         // Taken while this host was offline only if the member was cut off
         // from it since the session became this host's: this host started
         // since, or the member's link was made since. A session made here
@@ -5811,7 +5841,19 @@ impl Daemon {
             let d = self.clone();
             tokio::spawn(async move {
                 for s in d.sessions.list_sessions().into_iter().filter(|s| !s.archived) {
-                    own_branch_back(&s).await;
+                    // Under the give's lock: a give_back from the member
+                    // that took it can repair the same worktree meanwhile.
+                    let one = lock_of(&d.giving, &s.id);
+                    let _one = one.lock().await;
+                    // Read again under the lock: a give may have moved it on
+                    // since the list was made.
+                    let Ok(s) = d.sessions.session(&s.id) else { continue };
+                    if s.archived {
+                        continue;
+                    }
+                    if let Err(e) = own_branch_back(&s).await {
+                        tracing::warn!(session = %s.id, "{e}");
+                    }
                 }
             });
         }
@@ -6670,6 +6712,14 @@ impl Daemon {
     /// change to a design's record comes.
     pub fn keep_design_copies(self: &Arc<Self>) {
         let copies = Arc::downgrade(&self.copies);
+        self.link.on_account_in_step({
+            let copies = copies.clone();
+            move || {
+                if let Some(c) = copies.upgrade() {
+                    c.kick();
+                }
+            }
+        });
         self.sessions.on_account_applied(move |changes| {
             if let Some(c) = copies.upgrade()
                 && changes.iter().any(|c| c.kind == "design")

@@ -196,9 +196,32 @@ pub async fn take(
         kept(label, path, folder);
         Ok(())
     };
+    // What may be written is recorded as the owner's before it is: a
+    // daemon stopped half way still knows it had those from the owner, so
+    // the owner deleting one later deletes it here. The record is
+    // narrowed to what was taken once the take is done. Only what this
+    // checkout takes: a manifest it refuses writes nothing.
+    let sent: Vec<(String, u64)> = manifest
+        .iter()
+        .map(|e| (e.path.clone(), e.bytes.as_ref().map_or(0, |b| b.len() as u64)))
+        .collect();
+    let takes = files::receivable(dir, patterns, &sent).await?;
     let had = {
         let _one = received_lock().lock().unwrap();
-        load_received(home).remove(copy).unwrap_or_default()
+        let mut all = load_received(home);
+        let had = all.get(copy).cloned().unwrap_or_default();
+        let mut ahead = had.clone();
+        ahead.extend(
+            manifest
+                .iter()
+                .filter(|e| e.bytes.is_some() && takes.contains(&e.path))
+                .map(|e| e.path.clone()),
+        );
+        if ahead != had {
+            all.insert(copy.to_string(), ahead);
+            files::write(home, RECEIVED, &serde_json::to_vec(&all)?)?;
+        }
+        had
     };
     let want = files::apply(dir, patterns, manifest, &had, keep)
         .await?
@@ -721,5 +744,62 @@ mod tests {
         std::fs::write(dir.path().join(".env"), "A=2\n").unwrap();
         let changed = take(refused).await.unwrap();
         assert_eq!(sent(&changed), [(".env".into(), Some("QT0yCg==".into()))]);
+    }
+
+    /// A take stopped after it wrote a file, as a daemon killed in the
+    /// middle of one is: the file still counts as the owner's, so the
+    /// owner deleting it later deletes it here too, kept in leftovers.
+    #[tokio::test]
+    async fn a_file_written_by_a_take_cut_off_half_way_goes_once_the_owner_deletes_it() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = checkout("");
+        std::fs::remove_file(dir.path().join(".env")).unwrap();
+        // A link where a folder should be: the second file is refused,
+        // after the first was written.
+        std::os::unix::fs::symlink(home.path(), dir.path().join("config")).unwrap();
+        let patterns = vec![".env".to_string(), "config/.env.local".to_string()];
+        let entry = |path: &str, text: &str| Entry {
+            path: path.into(),
+            sha: files::sha(text.as_bytes()),
+            bytes: Some(text.as_bytes().to_vec()),
+        };
+        let manifest = [entry(".env", "A=1\n"), entry("config/.env.local", "B=1\n")];
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &manifest, false)
+            .await
+            .unwrap_err();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".env")).unwrap(), "A=1\n");
+
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &[], false)
+            .await
+            .unwrap();
+        assert!(!dir.path().join(".env").exists(), "the owner's deleted .env is still here");
+        let kept: Vec<_> = std::fs::read_dir(home.path().join("sync-leftovers"))
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path().join(".env")).unwrap())
+            .collect();
+        assert_eq!(kept, ["A=1\n"]);
+    }
+
+    /// A take refused for a path off the list writes nothing and counts
+    /// nothing as the owner's: a file of that name the checkout has of its
+    /// own stays when the owner's next list leaves it out.
+    #[tokio::test]
+    async fn a_take_refused_for_a_path_off_the_list_leaves_a_file_of_that_name_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = checkout("A=1\n");
+        std::fs::write(dir.path().join("notes.txt"), "mine\n").unwrap();
+        let patterns = vec![".env".to_string()];
+        let notes = Entry {
+            path: "notes.txt".into(),
+            sha: files::sha(b"theirs\n"),
+            bytes: Some(b"theirs\n".to_vec()),
+        };
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &[notes], true)
+            .await
+            .unwrap_err();
+        take(home.path(), "shop", "copy-1", dir.path(), &patterns, &[], true)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("notes.txt")).unwrap(), "mine\n");
     }
 }

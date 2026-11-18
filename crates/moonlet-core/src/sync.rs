@@ -1086,10 +1086,32 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
     commit_id(to)?;
     let r = format!("refs/heads/{branch}");
     git_env(worktree, &[], &["update-ref", &r, to, from], None).await?;
-    if self::branch(worktree).await?.as_deref() == Some(branch) {
-        git_env(worktree, &[], &["reset", "-q"], None).await?;
+    reset_index(worktree, Some(branch), to).await
+}
+
+/// `git reset -q` in `worktree` while its `HEAD` is still at `to`, on
+/// `branch` when one is named, or else on no other branch than when the
+/// move began, `was` (none: detached). It waits up
+/// to 5 s for another git (an editor's or a terminal's `git status`) to
+/// let the staging area's lock go: the branch has moved already, and its
+/// staging area must follow, unless another branch was checked out
+/// meanwhile, whose staging area stays.
+async fn reset_index(worktree: &Path, branch: Option<&str>, to: &str) -> Result<()> {
+    let until = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let head = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
+        let still = String::from_utf8_lossy(&head).trim() == to
+            && self::branch(worktree).await?.as_deref() == branch;
+        if !still {
+            return Ok(());
+        }
+        match git_env(worktree, &[], &["reset", "-q"], None).await {
+            Err(e) if std::time::Instant::now() < until && format!("{e:#}").contains("index.lock") => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            other => return other.map(drop),
+        }
     }
-    Ok(())
 }
 
 /// Moves the branch checked out in `worktree` from `from` to `to`, and
@@ -1099,9 +1121,9 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
 pub async fn reset_branch(worktree: &Path, from: &str, to: &str) -> Result<()> {
     commit_id(from)?;
     commit_id(to)?;
+    let on = self::branch(worktree).await?;
     git_env(worktree, &[], &["update-ref", "HEAD", to, from], None).await?;
-    git_env(worktree, &[], &["reset", "-q"], None).await?;
-    Ok(())
+    reset_index(worktree, on.as_deref(), to).await
 }
 
 /// Makes an empty repository at `dir`, unless one is there: a routing
@@ -1611,6 +1633,33 @@ mod tests {
         .await
         .unwrap();
         dir
+    }
+
+    /// A fast-forward while another git holds the staging area's lock, as
+    /// `git status` in an editor or a terminal takes it to refresh: the
+    /// branch moves, and the staging area follows once the lock is let go.
+    #[tokio::test]
+    async fn a_fast_forward_resets_the_staging_area_after_another_git_lets_its_lock_go() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let text = |out: Vec<u8>| String::from_utf8(out).unwrap().trim().to_string();
+        let from = text(git(p, &["rev-parse", "HEAD"]).await.unwrap());
+        git(p, &["add", "src/cart.ts"]).await.unwrap();
+        let tree = text(git(p, &["write-tree"]).await.unwrap());
+        git(p, &["reset", "-q"]).await.unwrap();
+        let to = text(git(p, &["commit-tree", &tree, "-p", &from, "-m", "cart"]).await.unwrap());
+        let lock = p.join(".git/index.lock");
+        std::fs::write(&lock, "").unwrap();
+        let held = lock.clone();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            std::fs::remove_file(held).unwrap();
+        });
+        fast_forward(p, "main", &from, &to).await.unwrap();
+        release.join().unwrap();
+        assert_eq!(text(git(p, &["rev-parse", "HEAD"]).await.unwrap()), to);
+        assert_eq!(text(git(p, &["diff", "--cached", "--name-only"]).await.unwrap()), "");
+        assert_eq!(std::fs::read_to_string(p.join("src/cart.ts")).unwrap(), "export const cart = [1];\n");
     }
 
     fn set_mode(path: &Path, mode: u32) {

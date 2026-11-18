@@ -516,6 +516,12 @@ impl DesignCopies {
         if info.worker.cloud {
             return Ok(());
         }
+        // Linked, nothing is offered or claimed before the link's first
+        // account exchange: an item this member owned may have moved while
+        // it was away. That exchange asks for a round.
+        if !self.link.account_in_step() {
+            return Ok(());
+        }
         let me = info.worker.id;
         let _one = self.round.lock().await;
         let records = self.records();

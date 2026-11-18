@@ -5336,6 +5336,44 @@ async fn a_give_cut_off_after_its_branch_moved_leaves_the_central_host_able_to_g
     brought_here(&mini, &book, &made).await;
 }
 
+/// A copy's branch left beside the session's own, as two repairs of a give
+/// cut off half way that raced on one worktree leave it (git's rename is
+/// not atomic): the left branch, at no commit of its own, is dropped,
+/// and the next give goes.
+#[tokio::test]
+async fn a_copy_branch_left_beside_the_sessions_own_does_not_stop_the_next_give() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let worktree = PathBuf::from(session_on(&mini, &made).await["path"].as_str().unwrap());
+    let copy_branch = format!("moonlet-copy/{}", made["id"].as_str().unwrap());
+    git_in(&worktree, &["branch", &copy_branch]);
+
+    brought_here(&mini, &book, &made).await;
+}
+
+/// The same, with commits on the left branch the session's own lacks: the
+/// give is refused, saying so, and the branch keeps them.
+#[tokio::test]
+async fn a_copy_branch_left_with_commits_of_its_own_is_kept_and_the_give_refused() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let worktree = PathBuf::from(session_on(&mini, &made).await["path"].as_str().unwrap());
+    let copy_branch = format!("moonlet-copy/{}", made["id"].as_str().unwrap());
+    git_in(&worktree, &["branch", &copy_branch]);
+    let tree = format!("{copy_branch}^{{tree}}");
+    let tip = git_out(&worktree, &["-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", "-p", &copy_branch, "-m", "only here", &tree]);
+    git_in(&worktree, &["update-ref", &format!("refs/heads/{copy_branch}"), &tip]);
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains(&format!("{copy_branch} has commits")), "{refused}");
+    assert_eq!(git_out(&worktree, &["rev-parse", &copy_branch]), tip);
+    assert_eq!(git_out(&worktree, &["branch", "--show-current"]), "moonlet/fix-cart");
+    assert_eq!(one_runs_it(&mini, &book, &made).await, MINI);
+}
+
 #[tokio::test]
 async fn a_give_cut_off_after_it_named_the_new_owner_ends_with_one_host_running_the_session() {
     give_cut_off_at("").await;
