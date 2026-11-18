@@ -53,7 +53,7 @@ Added 2026-11-17, after a security audit: the link used to authenticate with the
 
 - [x] The central host keeps a **worker link** as a `desktop` device with a mark, `worker_link`, in `mobile.json`, not as a new device kind: the methods members already use check for a paired Mac (`desktop`), a central host or app that predates the mark still reads the device, and the pairing code a Mac pairs with stays a `desktop` code. A connection that authenticates with a worker link's token is marked so when it authenticates, as a cloud machine's is (X63), and keeps that mark for its whole life. (`a_worker_link_replaces_the_macs_token_the_first_time_it_is_used`)
 - [x] A worker link's connection reaches only the methods a member's daemon sends its central host, an allowlist (`WORKER_LINK_METHODS` in `daemon.rs`):
-  - the link: `daemon.info`, `worker.register`, `account.sync`;
+  - the link: `daemon.info`, `worker.register`, `account.sync`, and `worker.sleep` (X73: going to sleep, and awake again);
   - keeping projects in sync and routing copies (X60, X89): `session.list`, `project.list`, `sync.open`, `sync.fetch`, `sync.offer`, `sync.close`, `sync.closing`, `sync.update`;
   - the member's sessions and their files (X72, X74): `session.open`, `session.offer`, `session.chat`, `session.transcript`, `session.checkpoint`, `session.event`, `session.take`, `session.give_back`, `session.transcript_fetch`, `session.yield`, `session.pin`, `session.files`, `session.files_fetch`, `files.checkout`;
   - design copies (X71): `design.offer`, `design.fetch`;
