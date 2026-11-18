@@ -133,6 +133,9 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    // A release build ignores the test seams, whoever starts it with them.
+    // SAFETY: no other thread exists yet.
+    unsafe { moonlet_core::seams::drop_in_release() };
     let cli = Cli::parse();
     // The release check needs no home, socket or runtime (X69).
     if let Some(Cmd::VerifyRelease { archive }) = &cli.cmd {

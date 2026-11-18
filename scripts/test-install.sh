@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Tests scripts/install.sh (X58) against a folder made by package-linux.sh:
 #
-#   scripts/package-linux.sh dist && scripts/test-install.sh dist
+#   scripts/package-linux.sh dist <helpers-dir> && scripts/test-install.sh dist
+#
+# The helpers must be debug builds, as CI's are: the tests steer the daemon
+# with test seams (MOONLET_MOBILE_ADDRS, MOONLET_TEST_SSHD_EXE), which a
+# release build ignores.
 #
 # On Linux with a systemd user instance it installs for the real user (CI's
 # throwaway runner) and checks the service too. Anywhere else, such as on a
