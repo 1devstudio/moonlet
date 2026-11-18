@@ -22,6 +22,10 @@ describe("mobileLine", () => {
     expect(mobileLine(status({ tailscale: false, addresses: [], listening: [] }))).toBe("Tailscale is not running on this Mac");
   });
 
+  it("says moonlet cannot find Tailscale when there is no tailscale command to ask", () => {
+    expect(mobileLine(status({ tailscale: false, tailscale_missing: true, addresses: [], listening: [] }))).toBe("moonlet cannot find Tailscale on this Mac");
+  });
+
   it("says off while phone access is off", () => {
     expect(mobileLine(status({ enabled: false, listening: [] }))).toBe("Off");
   });

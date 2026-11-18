@@ -2159,7 +2159,7 @@ impl Daemon {
                 let r: m::LinkSet = params(p)?;
                 self.link_managers_only(conn, r.central.is_some())?;
                 let settings = r.worker.as_ref().is_some_and(|w| w.enabled.is_some() || w.slots.is_some());
-                let info = self.link.set(r, &crate::mobile::tailscale_addresses())?;
+                let info = self.link.set(r, &crate::mobile::own_range_addresses())?;
                 if settings {
                     self.worker_settings_changed();
                 }
@@ -2174,12 +2174,12 @@ impl Daemon {
                 // `moonletd join` on a fresh cloud machine (X63).
                 app_only(conn, "the link")?;
                 let r: m::LinkJoin = params(p)?;
-                ok(self.link.join(r, &crate::mobile::tailscale_addresses()).await?)
+                ok(self.link.join(r, &crate::mobile::own_range_addresses()).await?)
             }
             m::LINK_PAIR => {
                 self.link_managers_only(conn, false)?;
                 let r: m::LinkPair = params(p)?;
-                ok(self.link.pair(r, &crate::mobile::tailscale_addresses()).await?)
+                ok(self.link.pair(r, &crate::mobile::own_range_addresses()).await?)
             }
             m::HEAVY_GET => {
                 let r: m::HeavyGet = params(p)?;

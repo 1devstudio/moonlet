@@ -6,6 +6,7 @@ import type { DeviceKind, MobileDevice, MobileStatus } from "./protocol";
 /** The line under the switch. */
 export function mobileLine(st: MobileStatus): string {
   if (!st.enabled) return "Off";
+  if (!st.tailscale && st.tailscale_missing) return "moonlet cannot find Tailscale on this Mac";
   if (!st.tailscale) return "Tailscale is not running on this Mac";
   if (st.listening.length === 0) return "Starting…";
   return `Listening on ${st.listening.join(", ")}`;

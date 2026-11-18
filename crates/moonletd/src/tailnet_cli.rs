@@ -147,6 +147,8 @@ fn ended(reason: &str) -> &'static str {
 pub fn status_line(st: &MobileStatus) -> String {
     if !st.enabled {
         "Tailnet access is off".into()
+    } else if !st.tailscale && st.tailscale_missing {
+        "moonlet cannot find Tailscale on this machine".into()
     } else if !st.tailscale {
         "Tailscale is not running on this machine".into()
     } else if st.listening.is_empty() {
@@ -206,6 +208,7 @@ mod tests {
             enabled,
             port: 47428,
             tailscale: !addresses.is_empty(),
+            tailscale_missing: false,
             addresses: addresses.iter().map(|a| a.to_string()).collect(),
             listening: listening.iter().map(|a| a.to_string()).collect(),
             host: "build-box".into(),
@@ -222,6 +225,10 @@ mod tests {
         assert_eq!(
             status_line(&status(true, &[], &[])),
             "Tailscale is not running on this machine"
+        );
+        assert_eq!(
+            status_line(&MobileStatus { tailscale_missing: true, ..status(true, &[], &[]) }),
+            "moonlet cannot find Tailscale on this machine"
         );
         assert_eq!(
             status_line(&status(true, &["100.88.1.20"], &[])),

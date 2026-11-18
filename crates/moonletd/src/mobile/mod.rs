@@ -35,18 +35,35 @@ pub const PAIR_TTL_MS: u64 = 5 * 60 * 1000;
 /// Wrong codes before the current one is cancelled.
 pub const PAIR_ATTEMPTS: u32 = 5;
 
-pub use moonlet_core::tailnet::is_tailscale;
+pub use moonlet_core::tailnet::{Tailnet, is_tailscale};
 
-/// The machine's Tailscale addresses, IPv4 first. `MOONLET_MOBILE_ADDRS`
-/// (comma-separated) replaces them, for tests.
-pub fn tailscale_addresses() -> Vec<IpAddr> {
-    if let Ok(list) = std::env::var("MOONLET_MOBILE_ADDRS") {
-        return list
-            .split(',')
-            .filter_map(|a| a.trim().parse().ok())
-            .collect();
+/// This machine's interface addresses in Tailscale's range, IPv4 first, or
+/// what the test seam `MOONLET_MOBILE_ADDRS` (comma-separated) lists. Only
+/// for refusing a link to this machine itself: the listener takes the
+/// addresses Tailscale reports ([`Mobile::ask_tailscale`]).
+pub fn own_range_addresses() -> Vec<IpAddr> {
+    if let Some(list) = seam_addresses() {
+        return list;
     }
-    let mut out: Vec<IpAddr> = nix::ifaddrs::getifaddrs()
+    let mut out: Vec<IpAddr> = local_addresses()
+        .into_iter()
+        .filter(|ip| is_tailscale(*ip))
+        .collect();
+    out.sort_by_key(|ip| (ip.is_ipv6(), *ip));
+    out.dedup();
+    out
+}
+
+/// `MOONLET_MOBILE_ADDRS`: this machine's tailnet addresses for a test,
+/// such as `127.0.0.1`. A release build never sees it ([`moonlet_core::seams`]).
+fn seam_addresses() -> Option<Vec<IpAddr>> {
+    let list = std::env::var("MOONLET_MOBILE_ADDRS").ok()?;
+    Some(list.split(',').filter_map(|a| a.trim().parse().ok()).collect())
+}
+
+/// Every address of this machine's interfaces.
+fn local_addresses() -> Vec<IpAddr> {
+    nix::ifaddrs::getifaddrs()
         .map(|addrs| {
             addrs
                 .filter_map(|a| a.address)
@@ -55,13 +72,78 @@ pub fn tailscale_addresses() -> Vec<IpAddr> {
                         .map(|v4| IpAddr::V4(v4.ip()))
                         .or_else(|| s.as_sockaddr_in6().map(|v6| IpAddr::V6(v6.ip())))
                 })
-                .filter(|ip| is_tailscale(*ip))
                 .collect()
         })
-        .unwrap_or_default();
-    out.sort_by_key(|ip| (ip.is_ipv6(), *ip));
-    out.dedup();
-    out
+        .unwrap_or_default()
+}
+
+/// Where Tailscale's command line tool may be, after the daemon's PATH:
+/// Homebrew's (`tailscaled` from Homebrew), the standalone app's CLI
+/// launcher, the one inside the app (the App Store app has only that one),
+/// and Linux packages'.
+const TAILSCALE_PLACES: [&str; 5] = [
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/bin/tailscale",
+    "/usr/sbin/tailscale",
+];
+
+/// The `tailscale` to ask: the first on `path`, else the first of
+/// [`TAILSCALE_PLACES`] that `exists`.
+pub fn find_tailscale(path: Option<&std::ffi::OsStr>, exists: impl Fn(&std::path::Path) -> bool) -> Option<PathBuf> {
+    path.into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|d| d.join("tailscale"))
+        .chain(TAILSCALE_PLACES.iter().map(PathBuf::from))
+        .find(|p| exists(p))
+}
+
+/// The `tailscale` this daemon asks: the test seam `MOONLET_TAILSCALE` (a
+/// stub; tests never run the real one), else [`find_tailscale`].
+fn tailscale_program() -> Option<PathBuf> {
+    if let Some(stub) = std::env::var_os("MOONLET_TAILSCALE") {
+        return Some(stub.into());
+    }
+    find_tailscale(std::env::var_os("PATH").as_deref(), |p| p.is_file())
+}
+
+/// How long `tailscale status --json` may take.
+const ASK_TIMEOUT: Duration = Duration::from_secs(5);
+/// A peer the cached answer does not list makes the daemon ask Tailscale
+/// again, at most this often, so a device that just joined is let in.
+const ASK_AGAIN: Duration = Duration::from_secs(2);
+
+/// `tailscale status --json` from `program`: `Err(())` when it cannot run.
+async fn tailscale_status(program: &std::path::Path) -> Result<Vec<u8>, ()> {
+    let run = tokio::process::Command::new(program)
+        .args(["status", "--json"])
+        // The app's executable acts as the CLI only when told to.
+        .env("TAILSCALE_BE_CLI", "1")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(ASK_TIMEOUT, run).await {
+        Ok(Ok(out)) => Ok(out.stdout),
+        Ok(Err(_)) => Err(()),
+        // It runs but does not answer: Tailscale is not usable.
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// What Tailscale said last (X39).
+#[derive(Debug, Default)]
+struct Seen {
+    /// Whether it was asked since tailnet access was turned on.
+    asked: bool,
+    /// The tailnet, while Tailscale runs.
+    tailnet: Option<Tailnet>,
+    /// The addresses to listen on.
+    listen: Vec<IpAddr>,
+    /// No `tailscale` command could be run.
+    missing: bool,
+    at: Option<std::time::Instant>,
 }
 
 pub use moonlet_core::hash::sha256_hex;
@@ -380,7 +462,15 @@ pub struct Mobile {
     joins: Mutex<JoinCodes>,
     /// Told `(machine, device)` when a cloud machine joins.
     on_join: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
+    /// What Tailscale said last; `asking` lets one ask run at a time.
+    seen: Mutex<Seen>,
+    asking: tokio::sync::Mutex<()>,
+    /// Connections waiting for their `auth`, at most [`UNAUTHED_MAX`].
+    pub(crate) unauthed: Arc<tokio::sync::Semaphore>,
 }
+
+/// How many connections may wait for their `auth` at once.
+pub const UNAUTHED_MAX: usize = 32;
 
 impl Mobile {
     pub fn load(file: PathBuf, emit: impl Fn(Message) + Send + Sync + 'static) -> Mobile {
@@ -403,7 +493,87 @@ impl Mobile {
             emit: Box::new(emit),
             joins: Mutex::new(joins),
             on_join: Mutex::new(None),
+            seen: Mutex::new(Seen::default()),
+            asking: tokio::sync::Mutex::new(()),
+            unauthed: Arc::new(tokio::sync::Semaphore::new(UNAUTHED_MAX)),
         }
+    }
+
+    /// Asks Tailscale for this machine's addresses and its peers. With the
+    /// test seam `MOONLET_MOBILE_ADDRS`, those are this machine's addresses,
+    /// and the stub `MOONLET_TAILSCALE`, when set, lists the peers. Without
+    /// a `tailscale` to run, or while Tailscale is not running, there is no
+    /// tailnet: nothing listens and no connection is let in. Returns whether
+    /// the answer changed.
+    pub async fn ask_tailscale(&self) -> bool {
+        let _one = self.asking.lock().await;
+        self.ask_locked().await
+    }
+
+    async fn ask_locked(&self) -> bool {
+        let seam = seam_addresses();
+        let program = tailscale_program();
+        let status = match (&seam, &program) {
+            (Some(_), _) if std::env::var_os("MOONLET_TAILSCALE").is_none() => Ok(Vec::new()),
+            (_, Some(p)) => tailscale_status(p).await,
+            (_, None) => Err(()),
+        };
+        let (tailnet, listen, missing) = match seam {
+            Some(own) => {
+                let peers = status.ok().and_then(|s| Tailnet::from_status(&s)).unwrap_or_default();
+                let t = peers.with_own(own.clone());
+                (Some(t), own, false)
+            }
+            None => match status {
+                Err(()) => (None, Vec::new(), true),
+                Ok(s) => match Tailnet::from_status(&s) {
+                    Some(t) => {
+                        let listen = t.listen_on(&local_addresses());
+                        (Some(t), listen, false)
+                    }
+                    None => (None, Vec::new(), false),
+                },
+            },
+        };
+        let mut seen = self.seen.lock().unwrap();
+        let changed = !seen.asked || seen.tailnet != tailnet || seen.missing != missing;
+        *seen = Seen {
+            asked: true,
+            tailnet,
+            listen,
+            missing,
+            at: Some(std::time::Instant::now()),
+        };
+        changed
+    }
+
+    /// The addresses to listen on, as Tailscale said last.
+    pub fn listen_addresses(&self) -> Vec<IpAddr> {
+        self.seen.lock().unwrap().listen.clone()
+    }
+
+    /// Whether a connection from `peer` comes from a device of this tailnet.
+    /// A peer the last answer does not list makes the daemon ask again, at
+    /// most every [`ASK_AGAIN`].
+    pub async fn lets_in(&self, peer: IpAddr) -> bool {
+        let known = |seen: &Seen| seen.tailnet.as_ref().is_some_and(|t| t.lets_in(peer));
+        if known(&self.seen.lock().unwrap()) {
+            return true;
+        }
+        let _one = self.asking.lock().await;
+        {
+            let seen = self.seen.lock().unwrap();
+            if known(&seen) {
+                return true;
+            }
+            if seen.at.is_some_and(|at| at.elapsed() < ASK_AGAIN) {
+                return false;
+            }
+        }
+        if self.ask_locked().await {
+            self.changed();
+        }
+        known(&self.seen.lock().unwrap())
     }
 
     fn save_joins(&self, joins: &JoinCodes) {
@@ -473,14 +643,17 @@ impl Mobile {
             .values()
             .map(|c| c.device_id.clone())
             .collect();
-        let addresses: Vec<String> = tailscale_addresses()
-            .iter()
-            .map(IpAddr::to_string)
-            .collect();
+        let (asked, missing, addresses) = {
+            let seen = self.seen.lock().unwrap();
+            let addresses: Vec<String> = seen.listen.iter().map(IpAddr::to_string).collect();
+            (seen.asked, seen.missing, addresses)
+        };
         MobileStatus {
             enabled: data.enabled,
             port: data.port,
-            tailscale: !addresses.is_empty(),
+            // Until Tailscale is asked, the listener is "Starting…".
+            tailscale: !addresses.is_empty() || (data.enabled && !asked),
+            tailscale_missing: data.enabled && missing,
             addresses,
             listening: self
                 .listening
@@ -511,6 +684,10 @@ impl Mobile {
     pub fn set_enabled(&self, enabled: bool) {
         {
             let mut data = self.data.lock().unwrap();
+            if enabled && !data.enabled {
+                // What Tailscale said before is old news.
+                self.seen.lock().unwrap().asked = false;
+            }
             data.enabled = enabled;
             self.save(&data);
         }
@@ -994,6 +1171,30 @@ pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tailscale_is_asked_on_the_path_first_then_where_its_installs_put_it() {
+        use std::path::Path;
+        let on = |list: &'static [&'static str]| move |p: &Path| list.iter().any(|l| Path::new(l) == p);
+        let path = std::ffi::OsString::from("/home/alex/bin:/usr/local/bin");
+        // The standalone app's CLI launcher, or tailscaled from a package.
+        assert_eq!(
+            find_tailscale(Some(&path), on(&["/usr/local/bin/tailscale", "/usr/bin/tailscale"])),
+            Some(PathBuf::from("/usr/local/bin/tailscale"))
+        );
+        // The App Store app has only the executable inside the app, and a
+        // daemon started at login may have a short PATH.
+        assert_eq!(
+            find_tailscale(Some(std::ffi::OsStr::new("/usr/bin:/bin")), on(&["/Applications/Tailscale.app/Contents/MacOS/Tailscale"])),
+            Some(PathBuf::from("/Applications/Tailscale.app/Contents/MacOS/Tailscale"))
+        );
+        // Homebrew's tailscaled, off the daemon's PATH.
+        assert_eq!(
+            find_tailscale(None, on(&["/opt/homebrew/bin/tailscale"])),
+            Some(PathBuf::from("/opt/homebrew/bin/tailscale"))
+        );
+        assert_eq!(find_tailscale(Some(&path), on(&[])), None);
+    }
 
     #[test]
     fn a_join_code_works_once() {

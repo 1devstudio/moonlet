@@ -3028,8 +3028,12 @@ pub struct MobileDevice {
 pub struct MobileStatus {
     pub enabled: bool,
     pub port: u16,
-    /// The Mac has a Tailscale address.
+    /// Tailscale runs and reports an address this machine's interfaces have.
     pub tailscale: bool,
+    /// No `tailscale` command was found to ask (X39): Settings says that
+    /// instead of "not running".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tailscale_missing: bool,
     /// Its Tailscale addresses.
     pub addresses: Vec<String>,
     /// Where the listener is bound, `ip:port`; empty while off or without Tailscale.

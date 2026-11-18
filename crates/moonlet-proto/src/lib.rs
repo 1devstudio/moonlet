@@ -22,7 +22,7 @@ pub mod types;
 
 pub use codec::{FrameDecoder, ProtoError, encode_frame};
 #[cfg(feature = "tokio")]
-pub use codec::{read_frame, write_frame};
+pub use codec::{read_frame, read_frame_max, write_frame};
 pub use message::{Message, RpcError};
 
 /// Bumped on any incompatible change to framing, messages or method shapes.

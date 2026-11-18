@@ -9,12 +9,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use moonlet_proto::methods as m;
-use moonlet_proto::{Frame, Message, RpcError, read_frame, write_frame};
+use moonlet_proto::{Frame, Message, RpcError, read_frame, read_frame_max, write_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use super::{Listening, tailscale_addresses};
+use super::Listening;
 use crate::daemon::Daemon;
 
 /// How often the listener checks the Tailscale addresses.
@@ -22,6 +22,9 @@ const RESCAN: Duration = Duration::from_secs(30);
 /// Retry delay after a bind failed (a daemon handing over still holds it).
 const REBIND: Duration = Duration::from_secs(2);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+/// The largest first frame: an `auth` holds a token, a code, a device name
+/// and a host alias. Larger ones are refused before they are read.
+const AUTH_FRAME_MAX: usize = 64 * 1024;
 const FAIL_DELAY: Duration = Duration::from_secs(1);
 /// What an auth failure says, whatever the reason.
 const UNAUTHORIZED: &str = "this phone is not paired with this Mac";
@@ -51,13 +54,17 @@ async fn reconcile(daemon: &Arc<Daemon>) -> Duration {
         let d = mobile.data.lock().unwrap();
         (d.enabled, d.port)
     };
+    let news = enabled && mobile.ask_tailscale().await;
     let want = if enabled {
-        tailscale_addresses()
+        mobile.listen_addresses()
     } else {
         Vec::new()
     };
     let key = (want.clone(), port);
     if mobile.listening.lock().unwrap().bound_for.as_ref() == Some(&key) {
+        if news {
+            mobile.changed();
+        }
         return RESCAN;
     }
     mobile.listening.lock().unwrap().stop();
@@ -101,12 +108,25 @@ async fn reconcile(daemon: &Arc<Daemon>) -> Duration {
 }
 
 async fn accept_loop(daemon: Arc<Daemon>, listener: TcpListener) {
+    // Tests play a peer elsewhere on the tailnet, or off it, from loopback.
+    let test_peer: Option<std::net::IpAddr> =
+        std::env::var("MOONLET_TEST_PEER_ADDR").ok().and_then(|a| a.parse().ok());
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
+                // Only so many connections wait for their auth at once.
+                let Ok(permit) = daemon.mobile.unauthed.clone().try_acquire_owned() else {
+                    tracing::debug!(%peer, "too many connections waiting for auth");
+                    continue;
+                };
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = serve_phone(daemon, stream).await {
+                    // Before any byte is read: only a device of this tailnet.
+                    if !daemon.mobile.lets_in(test_peer.unwrap_or(peer.ip())).await {
+                        tracing::debug!(%peer, "closed a connection from outside the tailnet");
+                        return;
+                    }
+                    if let Err(e) = serve_phone(daemon, stream, permit).await {
                         tracing::debug!(%peer, "phone connection ended: {e:#}");
                     }
                 });
@@ -119,12 +139,18 @@ async fn accept_loop(daemon: Arc<Daemon>, listener: TcpListener) {
     }
 }
 
-async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
+async fn serve_phone(
+    daemon: Arc<Daemon>,
+    mut stream: TcpStream,
+    waiting: tokio::sync::OwnedSemaphorePermit,
+) -> Result<()> {
     let _ = stream.set_nodelay(true);
-    let first = tokio::time::timeout(AUTH_TIMEOUT, read_frame(&mut stream))
+    let first = tokio::time::timeout(AUTH_TIMEOUT, read_frame_max(&mut stream, AUTH_FRAME_MAX))
         .await
         .context("no auth in time")??;
     let authed = match first {
+        // Closed before saying anything: nobody to answer.
+        None => return Ok(()),
         Some(Frame::Json(Message::Auth {
             token,
             pair,
@@ -149,6 +175,7 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
         .await;
         return Ok(());
     };
+    drop(waiting);
     write_frame(
         &mut stream,
         &Frame::Json(Message::Authed {

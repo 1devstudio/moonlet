@@ -74,6 +74,8 @@ function makeWorld(root: string): World {
       MOONLET_E2E_ROOT: root,
       // Phones (X39) reach the scratch daemon on loopback, not Tailscale.
       MOONLET_MOBILE_ADDRS: "127.0.0.1",
+      // Daemons never ask the real `tailscale` (X39): there is none here.
+      MOONLET_TAILSCALE: join(root, "no-tailscale"),
       // Remotes are local folders; an origin that names github.com (X44) never reaches the network.
       GIT_ALLOW_PROTOCOL: "file",
       // Linear, Jira and ClickUp go to a mock server the specs start (X44; e2e builds only).

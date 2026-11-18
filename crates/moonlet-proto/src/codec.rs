@@ -146,6 +146,17 @@ pub async fn read_frame<R>(reader: &mut R) -> Result<Option<Frame>, ProtoError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    read_frame_max(reader, MAX_FRAME_LEN).await
+}
+
+/// [`read_frame`] for frames of at most `max` bytes, such as a connection's
+/// first frame before it has authenticated. A longer frame is refused from
+/// its header, before its body is read or room is made for it.
+#[cfg(feature = "tokio")]
+pub async fn read_frame_max<R>(reader: &mut R, max: usize) -> Result<Option<Frame>, ProtoError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncReadExt;
     let mut len_buf = [0u8; 4];
     // EOF before a frame starts is a clean close; EOF inside one is not.
@@ -158,7 +169,7 @@ where
         }
     }
     let len = u32::from_be_bytes(len_buf) as usize;
-    if len > MAX_FRAME_LEN {
+    if len > max.min(MAX_FRAME_LEN) {
         return Err(ProtoError::TooLarge(len));
     }
     if len == 0 {
@@ -443,5 +454,17 @@ mod tests {
         assert!(read_frame(&mut clean).await.unwrap().is_none());
         let mut partial: &[u8] = &[0, 0];
         assert!(matches!(read_frame(&mut partial).await, Err(ProtoError::Truncated)));
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_the_callers_limit_is_refused_from_its_header() {
+        // A header claiming 65 537 bytes, and no body: the limit is checked
+        // before anything else is read or allocated.
+        let mut big: &[u8] = &[0, 1, 0, 1];
+        assert!(matches!(read_frame_max(&mut big, 64 * 1024).await, Err(ProtoError::TooLarge(65537))));
+        // A frame within it reads as usual.
+        let bytes = encode_frame(&Frame::Json(Message::Request { id: 1, method: "auth".into(), params: json!({}) })).unwrap();
+        let mut small: &[u8] = &bytes;
+        assert!(matches!(read_frame_max(&mut small, 64 * 1024).await, Ok(Some(Frame::Json(_)))));
     }
 }
