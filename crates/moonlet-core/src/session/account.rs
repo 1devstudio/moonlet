@@ -3028,7 +3028,9 @@ mod tests {
         drop(book);
         // While the MacBook's clock said a year ahead, it renamed its
         // workspace, and studio-mini refused the change: its log holds it
-        // as that change was made.
+        // as that change was made. Written into the file rather than made
+        // with `MOONLET_TEST_ACCOUNT_CLOCK_MS`, which would shift the clock
+        // of every test running in this process.
         let path = home.path().join("account.json");
         let mut file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let me = file["member"].as_str().unwrap().to_string();
