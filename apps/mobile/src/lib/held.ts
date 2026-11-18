@@ -48,7 +48,7 @@ export function sentOutcome(
         : null;
     return {
       kind: "sent",
-      note: on ? `${owner} ${gone(s)}. Continuing on ${on}.` : null,
+      note: on ? `${owner} is ${awayAs(s)}. Continuing on ${on}.` : null,
     };
   }
   const code = codeOf(r.error);
@@ -80,8 +80,8 @@ export function sentOutcome(
 const away = (s: Session) => !!s.owner && !s.owner.reachable;
 /** How the Mac is away: it said it went to sleep, or it is only not
  * reachable. */
-const gone = (s: Session) =>
-  s.owner?.asleep ? "is asleep" : "is not reachable";
+const awayAs = (s: Session) =>
+  s.owner?.asleep ? "asleep" : "not reachable";
 
 /** The line for a message or an answer held for `s` at `now` (ms). */
 export function heldLine(
@@ -93,12 +93,12 @@ export function heldLine(
   const owner = s.owner?.name ?? "Its Mac";
   if (!s.owner) return `Sending your ${what} to ${central}…`;
   if (away(s) && s.pinned)
-    return `Kept on ${owner} · ${s.owner.asleep ? "asleep" : "not reachable"}. Your ${what} goes when ${owner} is back.`;
+    return `Kept on ${owner} · ${awayAs(s)}. Your ${what} goes when ${owner} is back.`;
   if (away(s)) {
     const wait = continueWait(s, now);
     return wait > 0
-      ? `${owner} ${gone(s)}. Your ${what} goes on ${central} in ${wait} s.`
-      : `${owner} ${gone(s)}. Continuing on ${central}…`;
+      ? `${owner} is ${awayAs(s)}. Your ${what} goes on ${central} in ${wait} s.`
+      : `${owner} is ${awayAs(s)}. Continuing on ${central}…`;
   }
   return `${owner} is not responding. Your ${what} goes as soon as it answers, or on ${central} once it has been away for 30 s.`;
 }
