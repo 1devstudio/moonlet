@@ -1499,3 +1499,24 @@ async fn a_worker_id_stays_the_members_while_its_link_moves() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_worker_whose_address_is_no_device_of_the_tailnet_never_links() {
+    let (mut central, addr) = central().await;
+    let token = pair(&central, &addr, "build-box").await;
+    // Seen from the central host, the worker now connects from an address in
+    // 100.64.0.0/10 that is no device of its tailnet.
+    central.env.push(("MOONLET_TEST_PEER_ADDR".into(), "100.100.20.30".into()));
+    central.restart().await;
+    eventually("the restarted central host listens", || async {
+        let st: Value = central.call("mobile.status", json!({})).await;
+        st["listening"].as_array().is_some_and(|l| l.contains(&json!(addr)))
+    })
+    .await;
+    let worker = worker("w-off-tailnet", "build-box").await;
+    link(&worker, &addr, &token).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(workers(&central).await.is_empty());
+    let state = link_state(&worker).await;
+    assert!(!matches!(state, LinkState::Connected { .. }), "{state:?}");
+}

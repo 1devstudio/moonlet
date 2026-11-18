@@ -504,6 +504,7 @@ describe("the Phones page's access line (X43)", () => {
 
   it("warns when Tailscale is not running, and is quiet when off or starting", () => {
     expect(phoneAccessLine(st({ tailscale: false, listening: [] }))).toEqual({ tone: "blocked", text: "Tailscale is not running on this Mac" });
+    expect(phoneAccessLine(st({ tailscale: false, tailscale_missing: true, listening: [] }))).toEqual({ tone: "blocked", text: "moonlet cannot find Tailscale on this Mac" });
     expect(phoneAccessLine(st({ enabled: false, listening: [] }))).toEqual({ tone: "muted", text: "Off" });
     expect(phoneAccessLine(st({ listening: [] }))).toEqual({ tone: "muted", text: "Starting…" });
   });

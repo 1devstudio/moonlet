@@ -1143,8 +1143,11 @@ export interface MobileDevice {
 export interface MobileStatus {
   enabled: boolean;
   port: number;
-  /** The Mac has a Tailscale address. */
+  /** Tailscale runs and reports an address this Mac's interfaces have; also
+   * true, with nothing listening, until Tailscale was asked ("Starting…"). */
   tailscale: boolean;
+  /** No `tailscale` command was found to ask; absent means false. */
+  tailscale_missing?: boolean;
   addresses: string[];
   /** Where the daemon listens for phones, `ip:port`; empty while off. */
   listening: string[];

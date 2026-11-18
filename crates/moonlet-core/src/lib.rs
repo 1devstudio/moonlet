@@ -39,6 +39,7 @@ pub mod session_processes;
 pub mod shell;
 pub mod tasks;
 pub mod ssh;
+pub mod seams;
 pub mod sync;
 pub mod tailnet;
 pub mod term;

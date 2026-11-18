@@ -63,3 +63,18 @@ A paired desktop, like a phone, cannot manage the remote's devices, so it cannot
   1. a desktop pairs with a remote host over the tailnet, and the phone's dial-and-auth code moves into `moonlet-link` for both apps ([X57](../specs/X57-tailnet-hosts.md));
   2. the Linux install script and its release assets ([X58](../specs/X58-linux-install-script.md));
   3. X41 on the tailnet connection, then the rest of ADR 0009.
+
+## Open items
+
+### Who answers at the listener (2026-11-18)
+
+Since 2026-11-18 the daemon binds its listener only on the addresses its local Tailscale reports, and lets in only the addresses Tailscale lists for this tailnet's devices ([X39](../specs/X39-phone-pairing-and-link.md), "Listener"). A client still trusts the address it was given: it dials the host's `ip:port`, and its first frame carries its device token to whoever answers there. Clients dial only Tailscale addresses (or loopback for a pasted link), so this rests on the address belonging to the paired host.
+
+**Planned:** client and host prove to each other that they share the device's secret, and the token itself no longer crosses the wire, with nothing new to keep and no pairing again.
+
+- The host already stores the SHA-256 of each device token, and the client holds the token, so both can compute that hash. The client opens with its device id and a random nonce; the host answers with its own nonce and a keyed hash of both nonces under the token's hash; the client answers with its own keyed hash of them. Each side checks the other's before anything else goes.
+- A proof alone is not enough if a reusable secret follows it: a server in the middle could pass the challenge to the real host and keep what comes next. So no reusable secret follows. Both sides derive a key for this connection from the token's hash and the two nonces, and every later frame is authenticated with it, which ties the connection to the exchange. A server that relays the exchange cannot read or send frames on it. WireGuard still encrypts the traffic.
+- The cost: the host's stored hash becomes what a client proves it knows, so a copy of `mobile.json` could stand in for a device. The file is already private (mode 0600 inside the private `~/.moonlet`), and removing the device still takes access back.
+- **Compatibility.** A host from before answers the new first frame as any other non-`auth` first frame, with `unauthorized`, and closes. A newer client then connects the old way, sending the token, so a newer client with an older host, and an older client with a newer host (which keeps taking `auth`), still connect, without that protection. To keep a downgrade from undoing it, the client records per host that it once answered the challenge (`app-hosts.json`, `link.json`, the phone's store) and from then on refuses a host that does not.
+- **Scope.** It changes the first exchange of `moonlet-link` (desktop and worker link) and of the phone app, and what each keeps per host. That is a protocol change larger than the listener fix, so it is its own slice, with its own spec criteria and tests in `crates/moonlet-link/tests/tailnet.rs` and `crates/moonletd/tests/mobile.rs`.
+- **Pairing** sends a one-time code, not a token: one use, 5 minutes, 5 wrong attempts. Tying the code to the host (for example the host's answer proving it knows the code before the client takes the token) can follow in the same slice.

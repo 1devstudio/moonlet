@@ -18,6 +18,7 @@ struct Mac {
     home: tempfile::TempDir,
     socket: PathBuf,
     path: Option<PathBuf>,
+    env: Vec<(String, String)>,
     child: Child,
 }
 
@@ -25,6 +26,13 @@ impl Mac {
     /// A daemon with phone access configured on an ephemeral port, and
     /// `path` first on its login shell's PATH (for a fake `ssh`).
     async fn start(path: Option<&Path>) -> Mac {
+        Mac::start_with(path, &[]).await
+    }
+
+    /// [`Self::start`] with more of the daemon's environment; an empty value
+    /// leaves that variable out.
+    async fn start_with(path: Option<&Path>, env: &[(&str, &str)]) -> Mac {
+        let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join("mobile.json"),
@@ -32,16 +40,17 @@ impl Mac {
         )
         .unwrap();
         let socket = home.path().join("run").join("d.sock");
-        let child = Mac::spawn(home.path(), &socket, path).await;
+        let child = Mac::spawn(home.path(), &socket, path, &env).await;
         Mac {
             home,
             socket,
             path: path.map(Path::to_path_buf),
+            env,
             child,
         }
     }
 
-    async fn spawn(home: &Path, socket: &Path, path: Option<&Path>) -> Child {
+    async fn spawn(home: &Path, socket: &Path, path: Option<&Path>, env: &[(String, String)]) -> Child {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
@@ -51,6 +60,8 @@ impl Mac {
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
             // A task request no app answers fails within the test (X76).
             .env("MOONLET_TASKS_REQUEST_TIMEOUT_MS", "1500")
+            // Never the real `tailscale` (X39).
+            .env("MOONLET_TAILSCALE", "/nonexistent/tailscale")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -68,6 +79,13 @@ impl Mac {
             }
             cmd.env("HOME", home);
         }
+        for (k, v) in env {
+            if v.is_empty() {
+                cmd.env_remove(k);
+            } else {
+                cmd.env(k, v);
+            }
+        }
         let child = cmd.spawn().unwrap();
         wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15))
             .await
@@ -79,7 +97,7 @@ impl Mac {
     async fn restart(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        self.child = Mac::spawn(self.home.path(), &self.socket, self.path.as_deref()).await;
+        self.child = Mac::spawn(self.home.path(), &self.socket, self.path.as_deref(), &self.env).await;
     }
 
     async fn app(&self) -> Client {
@@ -629,6 +647,177 @@ async fn bad_auth_is_refused_without_saying_why() {
     let mut s = TcpStream::connect(&addr).await.unwrap();
     let r = hello(&mut s, "moonlet-mobile").await;
     assert!(unauthorized(&r), "{r:?}");
+}
+
+/// A fake `tailscale` in `dir` whose `status --json` prints `dir/status.json`,
+/// which starts as `status`. Returns its path.
+fn fake_tailscale(dir: &Path, status: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(dir.join("status.json"), status).unwrap();
+    let path = dir.join("tailscale");
+    // The status file sits beside the stub, so no path needs quoting.
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n[ \"$1 $2\" = \"status --json\" ] || exit 2\ncat \"$(dirname \"$0\")/status.json\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path.display().to_string()
+}
+
+/// `tailscale status --json` while Tailscale runs, cut down to what the
+/// daemon reads. The field names are Tailscale's (`ipnstate.Status`); the
+/// names and addresses are made up.
+fn running(own: &str, peers: &[&str]) -> String {
+    let peers: Vec<String> = peers
+        .iter()
+        .enumerate()
+        .map(|(i, ip)| format!(r#""nodekey:{i:04x}": {{ "HostName": "device-{i}", "TailscaleIPs": ["{ip}"], "Online": true }}"#))
+        .collect();
+    format!(
+        r#"{{ "BackendState": "Running", "TailscaleIPs": ["{own}"],
+             "Self": {{ "HostName": "studio-mini", "TailscaleIPs": ["{own}"] }},
+             "Peer": {{ {} }} }}"#,
+        peers.join(", ")
+    )
+}
+
+/// Whether the daemon closes `s` within `limit` without sending anything.
+async fn closed_within(s: &mut TcpStream, limit: Duration) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 64];
+    match tokio::time::timeout(limit, s.read(&mut buf)).await {
+        Ok(Ok(0)) | Ok(Err(_)) => true,
+        Ok(Ok(_)) | Err(_) => false,
+    }
+}
+
+#[tokio::test]
+async fn a_peer_tailscale_does_not_list_is_closed_before_its_first_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let tailscale = fake_tailscale(dir.path(), &running("100.101.102.103", &["100.88.1.20"]));
+    // The daemon takes every connection as coming from 100.100.20.30: in
+    // 100.64.0.0/10, as a phone tether's or a carrier's address can be, but
+    // no device of this tailnet.
+    let mac = Mac::start_with(None, &[("MOONLET_TAILSCALE", &tailscale), ("MOONLET_TEST_PEER_ADDR", "100.100.20.30")]).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+
+    let mut s = TcpStream::connect(&addr).await.unwrap();
+    let auth = Message::Auth { token: None, pair: Some(p.code.clone()), device: Some("Tether".into()), route: None, kind: None };
+    let _ = write_frame(&mut s, &Frame::Json(auth)).await;
+    assert!(closed_within(&mut s, Duration::from_secs(3)).await, "a peer off the tailnet was answered");
+    // Its code was never read: nothing paired.
+    let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+    assert!(st.devices.is_empty(), "{:?}", st.devices);
+}
+
+#[tokio::test]
+async fn a_peer_tailscale_lists_pairs() {
+    let dir = tempfile::tempdir().unwrap();
+    let tailscale = fake_tailscale(dir.path(), &running("100.101.102.103", &["100.88.1.20"]));
+    let mac = Mac::start_with(None, &[("MOONLET_TAILSCALE", &tailscale), ("MOONLET_TEST_PEER_ADDR", "100.88.1.20")]).await;
+    let addr = mac.allow_phones().await;
+    assert_eq!(mac.pair(&addr).await.len(), 64);
+}
+
+#[tokio::test]
+async fn a_device_that_joins_the_tailnet_later_is_let_in_without_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let tailscale = fake_tailscale(dir.path(), &running("100.101.102.103", &[]));
+    let mac = Mac::start_with(None, &[("MOONLET_TAILSCALE", &tailscale), ("MOONLET_TEST_PEER_ADDR", "100.88.1.20")]).await;
+    let addr = mac.allow_phones().await;
+    let mut s = TcpStream::connect(&addr).await.unwrap();
+    assert!(closed_within(&mut s, Duration::from_secs(3)).await, "a peer not yet on the tailnet was let in");
+    // The phone joins the tailnet. The daemon asks Tailscale again for a
+    // peer it does not know, at most every 2 seconds.
+    std::fs::write(dir.path().join("status.json"), running("100.101.102.103", &["100.88.1.20"])).unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(mac.pair(&addr).await.len(), 64);
+}
+
+/// Turns access on and returns the status once Tailscale was asked (it
+/// says "Starting…" until then), within 10 seconds.
+async fn status_once_asked(mac: &Mac) -> MobileStatus {
+    let mut app = mac.app().await;
+    let _: MobileStatus = app.request("mobile.set_enabled", json!({ "enabled": true })).await.unwrap();
+    let mut st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+    for _ in 0..200 {
+        if !st.tailscale || !st.listening.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        st = app.request("mobile.status", json!({})).await.unwrap();
+    }
+    // Nothing binds later either.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    app.request("mobile.status", json!({})).await.unwrap()
+}
+
+#[tokio::test]
+async fn without_tailscale_running_nothing_listens() {
+    let dir = tempfile::tempdir().unwrap();
+    let stopped = running("100.101.102.103", &["100.88.1.20"]).replace(r#""Running""#, r#""Stopped""#);
+    let tailscale = fake_tailscale(dir.path(), &stopped);
+    let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", &tailscale)]).await;
+    let st = status_once_asked(&mac).await;
+    assert_eq!((st.tailscale, st.tailscale_missing, st.listening.len()), (false, false, 0), "{st:?}");
+}
+
+#[tokio::test]
+async fn without_the_tailscale_command_nothing_listens_and_settings_says_so() {
+    let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", "/nonexistent/tailscale")]).await;
+    let st = status_once_asked(&mac).await;
+    assert_eq!((st.tailscale, st.tailscale_missing, st.listening.len()), (false, true, 0), "{st:?}");
+}
+
+#[tokio::test]
+async fn only_an_address_tailscale_reports_is_listened_on() {
+    // Tailscale reports an address no interface here has, so nothing
+    // listens. On a machine with an interface in 100.64.0.0/10, the range
+    // alone would have listened there; the unit test
+    // `an_address_tailscale_does_not_report_is_not_listened_on` covers that
+    // case on every machine.
+    let dir = tempfile::tempdir().unwrap();
+    let tailscale = fake_tailscale(dir.path(), &running("100.100.99.1", &[]));
+    let mac = Mac::start_with(None, &[("MOONLET_MOBILE_ADDRS", ""), ("MOONLET_TAILSCALE", &tailscale)]).await;
+    let st = status_once_asked(&mac).await;
+    assert_eq!((st.tailscale, st.listening.len()), (false, 0), "{st:?}");
+}
+
+#[tokio::test]
+async fn a_large_frame_before_auth_is_refused_at_once() {
+    use tokio::io::AsyncWriteExt;
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut s = TcpStream::connect(&addr).await.unwrap();
+    // A header announcing one byte over 64 KiB, and no body.
+    s.write_all(&[0, 1, 0, 1]).await.unwrap();
+    assert!(closed_within(&mut s, Duration::from_secs(3)).await, "the daemon waited for a 65 537-byte auth frame");
+    // An auth of a normal size still works.
+    assert_eq!(mac.pair(&addr).await.len(), 64);
+}
+
+#[tokio::test]
+async fn only_32_connections_wait_for_auth_at_once() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut waiting = Vec::new();
+    for _ in 0..32 {
+        waiting.push(TcpStream::connect(&addr).await.unwrap());
+    }
+    // Let the daemon take all 32 before the next one.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut extra = TcpStream::connect(&addr).await.unwrap();
+    assert!(closed_within(&mut extra, Duration::from_secs(3)).await, "a 33rd connection waited for auth");
+    // The first 32 still wait.
+    for (i, s) in waiting.iter_mut().enumerate() {
+        assert!(!closed_within(s, Duration::from_millis(20)).await, "connection {i} was closed");
+    }
+    drop(waiting);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(mac.pair(&addr).await.len(), 64);
 }
 
 #[tokio::test]
