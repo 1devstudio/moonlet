@@ -81,6 +81,8 @@ describe("Git settings", () => {
     await $(sel.button("Archive session…")).click();
     await expect($(sel.text('Archive "Throwaway"? Its terminals stop and the worktree folder is removed. The branch is deleted too.'))).toBeDisplayed();
     await expect($(`${sel.confirm("Archive session")}//input[@type="checkbox"]`)).not.toBeExisting();
+    // It opens at once and can be confirmed once the host was asked (X55).
+    await expect($(sel.confirmButton("Archive"))).toBeEnabled();
     await $(sel.confirmButton("Archive")).click();
     await expect($(sel.sessionRow("Throwaway"))).not.toBeExisting({ wait: 15_000 });
     await browser.waitUntil(() => execFileSync("git", ["-C", w.repo, "branch", "--list", s.branch], { encoding: "utf8" }).trim() === "", { timeoutMsg: "the branch is still there" });
