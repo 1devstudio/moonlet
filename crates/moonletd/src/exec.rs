@@ -77,6 +77,10 @@ struct Remote {
     /// (X89).
     conn: Peer,
     done: Option<oneshot::Sender<(i32, ExecBrought, u64)>>,
+    /// Output that came before the worker answered the start: the worker
+    /// starts the command before it replies, and the client hears
+    /// "running on" first. `None` once the start was answered.
+    held: Option<Vec<(u8, Vec<u8>)>>,
 }
 
 /// A run of this central host's, for stopping it from its job.
@@ -964,6 +968,7 @@ impl Runs {
                 outputs: plan.outputs.clone(),
                 conn: conn.clone(),
                 done: Some(tx),
+                held: Some(Vec::new()),
             },
         );
         let start = ExecStart {
@@ -1007,8 +1012,12 @@ impl Runs {
             } else {
                 None
             };
-            self.remote.lock().unwrap().remove(&run);
+            let held = self.remote.lock().unwrap().remove(&run).and_then(|r| r.held);
             if may_have_started(&e.code, cancel.as_ref()) {
+                // What it printed as it started still reaches the client.
+                for (stream, data) in held.into_iter().flatten() {
+                    self.emit(run, job, client, stream, data);
+                }
                 return Err(Fail::Gone("It went away as the command started."));
             }
             return Err(Fail::Refused(e.code, e.message));
@@ -1034,13 +1043,26 @@ impl Runs {
                 copy: prepared.path.clone(),
             });
         });
-        self.emit(
-            run,
-            job,
-            client,
-            2,
-            format!("moonlet: running on {name}\n").into_bytes(),
-        );
+        {
+            // Said before anything the command printed: what came while
+            // the start was answered follows it, and the rest after.
+            let mut remote = self.remote.lock().unwrap();
+            self.emit(
+                run,
+                job,
+                client,
+                2,
+                format!("moonlet: running on {name}\n").into_bytes(),
+            );
+            if let Some(r) = remote.get_mut(&run) {
+                for (stream, data) in r.held.take().into_iter().flatten() {
+                    self.emit(run, job, client, stream, data);
+                }
+                if r.done.is_none() {
+                    remote.remove(&run);
+                }
+            }
+        }
         // Stopped while it was being started: the worker stops it now.
         if self.stops.lock().unwrap().contains_key(&run) {
             self.cancel_remote(run).await;
@@ -1280,11 +1302,13 @@ impl Runs {
     /// Output of a remote run, from the worker on connection `from`.
     pub fn forward(&self, from: ClientId, run: u32, stream: u8, data: Vec<u8>) {
         let target = {
-            let remote = self.remote.lock().unwrap();
-            remote
-                .get(&run)
-                .filter(|r| r.conn.id() == from)
-                .map(|r| (r.client.clone(), r.job.clone()))
+            let mut remote = self.remote.lock().unwrap();
+            let Some(r) = remote.get_mut(&run).filter(|r| r.conn.id() == from) else { return };
+            if let Some(held) = &mut r.held {
+                held.push((stream, data));
+                return;
+            }
+            Some((r.client.clone(), r.job.clone()))
         };
         if let Some((client, job)) = target {
             self.emit(run, &job, &client, stream, data);
@@ -1306,11 +1330,14 @@ impl Runs {
     /// `back_ms` is how long bringing them in took.
     pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought, back_ms: u64) {
         let mut remote = self.remote.lock().unwrap();
-        if remote.get(&run).is_some_and(|r| r.conn.id() == from)
-            && let Some(mut r) = remote.remove(&run)
-            && let Some(tx) = r.done.take()
-        {
+        let Some(r) = remote.get_mut(&run).filter(|r| r.conn.id() == from) else { return };
+        if let Some(tx) = r.done.take() {
             let _ = tx.send((status, brought, back_ms));
+        }
+        // Done before its start was answered: kept until the start says
+        // "running on" and passes on what the command printed.
+        if r.held.is_none() {
+            remote.remove(&run);
         }
     }
 
@@ -1516,6 +1543,11 @@ impl Runs {
             drop(claim);
             sync.drop_run_copy_if_off(&req.copy);
         });
+        // Tests: the command runs before its start is answered, as on a
+        // slow link or a loaded machine.
+        if let Some(ms) = std::env::var("MOONLET_TEST_EXEC_START_REPLY_MS").ok().and_then(|v| v.parse().ok()) {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
         Ok(true)
     }
 
