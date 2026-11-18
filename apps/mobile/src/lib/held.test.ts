@@ -45,6 +45,18 @@ const away = (since: number) =>
     unreachable_since: since,
   });
 const silent = session({ worker: "w1", name: "MacBook", reachable: true });
+// It said it is going to sleep 5 s ago (X73).
+const asleep = (pinned?: string) =>
+  session(
+    {
+      worker: "w1",
+      name: "MacBook",
+      reachable: false,
+      unreachable_since: NOW - 5_000,
+      asleep: true,
+    },
+    pinned,
+  );
 const refused = (code: string, message = "") => ({
   error: new DaemonError({ code, message }),
 });
@@ -192,6 +204,32 @@ describe("what became of a message or an answer for a session whose Mac is away 
         NOW,
       ),
     ).toBe(5_000);
+  });
+});
+
+describe("a message or an answer for a session whose Mac said it is going to sleep (X73)", () => {
+  it("says the Mac is asleep and the session continues on the central host, with no count-down", () => {
+    expect(heldLine(asleep(), "studio-mini", "message", NOW)).toBe(
+      "MacBook is asleep. Continuing on studio-mini…",
+    );
+    expect(retryIn(asleep(), NOW)).toBe(1_000);
+    expect(
+      sentOutcome(
+        { value: { continued_on: "studio-mini" } },
+        asleep(),
+        "studio-mini",
+      ),
+    ).toEqual({
+      kind: "sent",
+      note: "MacBook is asleep. Continuing on studio-mini.",
+    });
+  });
+
+  it("holds it for a session kept on that Mac until the Mac is back", () => {
+    expect(heldLine(asleep("w1"), "studio-mini", "answer", NOW)).toBe(
+      "Kept on MacBook · asleep. Your answer goes when MacBook is back.",
+    );
+    expect(retryIn(asleep("w1"), NOW)).toBe(5_000);
   });
 });
 

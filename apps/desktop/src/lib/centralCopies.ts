@@ -66,11 +66,12 @@ const CONTINUE_AFTER_MS = 30_000;
 
 /** Seconds left at `now` (ms) before Continue on <central> can be pressed:
  * the central host continues a session only once its member has been
- * unreachable for 30 s (X73). 0 once it can, or when the central host does
- * not say since when the member is away. */
+ * unreachable for 30 s (X73), or at once when that member said it was
+ * going to sleep. 0 once it can, or when the central host does not say
+ * since when the member is away. */
 export function continueWait(s: Session, now: number): number {
   const since = s.owner?.unreachable_since;
-  if (since == null) return 0;
+  if (since == null || s.owner?.asleep) return 0;
   return Math.max(0, Math.ceil((since + CONTINUE_AFTER_MS - now) / 1000));
 }
 
