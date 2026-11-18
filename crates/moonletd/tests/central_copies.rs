@@ -1766,13 +1766,16 @@ async fn a_client_cannot_pick_a_relay_through_a_forwarded_request() {
 async fn ask_on(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> moonlet_proto::Message {
     use moonlet_proto::{Frame, Message, read_frame, write_frame};
     write_frame(s, &Frame::Json(Message::Request { id, method: method.into(), params })).await.unwrap();
-    loop {
-        match tokio::time::timeout(Duration::from_secs(20), read_frame(s)).await.expect("no reply") {
-            Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
-            Ok(Some(_)) => {}
-            other => panic!("the connection ended: {other:?}"),
+    let reply = async {
+        loop {
+            match read_frame(s).await {
+                Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+                Ok(Some(_)) => {}
+                other => panic!("the connection ended: {other:?}"),
+            }
         }
-    }
+    };
+    tokio::time::timeout(Duration::from_secs(20), reply).await.expect("no reply")
 }
 
 /// X40, X72: a paired phone's request for another member's session is
@@ -1819,8 +1822,8 @@ async fn a_phones_request_through_the_central_host_reaches_only_a_phones_methods
         };
         assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
     }
-    let versions = forward(&mini, &made, "git.file_versions", json!({ "file": "src/cart.ts" })).await;
-    assert!(versions.is_ok(), "{versions:?}");
+    let versions = forward(&mini, &made, "git.file_versions", json!({ "file": "src/cart.ts" })).await.unwrap();
+    assert_eq!(versions["modified"], "a\n");
 }
 
 /// A central host played by hand on 127.0.0.1 (X72): it registers the

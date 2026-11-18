@@ -791,6 +791,7 @@ async fn a_phone_reaches_only_what_the_phone_app_sends() {
         let reply = call_with(&mut phone, id, method, Value::Null).await;
         if let Message::Response { error: Some(e), .. } = &reply {
             assert_ne!(e.message, "a phone does not do that", "{method}");
+            assert_ne!(e.code, "unknown_method", "{method}");
         }
     }
     // Anything else is refused before it runs, a method the daemon does not
@@ -801,7 +802,7 @@ async fn a_phone_reaches_only_what_the_phone_app_sends() {
         (101, "git.set_settings", json!({ "push_on_commit": true })),
         (102, "link.join", json!({ "central": { "name": "elsewhere", "addrs": ["100.64.0.99:7655"], "token": "t" } })),
         (103, "session.move", json!({ "session": "s", "to": "w" })),
-        (104, "worker.settings_set", json!({ "worker": "w", "enabled": true })),
+        (104, "worker.settings.set", json!({ "worker": "w", "heavy": true })),
         (105, "phone.added_later", json!({})),
     ] {
         let Message::Response { error: Some(e), .. } = call_with(&mut phone, id, method, params).await else {
@@ -1026,7 +1027,7 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         (14, "signins.approve"),
         (15, "signins.run"),
         (16, "session.move"),
-        (17, "worker.settings_set"),
+        (17, "worker.settings.set"),
         (18, "phone.added_later"),
     ] {
         let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
@@ -1037,7 +1038,7 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
     let Message::Response { error: Some(e), .. } = call(&mut phone, 19, "terminal.read_answer").await else {
         panic!("terminal.read_answer worked through a route")
     };
-    assert_eq!(e.code, "forbidden");
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app answers read requests"));
 
     // A phone that names itself the app on the host is still a phone there:
     // the Mac sends its hello as the phone's.
