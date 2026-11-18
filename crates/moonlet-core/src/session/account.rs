@@ -1057,7 +1057,8 @@ impl SessionManager {
     /// Hands `changes`, just made here, to the listener, after this
     /// member's own changes that making them stamped again
     /// ([`Log::take_restamped`]): those go out as promptly, whenever in an
-    /// exchange they were stamped (X68).
+    /// exchange they were stamped (X68). A change in `changes` stamped
+    /// again since goes only as stamped again.
     pub(super) fn account_changed(&self, changes: Vec<Change>) {
         let (f, again) = {
             let mut account = self.account.lock().unwrap();
@@ -1065,6 +1066,10 @@ impl SessionManager {
             let Some(f) = a.listener.clone() else { return };
             (f, a.log.take_restamped())
         };
+        // One made earlier in the same batch, then stamped again, goes
+        // once, as stamped again.
+        let numbers: std::collections::HashSet<(&str, u64)> = again.iter().map(|c| (c.stamp.member.as_str(), c.seq)).collect();
+        let changes: Vec<Change> = changes.into_iter().filter(|c| !numbers.contains(&(c.stamp.member.as_str(), c.seq))).collect();
         f(again.into_iter().chain(changes).collect());
     }
 
@@ -3020,18 +3025,15 @@ mod tests {
         assert_eq!(fields, ["created_at", "name", "order", "view", "workspace"]);
     }
 
-    #[tokio::test]
-    async fn changes_stamped_again_are_handed_on_with_the_change_that_stamped_them() {
-        use serde_json::json;
-        let (home, book) = member("book").await;
-        let ws = book.list_workspaces()[0].clone();
-        drop(book);
-        // While the MacBook's clock said a year ahead, it renamed its
-        // workspace, and studio-mini refused the change: its log holds it
-        // as that change was made. Written into the file rather than made
-        // with `MOONLET_TEST_ACCOUNT_CLOCK_MS`, which would shift the clock
-        // of every test running in this process.
-        let path = home.path().join("account.json");
+    const YEAR_MS: u64 = 365 * 24 * 60 * 60 * 1000;
+
+    /// Adds to the log saved in `home` the change `make` gives, from this
+    /// member's log name and its next number, as a change made while a
+    /// clock was wrong would be held; gives that number. Written into the
+    /// file rather than made with `MOONLET_TEST_ACCOUNT_CLOCK_MS`, which
+    /// would shift the clock of every test running in this process.
+    fn held_in_log(home: &Path, make: impl FnOnce(&str, u64) -> serde_json::Value) -> u64 {
+        let path = home.join("account.json");
         let mut file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let me = file["member"].as_str().unwrap().to_string();
         let seq = file["changes"]
@@ -3041,35 +3043,96 @@ mod tests {
             .filter(|c| c["stamp"]["member"] == me.as_str())
             .map(|c| c["seq"].as_u64().unwrap())
             .max()
-            .unwrap()
+            .unwrap_or(0)
             + 1;
-        let year: u64 = 365 * 24 * 60 * 60 * 1000;
-        file["changes"].as_array_mut().unwrap().push(json!({
-            "stamp": { "ms": now_ms() + year, "n": 0, "member": me },
-            "seq": seq,
-            "kind": "workspace",
-            "id": ws.id,
-            "op": { "set": { "field": "name", "value": "Future" } },
-        }));
+        file["changes"].as_array_mut().unwrap().push(make(&me, seq));
         std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
-        let book = reload(home.path(), "book");
-        let sent = Arc::new(Mutex::new(Vec::<Change>::new()));
+        seq
+    }
+
+    /// Every batch of changes `mgr` hands on from now, one by one.
+    fn batches(mgr: &SessionManager) -> Arc<Mutex<Vec<Vec<Change>>>> {
+        let sent = Arc::new(Mutex::new(Vec::new()));
         let out = sent.clone();
-        book.on_account_change(move |c| out.lock().unwrap().extend(c));
+        mgr.on_account_change(move |c| out.lock().unwrap().push(c));
+        sent
+    }
+
+    #[tokio::test]
+    async fn changes_stamped_again_are_handed_on_with_the_change_that_stamped_them() {
+        use serde_json::json;
+        let (home, book) = member("book").await;
+        let ws = book.list_workspaces()[0].clone();
+        drop(book);
+        // While the MacBook's clock said a year ahead, it renamed its
+        // workspace, and studio-mini refused the change: its log holds it
+        // as that change was made.
+        let seq = held_in_log(home.path(), |me, seq| {
+            json!({
+                "stamp": { "ms": now_ms() + YEAR_MS, "n": 0, "member": me },
+                "seq": seq,
+                "kind": "workspace",
+                "id": ws.id,
+                "op": { "set": { "field": "name", "value": "Future" } },
+            })
+        });
+        let book = reload(home.path(), "book");
+        let sent = batches(&book);
         // Its clock is right again, and it adds a section. That stamps the
         // rename again first, and the rename goes out with the section, at
         // any moment of an exchange, rather than at the next one.
         book.create_section(&ws.id, "Later").unwrap();
         let sent = sent.lock().unwrap().clone();
-        let again = sent.iter().find(|c| c.seq == seq).unwrap_or_else(|| panic!("the rename is not handed on: {sent:?}"));
+        let [batch] = sent.as_slice() else { panic!("one batch: {sent:?}") };
+        // Oldest first, as the central host counts them.
+        let again = &batch[0];
+        assert_eq!(again.seq, seq, "the rename is not handed on first: {batch:?}");
         assert_eq!(
             again.op,
             moonlet_proto::types::ChangeOp::Set { field: "name".into(), value: json!("Future") }
         );
         assert!(again.stamp.ms <= now_ms(), "stamped again by the wall clock: {again:?}");
-        // Oldest first, as the central host counts them.
-        assert_eq!(sent[0].seq, seq);
-        assert!(sent[1..].iter().all(|c| c.kind == "section"), "{sent:?}");
+        let mut fields: Vec<String> = batch[1..]
+            .iter()
+            .filter(|c| c.kind == "section")
+            .map(|c| match &c.op {
+                moonlet_proto::types::ChangeOp::Set { field, .. } => field.clone(),
+                moonlet_proto::types::ChangeOp::Delete => "delete".into(),
+            })
+            .collect();
+        fields.sort();
+        assert_eq!(fields, ["created_at", "name", "order", "view", "workspace"]);
+        assert_eq!(batch.len(), 6, "{batch:?}");
+    }
+
+    #[tokio::test]
+    async fn a_change_stamped_again_in_the_batch_that_made_it_is_handed_on_once() {
+        use serde_json::json;
+        let (home, mini) = member("mini").await;
+        drop(mini);
+        // studio-mini took the MacBook's approval while its own clock said
+        // a year ahead, before it refereed permissions.
+        held_in_log(home.path(), |_, _| {
+            json!({
+                "stamp": { "ms": now_ms() + YEAR_MS, "n": 0, "member": "book.k3x9q2" },
+                "seq": 1,
+                "kind": "heavy_approval",
+                "id": "github.com/acme/shop",
+                "op": { "set": { "field": "commands", "value": ["cargo test"] } },
+            })
+        });
+        let mini = reload(home.path(), "mini");
+        let sent = batches(&mini);
+        // Its clock is right again, and it starts refereeing: it makes the
+        // approval its own, with the stamp it had, and its referee record
+        // then stamps that copy again.
+        mini.referee_permissions(None);
+        let sent = sent.lock().unwrap().clone();
+        let [batch] = sent.as_slice() else { panic!("one batch: {sent:?}") };
+        let approvals: Vec<&Change> = batch.iter().filter(|c| c.kind == "heavy_approval").collect();
+        let [approval] = approvals.as_slice() else { panic!("the approval once: {batch:?}") };
+        assert!(approval.stamp.ms <= now_ms(), "as stamped again: {approval:?}");
+        assert!(approval.stamp.member.starts_with("mini."), "{approval:?}");
     }
 
     /// A repository whose origin is `github.com/acme/<name>`: test
