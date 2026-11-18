@@ -760,8 +760,6 @@ async fn phones_and_agents_cannot_manage_phones() {
     );
 }
 
-/// A fake `ssh` that records its arguments and runs the host's `moonletd proxy` as an SSH session's
-/// command: under a copy of this test binary named sshd, with
 /// Every method the phone app sends (X40, "What a phone may call"), but
 /// `gh.whoami`, which runs the real `gh`.
 const PHONE_APP_SENDS: &[&str] = &[
@@ -817,6 +815,8 @@ async fn a_phone_reaches_only_what_the_phone_app_sends() {
     assert!(e.to_string().starts_with("unknown_method"), "{e}");
 }
 
+/// A fake `ssh` that records its arguments and runs the host's `moonletd proxy` as an SSH session's
+/// command: under a copy of this test binary named sshd, with
 /// `SSH_CONNECTION` set, so the proxy vouches for the phone it carries
 /// (X40, A6) as a real SSH login does.
 fn fake_ssh(dir: &Path, remote_home: &Path, args_file: &Path) {
@@ -854,6 +854,78 @@ fn as_sshd_runs_moonletd() {
         .status()
         .unwrap();
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// A fake `ssh` whose host is one from before hosts checked a routed
+/// phone's requests: a copy of this test binary that plays it (see
+/// [`as_an_older_host`]), writing down in `seen` every method it gets.
+fn older_host_ssh(dir: &Path, seen: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let script = format!(
+        "#!/bin/sh\nMOBILE_TEST_OLDER_HOST='{}' exec '{}' --exact as_an_older_host --nocapture --test-threads=1 2>&1 1>/dev/null\n",
+        seen.display(),
+        std::env::current_exe().unwrap().display(),
+    );
+    let ssh = dir.join("ssh");
+    std::fs::write(&ssh, script).unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// What this test binary does as [`older_host_ssh`]'s host: it answers
+/// `hello`, and takes every request, answering `true` and writing its
+/// method down, frames in on stdin and out on stderr. In a plain run it
+/// does nothing.
+#[test]
+fn as_an_older_host() {
+    use std::io::Write;
+    let Some(seen) = std::env::var_os("MOBILE_TEST_OLDER_HOST") else {
+        return;
+    };
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async move {
+        let (mut input, mut out) = (tokio::io::stdin(), tokio::io::stderr());
+        while let Ok(Some(Frame::Json(m))) = read_frame(&mut input).await {
+            let reply = match m {
+                Message::Hello { .. } => Message::Welcome { protocol: PROTOCOL_VERSION, daemon_version: "0.1.44".into(), host: "devbox".into(), pid: 1 },
+                Message::Request { id, method, .. } => {
+                    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&seen).unwrap();
+                    writeln!(f, "{method}").unwrap();
+                    Message::ok(id, true)
+                }
+                _ => continue,
+            };
+            if write_frame(&mut out, &Frame::Json(reply)).await.is_err() {
+                break;
+            }
+        }
+    });
+    std::process::exit(0);
+}
+
+/// X40: the Mac answers itself a routed phone's requests that are not a
+/// phone's, so a host from before that checks none still never gets them.
+#[tokio::test]
+async fn a_host_from_before_gets_only_a_phones_requests_through_the_mac() {
+    let bin = tempfile::tempdir().unwrap();
+    let seen = bin.path().join("seen");
+    older_host_ssh(bin.path(), &seen);
+    let mac = Mac::start(Some(bin.path())).await;
+    std::fs::write(mac.home.path().join("app-hosts.json"), r#"{ "remotes": ["devbox"] }"#).unwrap();
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token, "route": "devbox" })).await;
+    let welcome = hello(&mut phone, "moonlet-mobile").await;
+    assert!(matches!(welcome, Some(Message::Welcome { .. })), "{welcome:?}");
+
+    for (id, method) in [(1, "link.join"), (2, "signins.set"), (3, "session.move"), (4, "phone.added_later")] {
+        let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
+            panic!("{method} reached the host")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
+    let info = call(&mut phone, 5, "daemon.info").await;
+    assert!(matches!(info, Message::Response { error: None, .. }), "{info:?}");
+    assert_eq!(std::fs::read_to_string(&seen).unwrap(), "daemon.info\n");
 }
 
 #[tokio::test]

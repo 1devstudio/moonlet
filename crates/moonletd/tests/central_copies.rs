@@ -1820,7 +1820,7 @@ async fn a_phones_request_through_the_central_host_reaches_only_a_phones_methods
         assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
     }
     let versions = forward(&mini, &made, "git.file_versions", json!({ "file": "src/cart.ts" })).await;
-    assert!(!versions.as_ref().is_err_and(|e| e.contains("a phone does not do that")), "{versions:?}");
+    assert!(versions.is_ok(), "{versions:?}");
 }
 
 /// A central host played by hand on 127.0.0.1 (X72): it registers the

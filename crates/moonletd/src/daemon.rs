@@ -5486,10 +5486,11 @@ impl Daemon {
         // resolved, so a link in the session can't reach the rest of the Mac.
         crate::session_copies::files_inside(&p, Path::new(&s.path))?;
         // From one of the central host's phones: a phone's rules here too,
-        // on top of what reaches a session on another member.
+        // on top of what reaches a session on another member, and the
+        // caller named after that phone's device id there.
         let id = self.terminals.new_client_id();
         let conn = match &r.phone {
-            Some(_) => Conn::detached_phone(id, "moonlet-forwarded", Some("forwarded".to_string())),
+            Some(device) => Conn::detached_phone(id, "moonlet-forwarded", Some(format!("forwarded:{device}"))),
             None => Conn::detached(id, "moonlet-forwarded", Some("forwarded".to_string())),
         };
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
