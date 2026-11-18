@@ -563,14 +563,21 @@ impl Mobile {
     /// most every [`ASK_AGAIN`]. While another ask runs, such a peer is
     /// refused at once instead of waiting for it, so a burst of unknown
     /// peers never holds the places of connections waiting for their
-    /// `auth`; a device that just joined connects on its next try.
+    /// `auth`; a device that just joined connects on its next try. Before
+    /// the first answer, as right after a restart, every peer waits for it.
     pub async fn lets_in(&self, peer: IpAddr) -> bool {
         let known = |seen: &Seen| seen.tailnet.as_ref().is_some_and(|t| t.lets_in(peer));
-        if known(&self.seen.lock().unwrap()) {
-            return true;
-        }
-        let Ok(_one) = self.asking.try_lock() else {
-            return false;
+        let asked = {
+            let seen = self.seen.lock().unwrap();
+            if known(&seen) {
+                return true;
+            }
+            seen.asked
+        };
+        let _one = match self.asking.try_lock() {
+            Ok(one) => one,
+            Err(_) if asked => return false,
+            Err(_) => self.asking.lock().await,
         };
         {
             let seen = self.seen.lock().unwrap();
