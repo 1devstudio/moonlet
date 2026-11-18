@@ -467,6 +467,11 @@ pub const WORKER_CREDENTIAL: &str = "worker.credential";
 pub const WORKER_LIST: &str = "worker.list";
 /// Sent by the central host to a worker, every 10 s.
 pub const WORKER_PING: &str = "worker.ping";
+/// A member tells its central host it is going to sleep, or is awake again
+/// (X73): [`WorkerSleep`] → `true`. While it sleeps, the phone continues its
+/// sessions on the central host without the 30 s wait. A central host from
+/// before refuses it, and waits the 30 s as before.
+pub const WORKER_SLEEP: &str = "worker.sleep";
 /// A routing call between two members, through their central host (X89):
 /// [`PeerCall`] → the other member's answer. A member sends `to`; the
 /// central host passes it on with `from`, the sender's worker id.
@@ -3344,6 +3349,14 @@ pub struct WorkerCredential {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerCredentialGiven {
     pub token: String,
+}
+
+/// `worker.sleep` params (X73): `asleep` at the sleep notice, before the
+/// member sends anything else; not at the wake, before it asks who owns its
+/// sessions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerSleep {
+    pub asleep: bool,
 }
 
 /// `worker.register` params, sent again on every link.

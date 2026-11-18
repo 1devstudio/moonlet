@@ -736,6 +736,11 @@ pub struct SessionOwner {
     /// after this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unreachable_since: Option<u64>,
+    /// Whether it told this host it is going to sleep and has not been
+    /// back since (X73): its sessions continue here without the 30 s wait.
+    /// Left out when false, as a host from before lists it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
 }
 
 /// A named, coloured scope with its own sections, sessions and (X33) Claude
@@ -1671,6 +1676,21 @@ mod tests {
         format!(
             r#"{{"id":4,"kind":"agent","title":"Design · storefront","cwd":"/d","command":["claude"],"agent":"claude","agent_state":"idle","cols":80,"rows":24,"pid":null,"chat":true{design},"created_at":1,"last_output_at":1}}"#
         )
+    }
+
+    /// X73: an owner that is not asleep is listed as a host from before
+    /// lists it, and a list from before reads as not asleep.
+    #[test]
+    fn an_owner_said_to_be_asleep_is_marked_so_and_one_from_before_reads_as_awake() {
+        let asleep = SessionOwner { worker: "w1".into(), name: "MacBook".into(), reachable: false, unreachable_since: Some(1_790_000_000_000), asleep: true };
+        assert_eq!(
+            serde_json::to_value(&asleep).unwrap(),
+            serde_json::json!({ "worker": "w1", "name": "MacBook", "reachable": false, "unreachable_since": 1_790_000_000_000u64, "asleep": true })
+        );
+        let awake = SessionOwner { asleep: false, reachable: true, unreachable_since: None, ..asleep };
+        assert_eq!(serde_json::to_value(&awake).unwrap(), serde_json::json!({ "worker": "w1", "name": "MacBook", "reachable": true }));
+        let old: SessionOwner = serde_json::from_str(r#"{"worker":"w1","name":"MacBook","reachable":false,"unreachable_since":1790000000000}"#).unwrap();
+        assert!(!old.asleep);
     }
 
     #[test]

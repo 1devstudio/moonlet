@@ -426,6 +426,9 @@ pub struct WorkerLink {
     /// Which host is current: a stopped host's late news carries an older
     /// number and is ignored.
     generation: AtomicU64,
+    /// Set from the sleep notice told to the central host (X73) until the
+    /// central host hears this Mac is awake again.
+    told_asleep: AtomicBool,
     /// Sessions this Mac keeps in sync (X60); the link stays open for them.
     synced: AtomicUsize,
     /// Set while `link.set` applies a change, which says `link.changed` once.
@@ -481,6 +484,7 @@ impl WorkerLink {
             down_since: Mutex::new(None),
             host: Mutex::new(None),
             generation: AtomicU64::new(0),
+            told_asleep: AtomicBool::new(false),
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
             moving: AtomicBool::new(false),
@@ -1356,9 +1360,36 @@ impl WorkerLink {
         }
     }
 
+    /// Tells the central host this Mac is going to sleep (X73), waiting up
+    /// to a second for its answer so nothing sent after goes before it. The
+    /// central host then continues this Mac's sessions from the phone
+    /// without the 30 s wait, until it hears this Mac is back. A central
+    /// host from before refuses it, which changes nothing.
+    pub async fn say_going_to_sleep(&self) {
+        // A member from before says nothing (tests).
+        if std::env::var_os("MOONLET_TEST_BEFORE_SLEEP_NOTICE").is_some() || self.is_cloud() {
+            return;
+        }
+        if !matches!(*self.state.lock().unwrap(), LinkState::Connected { .. }) {
+            return;
+        }
+        let Some(host) = self.host() else { return };
+        // Noted first: however the notice fares, the wake says this Mac is
+        // back before it asks who owns its sessions.
+        self.told_asleep.store(true, Ordering::SeqCst);
+        let notice = serde_json::to_value(m::WorkerSleep { asleep: true }).unwrap_or_default();
+        match tokio::time::timeout(std::time::Duration::from_secs(1), host.request(m::WORKER_SLEEP, notice)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => tracing::info!("the central host did not take the sleep notice: {}", e.message),
+            Err(_) => tracing::info!("no answer to the sleep notice within a second"),
+        }
+    }
+
     /// Asks the central host now for what of the account this member lacks,
     /// and takes it in (X73, after a sleep): true once it answered, within
-    /// `wait`. The link's state is not taken at its word, as a link from
+    /// `wait`. A Mac that told the central host it was going to sleep says
+    /// it is awake first, so the central host takes no session over from
+    /// then on, before the account's answer says who owns each. The link's state is not taken at its word, as a link from
     /// before a sleep can look up long after the central host dropped it:
     /// it proves itself first with a round trip, and one that gives no
     /// answer within [`ANSWER_BEFORE_RELINKING`] is made again, once.
@@ -1380,6 +1411,22 @@ impl WorkerLink {
                     // A link that answers has the rest of the time, however
                     // much the account has to catch up.
                     Ok(Ok(_)) => {
+                        let left = until.saturating_duration_since(tokio::time::Instant::now());
+                        if self.told_asleep.load(Ordering::SeqCst) {
+                            let awake = serde_json::to_value(m::WorkerSleep { asleep: false }).unwrap_or_default();
+                            match tokio::time::timeout(left, host.request(m::WORKER_SLEEP, awake)).await {
+                                // Heard; or a central host from before, which
+                                // never took the notice.
+                                Ok(Ok(_)) => self.told_asleep.store(false, Ordering::SeqCst),
+                                Ok(Err(e)) if e.code == "forbidden" || e.code == "unknown_method" => self.told_asleep.store(false, Ordering::SeqCst),
+                                // Lost: again, before the account is asked.
+                                Ok(Err(_)) => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                    continue;
+                                }
+                                Err(_) => return false,
+                            }
+                        }
                         let left = until.saturating_duration_since(tokio::time::Instant::now());
                         match tokio::time::timeout(left, self.send_account(&host, Vec::new())).await {
                             Ok(Ok(_)) => return true,
