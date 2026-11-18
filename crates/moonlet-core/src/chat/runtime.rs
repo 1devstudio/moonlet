@@ -1625,6 +1625,11 @@ impl ChatManager {
             if inner.cfg.agent == "claude" && inner.state.mode.is_some() {
                 inner.cfg.mode = inner.state.mode.clone();
             }
+            // Kept before anyone hears of it: a daemon stopped right after
+            // the app was shown a question still has it when it starts.
+            self.save(chat, inner);
+            // Saved again below, with what the terminal reports now.
+            inner.dirty = true;
             // Items travel as `chat.item`; the state event leaves them out.
             let items = std::mem::take(&mut inner.state.items);
             self.terms.emit(Message::event(methods::EV_CHAT_STATE, ChatStateEvent { id: chat.id, state: inner.state.clone() }));
