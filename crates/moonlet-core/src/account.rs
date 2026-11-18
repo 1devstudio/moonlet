@@ -119,6 +119,11 @@ pub struct Log {
     /// their last exchange: those are never stamped again, as other
     /// members may hold them ([`Self::restamp_ahead`]).
     shared: u64,
+    /// The numbers of its own changes [`Self::stamped`] stamped again and
+    /// that were not handed on yet ([`Self::take_restamped`]). Not saved:
+    /// after a restart, the next exchange sends what its central host
+    /// lacks.
+    restamped: BTreeSet<u64>,
     /// How many changes this member has made.
     seq: u64,
     /// Every change seen, by member and `seq`, so one that arrives twice
@@ -151,6 +156,7 @@ impl Log {
             member: member.into(),
             clock: (0, 0),
             shared: 0,
+            restamped: BTreeSet::new(),
             seq: 0,
             changes: BTreeMap::new(),
             former: Vec::new(),
@@ -360,9 +366,11 @@ impl Log {
     /// machine's clock is behind another member's, but never from a clock
     /// that was wrong ([`Self::clock_at`]). This log's own changes stamped
     /// past the limit are stamped again first ([`Self::restamp_ahead`]), so
-    /// a change made now still comes after them.
+    /// a change made now still comes after them, and they go out with it
+    /// ([`Self::take_restamped`]).
     fn stamped(&mut self, now_ms: u64, kind: RecordKind, id: &str, op: ChangeOp) -> Change {
-        self.restamp_ahead(now_ms, 0, &[]);
+        let again = self.restamp_ahead(now_ms, 0, &[]);
+        self.restamped.extend(again.iter().map(|c| c.seq));
         let stamp = self.next_stamp(now_ms);
         self.seq = self.seq.saturating_add(1);
         let c = Change {
@@ -443,6 +451,18 @@ impl Log {
             again.push(c);
         }
         again
+    }
+
+    /// This log's own changes stamped again before a change made here
+    /// ([`Self::stamped`]) and not handed on yet, oldest first, each as the
+    /// log holds it now: they are sent with the change, as no exchange
+    /// may come to send them until the next one. Each is handed on once.
+    pub fn take_restamped(&mut self) -> Vec<Change> {
+        let me = self.member.clone();
+        std::mem::take(&mut self.restamped)
+            .into_iter()
+            .filter_map(|seq| self.get(&me, seq).cloned())
+            .collect()
     }
 
     /// What this member has seen: for each member, the changes up to the
@@ -959,6 +979,35 @@ mod tests {
         for l in [&log, &central] {
             assert_eq!(l.records(RecordKind::Workspace)["w1"]["name"], json!("Studio"));
         }
+    }
+
+    #[test]
+    fn changes_stamped_again_before_a_new_change_are_handed_on_once() {
+        let now = 1_794_823_200_000;
+        let year = 365 * 24 * 60 * 60 * 1000;
+        let book = "book.k3x9q2";
+        let mut log = Log::new(book);
+        log.set(now - 600_000, RecordKind::Workspace, "w1", "name", json!("Home"));
+        log.set_shared(1);
+        log.set(now + year, RecordKind::Workspace, "w1", "name", json!("Future"));
+        // Nothing stamped again while the clock is a year ahead.
+        log.set(now + year, RecordKind::Section, "s1", "name", json!("Train"));
+        assert_eq!(log.take_restamped(), vec![]);
+        // Its clock is right again: a section made now stamps both again.
+        let later = log.set(now + 2_000, RecordKind::Section, "s2", "name", json!("Later"));
+        assert_eq!(later.seq, 4);
+        let at = |n: u32| Stamp { ms: 1_794_823_202_000, n, member: book.into() };
+        assert_eq!(
+            log.take_restamped().iter().map(|c| (c.seq, c.stamp.clone(), c.op.clone())).collect::<Vec<_>>(),
+            vec![
+                (2, at(0), ChangeOp::Set { field: "name".into(), value: json!("Future") }),
+                (3, at(1), ChangeOp::Set { field: "name".into(), value: json!("Train") }),
+            ]
+        );
+        assert_eq!((later.stamp.ms, later.stamp.n), (1_794_823_202_000, 2));
+        // Handed on once: the next change has none.
+        log.set(now + 3_000, RecordKind::Section, "s2", "name", json!("Afterwards"));
+        assert_eq!(log.take_restamped(), vec![]);
     }
 
     #[test]

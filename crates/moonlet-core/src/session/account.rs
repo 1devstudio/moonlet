@@ -1054,16 +1054,18 @@ impl SessionManager {
         }
     }
 
+    /// Hands `changes`, just made here, to the listener, after this
+    /// member's own changes that making them stamped again
+    /// ([`Log::take_restamped`]): those go out as promptly, whenever in an
+    /// exchange they were stamped (X68).
     pub(super) fn account_changed(&self, changes: Vec<Change>) {
-        let listener = self
-            .account
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|a| a.listener.clone());
-        if let Some(f) = listener {
-            f(changes);
-        }
+        let (f, again) = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return };
+            let Some(f) = a.listener.clone() else { return };
+            (f, a.log.take_restamped())
+        };
+        f(again.into_iter().chain(changes).collect());
     }
 
     fn with_log<T: Default>(&self, f: impl FnOnce(&Log) -> T) -> T {
@@ -3016,6 +3018,56 @@ mod tests {
             .collect();
         fields.sort();
         assert_eq!(fields, ["created_at", "name", "order", "view", "workspace"]);
+    }
+
+    #[tokio::test]
+    async fn changes_stamped_again_are_handed_on_with_the_change_that_stamped_them() {
+        use serde_json::json;
+        let (home, book) = member("book").await;
+        let ws = book.list_workspaces()[0].clone();
+        drop(book);
+        // While the MacBook's clock said a year ahead, it renamed its
+        // workspace, and studio-mini refused the change: its log holds it
+        // as that change was made.
+        let path = home.path().join("account.json");
+        let mut file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let me = file["member"].as_str().unwrap().to_string();
+        let seq = file["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["stamp"]["member"] == me.as_str())
+            .map(|c| c["seq"].as_u64().unwrap())
+            .max()
+            .unwrap()
+            + 1;
+        let year: u64 = 365 * 24 * 60 * 60 * 1000;
+        file["changes"].as_array_mut().unwrap().push(json!({
+            "stamp": { "ms": now_ms() + year, "n": 0, "member": me },
+            "seq": seq,
+            "kind": "workspace",
+            "id": ws.id,
+            "op": { "set": { "field": "name", "value": "Future" } },
+        }));
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        let book = reload(home.path(), "book");
+        let sent = Arc::new(Mutex::new(Vec::<Change>::new()));
+        let out = sent.clone();
+        book.on_account_change(move |c| out.lock().unwrap().extend(c));
+        // Its clock is right again, and it adds a section. That stamps the
+        // rename again first, and the rename goes out with the section, at
+        // any moment of an exchange, rather than at the next one.
+        book.create_section(&ws.id, "Later").unwrap();
+        let sent = sent.lock().unwrap().clone();
+        let again = sent.iter().find(|c| c.seq == seq).unwrap_or_else(|| panic!("the rename is not handed on: {sent:?}"));
+        assert_eq!(
+            again.op,
+            moonlet_proto::types::ChangeOp::Set { field: "name".into(), value: json!("Future") }
+        );
+        assert!(again.stamp.ms <= now_ms(), "stamped again by the wall clock: {again:?}");
+        // Oldest first, as the central host counts them.
+        assert_eq!(sent[0].seq, seq);
+        assert!(sent[1..].iter().all(|c| c.kind == "section"), "{sent:?}");
     }
 
     /// A repository whose origin is `github.com/acme/<name>`: test
