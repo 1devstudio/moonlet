@@ -386,7 +386,8 @@ async fn moonletd_with_the_credential_is_the_app_only_within_an_ssh_session() {
 /// A paired phone the Mac routes to an SSH host comes through `moonletd
 /// proxy`, run as an SSH session's command (X40). The SSH login vouches
 /// for it, so it is not a local process that proved nothing (A6): it
-/// reaches the host's terminals as before. It is still not the host's app.
+/// reaches the host's terminals as before. It is still not the host's app,
+/// and the host gives it only a phone's methods, without the Mac's help.
 /// The same hello from a proxy no login started proves nothing.
 #[tokio::test]
 async fn a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app() {
@@ -405,16 +406,21 @@ async fn a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app() {
         .await;
     let attach = serde_json::to_value(TerminalAttach { id: made.id, cols: None, rows: None }).unwrap();
     let _: AttachResult = phone.call(methods::TERMINAL_ATTACH, attach.clone()).await;
+    // The host itself gives it only a phone's methods (X40), whichever Mac
+    // routed it here: never the host's sign-ins, its link, its daemon, nor
+    // a method added later.
     let e = phone.try_call(methods::SIGNINS_SET, entries()).await.unwrap_err();
-    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only the moonlet app manages sign-ins"));
-    // Nor stops or swaps the host's daemon, as no paired device may.
-    let e = phone
-        .try_call(methods::DAEMON_UPGRADE, serde_json::json!({ "binary": "/nonexistent/moonletd" }))
-        .await
-        .unwrap_err();
-    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "upgrade moonletd on its own machine"));
-    let e = phone.try_call(methods::DAEMON_SHUTDOWN, serde_json::json!({})).await.unwrap_err();
-    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "stop moonletd on its own machine"));
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"));
+    for (method, params) in [
+        ("link.join", serde_json::json!({ "central": { "name": "elsewhere", "addrs": ["100.64.0.99:7655"], "token": "t" } })),
+        ("heavy.set", serde_json::json!({ "project": host.home.path(), "heavy": [] })),
+        ("daemon.upgrade", serde_json::json!({ "binary": "/nonexistent/moonletd" })),
+        ("daemon.shutdown", serde_json::json!({})),
+        ("phone.added_later", serde_json::json!({})),
+    ] {
+        let e = phone.try_call(method, params).await.unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
 
     let mut direct = Link::open_as(&host, "moonlet-mobile").await;
     let e = direct.try_call(methods::TERMINAL_ATTACH, attach).await.unwrap_err();

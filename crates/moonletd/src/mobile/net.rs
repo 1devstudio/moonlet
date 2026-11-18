@@ -180,6 +180,7 @@ async fn serve_phone(daemon: Arc<Daemon>, mut stream: TcpStream) -> Result<()> {
                 None,
                 authed.cloud,
                 authed.worker_link,
+                authed.phone,
             ));
             let mut here = here;
             tokio::select! {
@@ -261,11 +262,13 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
     Ok(())
 }
 
-/// Copies a routed phone's frames to the host, except requests to manage
-/// phones, the host's worker link, its cloud workers, its heavy-command
-/// approvals or its daemon itself: the host's daemon cannot tell the
-/// phone from the Mac's app, and a phone that paired itself there would
-/// keep access after the Mac removes it. The Mac answers those itself.
+/// Copies a routed phone's frames to the host, except requests that are
+/// not a phone's (X40): the Mac answers those itself, so a host from
+/// before it checked a routed phone's requests by the same list still
+/// never gets them. Among them, managing phones, the host's worker link,
+/// its cloud workers, its heavy-command approvals and its daemon itself:
+/// a phone that paired itself there would keep access after the Mac
+/// removes it.
 async fn forward_from_phone(
     from: &mut tokio::net::tcp::OwnedReadHalf,
     to: &mut tokio::process::ChildStdin,
@@ -298,6 +301,11 @@ async fn forward_from_phone(
             }
             Frame::Json(Message::Request { method, .. }) if method == m::DAEMON_SHUTDOWN => {
                 Some("stop moonletd on its own machine")
+            }
+            Frame::Json(Message::Request { method, .. })
+                if !crate::daemon::PHONE_METHODS.contains(&method.as_str()) =>
+            {
+                Some(crate::daemon::PHONE_REFUSED)
             }
             _ => None,
         };

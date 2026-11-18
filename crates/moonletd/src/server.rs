@@ -71,7 +71,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     let (r, w) = stream.into_split();
-                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid, false, false).await {
+                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid, false, false, false).await {
                         tracing::debug!("connection ended: {e:#}");
                     }
                 });
@@ -135,6 +135,11 @@ pub struct Conn {
     /// proxy`, run as an SSH session's command, vouched for it as it does
     /// for the app (X75). Not an unproven local process (A6), nor the app.
     pub routed_phone: bool,
+    /// A paired phone (X40): over the tailnet, a device that paired as a
+    /// phone, decided when it authenticated; or a request a central host
+    /// passed on from one (X72). It reaches only a phone's methods
+    /// (`Daemon::handle`).
+    pub paired_phone: bool,
 }
 
 impl Conn {
@@ -160,7 +165,16 @@ impl Conn {
             cloud: std::sync::atomic::AtomicBool::new(false),
             worker_link: false,
             routed_phone: false,
+            paired_phone: false,
         })
+    }
+
+    /// [`Conn::detached`] for a request a central host passed on from one
+    /// of its phones (X72): it gets a phone's rules here too.
+    pub fn detached_phone(id: ClientId, client: &str, phone: Option<String>) -> Arc<Conn> {
+        let mut conn = Arc::into_inner(Conn::detached(id, client, phone)).expect("a new connection");
+        conn.paired_phone = true;
+        Arc::new(conn)
     }
 
     /// Sends the client a request and waits for its reply (X41).
@@ -265,6 +279,7 @@ pub async fn handle_connection<R, W>(
     peer_pid: Option<u32>,
     cloud: bool,
     worker_link: bool,
+    paired_phone: bool,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -356,6 +371,7 @@ where
         cloud: std::sync::atomic::AtomicBool::new(false),
         worker_link,
         routed_phone,
+        paired_phone,
     });
     tracing::debug!(client = %conn.client, id = conn.id, "client connected");
     daemon.on_connect(&conn);

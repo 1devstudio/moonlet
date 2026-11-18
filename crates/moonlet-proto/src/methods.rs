@@ -1319,6 +1319,12 @@ pub struct SessionForward {
     pub method: String,
     #[serde(default)]
     pub params: serde_json::Value,
+    /// Set by the central host, never taken from its client: the request
+    /// came from a paired phone, by its device id there (empty for a phone
+    /// another Mac routes to it over SSH). The owner then gives it a
+    /// phone's rules (X40, X72). A central host from before never sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
 }
 
 /// `session.event`, member → central host (X72): one of its session's

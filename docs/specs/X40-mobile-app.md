@@ -182,6 +182,16 @@ Added 2026-10-27. Design mode stays on the Mac: the phone lists no design system
 - [x] An ask from a design's agent is titled as the desktop names it, "Design · <design>"; one from a design system's sync agent, which has no session either, by its terminal's title. It shows only while its design's workspace is shown, or All workspaces; a sync agent from a daemon that does not name its workspace shows in every one. (`lib/inbox.test.ts`)
 - [x] Tapping an ask's title, or a question card, opens its chat: the session's for a session's agent, else the agent's own chat screen, with a back button, the agent's name and the chat as a session's Chat tab shows it. (`cardChat` in `lib/inbox.test.ts`)
 
+### What a phone may call (security audit, 2026-11-15)
+
+Added 2026-11-18. Until then a phone was held back by refusals written method by method, so a method added later was open to phones until someone refused it, most of all on a phone the Mac routes to an SSH host.
+
+- [x] A paired phone may call only what the phone app sends: its screens' calls and those of the desktop code it shares (`apps/desktop/src/lib`). The list: `daemon.info`, `mobile.hosts`, `account.get`, `workspace.list`, `workspace.merge`, `profile.list`, `project.list`, `project.config`, `section.list`, `session.list`, `sync.list`, `git.settings`, `claude.models`, `presence.active`; `session.create`, `session.update`, `session.archive`, `session.continue_here`, `session.forward`, `session.attach`, `session.detach`; `chat.summaries`, `chat.state`, `chat.send`, `chat.send_now`, `chat.unqueue`, `chat.interrupt`, `chat.permission`, `chat.aside`, `chat.stop_agent`, `chat.settings`; `terminal.list`, `terminal.create`, `terminal.attach`, `terminal.detach`, `terminal.read_requests`, `terminal.read_answer`; `git.status`, `git.base_status`, `git.diff`, `git.log`, `git.stage`, `git.unstage`, `git.revert`, `git.apply_patch`, `git.commit`, `git.branches`, `git.pull_base`, `git.unpushed`, `git.push`; `gh.prs`, `gh.pr_context`, `gh.pr_status`, `gh.pr_stack`, `gh.pr_create`, `gh.whoami`; `job.list`, `job.stayed`, `job.output`, `job.stop`, `job.stop_all`, `job.run_here`; `exec.setups`, `sync.run_setup`, `sync.skip_setup`; `tasks.app`, `tasks.snapshot`, `tasks.request`. Anything else, a method added later included, answers `forbidden: a phone does not do that` before it runs. A connection is a phone's from the kind its device paired as (a device paired before kinds existed is a phone), decided when it authenticates, never from the client name in `hello`. (`mobile.rs` › `a_phone_reaches_only_what_the_phone_app_sends`)
+- [x] Routed to an SSH host (X39), the same list is checked twice. The Mac answers anything else itself, so a host from before this never gets it; and the host gives a phone its proxy vouched for (A6) only these methods, whichever Mac routed it. So a routed phone never joins the host to another central host (`link.join`), changes its link, phones, pairing, sign-ins, worker settings, sessions' places, cloud workers or heavy commands, updates, upgrades or stops its daemon, nor acts as its app. (`mobile.rs` › `a_phone_reaches_an_ssh_host_through_the_mac`, and `a_host_from_before_gets_only_a_phones_requests_through_the_mac` for the Mac's check alone; `proxy.rs` › `a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app`)
+- [x] Through the central host, to a session of another member (X72): the central host checks the request's inner `method` against the list, then passes the request on marked with the phone's device id there (`phone`; empty for a phone another Mac routes to the central host over SSH). The mark is the central host's: one a client sends is replaced. The owner then gives the request a phone's rules too, on top of what reaches a session on another member: a phone does not read a file's versions there, which the central host's app may. (`central_copies.rs` › `a_phones_request_through_the_central_host_reaches_only_a_phones_methods`, `the_owner_gives_a_phones_forwarded_request_a_phones_rules`)
+- [x] Rules stricter than the list stay as they were: a routed phone still answers no read request and approves no setup on the SSH host, which takes neither from a phone it cannot name (X31, X60), and on a route the Mac still answers `mobile.*` other than `mobile.hosts`, `link.set`, `link.retry`, `link.pair`, `cloud.set`, `heavy.approve` and the daemon's own `daemon.update`, `.upgrade` and `.shutdown` with its own words (X39). (`mobile.rs` › `a_phone_reaches_an_ssh_host_through_the_mac`)
+- [x] Older builds keep working. A phone that speaks protocol 6 sends nothing outside the list: the last method the app stopped sending (`gh.issues`) went before protocol 6, found by reading the app's history. A Mac from before routing a phone to a newer host: the host checks (`proxy.rs` › `a_phone_routed_over_ssh_reaches_the_host_but_is_not_its_app`, no Mac in front). A newer Mac routing to an older host: the Mac checks (`mobile.rs` › `a_host_from_before_gets_only_a_phones_requests_through_the_mac`). A central host from before the mark: the owner gives its requests only what reaches a session on another member, as before. An owner from before ignores the mark, as serde ignores a field it does not know, and the central host's own check stands; no test runs an older owner. (`central_copies.rs` › `the_owner_gives_a_phones_forwarded_request_a_phones_rules`, its unmarked request, for a central host from before; `a_phones_request_through_the_central_host_reaches_only_a_phones_methods` for the central host's own check)
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
@@ -196,7 +206,7 @@ On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's 
 
 ## Security considerations
 
-- The device token gives full access to the Mac (X39). It lives in the Keychain, this device only, never in a file or a backup; Face ID gates approvals.
+- The device token reaches what the phone app sends on the Mac ("What a phone may call"): with terminals among it, that is still running any command on the Mac. It lives in the Keychain, this device only, never in a file or a backup; Face ID gates approvals.
 - Text from the daemon (chat, terminal output, file names) is rendered as text or through the desktop's sanitising Markdown renderer, never as raw HTML.
 
 ## Out of scope
@@ -204,6 +214,12 @@ On the phone: the paired Macs (id, name, addresses) in `macs.json` in the app's 
 - Push notifications and approving from a notification (needs APNs and a paid Apple Developer account).
 - iPad layouts, landscape, light theme.
 - Editing files, the file tree, the MCP panel, the command palette. The desktop's Agents panel and strip (X42): the chat's Launched card and its agent sheet stand in for them.
+
+## Implementation notes
+
+- `PHONE_METHODS` in `crates/moonletd/src/daemon.rs` is the list, checked at the top of `Daemon::handle` next to the cloud machine's, the worker link's and the local callers' (#652, #668, #669). A method the phone app newly sends, or shared desktop code it calls, must be added there and here, or phones get `forbidden`.
+- A connection is a phone's when `Conn::paired_phone` (set from `Authed::phone`, the device's kind at authentication) or `Conn::routed_phone` (#669) is set. `Conn::detached_phone` is the owner's connection for a request its central host marked as a phone's.
+- `forward_from_phone` in `mobile/net.rs` answers a routed phone's requests outside the list on the Mac; `Daemon::forward` checks and marks a phone's `session.forward`; `Daemon::forwarded` reads the mark (`SessionForward::phone`) and runs the request as a phone named `forwarded:<device id>`, the central host's id for it.
 
 ## Test plan
 

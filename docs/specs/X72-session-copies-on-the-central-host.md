@@ -108,7 +108,7 @@ Tests named here are in `crates/moonletd/tests/central_copies.rs` unless another
 - `session.offer`, `.chat`, `.transcript` and `.checkpoint` take only a member's worker link, and only for sessions whose record names that member as owner. Phones, the CLI and cloud machines are refused, as `sync.*` refuses them (X60).
 - The transcript holds everything the agent read, including secrets it printed. It already lives on the owner; it now lives on the central host too, written mode 0600. ADR 0014's "trust is the weakest member's" covers it.
 - A transcript line from the owner is written as it came. The central host never interprets it until Claude Code resumes it (X73). Its file name comes from the agent's session id, which must be a UUID, never a path.
-- A forwarded phone request is checked twice: by the central host's phone rules, and by the owner's, with the phone's device id passed along so the owner applies `forward_from_phone` to it as well.
+- A forwarded phone request is checked twice: by the central host, against what a phone may call ([X40](X40-mobile-app.md), "What a phone may call"), and by the owner, to which the central host passes the phone's device id there (`phone` in `session.forward`, set by the central host only), so the owner gives it a phone's rules as well as what reaches a session on another member. A central host from before the mark sends none, and the owner checks only the latter, as before.
 
 ## Out of scope
 

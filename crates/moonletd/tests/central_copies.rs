@@ -1761,6 +1761,198 @@ async fn a_client_cannot_pick_a_relay_through_a_forwarded_request() {
     }
 }
 
+/// Sends request `id` on a raw tailnet connection and gives its reply,
+/// passing over events meanwhile.
+async fn ask_on(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> moonlet_proto::Message {
+    use moonlet_proto::{Frame, Message, read_frame, write_frame};
+    write_frame(s, &Frame::Json(Message::Request { id, method: method.into(), params })).await.unwrap();
+    let reply = async {
+        loop {
+            match read_frame(s).await {
+                Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+                Ok(Some(_)) => {}
+                other => panic!("the connection ended: {other:?}"),
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(20), reply).await.expect("no reply")
+}
+
+/// X40, X72: a paired phone's request for another member's session is
+/// checked by a phone's rules on the central host, whatever it says it is.
+#[tokio::test]
+async fn a_phones_request_through_the_central_host_reaches_only_a_phones_methods() {
+    use moonlet_proto::Message;
+    let origin = Origin::new();
+    let (mini, addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+    let p: MobilePairing = mini.call("mobile.pair_start", json!({})).await;
+    let token = moonlet_link::tailnet::pair(&[addr.clone()], &p.code, "Alex's iPhone", DeviceKind::Phone)
+        .await
+        .unwrap()
+        .token;
+    let mut phone = raw(&addr, &token, "moonlet-mobile").await;
+
+    // What the phone app sends for a session gets to its owner.
+    let status = ask_on(
+        &mut phone,
+        1,
+        "session.forward",
+        json!({ "session": made["id"], "method": "git.status", "params": {} }),
+    )
+    .await;
+    let Message::Response { result: Some(status), .. } = status else { panic!("{status:?}") };
+    assert_eq!(status["branch"], made["branch"]);
+    // Anything else is refused, though the session's owner lets the central
+    // host's app read a file's versions; a phone that says it is none too.
+    for (id, method, phone_field) in [
+        (2, "git.file_versions", None),
+        (3, "git.file_versions", Some(Value::Null)),
+        (4, "phone.added_later", None),
+    ] {
+        let mut params = json!({ "session": made["id"], "method": method, "params": { "file": "src/cart.ts" } });
+        if let Some(v) = phone_field {
+            params["phone"] = v;
+        }
+        let Message::Response { error: Some(e), .. } = ask_on(&mut phone, id, "session.forward", params).await else {
+            panic!("{method} reached the owner from a phone")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
+    let versions = forward(&mini, &made, "git.file_versions", json!({ "file": "src/cart.ts" })).await.unwrap();
+    assert_eq!(versions["modified"], "a\n");
+}
+
+/// A central host played by hand on 127.0.0.1 (X72): it registers the
+/// member that links to it, and sends it the `session.forward` requests the
+/// test gives, as a central host passes on its clients' requests.
+struct HandCentral {
+    addr: String,
+    asks: tokio::sync::mpsc::UnboundedSender<(Value, tokio::sync::oneshot::Sender<moonlet_proto::Message>)>,
+}
+
+impl HandCentral {
+    async fn start() -> HandCentral {
+        use moonlet_proto::{Frame, Message, read_frame, write_frame};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (asks, mut asked) = tokio::sync::mpsc::unbounded_channel::<(Value, tokio::sync::oneshot::Sender<Message>)>();
+        tokio::spawn(async move {
+            let mut waiting = std::collections::HashMap::new();
+            let mut next = 1_000u64;
+            while let Ok((s, _)) = listener.accept().await {
+                let (mut r, mut w) = s.into_split();
+                let Ok(Some(Frame::Json(Message::Auth { .. }))) = read_frame(&mut r).await else { continue };
+                let authed = Message::Authed { device_id: "book".into(), token: None, protocol: None, daemon_version: None, host: None, os: None };
+                write_frame(&mut w, &Frame::Json(authed)).await.unwrap();
+                let Ok(Some(Frame::Json(Message::Hello { .. }))) = read_frame(&mut r).await else { continue };
+                let welcome = Message::Welcome { protocol: moonlet_proto::PROTOCOL_VERSION, daemon_version: "0.1.45".into(), host: "studio-mini".into(), pid: 1 };
+                write_frame(&mut w, &Frame::Json(welcome)).await.unwrap();
+                let (frames_tx, mut frames) = tokio::sync::mpsc::unbounded_channel();
+                tokio::spawn(async move {
+                    while let Ok(Some(f)) = read_frame(&mut r).await {
+                        if frames_tx.send(f).is_err() {
+                            return;
+                        }
+                    }
+                });
+                let mut registered = false;
+                loop {
+                    tokio::select! {
+                        f = frames.recv() => {
+                            let Some(f) = f else { break };
+                            match f {
+                                Frame::Json(Message::Request { id, method, .. }) => {
+                                    registered |= method == "worker.register";
+                                    let reply = match method.as_str() {
+                                        "worker.register" | "worker.ping" => Message::ok(id, true),
+                                        "daemon.info" => Message::ok(id, json!({})),
+                                        _ => Message::err(id, moonlet_proto::RpcError::new("unknown_method", method)),
+                                    };
+                                    if write_frame(&mut w, &Frame::Json(reply)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Frame::Json(m @ Message::Response { .. }) => {
+                                    let Message::Response { id, .. } = &m else { unreachable!() };
+                                    if let Some(tx) = waiting.remove(id) {
+                                        let _: Result<(), _> = tokio::sync::oneshot::Sender::send(tx, m);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        ask = asked.recv(), if registered => {
+                            let Some((params, tx)) = ask else { return };
+                            next += 1;
+                            waiting.insert(next, tx);
+                            let req = Message::Request { id: next, method: "session.forward".into(), params };
+                            if write_frame(&mut w, &Frame::Json(req)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        HandCentral { addr, asks }
+    }
+
+    /// Passes `params` on to the member as `session.forward`; its reply.
+    async fn forward(&self, params: Value) -> moonlet_proto::Message {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.asks.send((params, tx)).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), rx).await.expect("no reply from the member").unwrap()
+    }
+}
+
+/// X40, X72: the owner gives a request its central host says a phone sent
+/// a phone's rules, on top of what reaches a session on another member;
+/// one from a central host's app, or from a central host from before the
+/// mark, keeps what it had.
+#[tokio::test]
+async fn the_owner_gives_a_phones_forwarded_request_a_phones_rules() {
+    use moonlet_proto::Message;
+    let central = HandCentral::start().await;
+    let origin = Origin::new();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        json!({
+            "central": { "name": "studio-mini", "addrs": [central.addr], "token": "t" },
+            "worker": { "id": BOOK, "name": "MacBook", "enabled": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let book = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", "127.0.0.2")]).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let ask = |method: &str, phone: Option<&str>| {
+        let mut p = json!({ "session": made["id"], "method": method, "params": { "file": "src/cart.ts" } });
+        if let Some(d) = phone {
+            p["phone"] = json!(d);
+        }
+        p
+    };
+
+    let from_phone = central.forward(ask("git.file_versions", Some("d-iphone"))).await;
+    let Message::Response { error: Some(e), .. } = &from_phone else { panic!("{from_phone:?}") };
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"));
+    let from_phone = central.forward(ask("git.status", Some("d-iphone"))).await;
+    let Message::Response { result: Some(status), .. } = &from_phone else { panic!("{from_phone:?}") };
+    assert_eq!(status["branch"], made["branch"]);
+
+    let unmarked = central.forward(ask("git.file_versions", None)).await;
+    assert!(
+        matches!(&unmarked, Message::Response { error: None, .. }),
+        "{unmarked:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_terminal_can_be_followed_as_soon_as_its_member_links() {
     use moonlet_proto::{Frame, Message};

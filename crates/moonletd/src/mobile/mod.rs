@@ -338,6 +338,9 @@ pub struct Authed {
     /// A member's worker link, as it was when it authenticated: its
     /// connection reaches only a member's work, whatever client it says.
     pub worker_link: bool,
+    /// A phone's device, as it was when it authenticated: its connection
+    /// reaches only a phone's methods (X40).
+    pub phone: bool,
 }
 
 struct LiveConn {
@@ -798,6 +801,7 @@ impl Mobile {
                 let device_id = d.id.clone();
                 let cloud = d.kind == DeviceKind::Cloud;
                 let worker_link = d.worker_link;
+                let phone = d.kind == DeviceKind::Phone;
                 // The first use of a worker link that replaces its Mac's
                 // token: the member saved it, so the old token goes.
                 let replaced = if d.replaces {
@@ -821,6 +825,7 @@ impl Mobile {
                     route,
                     cloud,
                     worker_link,
+                    phone,
                 })
             }
             (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
@@ -860,6 +865,7 @@ impl Mobile {
                     route: None,
                     cloud: true,
                     worker_link: false,
+                    phone: false,
                 })
             }
             (None, Some(code)) if route.is_none() => {
@@ -907,6 +913,7 @@ impl Mobile {
                             route: None,
                             cloud: kind == DeviceKind::Cloud,
                             worker_link: false,
+                            phone: kind == DeviceKind::Phone,
                         })
                     }
                     (PairCheck::Exhausted, current) => {
