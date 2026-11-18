@@ -1086,18 +1086,28 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
     commit_id(to)?;
     let r = format!("refs/heads/{branch}");
     git_env(worktree, &[], &["update-ref", &r, to, from], None).await?;
-    if self::branch(worktree).await?.as_deref() == Some(branch) {
-        reset_index(worktree).await?;
-    }
-    Ok(())
+    reset_index(worktree, Some(branch), to).await
 }
 
-/// `git reset -q` in `worktree`, waiting up to 5 s for another git (an
-/// editor's or a terminal's `git status`) to let the staging area's lock
-/// go: the branch has moved already, and its staging area must follow.
-async fn reset_index(worktree: &Path) -> Result<()> {
+/// `git reset -q` in `worktree` while it still has `branch` checked out,
+/// or with no branch named, while its `HEAD` is still at `to`. It waits up
+/// to 5 s for another git (an editor's or a terminal's `git status`) to
+/// let the staging area's lock go: the branch has moved already, and its
+/// staging area must follow, unless another branch was checked out
+/// meanwhile, whose staging area stays.
+async fn reset_index(worktree: &Path, branch: Option<&str>, to: &str) -> Result<()> {
     let until = std::time::Instant::now() + Duration::from_secs(5);
     loop {
+        let still = match branch {
+            Some(b) => self::branch(worktree).await?.as_deref() == Some(b),
+            None => {
+                let head = git_env(worktree, &[], &["rev-parse", "HEAD"], None).await?;
+                String::from_utf8_lossy(&head).trim() == to
+            }
+        };
+        if !still {
+            return Ok(());
+        }
         match git_env(worktree, &[], &["reset", "-q"], None).await {
             Err(e) if std::time::Instant::now() < until && format!("{e:#}").contains("index.lock") => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1115,7 +1125,7 @@ pub async fn reset_branch(worktree: &Path, from: &str, to: &str) -> Result<()> {
     commit_id(from)?;
     commit_id(to)?;
     git_env(worktree, &[], &["update-ref", "HEAD", to, from], None).await?;
-    reset_index(worktree).await
+    reset_index(worktree, None, to).await
 }
 
 /// Makes an empty repository at `dir`, unless one is there: a routing

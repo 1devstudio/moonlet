@@ -5360,7 +5360,8 @@ async fn a_copy_branch_left_with_commits_of_its_own_is_kept_and_the_give_refused
     let worktree = PathBuf::from(session_on(&mini, &made).await["path"].as_str().unwrap());
     let copy_branch = format!("moonlet-copy/{}", made["id"].as_str().unwrap());
     git_in(&worktree, &["branch", &copy_branch]);
-    let tip = git_out(&worktree, &["commit-tree", "-p", &copy_branch, "-m", "only here", &format!("{copy_branch}^{{tree}}")]);
+    let tree = format!("{copy_branch}^{{tree}}");
+    let tip = git_out(&worktree, &["-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", "-p", &copy_branch, "-m", "only here", &tree]);
     git_in(&worktree, &["update-ref", &format!("refs/heads/{copy_branch}"), &tip]);
 
     let refused = book

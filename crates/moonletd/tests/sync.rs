@@ -3776,9 +3776,9 @@ async fn a_link_connecting_as_tailnet_access_turns_off_is_closed_not_refused() {
     link_off(&central).await;
     let auth = Message::Auth { token: Some(token), pair: None, device: None, route: None, kind: None };
     write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    // Closed, with nothing sent back.
     let got = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.unwrap();
-    let refused = matches!(&got, Ok(Some(Frame::Json(Message::Response { error: Some(e), .. }))) if e.code == "unauthorized");
-    assert!(!refused, "{got:?}");
+    assert!(matches!(got, Ok(None) | Err(_)), "{got:?}");
 }
 
 #[tokio::test]
