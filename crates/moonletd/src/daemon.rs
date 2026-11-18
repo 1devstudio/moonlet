@@ -2479,7 +2479,20 @@ impl Daemon {
                 if r.slots.is_some_and(|n| !(1..=64).contains(&n)) {
                     return Err(RpcError::new("invalid_params", "slots must be from 1 to 64"));
                 }
-                if r.worker == self.link.info().worker.id {
+                let link = self.link.info();
+                // A member's daemon never changes another host's settings:
+                // they count only from that host and the central host,
+                // where the app sets them (X89).
+                if r.worker != link.worker.id
+                    && let Some(central) = link.central.as_ref().filter(|_| self.sessions.permissions_refereed())
+                {
+                    let name = self.sessions.member_names().remove(&r.worker).unwrap_or_else(|| r.worker.clone());
+                    return Err(RpcError::new(
+                        "forbidden",
+                        format!("only the central host, {}, or {name} itself changes {name}'s worker settings", central.name),
+                    ));
+                }
+                if r.worker == link.worker.id {
                     let req = m::LinkSet {
                         central: None,
                         worker: Some(m::LinkWorkerSet {
@@ -2547,6 +2560,16 @@ impl Daemon {
                 // The other members take what this host newly kept from
                 // here; the one that sent them already has them.
                 let taken = self.sessions.apply_account(r.changes);
+                // A project's approval or copied files the member's app
+                // made count on the others once this host makes them its
+                // own; any other change of the member's to them counts on
+                // that member alone (X89, X74).
+                if !r.asks.is_empty() {
+                    let made = self.sessions.take_over(&worker, &r.asks);
+                    if made > 0 {
+                        tracing::info!(worker = %worker, "took over {made} of a member's changes to a project's approval or copied files");
+                    }
+                }
                 // A workspace another member removed or merged takes its boards along (X76).
                 self.prune_boards();
                 if !taken.is_empty() {

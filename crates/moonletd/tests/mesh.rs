@@ -23,6 +23,11 @@ async fn central() -> (Daemon, String) {
 
 /// [`central`], with more of its daemon's environment.
 async fn central_env(extra: &[(&str, &str)]) -> (Daemon, String) {
+    central_of(extra, Value::Null).await
+}
+
+/// [`central_env`], with `central` as its own central host in `link.json`.
+async fn central_of(extra: &[(&str, &str)], central: Value) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
         let port = free_port();
@@ -33,7 +38,7 @@ async fn central_env(extra: &[(&str, &str)]) -> (Daemon, String) {
         .unwrap();
         std::fs::write(
             home.path().join("link.json"),
-            r#"{ "central": null, "worker": { "id": "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70", "name": "studio-mini", "enabled": false } }"#,
+            json!({ "central": central, "worker": { "id": "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70", "name": "studio-mini", "enabled": false } }).to_string(),
         )
         .unwrap();
         let d = Daemon::start(
@@ -194,16 +199,24 @@ async fn a_new_member_takes_no_other_hosts_commands_and_has_two_slots() {
 }
 
 #[tokio::test]
-async fn worker_settings_set_on_one_member_reach_the_host_they_name() {
+async fn worker_settings_set_on_the_central_host_reach_the_host_they_name() {
     let (mini, _addr, book, air) = account().await;
-    // From the MacBook's app, for the Air and for the central host.
-    let _: bool = book
+    // A member's daemon does not change another host's settings: its app
+    // sets them on the central host, as the Workers page does, or on that
+    // host itself.
+    assert_eq!(
+        book.try_call("worker.settings.set", json!({ "worker": AIR, "heavy": true })).await,
+        Err("forbidden: only the central host, studio-mini, or Alex's MacBook Air itself changes Alex's MacBook Air's worker settings".to_string())
+    );
+    // From an app on the central host, for the Air and for the central
+    // host itself.
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": AIR, "heavy": true, "slots": 4 }),
         )
         .await;
-    let _: bool = book
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": MINI, "heavy": true }),
@@ -233,9 +246,9 @@ async fn worker_settings_set_on_one_member_reach_the_host_they_name() {
 
 #[tokio::test]
 async fn settings_set_for_an_offline_member_apply_when_it_links() {
-    let (_mini, _addr, book, mut air) = account().await;
+    let (mini, _addr, _book, mut air) = account().await;
     air.stop();
-    let _: bool = book
+    let _: bool = mini
         .call("worker.settings.set", json!({ "worker": AIR, "slots": 1 }))
         .await;
     air.restart().await;
@@ -269,10 +282,10 @@ async fn only_an_app_or_a_paired_mac_changes_worker_settings() {
 
 #[tokio::test]
 async fn slots_outside_one_to_sixty_four_are_refused() {
-    let (_mini, _addr, book, _air) = account().await;
+    let (mini, _addr, book, _air) = account().await;
     for slots in [0, 65] {
         assert_eq!(
-            book.try_call(
+            mini.try_call(
                 "worker.settings.set",
                 json!({ "worker": AIR, "slots": slots })
             )
@@ -281,7 +294,7 @@ async fn slots_outside_one_to_sixty_four_are_refused() {
         );
     }
     assert_eq!(
-        book.try_call(
+        mini.try_call(
             "worker.settings.set",
             json!({ "worker": "no-such-host", "heavy": true })
         )
@@ -292,6 +305,47 @@ async fn slots_outside_one_to_sixty_four_are_refused() {
         settings(&book).await[0],
         row(AIR, "Alex's MacBook Air", false, 2)
     );
+}
+
+#[tokio::test]
+async fn settings_made_before_the_central_host_referees_them_still_count() {
+    // studio-mini still links to a central host of its own, so it does not
+    // referee the account's permissions yet, as one from before.
+    let (mini, addr) = central_of(
+        &[],
+        json!({ "name": "old-mini", "addrs": ["127.0.0.1:9"], "token": "gone" }),
+    )
+    .await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let air = mac(AIR, "Alex's MacBook Air").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    link(&air, &mini, &addr, "Alex's MacBook Air").await;
+    for d in [&mini, &book, &air] {
+        within(Duration::from_secs(10), "every member known", || async {
+            settings(d).await.len() == 3
+        })
+        .await;
+    }
+    // Made the way members did before: the MacBook sets the Air's switch.
+    let _: bool = book
+        .call("worker.settings.set", json!({ "worker": AIR, "heavy": true, "slots": 4 }))
+        .await;
+    within(Duration::from_secs(5), "the Air takes the settings", || async {
+        own(&air).await == (true, 4)
+    })
+    .await;
+    // studio-mini becomes the central host on its own.
+    let _: Value = mini.call("link.set", json!({ "central": null })).await;
+    within(Duration::from_secs(10), "the members hear it referees", || async {
+        book.try_call("worker.settings.set", json!({ "worker": AIR, "heavy": false }))
+            .await
+            .is_err_and(|e| e.starts_with("forbidden: "))
+    })
+    .await;
+    assert_eq!(own(&air).await, (true, 4));
+    for d in [&mini, &book, &air] {
+        assert_eq!(settings(d).await[0], row(AIR, "Alex's MacBook Air", true, 4));
+    }
 }
 
 #[tokio::test]
@@ -622,7 +676,7 @@ async fn a_members_session_runs_its_heavy_command_on_the_central_host() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    let _: bool = book
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": MINI, "heavy": true }),
@@ -668,7 +722,7 @@ async fn a_line_that_starts_with_cd_runs_its_command_in_that_folder_on_another_h
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let worktree = std::path::PathBuf::from(session["path"].as_str().unwrap());
     std::fs::create_dir_all(worktree.join("web")).unwrap();
     std::fs::write(worktree.join("web/package.json"), "{}\n").unwrap();
@@ -708,10 +762,10 @@ async fn a_line_that_starts_with_cd_runs_its_command_in_that_folder_on_another_h
     );
 }
 
-/// Turns studio-mini's switch on or off from the MacBook, and waits until
+/// Turns studio-mini's switch on or off from an app on it, and waits until
 /// studio-mini has it.
-async fn mini_takes(mini: &Daemon, book: &Daemon, heavy: bool) {
-    let _: bool = book
+async fn mini_takes(mini: &Daemon, heavy: bool) {
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": MINI, "heavy": heavy }),
@@ -723,13 +777,119 @@ async fn mini_takes(mini: &Daemon, book: &Daemon, heavy: bool) {
     .await;
 }
 
+/// Project `project`'s key in the account on `d`: `<origin>|<root>`.
+async fn account_key(d: &Daemon, project: &str) -> String {
+    let projects: Value = d.call("project.list", json!({})).await;
+    let p = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == json!(project))
+        .unwrap();
+    format!(
+        "{}|{}",
+        p["identity"]["origin"].as_str().unwrap_or(""),
+        p["identity"]["root"].as_str().unwrap()
+    )
+}
+
+/// Waits until `d`'s link to its central host is up again.
+async fn linked(d: &Daemon) {
+    within(Duration::from_secs(15), "the link up", || async {
+        let info: Value = d.call("link.get", json!({})).await;
+        info["state"]["kind"] == json!("connected")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_member_that_writes_an_approval_itself_does_not_get_its_command_run_on_another_member() {
+    let (mini, _addr, mut book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let project = shop_on(&book, repo.path()).await;
+    std::fs::write(book.home.path().join("src/shop/.moonlet/config.toml"), RUN_HEAVY).unwrap();
+    let key = account_key(&book, &project).await;
+    // The approval, written into the MacBook's log without its app.
+    write_into_own_log(
+        &mut book,
+        "heavy_approval",
+        &key,
+        "approved",
+        json!({ "commands": ["sh -c", "pnpm check"], "env": [] }),
+    )
+    .await;
+    linked(&book).await;
+    let session: Value = book
+        .call("session.create", json!({ "project_id": project, "name": "Fix cart" }))
+        .await;
+    mini_takes(&mini, true).await;
+    // The MacBook's own word is enough for it to send the command on;
+    // studio-mini, where the user approved nothing, refuses it.
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+    // On the MacBook itself, its own word counts.
+    assert_eq!(approved(&book, &project).await, json!({ "commands": ["sh -c", "pnpm check"], "env": [] }));
+}
+
+#[tokio::test]
+async fn a_member_that_writes_another_hosts_switch_does_not_turn_it_on() {
+    let (mini, _addr, mut book, air) = account().await;
+    write_into_own_log(&mut book, "worker", MINI, "heavy", json!(true)).await;
+    write_into_own_log(&mut book, "worker", AIR, "heavy", json!(true)).await;
+    linked(&book).await;
+    // The MacBook's own slots, changed after: once the others have them,
+    // they have the switches it wrote before them too.
+    let _: Value = book
+        .call("link.set", json!({ "worker": { "slots": 3 } }))
+        .await;
+    for d in [&mini, &air] {
+        within(Duration::from_secs(10), "the MacBook's slots", || async {
+            settings(d).await[1] == row(BOOK, "Alex's MacBook Pro", false, 3)
+        })
+        .await;
+    }
+    assert_eq!(own(&mini).await, (false, 2));
+    assert_eq!(own(&air).await, (false, 2));
+    assert_eq!(
+        settings(&air).await,
+        vec![
+            row(AIR, "Alex's MacBook Air", false, 2),
+            row(BOOK, "Alex's MacBook Pro", false, 3),
+            row(MINI, "studio-mini", false, 2),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_runner_with_its_own_checkout_runs_only_what_that_checkout_lists_too() {
+    let (mini, _addr, book, _air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    // studio-mini's own checkout of shop lists only `pnpm check`.
+    let _ = shop_on(&mini, repo.path()).await;
+    mini_takes(&mini, true).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+    // A config it cannot read names nothing either.
+    std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), "[heavy\n").unwrap();
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    // Once it lists `sh -c` too, it runs it.
+    std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), RUN_HEAVY).unwrap();
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(ran.stderr.starts_with("moonlet: running on studio-mini\n"), "{}", ran.stderr);
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
+}
+
 #[tokio::test]
 async fn a_host_with_heavy_commands_off_takes_none_from_other_hosts() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
-    mini_takes(&mini, &book, false).await;
+    mini_takes(&mini, true).await;
+    mini_takes(&mini, false).await;
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
     assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
@@ -740,7 +900,7 @@ async fn a_member_without_its_central_host_runs_its_own_commands() {
     let (mut mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     mini.stop();
     let started = std::time::Instant::now();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
@@ -774,8 +934,8 @@ async fn lose_mid_run(lost: Lost, config: &str) -> (String, String, i64) {
     let repo = tempfile::tempdir().unwrap();
     let session = book_session_with(&book, repo.path(), config).await;
     match lost {
-        Lost::Runner => mini_takes(&mini, &book, true).await,
-        Lost::RelayedRunner | Lost::Relay => only_air_takes(&mini, &book, &air).await,
+        Lost::Runner => mini_takes(&mini, true).await,
+        Lost::RelayedRunner | Lost::Relay => only_air_takes(&mini, &air).await,
     }
     let marker = format!(
         "case \"$MOONLET_HOME\" in {}) echo here;; *) echo there;; esac; sleep 3",
@@ -850,7 +1010,7 @@ async fn a_member_whose_central_host_goes_silent_mid_run_ends_the_run_in_a_bound
     let (mini, _addr, book, _air) = account_with(&[], &[("MOONLET_TEST_LINK_SILENCE_MS", "1500")]).await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let (mut c, err) = start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 30"]).await;
     assert_eq!(err, "moonlet: running on studio-mini\n");
     // studio-mini stops answering, its link still open.
@@ -897,7 +1057,7 @@ async fn a_stopped_members_command_stops_on_the_central_host() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let mut c = book.app().await;
     let started: Value = c
         .request(
@@ -965,7 +1125,7 @@ async fn a_routing_copy_runs_the_setup_of_the_sessions_main_checkout() {
         format!("setup = \"mkdir -p node_modules && touch node_modules/.set-up\"\n{RUN_HEAVY}"),
     )
     .unwrap();
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     // studio-mini asks first, so this run stays on the MacBook.
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
     assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
@@ -1023,7 +1183,7 @@ async fn archiving_a_members_session_removes_its_routing_copies_on_other_hosts()
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
     assert!(
         ran.stderr.starts_with("moonlet: running on studio-mini\n"),
@@ -1049,7 +1209,7 @@ async fn a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    let _: bool = book
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": MINI, "heavy": true, "slots": 1 }),
@@ -1094,10 +1254,11 @@ async fn a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it() {
     assert_eq!(st["skips"], json!([]), "{st}");
 }
 
-/// Turns the Air's switch on from the MacBook, and studio-mini's off, so
-/// the MacBook's commands can only go to the Air, through studio-mini.
-async fn only_air_takes(mini: &Daemon, book: &Daemon, air: &Daemon) {
-    let _: bool = book
+/// Turns the Air's switch on from an app on studio-mini, and studio-mini's
+/// off, so the MacBook's commands can only go to the Air, through
+/// studio-mini.
+async fn only_air_takes(mini: &Daemon, air: &Daemon) {
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": AIR, "heavy": true }),
@@ -1125,7 +1286,7 @@ async fn a_members_session_runs_its_heavy_command_on_another_member_through_the_
     let (mini, _addr, book, air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    only_air_takes(&mini, &book, &air).await;
+    only_air_takes(&mini, &air).await;
     let ran = run(
         &book,
         &session,
@@ -1328,9 +1489,9 @@ async fn a_runner_that_loses_the_sessions_host_stops_the_command() {
         let repo = tempfile::tempdir().unwrap();
         let session = book_session(&book, repo.path()).await;
         if relayed {
-            only_air_takes(&mini, &book, &air).await;
+            only_air_takes(&mini, &air).await;
         } else {
-            mini_takes(&mini, &book, true).await;
+            mini_takes(&mini, true).await;
         }
         let marker = tempfile::tempdir().unwrap();
         let after = marker.path().join("after");
@@ -1355,7 +1516,7 @@ async fn two_hosts_picking_one_slot_run_one_there_and_one_elsewhere() {
     let repo = tempfile::tempdir().unwrap();
     let on_book = book_session(&book, repo.path()).await;
     let on_air = book_session(&air, repo.path()).await;
-    let _: bool = book
+    let _: bool = mini
         .call(
             "worker.settings.set",
             json!({ "worker": MINI, "heavy": true, "slots": 1 }),
@@ -1385,7 +1546,7 @@ async fn worker_list_lists_every_member_with_what_it_runs() {
     let (mini, _addr, book, air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    only_air_takes(&mini, &book, &air).await;
+    only_air_takes(&mini, &air).await;
     let (_c, _) =
         start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
     let running = within_value(
@@ -1413,7 +1574,7 @@ async fn exec_status_lists_what_a_host_runs_for_other_hosts() {
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let (_c, _) =
         start_until_started(&book, &session, &["sh", "-c", "echo started; sleep 3"]).await;
     let status: Value = mini.call("exec.status", json!({})).await;
@@ -1428,7 +1589,7 @@ async fn turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish() 
     let (mini, _addr, book, _air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let mut c = book.app().await;
     let started: Value = c
         .request(
@@ -1450,7 +1611,7 @@ async fn turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish() 
             break;
         }
     }
-    mini_takes(&mini, &book, false).await;
+    mini_takes(&mini, false).await;
     let status = loop {
         let f = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
             .await
@@ -1500,7 +1661,7 @@ async fn a_routing_copy_for_another_member_lives_under_runs_of_the_sessions_host
     let (mini, _addr, book, air) = account().await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    only_air_takes(&mini, &book, &air).await;
+    only_air_takes(&mini, &air).await;
     run(&book, &session, &["sh", "-c", "true"]).await;
     let copies = mini_copies(&air);
     assert_eq!(copies.len(), 1);
@@ -1518,7 +1679,7 @@ async fn a_central_host_before_this_spec_leaves_members_running_their_own_comman
     let (mini, _addr, book, _air) = account_env(&[("MOONLET_TEST_BEFORE_X89", "1")]).await;
     let repo = tempfile::tempdir().unwrap();
     let session = book_session(&book, repo.path()).await;
-    mini_takes(&mini, &book, true).await;
+    mini_takes(&mini, true).await;
     let started = std::time::Instant::now();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
     assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");

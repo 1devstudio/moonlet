@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use moonlet_proto::types::{Change, ChangeOp, Stamp};
+use moonlet_proto::types::{Change, ChangeOp, ChangeRef, Stamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,6 +39,12 @@ pub enum RecordKind {
     /// A project's approved heavy commands (X89), by project identity: its
     /// `commands` and `env`, approved together.
     HeavyApproval,
+    /// The central host that referees the records that act as
+    /// permissions ([`RecordKind::Worker`], [`RecordKind::HeavyApproval`],
+    /// [`RecordKind::ProjectFiles`]), by its worker id: `since`, when it
+    /// took them over. Until the central host wrote its own, every
+    /// member's changes to them count, as before.
+    Referee,
 }
 
 impl RecordKind {
@@ -54,6 +60,7 @@ impl RecordKind {
             RecordKind::SignIn => "signin",
             RecordKind::Worker => "worker",
             RecordKind::HeavyApproval => "heavy_approval",
+            RecordKind::Referee => "referee",
         }
     }
 }
@@ -94,6 +101,10 @@ pub struct LogFile {
     /// The account this member shares, as its central host named it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// This member's own changes, made for its app, that it asks its
+    /// central host to make its own (X89, X74).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<ChangeRef>,
 }
 
 /// One member's copy of the account state: every change it has seen.
@@ -117,6 +128,9 @@ pub struct Log {
     former: Vec<String>,
     /// The account it shares, as its central host named it.
     account: Option<String>,
+    /// Its own changes, made for its app, it asks its central host to make
+    /// its own ([`LogFile::asks`]).
+    asks: Vec<ChangeRef>,
     /// Which content this log holds: a number no other content of any log
     /// had, given again whenever its changes or its account change. What
     /// is worked out from a log can be kept while it stays the same
@@ -141,6 +155,7 @@ impl Log {
             changes: BTreeMap::new(),
             former: Vec::new(),
             account: None,
+            asks: Vec::new(),
             rev: next_rev(),
         }
     }
@@ -164,6 +179,7 @@ impl Log {
         log.apply(file.changes);
         log.former = file.former;
         log.account = file.account;
+        log.asks = file.asks;
         log
     }
 
@@ -220,7 +236,17 @@ impl Log {
             changes: self.changes.values().cloned().collect(),
             former: self.former.clone(),
             account: self.account.clone(),
+            asks: self.asks.clone(),
         }
+    }
+
+    /// Its own changes it asks its central host to make its own.
+    pub fn asks(&self) -> &[ChangeRef] {
+        &self.asks
+    }
+
+    pub fn set_asks(&mut self, asks: Vec<ChangeRef>) {
+        self.asks = asks;
     }
 
     /// Takes in changes from any member.
@@ -267,20 +293,29 @@ impl Log {
     /// change another member made to it, at any time, wins: for values a
     /// member brings from before they were kept in the account (X89).
     pub fn set_oldest(&mut self, kind: RecordKind, id: &str, field: &str, value: Value) -> Change {
+        self.at(0, 0, kind, id, ChangeOp::Set { field: field.into(), value })
+    }
+
+    /// Makes, as this log's own, a change with the time and counter `ms`
+    /// and `n` of another member's change: a central host taking that
+    /// change over keeps its place among the others (X89).
+    pub fn set_at(&mut self, ms: u64, n: u32, kind: RecordKind, id: &str, field: &str, value: Value) -> Change {
+        self.at(ms, n, kind, id, ChangeOp::Set { field: field.into(), value })
+    }
+
+    /// [`Self::set_at`] for a delete.
+    pub fn delete_at(&mut self, ms: u64, n: u32, kind: RecordKind, id: &str) -> Change {
+        self.at(ms, n, kind, id, ChangeOp::Delete)
+    }
+
+    fn at(&mut self, ms: u64, n: u32, kind: RecordKind, id: &str, op: ChangeOp) -> Change {
         self.seq = self.seq.saturating_add(1);
         let c = Change {
-            stamp: Stamp {
-                ms: 0,
-                n: 0,
-                member: self.member.clone(),
-            },
+            stamp: Stamp { ms, n, member: self.member.clone() },
             seq: self.seq,
             kind: kind.as_str().into(),
             id: id.into(),
-            op: ChangeOp::Set {
-                field: field.into(),
-                value,
-            },
+            op,
         };
         self.put((self.member.clone(), self.seq), c.clone());
         c
@@ -557,6 +592,11 @@ impl Log {
     /// The changes to records of `kind`, from every member.
     pub fn changes_of(&self, kind: RecordKind) -> impl Iterator<Item = &Change> {
         self.changes.values().filter(move |c| c.kind == kind.as_str())
+    }
+
+    /// [`Self::changes_of`], for a kind by its name.
+    pub fn changes_of_kind<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Change> + 'a {
+        self.changes.values().filter(move |c| c.kind == kind)
     }
 
     /// The records of `kind` by id, each field at its latest change.

@@ -654,8 +654,14 @@ impl WorkerLink {
                 c.central = None;
                 c.central_version = None;
             });
+            let before = self.sessions.central_account();
             if self.sessions.set_central_account(None) {
                 (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
+            }
+            // Made the central host itself: it referees permissions from
+            // now on, keeping what its central host counted (X89, X74).
+            if self.info().central.is_none() {
+                self.sessions.referee_permissions(before.as_deref());
             }
         }
         self.apply();
@@ -1237,7 +1243,10 @@ impl WorkerLink {
     /// answers, not taken in yet.
     async fn exchange(&self, host: &Arc<Host>, version: moonlet_core::account::Version, changes: Vec<moonlet_proto::types::Change>) -> Result<m::AccountSynced, RpcError> {
         let sent = moonlet_core::account::now_ms();
-        let send = m::AccountSync { version, changes, now_ms: Some(sent) };
+        // Its app's approvals and copied files, until the central host made
+        // them its own (X89, X74).
+        let asks = self.sessions.permission_asks();
+        let send = m::AccountSync { version, changes, now_ms: Some(sent), asks };
         let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(send).unwrap()).await?)?;
         if !self.is_current(host) {
             return Err(RpcError::new("gone", "the central host changed meanwhile"));
@@ -1757,6 +1766,11 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
             link.push_account(changes);
         }
     });
+    // A host with no central host of its own is its account's central
+    // host: it referees the records that act as permissions (X89, X74).
+    if daemon.link.info().central.is_none() {
+        daemon.sessions.referee_permissions(None);
+    }
 }
 
 /// A routing call from member `from`, passed on by the central host (X89):

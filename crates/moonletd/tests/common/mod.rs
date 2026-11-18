@@ -201,3 +201,32 @@ where
     }
     panic!("{what} did not happen within {limit:?}");
 }
+
+/// Writes a change to record `id` of `kind` into `d`'s own account log,
+/// as any process of the user's on that member could while its daemon is
+/// stopped, then starts the daemon again: a change its app never asked for,
+/// which the daemon sends its central host as its own (X68).
+pub async fn write_into_own_log(d: &mut Daemon, kind: &str, id: &str, field: &str, value: Value) {
+    d.stop();
+    let path = d.home.path().join("account.json");
+    let mut log: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let member = log["member"].as_str().unwrap().to_string();
+    let seq = log["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["stamp"]["member"] == json!(member))
+        .filter_map(|c| c["seq"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    log["changes"].as_array_mut().unwrap().push(json!({
+        "stamp": { "ms": now_ms(), "n": 0, "member": member },
+        "seq": seq,
+        "kind": kind,
+        "id": id,
+        "op": { "set": { "field": field, "value": value } },
+    }));
+    std::fs::write(&path, serde_json::to_vec(&log).unwrap()).unwrap();
+    d.restart().await;
+}

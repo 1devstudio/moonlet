@@ -5329,6 +5329,52 @@ async fn the_list_set_on_one_member_reaches_the_others() {
 }
 
 #[tokio::test]
+async fn a_list_a_members_daemon_writes_without_its_app_is_not_taken() {
+    let origin = Origin::new();
+    let (mini, addr) = central().await;
+    let mut book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    let on_book = origin.add_to(&book).await;
+    let on_mini = origin.add_to(&mini).await;
+    let projects: Value = book.call("project.list", json!({})).await;
+    let p = projects.as_array().unwrap().iter().find(|p| p["id"] == json!(on_book)).unwrap();
+    let key = format!(
+        "{}|{}",
+        p["identity"]["origin"].as_str().unwrap_or(""),
+        p["identity"]["root"].as_str().unwrap()
+    );
+    // Written into the MacBook's log without its app: every `.pem` file,
+    // to every member.
+    write_into_own_log(&mut book, "project_files", &key, "patterns", json!(["*.pem"])).await;
+    // The MacBook's own slots, changed after: once studio-mini has them, it
+    // has the list written before them too.
+    let _: Value = book.call("link.set", json!({ "worker": { "slots": 3 } })).await;
+    within(Duration::from_secs(15), "the MacBook's slots on studio-mini", || async {
+        let list: Vec<Value> = mini.call("worker.settings", json!({})).await;
+        list.iter().any(|e| e["worker"] == json!(BOOK) && e["slots"] == json!(3))
+    })
+    .await;
+    assert_eq!(
+        copied_files(&mini, &on_mini).await,
+        json!({ "patterns": [".env", ".env.*"], "cloud": false, "default": true })
+    );
+    // On the MacBook, its own word counts.
+    assert_eq!(copied_files(&book, &on_book).await["patterns"], json!(["*.pem"]));
+    // A list its app sets reaches studio-mini.
+    let _: Value = book
+        .call(
+            "project.copied_files.set",
+            json!({ "id": on_book, "patterns": [".env", "config/local.yaml"], "cloud": true }),
+        )
+        .await;
+    within(Duration::from_secs(15), "the app's list on studio-mini", || async {
+        copied_files(&mini, &on_mini).await
+            == json!({ "patterns": [".env", "config/local.yaml"], "cloud": true, "default": false })
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn only_the_macs_app_changes_the_list() {
     let book = mac(BOOK, "MacBook").await;
     let project = shop(&book).await;
