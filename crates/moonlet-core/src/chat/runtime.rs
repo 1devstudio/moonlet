@@ -1625,11 +1625,13 @@ impl ChatManager {
             if inner.cfg.agent == "claude" && inner.state.mode.is_some() {
                 inner.cfg.mode = inner.state.mode.clone();
             }
-            // Kept before anyone hears of it: a daemon stopped right after
-            // the app was shown a question still has it when it starts.
-            self.save(chat, inner);
-            // Saved again below, with what the terminal reports now.
-            inner.dirty = true;
+            // An ask is kept before anyone hears of it: a daemon stopped
+            // right after the app was shown a question still has it when it
+            // starts. Saved again below, with what the terminal reports.
+            if inner.state.status == "blocked" {
+                self.save(chat, inner);
+                inner.dirty = true;
+            }
             // Items travel as `chat.item`; the state event leaves them out.
             let items = std::mem::take(&mut inner.state.items);
             self.terms.emit(Message::event(methods::EV_CHAT_STATE, ChatStateEvent { id: chat.id, state: inner.state.clone() }));
@@ -1646,6 +1648,13 @@ impl ChatManager {
                 s => s,
             };
             let _ = self.terms.report(chat.id, state, StateSource::Hook, message, inner.cfg.agent.clone().into());
+            // Tests: a pause once the app was told the agent asks, as a
+            // daemon killed at that moment would leave it.
+            if inner.state.status == "blocked"
+                && let Some(ms) = std::env::var("MOONLET_TEST_CHAT_ASKED_PAUSE_MS").ok().and_then(|v| v.parse().ok())
+            {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             if self.terms.get(chat.id).is_some_and(|t| t.info().subagents != running) {
                 self.terms.update_info(chat.id, |i| i.subagents = running);
             }

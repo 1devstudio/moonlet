@@ -148,6 +148,7 @@ async fn serve_phone(
     let first = tokio::time::timeout(AUTH_TIMEOUT, read_frame_max(&mut stream, AUTH_FRAME_MAX))
         .await
         .context("no auth in time")??;
+    let enabled_before = daemon.mobile.is_enabled();
     let authed = match first {
         // Closed before saying anything: nobody to answer.
         None => return Ok(()),
@@ -170,7 +171,7 @@ async fn serve_phone(
         // Taken in just before access was turned off: closed, as every
         // connection then is, with no refusal a Mac's link or a phone
         // would keep after access is back on.
-        if !daemon.mobile.is_enabled() {
+        if !enabled_before || !daemon.mobile.is_enabled() {
             return Ok(());
         }
         tokio::time::sleep(FAIL_DELAY).await;

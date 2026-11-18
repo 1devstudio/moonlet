@@ -4412,6 +4412,28 @@ async fn asking(c: &mut Client, id: u64) {
     panic!("chat {id} never asked");
 }
 
+/// X6: a question the app was shown is still asked after the daemon is
+/// killed at once: the chat was saved before the app heard of it.
+#[tokio::test]
+async fn a_question_the_app_was_shown_is_still_asked_after_the_daemon_is_killed() {
+    let mut d = fake_claude_daemon_with(QUESTION_CLAUDE, vec![("MOONLET_TEST_CHAT_ASKED_PAUSE_MS".into(), "3000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    turn_over(&mut c, agent).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    asking(&mut c, agent).await;
+    drop(c);
+    // Killed while it pauses after telling the app.
+    d.restart().await;
+    let mut c = d.client().await;
+    asking(&mut c, agent).await;
+}
+
 /// X65: a design's agent still asking the user when the daemon restarts is
 /// within its turn after it: an edit by hand saved meanwhile waits for the
 /// turn, and Stop, which ends the turn, takes its Agent turn snapshot with

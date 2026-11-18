@@ -5338,8 +5338,8 @@ async fn a_give_cut_off_after_its_branch_moved_leaves_the_central_host_able_to_g
 
 /// A copy's branch left beside the session's own, as two repairs of a give
 /// cut off half way that raced on one worktree leave it (git's rename is
-/// not atomic): the next give still goes, and the left branch, at no
-/// commit of its own, is gone.
+/// not atomic): the left branch, at no commit of its own, is dropped,
+/// and the next give goes.
 #[tokio::test]
 async fn a_copy_branch_left_beside_the_sessions_own_does_not_stop_the_next_give() {
     let origin = Origin::new();

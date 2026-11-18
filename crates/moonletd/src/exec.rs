@@ -77,10 +77,12 @@ struct Remote {
     /// (X89).
     conn: Peer,
     done: Option<oneshot::Sender<(i32, ExecBrought, u64)>>,
-    /// Output that came before the worker answered the start: the worker
-    /// starts the command before it replies, and the client hears
-    /// "running on" first. `None` once the start was answered.
-    held: Option<Vec<(u8, Vec<u8>)>>,
+    /// The worker's name, for "moonlet: running on <name>".
+    name: String,
+    /// Whether the client was told where the run runs. The worker starts
+    /// the command before it answers the start, so its first output can
+    /// come first: the line goes out with whichever comes first.
+    said: bool,
 }
 
 /// A run of this central host's, for stopping it from its job.
@@ -968,7 +970,8 @@ impl Runs {
                 outputs: plan.outputs.clone(),
                 conn: conn.clone(),
                 done: Some(tx),
-                held: Some(Vec::new()),
+                name: name.to_string(),
+                said: false,
             },
         );
         let start = ExecStart {
@@ -1012,12 +1015,8 @@ impl Runs {
             } else {
                 None
             };
-            let held = self.remote.lock().unwrap().remove(&run).and_then(|r| r.held);
+            self.remote.lock().unwrap().remove(&run);
             if may_have_started(&e.code, cancel.as_ref()) {
-                // What it printed as it started still reaches the client.
-                for (stream, data) in held.into_iter().flatten() {
-                    self.emit(run, job, client, stream, data);
-                }
                 return Err(Fail::Gone("It went away as the command started."));
             }
             return Err(Fail::Refused(e.code, e.message));
@@ -1043,25 +1042,9 @@ impl Runs {
                 copy: prepared.path.clone(),
             });
         });
-        {
-            // Said before anything the command printed: what came while
-            // the start was answered follows it, and the rest after.
-            let mut remote = self.remote.lock().unwrap();
-            self.emit(
-                run,
-                job,
-                client,
-                2,
-                format!("moonlet: running on {name}\n").into_bytes(),
-            );
-            if let Some(r) = remote.get_mut(&run) {
-                for (stream, data) in r.held.take().into_iter().flatten() {
-                    self.emit(run, job, client, stream, data);
-                }
-                if r.done.is_none() {
-                    remote.remove(&run);
-                }
-            }
+        // Said now, unless the command's output or its end said it first.
+        if let Some(r) = self.remote.lock().unwrap().get_mut(&run) {
+            self.say_where(run, r);
         }
         // Stopped while it was being started: the worker stops it now.
         if self.stops.lock().unwrap().contains_key(&run) {
@@ -1303,12 +1286,10 @@ impl Runs {
     pub fn forward(&self, from: ClientId, run: u32, stream: u8, data: Vec<u8>) {
         let target = {
             let mut remote = self.remote.lock().unwrap();
-            let Some(r) = remote.get_mut(&run).filter(|r| r.conn.id() == from) else { return };
-            if let Some(held) = &mut r.held {
-                held.push((stream, data));
-                return;
-            }
-            Some((r.client.clone(), r.job.clone()))
+            remote.get_mut(&run).filter(|r| r.conn.id() == from).map(|r| {
+                self.say_where(run, r);
+                (r.client.clone(), r.job.clone())
+            })
         };
         if let Some((client, job)) = target {
             self.emit(run, &job, &client, stream, data);
@@ -1330,14 +1311,23 @@ impl Runs {
     /// `back_ms` is how long bringing them in took.
     pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought, back_ms: u64) {
         let mut remote = self.remote.lock().unwrap();
-        let Some(r) = remote.get_mut(&run).filter(|r| r.conn.id() == from) else { return };
-        if let Some(tx) = r.done.take() {
-            let _ = tx.send((status, brought, back_ms));
+        if remote.get(&run).is_some_and(|r| r.conn.id() == from)
+            && let Some(mut r) = remote.remove(&run)
+        {
+            // Done before its start was answered.
+            self.say_where(run, &mut r);
+            if let Some(tx) = r.done.take() {
+                let _ = tx.send((status, brought, back_ms));
+            }
         }
-        // Done before its start was answered: kept until the start says
-        // "running on" and passes on what the command printed.
-        if r.held.is_none() {
-            remote.remove(&run);
+    }
+
+    /// Tells remote run `run`'s client where it runs, once: before anything
+    /// the command printed. Called with the run's entry in `remote` held.
+    fn say_where(&self, run: u32, r: &mut Remote) {
+        if !r.said {
+            r.said = true;
+            self.emit(run, &r.job, &r.client, 2, format!("moonlet: running on {}\n", r.name).into_bytes());
         }
     }
 

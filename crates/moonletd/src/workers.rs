@@ -142,6 +142,9 @@ impl Workers {
         paired: impl Fn(&str) -> bool,
     ) -> Result<(), RpcError> {
         let id = worker.id.clone();
+        if conn.is_gone() {
+            return Err(RpcError::new("disconnected", "the connection closed"));
+        }
         // One worker per connection: a second id would leave the first
         // listed against a connection that no longer speaks for it.
         if self

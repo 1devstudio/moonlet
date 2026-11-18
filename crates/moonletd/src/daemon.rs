@@ -5845,6 +5845,12 @@ impl Daemon {
                     // that took it can repair the same worktree meanwhile.
                     let one = lock_of(&d.giving, &s.id);
                     let _one = one.lock().await;
+                    // Read again under the lock: a give may have moved it on
+                    // since the list was made.
+                    let Ok(s) = d.sessions.session(&s.id) else { continue };
+                    if s.archived {
+                        continue;
+                    }
                     if let Err(e) = own_branch_back(&s).await {
                         tracing::warn!(session = %s.id, "{e}");
                     }

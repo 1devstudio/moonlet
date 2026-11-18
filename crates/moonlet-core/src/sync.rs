@@ -1096,11 +1096,10 @@ pub async fn fast_forward(worktree: &Path, branch: &str, from: &str, to: &str) -
 /// editor's or a terminal's `git status`) to let the staging area's lock
 /// go: the branch has moved already, and its staging area must follow.
 async fn reset_index(worktree: &Path) -> Result<()> {
-    let mut tries = 0;
+    let until = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         match git_env(worktree, &[], &["reset", "-q"], None).await {
-            Err(e) if tries < 50 && format!("{e:#}").contains("index.lock") => {
-                tries += 1;
+            Err(e) if std::time::Instant::now() < until && format!("{e:#}").contains("index.lock") => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             other => return other.map(drop),
