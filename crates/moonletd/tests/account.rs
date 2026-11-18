@@ -1033,8 +1033,20 @@ async fn a_copy_is_read_only_until_moved_here_and_the_old_owner_keeps_a_copy() {
 
 #[tokio::test]
 async fn a_change_the_old_owner_made_offline_is_never_lost_when_its_item_moved() {
+    offline_change_kept(&[]).await;
+}
+
+/// The same, with the MacBook's link slow to register, as on a loaded
+/// machine: its design copies wait for the link's first account exchange,
+/// which says the item moved, and start once it is done.
+#[tokio::test]
+async fn a_change_the_old_owner_made_offline_is_kept_when_its_link_registers_slowly() {
+    offline_change_kept(&[("MOONLET_TEST_REGISTER_DELAY_MS", "2000")]).await;
+}
+
+async fn offline_change_kept(book_env: &[(&str, &str)]) {
     let (mini, addr) = central().await;
-    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let mut book = mac_with(BOOK, "Alex's MacBook Pro", book_env).await;
     link(&book, &mini, &addr, "Alex's MacBook Pro").await;
     let books = book.workspaces().await[0].id.clone();
     let _: Value = book
@@ -1063,7 +1075,8 @@ async fn a_change_the_old_owner_made_offline_is_never_lost_when_its_item_moved()
         let left = std::fs::read_dir(book.home.path().join("sync-leftovers"))
             .map(|d| {
                 d.flatten().any(|e| {
-                    e.file_name().to_string_lossy().starts_with(&format!("design-{books}-acme-web-"))
+                    // A system's workspace is the library (X95).
+                    e.file_name().to_string_lossy().starts_with("design-library-acme-web-")
                         && std::fs::read_to_string(e.path().join("NOTES.md")).ok().as_deref() == Some("Made on the plane.\n")
                 })
             })

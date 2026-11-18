@@ -6712,6 +6712,14 @@ impl Daemon {
     /// change to a design's record comes.
     pub fn keep_design_copies(self: &Arc<Self>) {
         let copies = Arc::downgrade(&self.copies);
+        self.link.on_account_in_step({
+            let copies = copies.clone();
+            move || {
+                if let Some(c) = copies.upgrade() {
+                    c.kick();
+                }
+            }
+        });
         self.sessions.on_account_applied(move |changes| {
             if let Some(c) = copies.upgrade()
                 && changes.iter().any(|c| c.kind == "design")
