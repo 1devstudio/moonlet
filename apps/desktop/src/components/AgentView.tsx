@@ -1186,7 +1186,7 @@ function ChatEditor({
           ))}
         </div>
       )}
-      <div className="rounded-[14px] border border-border-strong bg-panel has-[textarea:focus]:border-[#3a3a3a]">
+      <div className="rounded-md border border-border-strong bg-panel has-[textarea:focus]:border-[#3a3a3a]">
         {top}
         {/* Two lines tall when empty (X51); the send button sits at the bottom. */}
         <div className={cx("relative flex items-start gap-2.5 pr-3", CARD_PAD[layout.insetX])}>
