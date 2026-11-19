@@ -37,6 +37,7 @@ pub mod process;
 pub mod pty;
 pub mod session;
 pub mod session_processes;
+pub mod setup_inputs;
 pub mod shell;
 pub mod tasks;
 pub mod ssh;

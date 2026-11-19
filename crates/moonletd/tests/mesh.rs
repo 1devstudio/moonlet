@@ -1895,6 +1895,249 @@ async fn a_failed_setup_keeps_routed_commands_away_and_runs_again_from_an_app() 
     assert!(others_setups(&book).await.is_empty());
 }
 
+/// A setup that records each of its runs in the copy's ignored
+/// `node_modules`: the lockfile it saw, and one line per run.
+const RECORDS: &str = "mkdir -p node_modules && { cat pnpm-lock.yaml 2>/dev/null || echo none; } > node_modules/installed && echo run >> node_modules/runs";
+
+/// What a command that reads [`RECORDS`]'s marks prints: the lockfile the
+/// last setup saw, then how many times it ran.
+const READ_RECORDS: &[&str] = &["sh", "-c", "cat node_modules/installed; grep -c run node_modules/runs"];
+
+/// [`air_waits_for_setup`], with `setup` approved from the MacBook's app
+/// and a first command run on the Air after it.
+async fn air_set_up(setup: &str) -> (Daemon, Daemon, Daemon, Value, tempfile::TempDir) {
+    let (mini, book, air, session, repo) = air_waits_for_setup(setup).await;
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.into_iter().next()
+    })
+    .await;
+    let _: bool = book
+        .call("exec.answer_setup", json!({ "id": ask["copy"], "command": setup, "run": true }))
+        .await;
+    run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/runs"]).await;
+    (mini, book, air, session, repo)
+}
+
+/// Waits until the Air serves no command: one run's copy is free a moment
+/// after its exit status, and a run that came sooner is refused `busy`.
+async fn air_idle(air: &Daemon) {
+    within(Duration::from_secs(10), "the Air idle", || async {
+        let st: Value = air.call("exec.status", json!({})).await;
+        st["serving"].as_array().is_none_or(|s| s.is_empty())
+    })
+    .await;
+}
+
+/// Whether `session`'s last job was refused at its fence because another
+/// snapshot of the session's worktree held its index lock: a race on the
+/// session's host, before the runner looks at its setup.
+async fn lost_the_index_lock(book: &Daemon, session: &Value) -> bool {
+    last_job(book, session).await["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["text"].as_str().is_some_and(|t| t.contains("moonlet-sync-index.lock")))
+}
+
+/// [`run`] on the MacBook once the Air is idle, again while the fence
+/// lost the index lock.
+async fn run_when_idle(book: &Daemon, air: &Daemon, session: &Value, argv: &[&str]) -> Ran {
+    for _ in 0..10 {
+        air_idle(air).await;
+        let ran = run(book, session, argv).await;
+        if !lost_the_index_lock(book, session).await {
+            return ran;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    panic!("the fence kept losing the index lock");
+}
+
+/// The session's worktree on the MacBook.
+fn worktree(session: &Value) -> std::path::PathBuf {
+    std::path::PathBuf::from(session["path"].as_str().unwrap())
+}
+
+/// The latest job of `session` on `d`.
+async fn last_job(d: &Daemon, session: &Value) -> Value {
+    let jobs: Vec<Value> = d.call("job.list", json!({ "session": session["id"] })).await;
+    jobs.into_iter().next().unwrap()
+}
+
+#[tokio::test]
+async fn a_lockfile_changed_in_the_session_runs_the_setup_again_on_the_runner_once_before_the_command() {
+    let (_mini, book, air, session, _repo) = air_set_up(RECORDS).await;
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("none\n1\n", 0), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+    // A dependency added in the session: its lockfile changed.
+    std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\nleft-pad: 1.3.0\n").unwrap();
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!(
+        (ran.stdout.as_str(), ran.stderr.as_str(), ran.status),
+        (
+            "lockfileVersion: '9.0'\nleft-pad: 1.3.0\n2\n",
+            "moonlet: running setup again on Alex's MacBook Air: pnpm-lock.yaml changed\nmoonlet: running on Alex's MacBook Air\n",
+            0
+        ),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+    // The job says so, with the time it took.
+    let job = last_job(&book, &session).await;
+    let said: Vec<&str> = job["timeline"].as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
+    assert!(said.contains(&"Ran setup again on Alex's MacBook Air: pnpm-lock.yaml changed"), "{said:?}");
+    let phase = job["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == json!("Ran setup again: pnpm-lock.yaml changed"))
+        .unwrap_or_else(|| panic!("no setup phase: {job}"));
+    assert!(phase["took_ms"].is_u64(), "{phase}");
+    // Nobody was asked again: the command is the one approved.
+    assert_eq!(others_setups(&book).await, Vec::<Value>::new());
+    let asked: Vec<Value> = air.call("exec.setups", json!({})).await;
+    assert_eq!(asked, Vec::<Value>::new());
+    // Once is enough: the next run finds it up to date.
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!(
+        (ran.stdout.as_str(), ran.stderr.as_str()),
+        ("lockfileVersion: '9.0'\nleft-pad: 1.3.0\n2\n", "moonlet: running on Alex's MacBook Air\n"),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+}
+
+#[tokio::test]
+async fn a_change_to_a_file_the_setup_does_not_read_runs_no_setup() {
+    let (_mini, book, air, session, _repo) = air_set_up(RECORDS).await;
+    std::fs::create_dir_all(worktree(&session).join("src")).unwrap();
+    std::fs::write(worktree(&session).join("src/cart.ts"), "export const total = 0;\n").unwrap();
+    std::fs::write(worktree(&session).join("README.md"), "# shop\n").unwrap();
+    let ran = run_when_idle(&book, &air, &session, &["sh", "-c", "cat src/cart.ts; grep -c run node_modules/runs"]).await;
+    assert_eq!(
+        (ran.stdout.as_str(), ran.stderr.as_str(), ran.status),
+        ("export const total = 0;\n1\n", "moonlet: running on Alex's MacBook Air\n", 0),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+}
+
+#[tokio::test]
+async fn a_changed_setup_command_asks_again_and_runs_nothing_until_approved() {
+    let (_mini, book, air, session, _repo) = air_set_up(RECORDS).await;
+    // The lockfile and the setup command both changed.
+    std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "left-pad: 1.3.0\n").unwrap();
+    let changed = format!("{RECORDS} && touch node_modules/.changed");
+    std::fs::write(
+        book.home.path().join("src/shop/.moonlet/config.toml"),
+        format!("setup = {}\n{RUN_HEAVY}", json!(changed)),
+    )
+    .unwrap();
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert!(!ran.stderr.contains("running on Alex's MacBook Air"), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's new setup", || async {
+        others_setups(&book).await.into_iter().find(|s| s["command"] == json!(changed))
+    })
+    .await;
+    assert_eq!((&ask["on"], &ask["failed"]), (&json!("Alex's MacBook Air"), &Value::Null), "{ask}");
+    let jobs: Vec<Value> = book.call("job.list", json!({ "session": session["id"] })).await;
+    let said: Vec<&str> = jobs[0]["timeline"].as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
+    assert!(said.contains(&"Alex's MacBook Air refused it: waiting for setup approval"), "{said:?}");
+    // Approved: it runs, on the files the command sees.
+    let _: bool = book
+        .call("exec.answer_setup", json!({ "id": ask["copy"], "command": changed, "run": true }))
+        .await;
+    // Nothing ran before it: this is the setup's second run in the copy.
+    let ran = run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/.changed && cat node_modules/installed && grep -c run node_modules/runs"]).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("left-pad: 1.3.0\n2\n", 0), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+}
+
+#[tokio::test]
+async fn a_setup_that_fails_when_run_again_keeps_the_command_away() {
+    let setup = format!("grep -q broken pnpm-lock.yaml 2>/dev/null && {{ echo 'ERR_PNPM_NO_MATCHING_VERSION left-pad@9'; exit 3; }}; {RECORDS}");
+    let (_mini, book, air, session, _repo) = air_set_up(&setup).await;
+    std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "broken\n").unwrap();
+    let ran = run_when_idle(&book, &air, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(
+        (ran.stdout.as_str(), ran.status),
+        ("done\n", 0),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+    assert!(
+        ran.stderr.starts_with("moonlet: running setup again on Alex's MacBook Air: pnpm-lock.yaml changed\n"),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+    assert!(!ran.stderr.contains("moonlet: running on Alex's MacBook Air"), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+    let job = last_job(&book, &session).await;
+    let said: Vec<&str> = job["timeline"].as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
+    assert!(
+        said.contains(&"Alex's MacBook Air refused it: its setup failed (exit 3): ERR_PNPM_NO_MATCHING_VERSION left-pad@9"),
+        "{said:?}"
+    );
+    // As any failed setup (X60): the app on another member offers to run it again.
+    let failed = within_value(Duration::from_secs(10), "the Air's failed setup listed", || async {
+        others_setups(&book).await.into_iter().find(|s| s["failed"].is_object())
+    })
+    .await;
+    assert_eq!(failed["failed"], json!({ "exit": 3, "line": "ERR_PNPM_NO_MATCHING_VERSION left-pad@9" }));
+    let ran = run_when_idle(&book, &air, &session, &["sh", "-c", "echo done"]).await;
+    assert!(!ran.stderr.contains("running on Alex's MacBook Air"), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+}
+
+#[tokio::test]
+async fn two_commands_arriving_together_after_a_lockfile_change_run_the_setup_once() {
+    // Slow, so a command that ran half way through it would read the old
+    // lockfile.
+    let slow = format!("sleep 1 && {RECORDS}");
+    let (_mini, book, air, session, _repo) = air_set_up(&slow).await;
+    std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "left-pad: 1.3.0\n").unwrap();
+    let read = &["sh", "-c", "cat node_modules/installed 2>/dev/null; grep -c run node_modules/runs 2>/dev/null; true"];
+    let (a, b) = {
+        let mut tries = 0;
+        loop {
+            air_idle(&air).await;
+            let (a, b) = tokio::join!(run(&book, &session, read), run(&book, &session, read));
+            tries += 1;
+            let on_air = [&a, &b].iter().any(|r| r.stderr.contains("running on Alex's MacBook Air"));
+            if on_air || tries == 10 || !lost_the_index_lock(&book, &session).await {
+                break (a, b);
+            }
+        }
+    };
+    let on_air: Vec<&Ran> = [&a, &b].into_iter().filter(|r| r.stderr.contains("running on Alex's MacBook Air")).collect();
+    assert!(!on_air.is_empty(), "{a:?} {b:?}");
+    for r in &on_air {
+        assert_eq!(r.stdout, "left-pad: 1.3.0\n2\n", "{a:?} {b:?}");
+    }
+    // And once more: still the one run again.
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!((ran.stdout.as_str(), ran.stderr.as_str()), ("left-pad: 1.3.0\n2\n", "moonlet: running on Alex's MacBook Air\n"), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+}
+
+#[tokio::test]
+async fn a_projects_own_setup_inputs_replace_the_default_list() {
+    let (_mini, book, air, session, _repo) = air_set_up(RECORDS).await;
+    // The MacBook's main checkout names what its setup reads (X90).
+    std::fs::write(
+        book.home.path().join("src/shop/.moonlet/config.toml"),
+        format!("setup = {}\nsetup_inputs = [\"patches/*.patch\"]\n{RUN_HEAVY}", json!(RECORDS)),
+    )
+    .unwrap();
+    // A lockfile is not on its list.
+    std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "left-pad: 1.3.0\n").unwrap();
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!((ran.stdout.as_str(), ran.stderr.as_str()), ("none\n1\n", "moonlet: running on Alex's MacBook Air\n"), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+    // A patch is.
+    std::fs::create_dir_all(worktree(&session).join("patches")).unwrap();
+    std::fs::write(worktree(&session).join("patches/left-pad.patch"), "--- a\n+++ b\n").unwrap();
+    let ran = run_when_idle(&book, &air, &session, READ_RECORDS).await;
+    assert_eq!(
+        (ran.stdout.as_str(), ran.stderr.as_str()),
+        (
+            "left-pad: 1.3.0\n2\n",
+            "moonlet: running setup again on Alex's MacBook Air: patches/left-pad.patch changed\nmoonlet: running on Alex's MacBook Air\n"
+        ),
+        "{ran:?} {}", last_job(&book, &session).await["timeline"]
+    );
+}
+
 #[tokio::test]
 async fn skipping_a_setup_waiting_on_a_member_from_another_members_app_lets_commands_run_there_without_it() {
     let (_mini, book, _air, session, _repo) = air_waits_for_setup(SETUP).await;

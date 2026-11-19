@@ -588,10 +588,29 @@ export function selectedSession(s: State = get()): Session | undefined {
   return s.sessions[s.selected.host]?.find((w) => w.id === s.selected!.session);
 }
 
-export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): TerminalInfo[] {
-  return Object.values(s.terminals[host] ?? {})
-    .filter((x) => x.session_id === wsId)
-    .sort((a, b) => a.id - b.id);
+/** A host's terminals by session, in id order, built once per terminals
+ *  object: every sidebar row asks for its own on every state change, and a
+ *  scan of every terminal each time froze the app at start. */
+const terminalsBySession = new WeakMap<Record<number, TerminalInfo>, Map<string, TerminalInfo[]>>();
+const NO_TERMINALS: readonly TerminalInfo[] = Object.freeze([]);
+
+/** A session's terminals in id order. While the host's terminals are
+ *  unchanged, every call gives the same list, so it is read only. */
+export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): readonly TerminalInfo[] {
+  const all = s.terminals[host];
+  if (!all) return NO_TERMINALS;
+  let index = terminalsBySession.get(all);
+  if (!index) {
+    index = new Map();
+    for (const x of Object.values(all).sort((a, b) => a.id - b.id)) {
+      if (x.session_id === undefined) continue;
+      const list = index.get(x.session_id);
+      if (list) list.push(x);
+      else index.set(x.session_id, [x]);
+    }
+    terminalsBySession.set(all, index);
+  }
+  return index.get(wsId) ?? NO_TERMINALS;
 }
 
 const RANK: Record<AgentState, number> = { blocked: 5, error: 4, working: 3, done: 2, idle: 1 };
@@ -648,7 +667,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     // memory. The others load when shown (X81).
     void reloadChats(host, terminals.filter((t) => t.chat).map((t) => t.id));
     // Saved PRs show at once; the poll then asks only about those that can
-    // still change, alongside the git statuses rather than after them (X107).
+    // still change, alongside the git statuses rather than after them (X108).
     void loadKnownPrs(host).then(() => refreshPrs(host));
     void refreshAllGit(host);
     timedFetch[host] = Date.now();
@@ -961,10 +980,10 @@ export async function refreshGit(host: string, id: string) {
   }
 }
 
-/** When each session's PR was last checked, by session key (X107). */
+/** When each session's PR was last checked, by session key (X108). */
 const prCheckedAt: Record<string, number> = {};
 
-/** Shows the PRs the host's daemon saved (X107). A daemon from before it
+/** Shows the PRs the host's daemon saved (X108). A daemon from before it
  *  has none to give, and the poll asks about every session as before. */
 async function loadKnownPrs(host: string) {
   try {
@@ -1002,7 +1021,7 @@ const prPolls = latestPerKey();
 export async function pollPr(host: string, sessionId: string, path: string): Promise<PullRequest | null> {
   const isLatest = prPolls.start(sesKey(host, sessionId));
   // Counted from the ask, so the 5-minute poll is not a few seconds early
-  // for the 5-minute pause (X107).
+  // for the 5-minute pause (X108).
   const askedAt = Date.now();
   const pr = await rpc<PullRequest | null>(host, M.prStatus, { path });
   if (isLatest()) recordPr(host, sessionId, pr, askedAt);

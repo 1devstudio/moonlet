@@ -3,6 +3,9 @@
 //! a fake release server signed with a test key (`MOONLET_RELEASES` and
 //! `MOONLET_RELEASE_KEY`, honoured by debug builds only).
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -233,6 +236,7 @@ impl Host {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();

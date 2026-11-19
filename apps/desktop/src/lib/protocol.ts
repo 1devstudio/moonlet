@@ -1056,7 +1056,7 @@ export interface PullRequest {
   head_oid?: string | null;
 }
 
-/** A session's PR as the daemon last heard it from GitHub (X107). */
+/** A session's PR as the daemon last heard it from GitHub (X108). */
 export interface KnownPr {
   pr: PullRequest | null;
   checked_at: number;

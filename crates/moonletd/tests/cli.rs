@@ -2,6 +2,9 @@
 //! would on a host without the app, against a test daemon that listens on
 //! 127.0.0.1 (`MOONLET_MOBILE_ADDRS`) instead of a Tailscale address.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
@@ -53,6 +56,7 @@ impl Host {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15))

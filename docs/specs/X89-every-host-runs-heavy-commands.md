@@ -206,7 +206,7 @@ The worker settings, a project's approval and its copied files (X74) act as perm
 **Changed:**
 
 - `worker.register` gains `peer: bool`.
-- The `worker.ping` answer gains `used` and `running`; `exec.status` gains `serving`, what this host runs for other hosts; `exec.start` gains `session_name`; `exec.prepare` gains `setup` (X90's main checkout) and `identity`.
+- The `worker.ping` answer gains `used` and `running`; `exec.status` gains `serving`, what this host runs for other hosts; `exec.start` gains `session_name`; `exec.prepare` gains `setup` (X90's main checkout) and `identity`, and since 2026-11-19 `setup_inputs` and `fence` (X62's Setup again when what it reads changed).
 - `link.get`/`link.set`'s `worker.enabled` and `worker.slots` read and write the account's settings for this host.
 - `docs/protocol.md` gets the methods and the relay's frames.
 - `account.sync` gains `asks: [{member, seq}]`, optional: the sender's own changes to a project's approval or copied files that its app made, which it asks the central host to make its own (Who a permission counts from).

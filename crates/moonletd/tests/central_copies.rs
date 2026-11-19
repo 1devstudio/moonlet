@@ -1065,9 +1065,12 @@ async fn agents_not_linked_as(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     b.extend_from_slice(book_extra);
-    let (mini, addr) = central_with(&m).await;
-    let book = mac_with(BOOK, "MacBook", &b).await;
-    std::mem::forget(scratch);
+    let (mut mini, addr) = central_with(&m).await;
+    let mut book = mac_with(BOOK, "MacBook", &b).await;
+    // The agents' folders, which both daemons use, go with the last of them.
+    let scratch = std::sync::Arc::new(scratch);
+    mini.also.push(scratch.clone());
+    book.also.push(scratch);
     (mini, addr, book)
 }
 

@@ -1,5 +1,8 @@
 //! End-to-end tests against a real `moonletd` process.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -34,6 +37,7 @@ impl TestDaemon {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15))
@@ -465,6 +469,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home.path())
         .spawn()
         .unwrap();
     wait_for_socket(&socket, Duration::from_secs(15))
@@ -1138,6 +1143,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(&home.path().join(".moonlet"))
         .spawn()
         .unwrap();
     wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
@@ -1211,7 +1217,8 @@ impl HomeDaemon {
             .env_remove("CODEX_HOME")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .keep_logs(&home.join(".moonlet"));
         if let Some(p) = path {
             cmd.env("PATH", p);
         }
@@ -1909,7 +1916,7 @@ async fn home_project(d: &HomeDaemon, c: &mut Client) -> moonlet_proto::types::P
     c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap()
 }
 
-/// X107: a merged PR cannot change, so once the daemon has seen a session's
+/// X108: a merged PR cannot change, so once the daemon has seen a session's
 /// PR merged it answers from what it saved, after a restart too, without
 /// asking GitHub again. The app reads every saved PR in one call.
 #[tokio::test]
@@ -1948,7 +1955,7 @@ async fn a_merged_pr_is_answered_from_what_the_daemon_saved() {
     assert_eq!(known, serde_json::json!({}), "an archived session's PR is not listed");
 }
 
-/// X107: a stack fetched for one PR answers for every PR in it within a
+/// X108: a stack fetched for one PR answers for every PR in it within a
 /// minute, and `known: true` answers from the saved stack after a restart,
 /// neither asking GitHub.
 #[tokio::test]
@@ -2123,6 +2130,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(d.home.path())
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -2179,6 +2187,7 @@ async fn a_daemon_started_for_a_process_already_gone_stops() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home.path())
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);

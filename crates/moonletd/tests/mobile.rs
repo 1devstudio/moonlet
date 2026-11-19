@@ -2,6 +2,9 @@
 //! when removed, and reach the Mac's SSH hosts through it. The daemon listens
 //! on 127.0.0.1 here (`MOONLET_MOBILE_ADDRS`) instead of a Tailscale address.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -64,7 +67,8 @@ impl Mac {
             .env("MOONLET_TAILSCALE", "/nonexistent/tailscale")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .keep_logs(home);
         if let Some(p) = path {
             // The daemon takes PATH from the login shell, which reads these.
             let first = format!("PATH=\"{}:$PATH\"; export PATH\n", p.display());

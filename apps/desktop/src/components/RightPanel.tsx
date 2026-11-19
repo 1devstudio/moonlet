@@ -168,7 +168,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
     let live = true;
     const polls = latestOnly();
     // The saved stack of the saved PR shows at once; the poll below brings
-    // it up to date (X107).
+    // it up to date (X108).
     let fetched = false;
     const saved = useStore.getState().prs[sesKey(host, ws.id)];
     if (saved)
@@ -176,7 +176,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
         .then((st) => live && !fetched && setStack(st))
         .catch(() => {});
     // Opening the session asks GitHub for its stack again, however fresh
-    // the saved one is; the minute polls after it share the saved one (X107).
+    // the saved one is; the minute polls after it share the saved one (X108).
     const load = (refresh = false) => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();

@@ -1,5 +1,5 @@
 //! What the daemon last heard from GitHub about each session's pull request
-//! and about PR stacks (X107), kept in `prs.json` beside `state.json`. It is
+//! and about PR stacks (X108), kept in `prs.json` beside `state.json`. It is
 //! this host's own cache, not part of the account state: an unreadable file
 //! starts it empty, and GitHub is asked again.
 

@@ -42,6 +42,18 @@ const DRAIN: Duration = Duration::from_secs(1);
 const MAX_QUEUED: usize = 4 * 1024 * 1024;
 /// How long a worker has to make its routing copy.
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How often a run asks again while its routing copy's setup runs again.
+const SETUP_POLL: Duration = Duration::from_millis(500);
+
+/// A worker's answer to `exec.prepare` that is not `ready`, as a refusal.
+fn not_ready(prepared: ExecPrepared) -> Fail {
+    let why = prepared.reason.clone().unwrap_or_else(|| match prepared.state.as_str() {
+        "setup_pending" => "waiting for setup approval".into(),
+        "making" => "making its copy".into(),
+        other => other.into(),
+    });
+    Fail::Refused(prepared.state, why)
+}
 /// How long a member's session waits for its central host's cloud machine
 /// (X89).
 const CENTRAL_CLOUD_WAIT: Duration = Duration::from_secs(20 * 60);
@@ -181,6 +193,8 @@ pub struct Plan {
     /// The project's setup command, from its main checkout, for a routing
     /// copy that has none of its own (X89).
     pub setup: Option<String>,
+    /// The files that setup reads, from the same checkout.
+    pub setup_inputs: Option<Vec<String>>,
     /// The project's identity, for the central host's cloud machines of
     /// it (X89).
     pub identity: Option<moonlet_proto::types::ProjectIdentity>,
@@ -1159,37 +1173,18 @@ impl Runs {
         let conn = sync
             .peer_for(worker)
             .ok_or_else(|| Fail::Refused("gone".into(), "it went away".into()))?;
-        let prepare = m::ExecPrepare {
+        let mut prepare = m::ExecPrepare {
             session: plan.session.clone(),
             setup: plan.setup.clone(),
             identity: plan.identity.clone(),
             session_name: Some(plan.session_name.clone()),
+            setup_inputs: plan.setup_inputs.clone(),
+            fence: None,
         };
         sync.expect_open(worker, &plan.session);
-        let prepared: ExecPrepared = self
-            .unless_stopped(
-                run,
-                client,
-                conn.request(
-                    m::EXEC_PREPARE,
-                    serde_json::to_value(prepare).unwrap(),
-                    PREPARE_TIMEOUT,
-                ),
-            )
-            .await?
-            .ok()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .ok_or_else(|| Fail::Refused("failed".into(), "it could not make its copy".into()))?;
+        let prepared = self.prepare_on(run, client, &conn, &prepare, PREPARE_TIMEOUT).await?;
         if prepared.state != "ready" {
-            let why = prepared
-                .reason
-                .clone()
-                .unwrap_or_else(|| match prepared.state.as_str() {
-                    "setup_pending" => "waiting for setup approval".into(),
-                    "making" => "making its copy".into(),
-                    other => other.into(),
-                });
-            return Err(Fail::Refused(prepared.state, why));
+            return Err(not_ready(prepared));
         }
         let fencing = std::time::Instant::now();
         let (tree, head, session_path) = self
@@ -1201,6 +1196,41 @@ impl Runs {
             .await?
             .map_err(|e| Fail::Refused(e.code, e.message))?;
         let fenced_ms = fencing.elapsed().as_millis() as u64;
+        // Asked again at the fence: the setup runs again first there when
+        // what it reads changed, and the command waits for it, on the same
+        // host. A runner from before answers `ready` at once.
+        prepare.fence = Some(m::ExecFence { tree: tree.clone(), head: head.clone() });
+        let mut setup_again: Option<(String, std::time::Instant)> = None;
+        // One deadline for the whole wait, as long as a copy may take to
+        // make; then the next host runs it.
+        let left = |setup_again: &Option<(String, std::time::Instant)>| {
+            setup_again.as_ref().map_or(PREPARE_TIMEOUT, |(_, began)| PREPARE_TIMEOUT.saturating_sub(began.elapsed()))
+        };
+        loop {
+            if left(&setup_again).is_zero() {
+                let minutes = PREPARE_TIMEOUT.as_secs() / 60;
+                return Err(Fail::Refused("setup_running".into(), format!("its setup still runs after {minutes} minutes")));
+            }
+            let prepared = self.prepare_on(run, client, &conn, &prepare, left(&setup_again)).await?;
+            match prepared.state.as_str() {
+                "ready" => break,
+                "setup_running" => {
+                    if setup_again.is_none() {
+                        let why = prepared.reason.clone().unwrap_or_else(|| "its setup runs".into());
+                        self.emit(
+                            run,
+                            job,
+                            client,
+                            2,
+                            format!("moonlet: running setup again on {name}: {why}\n").into_bytes(),
+                        );
+                        setup_again = Some((why, std::time::Instant::now()));
+                    }
+                    self.unless_stopped(run, client, tokio::time::sleep(SETUP_POLL.min(left(&setup_again)))).await?;
+                }
+                _ => return Err(not_ready(prepared)),
+            }
+        }
         if let Some(status) = self.stopped(run, client) {
             return Err(Fail::Stopped(status));
         }
@@ -1270,11 +1300,20 @@ impl Runs {
             j.state = JobState::Running {
                 worker: name.to_string(),
             };
+            if let Some((why, _)) = &setup_again {
+                event(j, format!("Ran setup again on {name}: {why}"), None);
+            }
             event(j, format!("Started on {name}"), None);
             j.phases.push(JobPhase {
                 name: "Copy matched the session".into(),
                 took_ms: Some(fenced_ms),
             });
+            if let Some((why, began)) = &setup_again {
+                j.phases.push(JobPhase {
+                    name: format!("Ran setup again: {why}"),
+                    took_ms: Some(began.elapsed().as_millis() as u64),
+                });
+            }
             j.worker = Some(JobWorker {
                 name: name.to_string(),
                 kind: kind.into(),
@@ -1388,6 +1427,19 @@ impl Runs {
     fn stopped(&self, run: u32, client: &Conn) -> Option<i32> {
         let stopped = self.stops.lock().unwrap().get(&run).copied();
         stopped.or_else(|| client.is_gone().then_some(130))
+    }
+
+    /// `exec.prepare` on the worker `conn` leads to, until the job stops.
+    async fn prepare_on(&self, run: u32, client: &Conn, conn: &Peer, prepare: &m::ExecPrepare, timeout: Duration) -> Result<ExecPrepared, Fail> {
+        self.unless_stopped(
+            run,
+            client,
+            conn.request(m::EXEC_PREPARE, serde_json::to_value(prepare).unwrap(), timeout),
+        )
+        .await?
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .ok_or_else(|| Fail::Refused("failed".into(), "it could not make its copy".into()))
     }
 
     /// `f`'s result, unless run `run` is stopped first.
@@ -1881,6 +1933,7 @@ fn cores() -> u32 {
 
 /// Adds `text` to job `j`'s timeline, now.
 fn event(j: &mut Job, text: String, detail: Option<String>) {
+    tracing::debug!(job = %j.id, detail, "{text}");
     j.timeline.push(JobEvent {
         at: moonlet_core::paths::now_ms(),
         text,

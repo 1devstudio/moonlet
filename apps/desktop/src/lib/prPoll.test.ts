@@ -13,7 +13,7 @@ describe("needsPrPoll", () => {
     expect(needsPrPoll(undefined)).toBe(true);
   });
 
-  it("asks about a session with no PR, or a closed one, at most every 5 minutes (X107)", () => {
+  it("asks about a session with no PR, or a closed one, at most every 5 minutes (X108)", () => {
     const now = 10_000_000;
     expect(needsPrPoll(null, { checkedAt: now - 299_999, now })).toBe(false);
     expect(needsPrPoll({ state: "closed" }, { checkedAt: now - 60_000, now })).toBe(false);
@@ -65,7 +65,7 @@ describe("knownPrs", () => {
   const merged = { number: 11, url: "https://github.com/acme/web/pull/11", state: "merged", title: "Gift card model", checks: [], review_decision: null, draft: false };
   const open = { ...merged, state: "open" };
 
-  it("takes the daemon's saved PRs and when each was checked (X107)", () => {
+  it("takes the daemon's saved PRs and when each was checked (X108)", () => {
     const got = knownPrs("local", {}, { s1: { pr: merged, checked_at: 1_000 }, s2: { pr: null, checked_at: 2_000 } });
     expect(got).toEqual({ prs: { "local/s1": merged, "local/s2": null }, checkedAt: { "local/s1": 1_000, "local/s2": 2_000 } });
   });

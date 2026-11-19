@@ -2,6 +2,10 @@
 //! an agent reads a terminal of its own session once the user allows it.
 //! Needs `moonletd` built next to this test binary (`cargo test --workspace`).
 
+#[path = "../../moonletd/tests/common/logs.rs"]
+mod logs;
+use logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
@@ -59,6 +63,7 @@ impl Daemon {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();

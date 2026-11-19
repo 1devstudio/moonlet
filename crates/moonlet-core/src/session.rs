@@ -356,7 +356,7 @@ pub struct SessionManager {
     /// one taken over while the central host was offline, or brought here
     /// while the news of it is on its way. Listed as its own all the same.
     kept_listed: Mutex<std::collections::BTreeSet<String>>,
-    /// What GitHub last said about each session's PR and about stacks (X107).
+    /// What GitHub last said about each session's PR and about stacks (X108).
     prs: crate::pr_cache::PrCache,
 }
 
@@ -2135,7 +2135,7 @@ impl SessionManager {
     /// The pull request of the session at `path`. Once known it is read by
     /// number; until then (or after it was closed unmerged) it is looked for
     /// among the PRs heading the session's branch, and remembered. The answer
-    /// is saved (X107), and a saved merged PR is answered without asking
+    /// is saved (X108), and a saved merged PR is answered without asking
     /// GitHub again. A path no session owns gets its branch's PR.
     pub async fn pr_status(&self, path: &Path) -> Result<Option<PullRequest>> {
         let Some(s) = self.session_at(path) else {
@@ -2150,7 +2150,7 @@ impl SessionManager {
         Ok(found)
     }
 
-    /// Every live session's PR as last heard from GitHub (X107).
+    /// Every live session's PR as last heard from GitHub (X108).
     pub fn known_prs(&self) -> BTreeMap<String, crate::pr_cache::KnownPr> {
         self.prs.sessions(&self.live_ids())
     }
@@ -2163,7 +2163,7 @@ impl SessionManager {
     /// The GitHub stack PR `number` of the session at `path` belongs to
     /// (X11). Saved stacks answer every asker within a minute, or for good
     /// once no PR in them is open; `known` answers only from what is saved,
-    /// and `refresh` always asks GitHub (X107). A path no session owns is
+    /// and `refresh` always asks GitHub (X108). A path no session owns is
     /// asked about every time.
     pub async fn pr_stack(&self, path: &Path, number: u64, known: bool, refresh: bool) -> Result<Option<PrStack>> {
         use crate::pr_cache::{STACK_FRESH_MS, stack_at, stack_fresh};

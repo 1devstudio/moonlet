@@ -5,14 +5,14 @@ import { latestOnly } from "./prStack";
 import { sesKey } from "./sesKey";
 
 /** How long a session with no PR, or a closed one, goes before the
- *  background polls ask about it again (X107). */
+ *  background polls ask about it again (X108). */
 export const NO_PR_GAP_MS = 5 * 60_000;
 
 /** A merged PR cannot change, and `gh.pr_status` keeps returning it, so its
  *  session is not polled again. `undefined` means not polled yet. The
  *  minute poll (`openOnly`) covers just open PRs, which an agent or a
  *  terminal may merge while the window keeps focus. A session with no PR,
- *  or a closed one, checked at `checkedAt` waits `NO_PR_GAP_MS` (X107). */
+ *  or a closed one, checked at `checkedAt` waits `NO_PR_GAP_MS` (X108). */
 export function needsPrPoll(
   pr: { state: string } | null | undefined,
   { openOnly = false, checkedAt, now = Date.now() }: { openOnly?: boolean; checkedAt?: number; now?: number } = {},
@@ -48,7 +48,7 @@ export function latestPerKey() {
   };
 }
 
-/** The daemon's saved PRs of `host`'s sessions (`gh.pr_known`, X107), to
+/** The daemon's saved PRs of `host`'s sessions (`gh.pr_known`, X108), to
  *  show before any `gh` runs: by session key, with when each was checked.
  *  A session the app already holds a PR for (`held`) keeps it, as that
  *  one is newer. */
