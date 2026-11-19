@@ -108,13 +108,12 @@ fn glob_match(pattern: &[u8], name: &[u8]) -> bool {
 }
 
 /// The private index a worktree's snapshots go through, beside its own
-/// index: the session's staging area is never touched. A routed run's
-/// fence and a sync round can snapshot one worktree at once (X62, X60),
-/// and two gits on one index refuse each other
-/// (`moonlet-sync-index.lock: File exists`): in this process the git
-/// commands on it take turns, through the lock given with it, one command
-/// at a time, so one snapshot never waits for a whole other one.
-async fn private_index(worktree: &Path) -> Result<(PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>)> {
+/// index: the session's staging area is never touched. One user of it at a
+/// time in this process: a routed run's fence and a sync round can take a
+/// snapshot of one worktree at once (X62, X60), and two gits on one index
+/// refuse each other (`moonlet-sync-index.lock: File exists`). The index is
+/// the worktree's for as long as the guard is held.
+async fn private_index(worktree: &Path) -> Result<(PathBuf, tokio::sync::OwnedMutexGuard<()>)> {
     type Locks = std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>;
     static LOCKS: std::sync::Mutex<Option<Locks>> = std::sync::Mutex::new(None);
     let index = git_dir(worktree).await?.join("moonlet-sync-index");
@@ -126,19 +125,7 @@ async fn private_index(worktree: &Path) -> Result<(PathBuf, std::sync::Arc<tokio
         all.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
         all.entry(index.clone()).or_default().clone()
     };
-    Ok((index, lock))
-}
-
-/// [`git_env`] on a private index, its turn taken through `only`.
-async fn git_locked(
-    only: &tokio::sync::Mutex<()>,
-    cwd: &Path,
-    env: &[(&str, &str)],
-    args: &[&str],
-    stdin: Option<&[u8]>,
-) -> Result<Vec<u8>> {
-    let _turn = only.lock().await;
-    git_env(cwd, env, args, stdin).await
+    Ok((index, lock.lock_owned().await))
 }
 
 /// NUL-separated pathspecs for `--pathspec-from-file=- --pathspec-file-nul`,
@@ -164,7 +151,7 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 /// bytes ([`MAX_FILE`] outside tests), or it stays out if no snapshot took
 /// it yet.
 pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Result<Snapshot> {
-    let (index, only) = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
     // A pattern the list could not hold is left out, as the copied-files
@@ -195,7 +182,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
         // Start from HEAD, so tracked files that match an ignore rule stay
         // in, as they do for git.
         let from = if has_head { "HEAD" } else { "--empty" };
-        git_locked(&only, worktree, &env, &["read-tree", from], None).await?;
+        git_env(worktree, &env, &["read-tree", from], None).await?;
     }
 
     let head: std::collections::HashSet<String> = if has_head {
@@ -222,7 +209,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
         "--exclude-standard",
     ]);
     let frozen: std::collections::HashSet<String> =
-        split_z(&git_locked(&only, worktree, &env, &ignored, None).await?)
+        split_z(&git_env(worktree, &env, &ignored, None).await?)
             .filter(|p| !head.contains(p))
             .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
             .collect();
@@ -230,7 +217,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
     // names an ignored file makes `add` refuse.
     let mut kept = Vec::new();
     if !frozen.is_empty() {
-        let staged = git_locked(&only, worktree, &env, &["ls-files", "-z", "-s"], None).await?;
+        let staged = git_env(worktree, &env, &["ls-files", "-z", "-s"], None).await?;
         for line in split_z(&staged) {
             // `<mode> <oid> <stage>\t<path>`
             if let Some((meta, path)) = line.split_once('\t')
@@ -253,7 +240,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
         &["ls-files", "-z", "--modified"][..],
     ] {
         let args: Vec<&str> = our_excludes.iter().chain(listing).copied().collect();
-        let out = git_locked(&only, worktree, &env, &args, None).await?;
+        let out = git_env(worktree, &env, &args, None).await?;
         candidates.extend(split_z(&out));
     }
     // Copied files a `.gitignore` lets back in, on disk: `add` leaves them
@@ -295,9 +282,11 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
     );
     let mut add: Vec<&str> = our_excludes.iter().copied().collect();
     add.extend(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]);
-    git_locked(&only, worktree, &env, &add, Some(&specs)).await?;
+    git_env(worktree, &env, &add, Some(&specs)).await?;
     if !kept.is_empty() {
-        git_locked(&only, worktree, &env,
+        git_env(
+            worktree,
+            &env,
             &["update-index", "-z", "--index-info"],
             Some(&kept),
         )
@@ -306,7 +295,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
 
     // Secrets already in the snapshot follow their edits if HEAD tracks
     // them, and leave it otherwise.
-    let cached = git_locked(&only, worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+    let cached = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
     let cached: std::collections::HashSet<String> = split_z(&cached).collect();
     let (secrets_kept, secrets_dropped): (Vec<&String>, Vec<&String>) = cached
         .iter()
@@ -314,7 +303,9 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
         .partition(|p| head.contains(*p));
     if !secrets_kept.is_empty() {
         let specs = pathspecs(secrets_kept.iter().map(|p| format!(":(literal){p}")));
-        git_locked(&only, worktree, &env,
+        git_env(
+            worktree,
+            &env,
             &["add", "-u", "--pathspec-from-file=-", "--pathspec-file-nul"],
             Some(&specs),
         )
@@ -325,7 +316,9 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
             .iter()
             .flat_map(|p| p.bytes().chain([0]))
             .collect();
-        git_locked(&only, worktree, &env,
+        git_env(
+            worktree,
+            &env,
             &["update-index", "--force-remove", "-z", "--stdin"],
             Some(&paths),
         )
@@ -350,14 +343,16 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
     too_big.dedup();
     if !missing.is_empty() {
         let specs = pathspecs(missing.iter().map(|p| format!(":(literal){p}")));
-        git_locked(&only, worktree, &env,
+        git_env(
+            worktree,
+            &env,
             &["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
             Some(&specs),
         )
         .await?;
     }
     // Names that are not text leave the snapshot, wherever they came from.
-    let listed = git_locked(&only, worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
+    let listed = git_env(worktree, &env, &["ls-files", "-z", "--cached"], None).await?;
     let bad = bad_names_z(&listed);
     if !bad.is_empty() {
         let mut stdin = Vec::new();
@@ -365,7 +360,9 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
             stdin.extend_from_slice(name);
             stdin.push(0);
         }
-        git_locked(&only, worktree, &env,
+        git_env(
+            worktree,
+            &env,
             &["update-index", "-z", "--force-remove", "--stdin"],
             Some(&stdin),
         )
@@ -376,7 +373,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Resu
         .map(|n| String::from_utf8_lossy(n).into_owned())
         .collect();
     bad_names.sort();
-    let tree = git_locked(&only, worktree, &env, &["write-tree"], None).await?;
+    let tree = git_env(worktree, &env, &["write-tree"], None).await?;
     Ok(Snapshot {
         tree: String::from_utf8_lossy(&tree).trim().to_string(),
         too_big,
@@ -707,10 +704,10 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
     if let Some(path) = unsafe_path(&read_files(worktree, to).await?) {
         return Err(ApplyError::Unsafe(path));
     }
-    let (index, only) = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
-    git_locked(&only, worktree, &env, &["read-tree", from], None).await?;
+    git_env(worktree, &env, &["read-tree", from], None).await?;
     // Fresh stat data, so files unchanged since the snapshot count as such.
     // It exits 1 when some did change; read-tree then refuses those.
     run_raw_env(
@@ -735,7 +732,7 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
         return Ok(());
     }
     // Leave the private index at `from`, as the worktree still is.
-    let _ = git_locked(&only, worktree, &env, &["read-tree", from], None).await;
+    let _ = git_env(worktree, &env, &["read-tree", from], None).await;
     if worktree_changed(&out.stderr) {
         Err(ApplyError::Changed(out.stderr))
     } else {
@@ -1225,19 +1222,23 @@ pub async fn branch_exists(repo: &Path, name: &str) -> bool {
 /// they became ignored or grew past the limit and changed since. Plain
 /// ignored files, such as build output, are not among them. Sorted.
 pub async fn local_only(worktree: &Path) -> Result<Vec<String>> {
-    let (index, only) = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
     // Files whose content matches the snapshot only lack fresh stat data.
-    let _ = git_locked(&only, worktree, &env, &["update-index", "-q", "--refresh"], None).await;
-    let changed = git_locked(&only, worktree, &env,
+    let _ = git_env(worktree, &env, &["update-index", "-q", "--refresh"], None).await;
+    let changed = git_env(
+        worktree,
+        &env,
         &["diff-files", "-z", "--name-only", "--ignore-submodules"],
         None,
     )
     .await?;
     let excludes = git_dir(worktree).await?.join("moonlet-sync-excludes");
     let excludes_opt = format!("--exclude-from={}", excludes.display());
-    let secrets = git_locked(&only, worktree, &env,
+    let secrets = git_env(
+        worktree,
+        &env,
         &["ls-files", "-z", "--others", "--ignored", &excludes_opt],
         None,
     )
