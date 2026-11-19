@@ -258,7 +258,7 @@ impl Workers {
             )
         };
         self.gone_since.lock().unwrap().remove(&id);
-        self.hear(&id, Heard::Linked);
+        self.hear(&id, None, Heard::Linked);
         let again = old.as_ref().is_some_and(|o| o.conn.id == conn.id);
         if let Some(old) = old
             && !again
@@ -325,8 +325,8 @@ impl Workers {
         // A ping late behind a frame the worker was sending meanwhile, as
         // a pack in its sleep's hold, says nothing of its sleep.
         let busy = !answered && conn.heard_at() >= sent;
-        if self.current(id, conn.id) && !busy {
-            self.hear(id, Heard::Ping { answered });
+        if !busy {
+            self.hear(id, Some(conn.id), Heard::Ping { answered });
         }
         answered
     }
@@ -336,15 +336,21 @@ impl Workers {
     /// on `conn` to say so.
     pub fn said_sleep(&self, conn: u64, asleep: bool) -> bool {
         let Some(id) = self.worker_on(conn) else { return false };
-        self.hear(&id, if asleep { Heard::Sleeping } else { Heard::Awake });
-        true
+        self.hear(&id, Some(conn), if asleep { Heard::Sleeping } else { Heard::Awake })
     }
 
-    /// Applies what was heard of worker `id`'s sleep; a mark set or ended
-    /// tells the clients, so a phone reads the session list again.
-    fn hear(&self, id: &str, h: Heard) {
+    /// Applies what was heard of worker `id`'s sleep, with `on` the
+    /// connection it was heard on: only while the worker is linked on it
+    /// still, checked under the same lock, so a worker that linked again
+    /// meanwhile is never marked from its old link. Whether it applied it.
+    /// A mark set or ended tells the clients, so a phone reads the session
+    /// list again.
+    fn hear(&self, id: &str, on: Option<u64>, h: Heard) -> bool {
         let changed = {
             let mut sleeping = self.sleeping.lock().unwrap();
+            if on.is_some_and(|conn| !self.current(id, conn)) {
+                return false;
+            }
             let was = sleeping.get(id).copied();
             let now = heard(was, h, now_ms());
             match now {
@@ -356,6 +362,7 @@ impl Workers {
         if changed {
             self.changed();
         }
+        true
     }
 
     /// When worker `id` said it is going to sleep, while it has not been
@@ -457,10 +464,8 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
             Ok(answer) => {
                 missed = 0;
                 answered = now_ms();
-                if let Some(w) = workers.upgrade()
-                    && w.current(&id, conn.id)
-                {
-                    w.hear(&id, Heard::Ping { answered: true });
+                if let Some(w) = workers.upgrade() {
+                    w.hear(&id, Some(conn.id), Heard::Ping { answered: true });
                 }
                 let rtt = sent.elapsed().as_millis() as u64;
                 if let Some(w) = workers.upgrade()
@@ -483,9 +488,8 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                 if missed >= 2
                     && conn.heard_at() < sent_ms
                     && let Some(w) = workers.upgrade()
-                    && w.current(&id, conn.id)
                 {
-                    w.hear(&id, Heard::Ping { answered: false });
+                    w.hear(&id, Some(conn.id), Heard::Ping { answered: false });
                 }
                 tracing::debug!(worker = %id, missed, "worker.ping failed: {}", e.message);
                 if missed >= MISSES {
