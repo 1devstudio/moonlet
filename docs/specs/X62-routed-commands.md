@@ -204,6 +204,7 @@ Until 2026-11-19 a machine was **busy** when its 1-minute load average was at le
   - `busy`: "no free slot (2 of 2 in use)", or, from a worker before 2026-11-19, a load at 0.7 × its cores or more, which it also calls "no free slot";
   - `missing_tool`: the command's first word is not on the copy's `PATH`;
   - `setup_pending`;
+  - `setup_failed`, with "its setup failed (exit 3): <the first line of its output>" (since 2026-11-19, X60's Setups on other members; until then a failed setup counted as ready);
   - `not_approved`;
   - `not_fenced`.
 
@@ -218,7 +219,7 @@ Until 2026-11-19 a machine was **busy** when its 1-minute load average was at le
 
 - [x] A worker runs routed commands in a **routing copy** of the session, at `$MOONLET_HOME/runs/<host>/<project>/<session>/`. It is made with X60's `sync.open` and `sync.fetch`, in a repository of its own under `runs/repos/`, filled only with what the central host sends: the user's own repositories, branches and credentials are never used, so a routing copy and a live copy of the same session never stand in each other's way. A copy the user keeps in sync (X60) is never used for routing, and a routing copy never shows in `sync.list`, its events or the sidebar.
 - [x] A routing copy syncs only at fences. After each run, once the central host has its changes, it returns to that run's fence, so between runs it holds exactly what the last fence left.
-- [x] Setup in a routing copy on a Mac follows X60: the user approves the exact command once per project and central host, and the approval is shared with live copies. Until setup has finished, the Mac refuses with `setup_pending`, and the app shows X60's setup modal. Cloud machines run setup without asking (X63).
+- [x] Setup in a routing copy on a Mac follows X60: the user approves the exact command once per project and central host, and the approval is shared with live copies. Until setup has finished, the Mac refuses with `setup_pending`, and the app shows X60's setup modal. Cloud machines run setup without asking (X63). Since 2026-11-19 an approval made in an app on any member holds on every member, a setup waiting on a host with no app is answered from the app on another member, and a setup that failed refuses with `setup_failed` until it runs again (X60's Setups on other members: `a_setup_waiting_on_a_member_with_no_app_is_approved_from_another_members_app`, `a_failed_setup_keeps_routed_commands_away_and_runs_again_from_an_app`).
 - [x] Paths in output are the session's paths. The worker replaces the routing copy's absolute path with the session's path in every output byte stream, including across chunk boundaries. Example: `/Users/alex/.moonlet/runs/studio-mini/shop/fix-cart/src/cart.ts:12` reads `/Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts:12`.
 - [x] A routing copy is removed:
   - when the session is archived;
@@ -402,7 +403,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
 - `exec.status` → `{host: {name, os, cores, load, slots, used}` (`used`: its slots in use, its own sessions' and other hosts' since 2026-11-19; `exec_status_lists_what_a_host_runs_for_other_hosts`), running: [{job, session, command, worker, started_at}], skips: [{worker, project, reason, detail}], routed}`: this machine, the routed commands going on wherever they run, why workers were skipped in the last hour, and how many commands this machine runs for its own central host. The Workers page and the Hosts page's `· 1 running` read it.
-- `exec.setups` → `[{copy, host, project, command}]` on a Mac: its routing copies whose setup waits for the user's approval, and the event `exec.setup {copy, host, project, command}` when one starts to wait. The app asks with X60's setup modal, and a paired phone with a Needs you card (X40); either answers with `sync.run_setup` or `sync.skip_setup`. A paired phone hears `exec.setup` too; a paired Mac, a worker and the `moonlet` CLI do not. (`a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_does_not`)
+- `exec.setups {all?}` → `[{copy, host, project, command, on?, failed?, approved?}]` on a Mac: its routing copies whose setup waits for the user's approval (with `all`, since 2026-11-19, also failed ones and those of the account's other members, answered with `exec.answer_setup`: X60), and the event `exec.setup {copy, host, project, command}` when one starts to wait. The app asks with X60's setup modal, and a paired phone with a Needs you card (X40); either answers with `sync.run_setup` or `sync.skip_setup`. A paired phone hears `exec.setup` too; a paired Mac, a worker and the `moonlet` CLI do not. (`a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_does_not`)
 - `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
 - `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
 - `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
@@ -415,7 +416,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 **Central host to worker:**
 
-- `exec.prepare {session}` returns `{copy, state, reason}`, `state` being `ready`, `making`, `setup_pending` or `failed`. The worker makes the routing copy, through X60's `sync.open {kind: "run"}` and `sync.fetch`, if it has none. A worker with heavy commands off answers `not_approved`.
+- `exec.prepare {session}` returns `{copy, state, reason}`, `state` being `ready`, `making`, `setup_pending`, `setup_failed` (2026-11-19) or `failed`. The worker makes the routing copy, through X60's `sync.open {kind: "run"}` and `sync.fetch`, if it has none. A worker with heavy commands off answers `not_approved`.
 - `exec.start {run, copy, argv, cwd, env, tree, head, session_path, outputs}` returns `true`, or a refusal: `not_approved` (this machine's own approval), `busy` (no free slot; before 2026-11-19 also a load at 0.7 × its cores), `not_fenced`, `missing_tool` or `invalid_params` (a folder or `outputs` path outside the copy).
 - `exec.cancel {run}`.
 
