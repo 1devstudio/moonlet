@@ -161,6 +161,100 @@ describe("the setup modal (X60)", () => {
     delete answers["exec.setups"];
   });
 
+  it("asks about a setup waiting on another host, naming the host, and Run setup approves it from this Mac (X60)", async () => {
+    const ask = { copy: "air|git.invalid/acme/shop|4171b03c|pnpm install", host: "", project: "shop", command: "pnpm install", on: "studio-mini" };
+    answers["exec.setups"] = () => [ask];
+    answers["exec.answer_setup"] = () => true;
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    await settle();
+    expect(calls.find((c) => c.method === "exec.setups")?.params).toEqual({ all: true });
+    expect(useStore.getState().confirm?.options).toMatchObject({
+      title: "Run setup",
+      message: "Run shop's setup in the copy on studio-mini? (from .moonlet/config.toml)",
+      code: "pnpm install",
+      action: "Run setup",
+      cancel: "Skip",
+    });
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "exec.answer_setup")).toEqual([{ method: "exec.answer_setup", params: { id: ask.copy, command: "pnpm install", run: true } }]);
+    // Listed again before the host says it runs: not asked twice.
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm).toBeNull();
+    delete answers["exec.setups"];
+  });
+
+  it("does not ask about a setup on another host that is approved already, which runs there unasked (X60)", async () => {
+    answers["exec.setups"] = () => [{ copy: "air|git.invalid/acme/shop|4171b03c|pnpm ci", host: "", project: "shop", command: "pnpm ci", on: "studio-mini", approved: true }];
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm).toBeNull();
+    delete answers["exec.setups"];
+  });
+
+  it("skips a setup waiting on another host there, and asks again once it waits anew (X60)", async () => {
+    const ask = { copy: "air|git.invalid/acme/shop|4171b03c|make", host: "", project: "shop", command: "make", on: "studio-mini" };
+    let listed = [ask];
+    answers["exec.setups"] = () => listed;
+    answers["exec.answer_setup"] = () => true;
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    answerConfirm(false, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "exec.answer_setup")).toEqual([{ method: "exec.answer_setup", params: { id: ask.copy, command: "make", run: false } }]);
+    listed = [];
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    listed = [ask];
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ code: "make" });
+    answerConfirm(false, false);
+    await settle();
+    delete answers["exec.setups"];
+  });
+
+  it("offers to run a failed setup again, on another host or here, and Not now leaves it (X60)", async () => {
+    const there = { copy: "air|git.invalid/acme/shop|4171b03c|pnpm i", host: "", project: "shop", command: "pnpm i", on: "studio-mini", failed: { exit: 3, line: "ERR_PNPM_FETCH_404 left-pad" } };
+    const here = { copy: "r9", host: "studio-mini", project: "shop", command: "pnpm i", failed: { exit: 1, line: "sh: pnpm: command not found" } };
+    answers["exec.setups"] = () => [there, here];
+    answers["exec.answer_setup"] = () => true;
+    answers["sync.run_setup"] = () => copy();
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({
+      title: "Setup failed",
+      message: "shop's setup failed in the copy on studio-mini (exit 3): ERR_PNPM_FETCH_404 left-pad. Heavy commands do not run there until it does.",
+      code: "pnpm i",
+      action: "Run setup again",
+      cancel: "Not now",
+    });
+    answerConfirm(false, false);
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({
+      title: "Setup failed",
+      message: "shop's setup failed in the copy on this Mac (exit 1): sh: pnpm: command not found. Heavy commands do not run there until it does.",
+    });
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "exec.answer_setup" || c.method === "sync.run_setup" || c.method === "sync.skip_setup")).toEqual([{ method: "sync.run_setup", params: { copy: "r9", command: "pnpm i" } }]);
+    // Not asked again while it stays as it failed.
+    events.emit({ host: "local", name: "exec.setups_changed", data: {} });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm).toBeNull();
+    delete answers["exec.setups"];
+  });
+
   it("asks for two copies one after the other, skipping neither", async () => {
     answers["sync.run_setup"] = () => copy();
     answers["sync.skip_setup"] = () => copy();

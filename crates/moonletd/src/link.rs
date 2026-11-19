@@ -1851,6 +1851,8 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         if changes.iter().any(|c| c.kind == RecordKind::HeavyApproval.as_str()) {
             d.terminals.emit(Message::event(m::EV_HEAVY_APPROVAL_CHANGED, serde_json::json!({})));
         }
+        // A setup approved, or answered, in an app on another member (X60).
+        d.sync.setups_news(changes);
         let worker = RecordKind::Worker.as_str();
         if changes.iter().any(|c| c.kind == worker) {
             if changes.iter().any(|c| c.kind == worker && c.id == me) {
@@ -1874,6 +1876,10 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
     if daemon.link.info().central.is_none() {
         daemon.sessions.referee_permissions(None);
     }
+    // Setups that wait here, for the apps on other members, and those
+    // approved while this host was away (X60).
+    daemon.sync.report_setups();
+    daemon.sync.run_approved_setups();
 }
 
 /// A routing call from member `from`, passed on by the central host (X89):

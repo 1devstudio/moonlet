@@ -624,11 +624,19 @@ pub const WORKER_STEP: &str = "worker.step";
 /// Central host → worker, `{}`: the machine is being removed; it leaves the
 /// tailnet.
 pub const WORKER_RETIRE: &str = "worker.retire";
-/// `{}` → `[ExecSetup]`: this Mac's routing copies whose setup waits for
-/// the user's approval, for an app that starts after it was asked (X62).
+/// [`ExecSetups`] → `[ExecSetup]`: this Mac's routing copies whose setup
+/// waits for the user's approval, for an app that starts after it was
+/// asked (X62). With `all`, also those whose setup failed here, and the
+/// setups waiting or failed on the account's other members (X60).
 pub const EXEC_SETUPS: &str = "exec.setups";
 /// [`ExecSetup`]: a routing copy's setup waits for the user's approval.
 pub const EV_EXEC_SETUP: &str = "exec.setup";
+/// `{}`: what `exec.setups {all: true}` lists changed, on another member
+/// or by a setup that failed here (X60).
+pub const EV_EXEC_SETUPS_CHANGED: &str = "exec.setups_changed";
+/// [`ExecAnswerSetup`] → `true`: the app's answer to a setup another
+/// member of the account waits for, or that failed there (X60).
+pub const EXEC_ANSWER_SETUP: &str = "exec.answer_setup";
 /// [`BrowserOpen`] → `true`: `moonlet-open` hands a URL to its daemon (X75).
 pub const BROWSER_OPEN: &str = "browser.open";
 /// [`BrowserShow`]: a URL to open, for the app or the phone (X75). Also
@@ -3911,21 +3919,62 @@ pub struct ExecPrepare {
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live
-/// copy (X60): `sync.run_setup` or `sync.skip_setup` answers it.
+/// copy (X60): `sync.run_setup` or `sync.skip_setup` answers it; one on
+/// another member (`on`), `exec.answer_setup`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecSetup {
+    /// The routing copy here, or the account's setup record of the
+    /// member `on` names.
     pub copy: String,
-    /// The central host's name.
+    /// The session's host's name; empty for another member's setup.
     pub host: String,
     pub project: String,
     pub command: String,
+    /// The member whose setup it is, by its name, when not this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
+    /// How the setup failed, when it ran and failed, rather than waits for
+    /// approval. Only with `exec.setups {all: true}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<SetupFailed>,
+    /// Another member's setup whose command is approved for the account by
+    /// now: it runs there once that member hears of it, unasked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approved: bool,
+}
+
+/// How a setup failed: its exit status (-1 when a signal or a restart
+/// ended it) and the first line of its output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetupFailed {
+    pub exit: i32,
+    #[serde(default)]
+    pub line: String,
+}
+
+/// `exec.setups` params.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecSetups {
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// `exec.answer_setup` params: `run` approves `command`, which must be the
+/// one setup record `id` holds, for every member, and runs a failed one
+/// again; otherwise the setup is skipped there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecAnswerSetup {
+    pub id: String,
+    pub command: String,
+    pub run: bool,
 }
 
 /// The worker's routing copy of a session, and whether it can run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecPrepared {
     pub copy: String,
-    /// `ready`, `making`, `setup_pending` or `failed`.
+    /// `ready`, `making`, `setup_pending`, `setup_failed` (with the
+    /// failure as `reason`) or `failed`.
     pub state: String,
     #[serde(default)]
     pub reason: Option<String>,

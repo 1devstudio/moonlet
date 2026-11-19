@@ -41,10 +41,21 @@ pub enum RecordKind {
     HeavyApproval,
     /// The central host that referees the records that act as
     /// permissions ([`RecordKind::Worker`], [`RecordKind::HeavyApproval`],
-    /// [`RecordKind::ProjectFiles`]), by its worker id: `since`, when it
-    /// took them over. Until the central host wrote its own, every
-    /// member's changes to them count, as before.
+    /// [`RecordKind::ProjectFiles`], [`RecordKind::SetupApproval`]), by its
+    /// worker id: `since`, when it took them over. Until the central host
+    /// wrote its own, every member's changes to the first three count, as
+    /// before.
     Referee,
+    /// A project's approved setup commands (X60), by project identity: one
+    /// field per command, its exact text, set to `true`. Only the central
+    /// host's changes count, once it referees permissions.
+    SetupApproval,
+    /// A project's setup on one member (X60, X62), by
+    /// `<worker id>|<project identity>|<command>`: the member's `state`
+    /// (`waiting`, `failed` or `ready`), `project`, `identity`, `command`,
+    /// and a failure's `exit` and `line`; and the answers another member's
+    /// app gives it, `skip` and `again`.
+    Setup,
 }
 
 impl RecordKind {
@@ -61,6 +72,8 @@ impl RecordKind {
             RecordKind::Worker => "worker",
             RecordKind::HeavyApproval => "heavy_approval",
             RecordKind::Referee => "referee",
+            RecordKind::SetupApproval => "setup_approval",
+            RecordKind::Setup => "setup",
         }
     }
 }
@@ -708,6 +721,25 @@ pub fn new_log_name(worker: &str) -> String {
         "{worker}.{}",
         &uuid::Uuid::new_v4().simple().to_string()[..6]
     )
+}
+
+/// A project identity as the account keys records by it (X68):
+/// `<origin>|<root>`; none for a project without a root, which is one
+/// member's alone.
+pub fn identity_key(i: &moonlet_proto::types::ProjectIdentity) -> Option<String> {
+    Some(format!("{}|{}", i.origin.as_deref().unwrap_or(""), i.root.as_deref()?))
+}
+
+/// The id of [`RecordKind::Setup`]'s record of `worker`'s setup `command`
+/// of project `identity` (X60): `<worker>|<origin>|<root>|<command>`.
+/// Read back with [`setup_record_worker`].
+pub fn setup_record_id(worker: &str, identity: &moonlet_proto::types::ProjectIdentity, command: &str) -> Option<String> {
+    Some(format!("{worker}|{}|{command}", identity_key(identity)?))
+}
+
+/// The worker a [`setup_record_id`] names.
+pub fn setup_record_worker(id: &str) -> &str {
+    id.split('|').next().unwrap_or_default()
 }
 
 /// The worker a log belongs to, from the log's name, when it is one.

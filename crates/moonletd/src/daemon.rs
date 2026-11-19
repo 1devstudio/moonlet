@@ -2348,7 +2348,17 @@ impl Daemon {
             }
             m::EXEC_SETUPS => {
                 self.app_or_paired_phone(conn)?;
-                ok(self.sync.run_setups())
+                let r: m::ExecSetups = serde_json::from_value(p).unwrap_or_default();
+                ok(self.sync.run_setups(r.all))
+            }
+            m::EXEC_ANSWER_SETUP => {
+                // The user answers in this Mac's app (the phone app does not
+                // send it), and the approval is this member's, which its
+                // central host makes its own (X60).
+                self.app_or_paired_phone(conn)?;
+                app_only(conn, "setups")?;
+                let r: m::ExecAnswerSetup = params(p)?;
+                ok(self.sync.answer_setup(&r.id, &r.command, r.run)?)
             }
             m::EXEC_STATUS => {
                 jobs_reader(conn)?;
