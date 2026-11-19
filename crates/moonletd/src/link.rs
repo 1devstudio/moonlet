@@ -1006,6 +1006,8 @@ impl WorkerLink {
         // This Mac's app keeps a token of its own to reach the host (X57),
         // which may be the one it handed to the link (X41): that one stays
         // the app's. One the link alone holds goes once the new one works.
+        // The app's host list has the token, or once the app has moved it
+        // into the Keychain only its hash, so the daemon never reads it.
         // A host list that is there but cannot be read may hold it: the
         // link keeps the paired token rather than end the app's.
         let file = moonlet_core::ssh::saved_hosts_file();
@@ -1023,7 +1025,7 @@ impl WorkerLink {
                 return false;
             }
         };
-        let apps = hosts.tailnet.iter().any(|t| t.token == was);
+        let apps = hosts.holds_token(&was);
         let ask = serde_json::to_value(m::WorkerCredential { replace: !apps }).unwrap();
         let given = match host.request(m::WORKER_CREDENTIAL, ask).await {
             Ok(v) => match serde_json::from_value::<m::WorkerCredentialGiven>(v) {

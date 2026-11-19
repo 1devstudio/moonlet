@@ -51,8 +51,26 @@ pub struct TailnetHost {
     pub device_id: String,
     /// `ip:port`s of the host's tailnet listener, tried in order.
     pub addrs: Vec<String>,
-    /// The device token: full access to the host, so the file is 0600.
+    /// The device token, full access to the host. The app keeps it in the
+    /// Keychain (X57) and writes it here as `""`, which builds from before
+    /// still read; a token here is one not moved there yet.
+    #[serde(default)]
     pub token: String,
+    /// The token's SHA-256 in hex, so this Mac's daemon can tell the app's
+    /// token from one only its link holds (X41) without reading the token.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token_sha256: String,
+}
+
+impl SavedHosts {
+    /// Whether the app holds `token` for one of its tailnet hosts, in this
+    /// file or in the Keychain beside it.
+    pub fn holds_token(&self, token: &str) -> bool {
+        let digest = crate::hash::sha256_hex(token.as_bytes());
+        self.tailnet
+            .iter()
+            .any(|t| (!t.token.is_empty() && t.token == token) || t.token_sha256 == digest)
+    }
 }
 
 pub fn saved_hosts_file() -> PathBuf {
@@ -104,6 +122,41 @@ mod tests {
         assert!(hosts.tailnet.is_empty());
     }
 
+    /// A host whose token is in the Keychain keeps `"token": ""`, so a build
+    /// from before, whose entries must have a token, still lists every host
+    /// (and fails to connect) rather than reading the file as empty.
+    #[test]
+    fn a_host_whose_token_moved_still_reads_in_builds_from_before() {
+        #[derive(Deserialize)]
+        struct Before {
+            remotes: Vec<String>,
+            tailnet: Vec<BeforeHost>,
+        }
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct BeforeHost {
+            id: String,
+            device_id: String,
+            addrs: Vec<String>,
+            token: String,
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("app-hosts.json");
+        let moved = TailnetHost {
+            id: "studio-mini".into(),
+            device_id: "d1".into(),
+            addrs: vec!["100.101.102.103:47428".into()],
+            token: String::new(),
+            token_sha256: "65dcf16ea3dfa49069628089eb4a75483070f5584b2a21ee64912b5f621f12da".into(),
+        };
+        save_hosts_at(&file, &SavedHosts { remotes: vec!["devbox".into()], tailnet: vec![moved.clone()] }).unwrap();
+        let before: Before = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(before.remotes, ["devbox"]);
+        assert_eq!(before.tailnet[0].id, "studio-mini");
+        assert_eq!(before.tailnet[0].token, "");
+        assert_eq!(saved_hosts_at(&file).tailnet, [moved]);
+    }
+
     #[test]
     fn tailnet_hosts_are_kept_with_their_token_readable_by_this_user_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -115,6 +168,7 @@ mod tests {
                 device_id: "d1".into(),
                 addrs: vec!["100.101.102.103:47428".into()],
                 token: "tok".into(),
+                token_sha256: String::new(),
             }],
         };
         save_hosts_at(&file, &hosts).unwrap();

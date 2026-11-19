@@ -160,6 +160,20 @@ pub fn keep_in_app_hosts(home: &Path, addr: &str, token: &str) {
     .unwrap();
 }
 
+/// Puts studio-mini at `addr` in the app's host list as the app keeps it
+/// once its token is in the Keychain: no token, only the token's SHA-256
+/// in hex (X57).
+pub fn keep_in_app_hosts_without_the_token(home: &Path, addr: &str, token: &str) {
+    use sha2::Digest;
+    let digest: String = sha2::Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(
+        home.join("app-hosts.json"),
+        json!({ "remotes": [], "tailnet": [{ "id": "studio-mini", "device_id": "d1", "addrs": [addr], "token": "", "token_sha256": digest }] })
+            .to_string(),
+    )
+    .unwrap();
+}
+
 /// What a worker's daemon sends to register as `id`.
 pub fn registration(id: &str, name: &str) -> Value {
     json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] })
