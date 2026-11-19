@@ -1177,12 +1177,19 @@ pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
     if let Some(dir) = path.parent() {
         moonlet_core::paths::ensure_private_dir(dir)?;
     }
-    // A temp file of this write's own: two writes at once, as the copies
-    // file is saved from several tasks, must not truncate or rename each
-    // other's.
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    // One write of a file at a time: two at once, as the copies file is
+    // saved from several tasks, truncated and renamed each other's temp
+    // file.
+    type Writing = std::collections::HashMap<std::path::PathBuf, std::sync::Arc<std::sync::Mutex<()>>>;
+    static WRITING: std::sync::Mutex<Option<Writing>> = std::sync::Mutex::new(None);
+    let one = {
+        let mut all = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+        let all = all.get_or_insert_with(Default::default);
+        all.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
+        all.entry(path.to_path_buf()).or_default().clone()
+    };
+    let _one = one.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = path.with_extension("json.tmp");
     let written = write_through(&tmp, path, bytes);
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
