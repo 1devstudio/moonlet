@@ -35,7 +35,16 @@ The daemon's end-to-end tests (`crates/moonletd/tests/`, and the CLI's in `crate
 - `cloud.rs` registers the fake provider's folder with `logs::machines_in`; the fake provider (`cloud_fake.rs`) sends each machine's stderr to its `logs/stderr.log`.
 - The CLI's tests include the same file with `#[path]`.
 - `central_copies.rs`'s agent tests used to `mem::forget` their scratch folder, so every run left one in `$TMPDIR`; it now goes with the last of the two daemons that use it (`Daemon::also`).
-- Cost, measured on this Mac with `central_copies.rs` (154 tests) and `mesh.rs` (50 tests), two rounds each, against `MOONLET_LOG=info`: see below.
+- Cost, measured on 2026-11-19 on a 10-core Mac shared with other work (load average 39–143), each suite run whole, two rounds, at `MOONLET_LOG=info` (as before X107) and at the test level. Size is every daemon's log at the end of its test, summed over the suite:
+
+  | Suite | Level | Round 1 | Round 2 | Logs written (largest daemon) |
+  |---|---|---|---|---|
+  | `central_copies.rs`, 154 tests, 302 daemons | info | 195 s | 490 s | 0.20–0.24 MB (5 KB) |
+  | | debug | 616 s | 219 s | 3.6–3.8 MB (173 KB) |
+  | `mesh.rs`, 50 tests, 157 daemons | info | 110 s | 152 s | 0.08–0.16 MB (3 KB) |
+  | | debug | 193 s | 133 s | 1.6–1.7 MB (123 KB) |
+
+  The run times follow the machine's load, not the level: each level was both the faster and the slower one. The logs are about 25 KB a test, written to the scratch home, and nothing is copied unless the test fails.
 
 ## Security considerations
 
