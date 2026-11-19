@@ -1427,6 +1427,26 @@ async fn a_link_set_with_the_apps_own_token_leaves_the_app_its_token() {
     assert!(linked.iter().all(|(_, got)| got == "forbidden"), "{linked:?}");
 }
 
+/// The app keeps its token in the Keychain, and its host list only the
+/// token's hash: the daemon still sees that the token it was handed is the
+/// app's, and leaves it working.
+#[tokio::test]
+async fn a_link_set_with_the_apps_token_kept_in_the_keychain_leaves_the_app_its_token() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let apps = pair(&central, &addr, "Alex's MacBook Pro").await;
+    keep_in_app_hosts_without_the_token(worker.home.path(), &addr, &apps);
+    link(&worker, &addr, &apps).await;
+    eventually("the link has a credential of its own", || async {
+        link_token(&worker) != apps
+    })
+    .await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    // The trade is done; give a replaced token time to be removed.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(authenticates(&addr, &apps).await, "the app's token stopped working");
+}
+
 /// A central host from before worker links does not know
 /// `worker.credential`: the member keeps linking with its paired token,
 /// and asks again once the central host has updated.
