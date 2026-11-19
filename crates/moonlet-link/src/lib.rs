@@ -304,6 +304,14 @@ impl Host {
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+        let r = self.request_once(method, params).await;
+        if let Err(e) = &r {
+            tracing::debug!(host = %self.id, method, "request refused: {}: {}", e.code, e.message);
+        }
+        r
+    }
+
+    async fn request_once(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         {
@@ -432,6 +440,7 @@ impl Host {
     }
 
     fn set_status(&self, status: HostStatus, message: Option<String>) {
+        tracing::debug!(host = %self.id, ?status, message, "link status");
         let info = {
             let mut i = self.info.lock().unwrap();
             i.status = status;

@@ -1933,6 +1933,7 @@ fn cores() -> u32 {
 
 /// Adds `text` to job `j`'s timeline, now.
 fn event(j: &mut Job, text: String, detail: Option<String>) {
+    tracing::debug!(job = %j.id, detail, "{text}");
     j.timeline.push(JobEvent {
         at: moonlet_core::paths::now_ms(),
         text,
