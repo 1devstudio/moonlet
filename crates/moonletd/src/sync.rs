@@ -135,6 +135,19 @@ struct Kept {
     /// commands has it in its project's main checkout (X89).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     setup_command: Option<String>,
+    /// The files a routing copy's setup reads, as that host's main
+    /// checkout lists them (`setup_inputs`); none for the copy's own list,
+    /// or the default one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup_watch: Option<Vec<String>>,
+    /// Those files as the copy's last setup that ended well read them, by
+    /// path and blob id: a routing copy runs its setup again when they
+    /// changed (X62). None for a copy whose setup ran before this was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup_inputs: Option<moonlet_core::setup_inputs::Inputs>,
+    /// Why the setup running now runs again, for a run that waits for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup_why: Option<String>,
     session: String,
     /// The copy's worktree; empty until it is made.
     #[serde(default)]
@@ -3031,6 +3044,10 @@ impl LiveCopies {
             }
         };
         self.set_setup(id, Some(running(SetupState::Running)));
+        // A routing copy's setup runs on the files of its fence (X62): what
+        // it read there is kept, so the next run knows when it changed.
+        let fence = k.base.clone().filter(|_| k.kind == CopyKind::Run);
+        let watch = setup_watch_of(&k);
         let me = self.clone();
         let id = id.to_string();
         tokio::spawn(async move {
@@ -3039,6 +3056,23 @@ impl LiveCopies {
                 Err(_) => -1,
             };
             reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+            let current = || me.setups.lock().unwrap().get(&id).is_some_and(|s| s.run == run);
+            let mut read = None;
+            if let Some(tree) = fence.as_deref().filter(|_| current()) {
+                let path = PathBuf::from(&k.path);
+                if exit == 0 {
+                    read = setup_inputs_at(&path, tree, &watch).await;
+                }
+                // And the copy goes back to its fence, so only what a
+                // command changes there goes back to the session.
+                let lock = me.lock(&id);
+                let _one = lock.lock().await;
+                if current()
+                    && let Err(Stop::Paused(reason)) = apply_tries(&me.sessions, &path, tree, &k.host).await
+                {
+                    me.update_kept(&id, |k| k.paused = Some(reason));
+                }
+            }
             // A setup stopped or run again meanwhile reports nothing. The run
             // stays recorded, and its session too: jobs the setup left
             // running end when the copy goes or setup runs again.
@@ -3049,7 +3083,13 @@ impl LiveCopies {
                 } else {
                     SetupState::Failed { exit }
                 };
-                me.update_kept(&id, |k| k.setup = Some(running(state)));
+                me.update_kept(&id, |k| {
+                    k.setup = Some(running(state));
+                    k.setup_why = None;
+                    if read.is_some() {
+                        k.setup_inputs = read;
+                    }
+                });
                 drop(setups);
                 me.changed(&id);
                 me.run_setup_moved(&id);
@@ -3883,6 +3923,30 @@ fn setup_of_copy(k: &Kept) -> Option<String> {
     }
 }
 
+/// The files copy `k`'s setup reads: the list the host that routes its
+/// commands sent, else the copy's own `setup_inputs`, else the default.
+fn setup_watch_of(k: &Kept) -> Vec<String> {
+    k.setup_watch
+        .clone()
+        .or_else(|| moonlet_core::project_config::load(Path::new(&k.path), String::new()).config.setup_inputs)
+        .unwrap_or_else(|| moonlet_core::setup_inputs::DEFAULT.iter().map(|p| p.to_string()).collect())
+}
+
+/// The files `watch` names in `tree`, in the copy at `path`, by blob id;
+/// none when the tree cannot be read.
+async fn setup_inputs_at(path: &Path, tree: &str, watch: &[String]) -> Option<moonlet_core::setup_inputs::Inputs> {
+    match git_sync::read_files(path, tree).await {
+        Ok(files) => Some(moonlet_core::setup_inputs::select(
+            files.iter().map(|(p, e)| (p.as_str(), e.oid.as_str())),
+            watch,
+        )),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), "cannot read the setup's files: {e:#}");
+            None
+        }
+    }
+}
+
 /// The copy's setup command, exactly as its `.moonlet/config.toml` has it;
 /// none when blank.
 fn setup_command(copy: &Path) -> Option<String> {
@@ -4164,12 +4228,16 @@ impl LiveCopies {
     /// has none yet: a session of this machine's central host, or of a
     /// member that routed it here, `member` being its worker id and name
     /// (X89). `setup_pending` while the project's setup runs or waits for
-    /// the user's approval.
+    /// the user's approval. Asked with the `fence` the copy was just
+    /// brought to, it runs the setup again first when the files it reads
+    /// changed since it last ran, and is `setup_running` until it ends.
     pub async fn prepare_run(
         self: &Arc<Self>,
         session: String,
         member: Option<(String, String)>,
         setup: Option<String>,
+        watch: Option<Vec<String>>,
+        fence: Option<m::ExecFence>,
     ) -> Result<m::ExecPrepared, RpcError> {
         let (host, peer) = match member {
             Some((id, name)) => (name, Some(id)),
@@ -4218,10 +4286,14 @@ impl LiveCopies {
             }
         };
         drop(_held);
-        // The router's setup command, kept for the copy's setup (X89).
-        if setup.is_some() {
-            self.update_kept(&id, |k| k.setup_command = setup.clone());
-        }
+        // The router's setup command, kept for the copy's setup (X89), and
+        // the files it reads.
+        self.update_kept(&id, |k| {
+            if setup.is_some() {
+                k.setup_command = setup.clone();
+            }
+            k.setup_watch = watch;
+        });
         self.save();
         // A routing copy has nobody to retry it: one whose folder went, or
         // that stopped on an error, is made again.
@@ -4243,6 +4315,13 @@ impl LiveCopies {
         }
         self.clone().make(id.clone()).await;
         self.update_kept(&id, |k| k.last_used = Some(moonlet_core::paths::now_ms()));
+        // One look at the copy's setup at a time: two runs that find its
+        // files changed start it once.
+        let checking = self.lock(&format!("setup:{id}"));
+        let _checking = checking.lock().await;
+        if let Some(fence) = &fence {
+            self.setup_again_if_changed(&id, fence).await;
+        }
         let k = self
             .kept(&id)
             .ok_or_else(|| RpcError::new("not_found", "the routing copy went"))?;
@@ -4252,6 +4331,10 @@ impl LiveCopies {
             ("making", None)
         } else {
             match k.setup.map(|s| s.state) {
+                // The run that asked at the fence waits for it there.
+                Some(SetupState::Running) if fence.is_some() => {
+                    ("setup_running", Some(k.setup_why.unwrap_or_else(|| "its setup runs".into())))
+                }
                 Some(SetupState::Running | SetupState::NeedsApproval) => ("setup_pending", None),
                 // A failed setup is not ready: the command would fail here
                 // for want of what the setup installs (X60).
@@ -4271,13 +4354,61 @@ impl LiveCopies {
         })
     }
 
+    /// Runs routing copy `id`'s setup again, unasked, when the files it
+    /// reads differ in `fence` from those it last ran on and its command
+    /// is still the approved one; asks for the command when it is not.
+    /// Only a setup that ended well runs again: one skipped, failed or
+    /// waiting stays as it is. Call holding the copy's `setup:` lock.
+    async fn setup_again_if_changed(self: &Arc<Self>, id: &str, fence: &m::ExecFence) {
+        let Some(k) = self.kept(id) else { return };
+        if k.paused.is_some()
+            || k.base.as_deref() != Some(fence.tree.as_str())
+            || k.setup.as_ref().is_none_or(|s| s.state != SetupState::Done)
+        {
+            return;
+        }
+        let Some(command) = setup_of_copy(&k) else { return };
+        let watch = setup_watch_of(&k);
+        let Some(now) = setup_inputs_at(Path::new(&k.path), &fence.tree, &watch).await else { return };
+        let why = match &k.setup_inputs {
+            Some(last) => {
+                let last = moonlet_core::setup_inputs::select(last.iter().map(|(p, b)| (p.as_str(), b.as_str())), &watch);
+                let changed = moonlet_core::setup_inputs::changed(&last, &now);
+                if changed.is_empty() {
+                    return;
+                }
+                moonlet_core::setup_inputs::why(&changed)
+            }
+            // Set up before what it read was kept: once more, to know.
+            None => "the files its last run read are not known".to_string(),
+        };
+        if !self.approved(&k, &command) {
+            self.set_setup(
+                id,
+                Some(CopySetup {
+                    state: SetupState::NeedsApproval,
+                    command,
+                    approved: false,
+                }),
+            );
+            return;
+        }
+        tracing::info!(copy = %id, "running the setup again: {why}");
+        self.update_kept(id, |k| k.setup_why = Some(why));
+        self.run_setup_now(id, command);
+    }
+
     /// The routing copy `copy`'s folder, when it holds exactly the fence's
-    /// `tree` and `head`; otherwise `not_fenced`.
+    /// `tree` and `head`; otherwise `not_fenced`. Never while its setup
+    /// runs: a command does not run half way through it.
     pub async fn run_copy_at(&self, copy: &str, tree: &str, head: &str) -> Result<PathBuf, RpcError> {
         let k = self
             .kept(copy)
             .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty())
             .ok_or_else(|| RpcError::new("not_found", "no such routing copy"))?;
+        if k.setup.as_ref().is_some_and(|s| s.state == SetupState::Running) {
+            return Err(RpcError::new("setup_pending", "its setup runs"));
+        }
         let path = PathBuf::from(&k.path);
         let snap = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE).await.map_err(internal)?;
         let now = git_sync::head(&path).await.map_err(internal)?;

@@ -34,6 +34,8 @@ pub struct Checked {
     pub outputs: Vec<String>,
     /// The project's setup command, for a routing copy (X89).
     pub setup: Option<String>,
+    /// The files that setup reads, when the project lists them.
+    pub setup_inputs: Option<Vec<String>>,
     /// The project marked the command safe to run again (`[heavy] rerun`).
     pub rerun: bool,
 }
@@ -266,6 +268,7 @@ impl Heavy {
         let os = config.config.heavy.os;
         let outputs = config.config.heavy.outputs.clone();
         let setup = config.config.setup.clone().filter(|c| !c.trim().is_empty());
+        let setup_inputs = config.config.setup_inputs.clone();
         let rerun = heavy::runs_again(argv, &config.config.heavy);
         let names = config.config.heavy.env;
         let passed = env
@@ -288,6 +291,7 @@ impl Heavy {
             os,
             outputs,
             setup,
+            setup_inputs,
             rerun,
         })
     }

@@ -2270,6 +2270,7 @@ impl Daemon {
                     os: checked.os,
                     outputs: checked.outputs,
                     setup: checked.setup,
+                    setup_inputs: checked.setup_inputs,
                     rerun: checked.rerun,
                     identity: session
                         .as_ref()
@@ -2430,6 +2431,8 @@ impl Daemon {
                                 .setup
                                 .filter(|c| !c.trim().is_empty())
                                 .map_or(Value::Null, Value::from);
+                            // And the files that setup reads, from the same file.
+                            r.params["setup_inputs"] = config.config.setup_inputs.map_or(Value::Null, Value::from);
                         }
                         _ => {}
                     }
@@ -2512,7 +2515,7 @@ impl Daemon {
                     return Err(RpcError::new("not_approved", "heavy commands are off here"));
                 }
                 let r: m::ExecPrepare = params(p)?;
-                ok(self.sync.prepare_run(r.session, Some(member), r.setup).await?)
+                ok(self.sync.prepare_run(r.session, Some(member), r.setup, r.setup_inputs, r.fence).await?)
             }
             // A member archived the session: its routing copy here goes
             // (X89).
