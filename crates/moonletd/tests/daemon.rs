@@ -1993,6 +1993,15 @@ async fn a_saved_stack_answers_for_each_of_its_prs() {
         .unwrap();
     assert_eq!(none, serde_json::Value::Null);
     assert_eq!(gh_pr_calls(&d).len(), 2, "known answers never ask GitHub");
+
+    // Opening a session asks again however fresh the saved stack is, and
+    // a saved stack needs only the stack itself fetched.
+    let opened: serde_json::Value = c
+        .request(methods::GH_PR_STACK, serde_json::json!({"path": s.path, "number": 12, "refresh": true}))
+        .await
+        .unwrap();
+    assert_eq!(opened, stack);
+    assert_eq!(gh_pr_calls(&d)[2..], ["api repos/{owner}/{repo}/stacks/4"]);
 }
 
 #[tokio::test]

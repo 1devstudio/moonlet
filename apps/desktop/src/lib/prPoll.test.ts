@@ -13,12 +13,12 @@ describe("needsPrPoll", () => {
     expect(needsPrPoll(undefined)).toBe(true);
   });
 
-  it("asks about a session with no PR, or a closed one, at most every 15 minutes (X107)", () => {
+  it("asks about a session with no PR, or a closed one, at most every 5 minutes (X107)", () => {
     const now = 10_000_000;
-    expect(needsPrPoll(null, { checkedAt: now - 899_999, now })).toBe(false);
+    expect(needsPrPoll(null, { checkedAt: now - 299_999, now })).toBe(false);
     expect(needsPrPoll({ state: "closed" }, { checkedAt: now - 60_000, now })).toBe(false);
-    expect(needsPrPoll(null, { checkedAt: now - 900_000, now })).toBe(true);
-    expect(needsPrPoll({ state: "closed" }, { checkedAt: now - 900_000, now })).toBe(true);
+    expect(needsPrPoll(null, { checkedAt: now - 300_000, now })).toBe(true);
+    expect(needsPrPoll({ state: "closed" }, { checkedAt: now - 300_000, now })).toBe(true);
     // An open PR is asked about on every poll, and a merged one never.
     expect(needsPrPoll({ state: "open" }, { checkedAt: now - 1_000, now })).toBe(true);
     expect(needsPrPoll({ state: "merged" }, { checkedAt: now - 86_400_000, now })).toBe(false);

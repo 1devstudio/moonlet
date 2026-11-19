@@ -6,7 +6,7 @@ import { sesKey } from "./sesKey";
 
 /** How long a session with no PR, or a closed one, goes before the
  *  background polls ask about it again (X107). */
-export const NO_PR_GAP_MS = 15 * 60_000;
+export const NO_PR_GAP_MS = 5 * 60_000;
 
 /** A merged PR cannot change, and `gh.pr_status` keeps returning it, so its
  *  session is not polled again. `undefined` means not polled yet. The

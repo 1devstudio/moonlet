@@ -175,7 +175,9 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
       void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: saved.number, known: true })
         .then((st) => live && !fetched && setStack(st))
         .catch(() => {});
-    const load = () => {
+    // Opening the session asks GitHub for its stack again, however fresh
+    // the saved one is; the minute polls after it share the saved one (X107).
+    const load = (refresh = false) => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();
       void pollPr(host, ws.id, ws.path)
@@ -185,7 +187,7 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
             fetched = true;
             return setStack(null);
           }
-          void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
+          void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number, refresh })
             .then((st) => {
               fetched = true;
               if (latest()) setStack(st);
@@ -196,8 +198,8 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
           /* keeps the last known PR and stack, as the sidebar's poll does */
         });
     };
-    load();
-    const t = setInterval(load, 60_000);
+    load(true);
+    const t = setInterval(() => load(), 60_000);
     return () => {
       live = false;
       clearInterval(t);

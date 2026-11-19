@@ -1001,17 +1001,20 @@ const prPolls = latestPerKey();
  *  session started meanwhile; that one records instead. */
 export async function pollPr(host: string, sessionId: string, path: string): Promise<PullRequest | null> {
   const isLatest = prPolls.start(sesKey(host, sessionId));
+  // Counted from the ask, so the 5-minute poll is not a few seconds early
+  // for the 5-minute pause (X107).
+  const askedAt = Date.now();
   const pr = await rpc<PullRequest | null>(host, M.prStatus, { path });
-  if (isLatest()) recordPr(host, sessionId, pr);
+  if (isLatest()) recordPr(host, sessionId, pr, askedAt);
   return pr;
 }
 
 /** Records a session's PR. When it has just merged, origin's base branch
  *  moved, so the project fetches it (X13). */
-export function recordPr(host: string, sessionId: string, pr: PullRequest | null) {
+export function recordPr(host: string, sessionId: string, pr: PullRequest | null, checkedAt = Date.now()) {
   const key = sesKey(host, sessionId);
   const prev = get().prs[key];
-  prCheckedAt[key] = Date.now();
+  prCheckedAt[key] = checkedAt;
   set((s) => ({ prs: { ...s.prs, [key]: pr } }));
   const w = get().sessions[host]?.find((x) => x.id === sessionId);
   if (w && pr && justMerged(prev, pr)) void refreshBase(host, w.project_id, { fetch: true, reason: `after PR #${pr.number} merged` });

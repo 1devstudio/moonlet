@@ -2361,6 +2361,10 @@ pub struct PrStackParams {
     /// Answer only from the saved stack, without asking GitHub (X107).
     #[serde(default)]
     pub known: bool,
+    /// Ask GitHub however fresh the saved stack is, as on opening a
+    /// session (X107).
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

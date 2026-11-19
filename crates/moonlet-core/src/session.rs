@@ -2162,9 +2162,10 @@ impl SessionManager {
 
     /// The GitHub stack PR `number` of the session at `path` belongs to
     /// (X11). Saved stacks answer every asker within a minute, or for good
-    /// once no PR in them is open; `known` answers only from what is saved
-    /// (X107). A path no session owns is asked about every time.
-    pub async fn pr_stack(&self, path: &Path, number: u64, known: bool) -> Result<Option<PrStack>> {
+    /// once no PR in them is open; `known` answers only from what is saved,
+    /// and `refresh` always asks GitHub (X107). A path no session owns is
+    /// asked about every time.
+    pub async fn pr_stack(&self, path: &Path, number: u64, known: bool, refresh: bool) -> Result<Option<PrStack>> {
         use crate::pr_cache::{STACK_FRESH_MS, stack_at, stack_fresh};
         let Some(s) = self.session_at(path) else {
             return if known { Ok(None) } else { git::pr_stack(path, number).await };
@@ -2172,7 +2173,7 @@ impl SessionManager {
         let project = s.project_id;
         let now = now_ms();
         match self.prs.stack(&project, number) {
-            Some((saved, at)) if known || stack_fresh(&saved, now.saturating_sub(at)) => return Ok(Some(saved)),
+            Some((saved, at)) if known || (!refresh && stack_fresh(&saved, now.saturating_sub(at))) => return Ok(Some(saved)),
             // Only the stack is asked again; when the PR has left it, its
             // stack is looked up below.
             Some((saved, _)) => match git::stack(path, saved.number).await {
@@ -2188,7 +2189,7 @@ impl SessionManager {
             None if known => return Ok(None),
             None => {
                 let at = self.prs.unstacked_at(&project, number);
-                if at.is_some_and(|at| now.saturating_sub(at) < STACK_FRESH_MS) {
+                if !refresh && at.is_some_and(|at| now.saturating_sub(at) < STACK_FRESH_MS) {
                     return Ok(None);
                 }
             }
