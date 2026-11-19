@@ -48,15 +48,6 @@ async fn named(name: &str) -> Daemon {
     Daemon::start(home, &[]).await
 }
 
-fn links() -> usize {
-    let mine = format!("{}-", std::process::id());
-    std::fs::read_dir(std::env::temp_dir().join("moonlet-test-logs"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with(&mine))
-        .count()
-}
 
 #[test]
 fn a_failing_test_keeps_each_daemons_log_and_all_of_them_in_time_order() {
@@ -67,6 +58,10 @@ fn a_failing_test_keeps_each_daemons_log_and_all_of_them_in_time_order() {
         Box::pin(async move {
             let mini = named("studio-mini").await;
             let book = named("MacBook").await;
+            // At the test level a request the daemon answered is a line.
+            let _: serde_json::Value = mini
+                .call("workspace.create", json!({ "name": "Acme", "color": "clay" }))
+                .await;
             seen.lock().unwrap().extend([mini.home.path().to_path_buf(), book.home.path().to_path_buf()]);
             panic!("the probe fails");
         })
@@ -83,6 +78,8 @@ fn a_failing_test_keeps_each_daemons_log_and_all_of_them_in_time_order() {
 
     let mini = std::fs::read_to_string(dir.join("studio-mini.log")).unwrap();
     assert!(mini.contains("INFO moonletd: moonletd listening"), "{mini}");
+    assert!(mini.contains(r#"DEBUG moonletd::daemon: answered client=moonlet-app"#), "{mini}");
+    assert!(mini.contains(r#"method="workspace.create""#), "{mini}");
     let all = std::fs::read_to_string(dir.join("all.log")).unwrap();
     let starts: Vec<&str> = all
         .lines()
@@ -90,14 +87,19 @@ fn a_failing_test_keeps_each_daemons_log_and_all_of_them_in_time_order() {
         .map(|l| l.split_whitespace().nth(1).unwrap())
         .collect();
     assert_eq!(starts, ["studio-mini", "MacBook"], "{all}");
-    let stamps: Vec<&str> = all.lines().map(|l| l.split(' ').next().unwrap()).collect();
+    // A message's next lines carry no time of their own.
+    let stamps: Vec<&str> = all
+        .lines()
+        .map(|l| l.split(' ').next().unwrap())
+        .filter(|s| !s.is_empty())
+        .collect();
     assert!(stamps.windows(2).all(|w| w[0] <= w[1]), "{all}");
 
     // The scratch homes went with the test, and so did the links.
     for home in homes.lock().unwrap().iter() {
         assert!(!home.exists(), "{} was left", home.display());
     }
-    assert_eq!(links(), 0);
+    assert_eq!(logs::links_left(), 0);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -108,14 +110,17 @@ fn a_daemon_let_go_before_the_test_failed_still_has_its_log_kept() {
         Box::pin(async {
             let first = named("studio-mini").await;
             drop(first);
-            let _second = named("MacBook").await;
+            // A second daemon of the same name.
+            let _second = named("studio-mini").await;
             panic!("the probe fails");
         })
     });
     assert!(!passed);
     let dir = logs::kept_dir("a_probe_that_lets_its_daemon_go_and_then_fails");
-    let mini = std::fs::read_to_string(dir.join("studio-mini.log")).unwrap();
-    assert!(mini.contains("moonletd listening"), "{mini}");
+    for name in ["studio-mini.log", "studio-mini-2.log"] {
+        let log = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert!(log.contains("moonletd listening"), "{name}: {log}");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -130,7 +135,7 @@ fn a_passing_test_leaves_no_logs_behind() {
     });
     assert!(passed);
     assert!(!logs::kept_dir("a_probe_that_passes").exists());
-    assert_eq!(links(), 0);
+    assert_eq!(logs::links_left(), 0);
 }
 
 #[test]

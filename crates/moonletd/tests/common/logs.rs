@@ -26,6 +26,9 @@ use std::thread::ThreadId;
 /// `MOONLET_LOG` the test or its command sets wins.
 pub const LEVEL: &str = "info,moonletd=debug,moonlet_core=debug,moonlet_link=debug,moonlet_cloud=debug";
 
+/// A `tailscale` that is not there.
+const NO_TAILSCALE: &str = "/nonexistent/tailscale";
+
 /// How much of `all.log` a failing test prints.
 const TAIL_LINES: usize = 200;
 const TAIL_BYTES: usize = 48 * 1024;
@@ -39,9 +42,12 @@ struct Started {
     thread: ThreadId,
     name: String,
     home: PathBuf,
-    /// Hard links to its `moonletd.log` and `stderr.log` outside its home.
+    /// Hard links to its `moonletd.log` and `stderr.log` outside its home,
+    /// or the home's own files where no link could be made.
     log: PathBuf,
     stderr: PathBuf,
+    /// Whether `log` and `stderr` are links, which go with the test.
+    linked: bool,
 }
 
 static STARTED: Mutex<Vec<Started>> = Mutex::new(Vec::new());
@@ -66,8 +72,11 @@ impl Drop for Forget {
             if s.thread != me {
                 return true;
             }
-            let _ = std::fs::remove_file(&s.log);
-            let _ = std::fs::remove_file(&s.stderr);
+            // Never the home's own files: only the links.
+            if s.linked {
+                let _ = std::fs::remove_file(&s.log);
+                let _ = std::fs::remove_file(&s.stderr);
+            }
             false
         });
     }
@@ -84,25 +93,43 @@ pub fn root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test-logs"))
 }
 
-/// Where the logs of `test` in this test file go if it fails. A test in a
-/// module gets `module.test`: CI artifacts take no `:` in a path.
+/// Where the logs of `test` in this test file go if it fails, under its
+/// package (moonletd and moonlet-cli both have `tests/exec.rs`). A test in
+/// a module gets `module.test`: CI artifacts take no `:` in a path.
 pub fn kept_dir(test: &str) -> PathBuf {
     let test: String = test
         .replace("::", ".")
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' })
         .collect();
-    root().join(env!("CARGO_CRATE_NAME")).join(test)
+    root().join(env!("CARGO_PKG_NAME")).join(env!("CARGO_CRATE_NAME")).join(test)
 }
 
 fn links_dir() -> PathBuf {
     std::env::temp_dir().join("moonlet-test-logs")
 }
 
+/// This process's links that are still there: none once every test that
+/// started a daemon has ended.
+pub fn links_left() -> usize {
+    let mine = format!("{}-", std::process::id());
+    std::fs::read_dir(links_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&mine))
+        .count()
+}
+
+/// Which daemon a test started is whose is known by the thread that started
+/// it: a daemon started from another thread (a `tokio::spawn` task on a
+/// worker thread) is not kept.
 pub trait KeepLogs {
     /// Makes this daemon command, whose `MOONLET_HOME` is `home`, one whose
     /// logs a failing test keeps. Call it last before spawning: it sets
-    /// stderr.
+    /// stderr. Unless the command names a `tailscale`, the daemon gets
+    /// none, so it never runs this machine's own (X39), and no tailnet
+    /// address or peer of it can reach a kept log.
     fn keep_logs(&mut self, home: &Path) -> &mut Self;
 }
 
@@ -110,6 +137,9 @@ impl KeepLogs for Command {
     fn keep_logs(&mut self, home: &Path) -> &mut Self {
         if !self.get_envs().any(|(k, _)| k == "MOONLET_LOG") && std::env::var_os("MOONLET_LOG").is_none() {
             self.env("MOONLET_LOG", LEVEL);
+        }
+        if !self.get_envs().any(|(k, _)| k == "MOONLET_TAILSCALE") {
+            self.env("MOONLET_TAILSCALE", NO_TAILSCALE);
         }
         match started(home) {
             Some(stderr) => self.stderr(stderr),
@@ -122,6 +152,9 @@ impl KeepLogs for tokio::process::Command {
     fn keep_logs(&mut self, home: &Path) -> &mut Self {
         if !self.as_std().get_envs().any(|(k, _)| k == "MOONLET_LOG") && std::env::var_os("MOONLET_LOG").is_none() {
             self.env("MOONLET_LOG", LEVEL);
+        }
+        if !self.as_std().get_envs().any(|(k, _)| k == "MOONLET_TAILSCALE") {
+            self.env("MOONLET_TAILSCALE", NO_TAILSCALE);
         }
         match started(home) {
             Some(stderr) => self.stderr(stderr),
@@ -201,10 +234,18 @@ fn started(home: &Path) -> Option<Stdio> {
         let link = |from: &Path, ext: &str| {
             let to = dir.join(format!("{stem}.{ext}"));
             let _ = std::fs::remove_file(&to);
-            // Another file system (no hard link): read the home's file.
-            match std::fs::hard_link(from, &to) {
-                Ok(()) => to,
-                Err(_) => from.to_path_buf(),
+            std::fs::hard_link(from, &to).ok().map(|()| to)
+        };
+        let err = logs.join("stderr.log");
+        // Another file system (no hard link): the home's own files are
+        // read, while the home is there.
+        let (log, stderr, linked) = match (link(&log, "log"), link(&err, "stderr")) {
+            (Some(l), Some(e)) => (l, e, true),
+            (l, e) => {
+                for p in [l, e].into_iter().flatten() {
+                    let _ = std::fs::remove_file(p);
+                }
+                (log, err, false)
             }
         };
         all.push(Started {
@@ -212,8 +253,9 @@ fn started(home: &Path) -> Option<Stdio> {
             thread: thread.id(),
             name,
             home: home.to_path_buf(),
-            log: link(&log, "log"),
-            stderr: link(&logs.join("stderr.log"), "stderr"),
+            log,
+            stderr,
+            linked,
         });
     }
     Some(Stdio::from(stderr))

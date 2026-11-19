@@ -238,10 +238,11 @@ pub type HandlerResult = Result<Value, RpcError>;
 /// only reads, which apps and tests ask for many times a second, only when
 /// refused.
 fn log_call(conn: &Conn, method: &str, r: &HandlerResult) {
-    let reads = method
-        .rsplit('.')
-        .next()
-        .is_some_and(|v| ["status", "info", "list", "get", "read", "ping"].iter().any(|r| v.starts_with(r)));
+    let reads = method.rsplit('.').next().is_some_and(|v| {
+        ["status", "info", "list", "get", "read", "ping"]
+            .iter()
+            .any(|r| v == *r || v.strip_prefix(r).is_some_and(|rest| rest.starts_with('_')))
+    });
     match r {
         Err(e) => tracing::debug!(client = %conn.client, conn = conn.id, method, "refused: {}: {}", e.code, e.message),
         Ok(_) if !reads => tracing::debug!(client = %conn.client, conn = conn.id, method, "answered"),
