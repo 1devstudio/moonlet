@@ -5,9 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stayedLine, stderrCount, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobWaitNote, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stayedLine, stderrCount, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs, useSessionStayed } from "../lib/jobsStore";
-import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
+import { startupCard, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
 import { M, type Job, type JobStayed, type Session } from "../lib/protocol";
 import { clock } from "../lib/subagents";
@@ -224,7 +224,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
           <span className={TONE[state.tone]}>{state.text.split(" · ")[0]}</span>
           {state.text.split(" · ").slice(1).map((p) => ` · ${p}`)}
         </div>
-        {waitingFor && <p className="m-0 mt-3 ui-text-12.5 text-muted">{waitingNote(ws.name, central)}</p>}
+        {waitingFor && <p className="m-0 mt-3 ui-text-12.5 text-muted">{jobWaitNote(job, ws.name, central)}</p>}
         {machine && <MachineCard card={startupCard(machine)} />}
         <div className="mt-4 flex flex-col gap-0.5">
           {phaseList(job, now).map((p, i) => (

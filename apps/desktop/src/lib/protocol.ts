@@ -548,7 +548,8 @@ export interface Job {
 }
 
 export type JobState =
-  | { kind: "waiting"; for: string }
+  /** For a cloud machine (X63), or with `slot` for a free slot on any host (X62). */
+  | { kind: "waiting"; for: string; slot?: boolean }
   | { kind: "running"; worker: string }
   | { kind: "bringing_back" }
   | { kind: "done"; exit: number }

@@ -69,9 +69,12 @@ describe("the Workers page (X62)", () => {
     expect(page.rows[0].line).toEqual({ tone: "blocked", text: "Not approved for shop" });
     expect(page.rows[0].approve).toEqual({ project: "shop" });
     expect(page.rows[1].line).toEqual({ tone: "blocked", text: "Linux · 16 cores · skipped for shop: missing pnpm" });
-    // A central host with no slot left, or loaded, takes what no one else can.
+    // A central host with no slot left takes what no one else can.
     expect(page.rows[2].line).toEqual({ tone: "blocked", text: "macOS · 12 cores · busy, takes commands no one else can" });
     expect(page.rows[2].load).toEqual({ text: "9.0 / 12", fraction: 0.75, busy: true });
+    // At a high load with a free slot it has room (X62): agents keep the load high.
+    const loaded = workersPage({ workers: [], status: status({ host: { name: "studio-mini", os: "macos", cores: 10, load: 31.0, slots: 2, used: 1 } }), me: null, sessions });
+    expect(loaded.rows[0].line).toEqual({ tone: "muted", text: "macOS · 10 cores" });
   });
 
   it("the summary line counts running jobs and slots", () => {
