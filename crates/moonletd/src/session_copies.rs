@@ -2024,7 +2024,18 @@ impl SessionCopies {
         }
         let mut held = held;
         let dir = if held.path.is_empty() || !Path::new(&held.path).exists() {
-            let dir = self.make_worktree(&r, &held).await?;
+            let dir = match self.cut_off_copy(&r.session, &held).await {
+                Some(dir) => dir,
+                None => {
+                    let dir = self.make_worktree(&r, &held).await?;
+                    // Tests: stopped here, the worktree is made and not yet
+                    // recorded.
+                    if let Some(ms) = std::env::var("MOONLET_TEST_OFFER_PAUSE_MS").ok().and_then(|v| v.parse().ok()) {
+                        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                    }
+                    dir
+                }
+            };
             held.path = dir.display().to_string();
             held.tree.clear();
             held.head = r.head.clone();
@@ -2048,6 +2059,29 @@ impl SessionCopies {
             tree: r.tree,
             head: r.head,
         })
+    }
+
+    /// The worktree an offer made for `session` before this daemon was
+    /// stopped, so before it was recorded: it is still on the copy's own
+    /// branch, `moonlet-copy/<session id>`, in this host's folders, where
+    /// [`Self::make_worktree`] puts every copy (`copy_path`), and it is
+    /// neither one of this host's own sessions nor another session's copy.
+    /// It is the copy; [`Self::bring`] then brings it to the offer, and
+    /// [`Self::drop_ended`] removes it with the copy.
+    async fn cut_off_copy(&self, session: &str, held: &Held) -> Option<PathBuf> {
+        let dir = git_sync::checked_out(Path::new(&held.repo), &copy_branch(session)).await?;
+        let real = dir.canonicalize().ok()?;
+        let home = self.home.canonicalize().unwrap_or_else(|_| self.home.clone());
+        let same = |p: &str| !p.is_empty() && Path::new(p).canonicalize().ok().as_ref() == Some(&real);
+        let own = self.sessions.list_sessions().iter().any(|s| same(&s.path));
+        let others = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .iter()
+            .any(|(id, h)| id != session && same(&h.path));
+        (real.starts_with(&home) && real != home && !own && !others).then_some(dir)
     }
 
     async fn make_worktree(&self, r: &m::SessionOffer, held: &Held) -> Result<PathBuf, RpcError> {
@@ -2857,8 +2891,16 @@ impl SessionCopies {
             .filter(|(id, _)| ended.contains(*id))
             .map(|(id, h)| (id.clone(), h.clone()))
             .collect();
-        for (id, h) in ended {
+        for (id, mut h) in ended {
             let _one = self.apply.lock().await;
+            // A copy whose making was cut off has no path yet: its worktree
+            // goes too.
+            if (h.path.is_empty() || !Path::new(&h.path).exists())
+                && is_repo(Path::new(&h.repo))
+                && let Some(dir) = self.cut_off_copy(&id, &h).await
+            {
+                h.path = dir.display().to_string();
+            }
             if !h.path.is_empty() && Path::new(&h.path).exists() {
                 let dir = Path::new(&h.path);
                 // Edits made in the copy are kept first; a copy whose edits

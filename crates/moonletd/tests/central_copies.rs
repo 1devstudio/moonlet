@@ -629,6 +629,62 @@ async fn a_lost_log_keeps_the_copy(lose: impl Fn(&Path)) {
     reads(&copy.join("src/cart.ts"), "b\n").await;
 }
 
+/// The central host stopped while it made a copy: the copy's worktree is
+/// there, but not yet recorded as the session's copy. Once it is back, the
+/// next offer takes that worktree as the copy, rather than make a second
+/// one on the same branch, which git refuses for good (X72).
+#[tokio::test]
+async fn a_copy_cut_off_while_it_was_made_follows_the_session_once_the_central_host_is_back() {
+    let origin = Origin::new();
+    let mut env = env_for(&origin);
+    // Tests: the offer waits once its worktree is made.
+    env.push(("MOONLET_TEST_OFFER_PAUSE_MS".into(), "5000".into()));
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (mut mini, addr) = central_with(&env).await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = mini.home.path().join("copies/MacBook/shop/fix-cart");
+    reads(&copy.join("src/cart.ts"), "a\n").await;
+    mini.stop();
+    mini.restart().await;
+
+    std::fs::write(path_of(&made).join("src/cart.ts"), "b\n").unwrap();
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+    let listed = copy_of(&mini, &made).await;
+    assert_eq!(listed.canonicalize().unwrap(), copy.canonicalize().unwrap());
+}
+
+/// [`a_copy_cut_off_while_it_was_made_follows_the_session_once_the_central_host_is_back`],
+/// the session archived while the central host is down: its cut-off copy
+/// goes as any archived session's does.
+#[tokio::test]
+async fn a_copy_cut_off_while_it_was_made_goes_once_its_session_is_archived() {
+    let origin = Origin::new();
+    let mut env = env_for(&origin);
+    env.push(("MOONLET_TEST_OFFER_PAUSE_MS".into(), "5000".into()));
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (mut mini, addr) = central_with(&env).await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = mini.home.path().join("copies/MacBook/shop/fix-cart");
+    reads(&copy.join("src/cart.ts"), "a\n").await;
+    mini.stop();
+    let _: Value = book
+        .call("session.archive", json!({ "id": made["id"] }))
+        .await;
+    mini.restart().await;
+    within(Duration::from_secs(30), "the copy removed", || async {
+        !copy.exists()
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_central_host_started_without_its_account_log_keeps_its_copies() {
     a_lost_log_keeps_the_copy(|log| std::fs::remove_file(log).unwrap()).await;
