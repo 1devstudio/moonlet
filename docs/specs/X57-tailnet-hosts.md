@@ -71,6 +71,19 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 - [ ] After `authed` the connection is a normal host connection: R3's reconnect banner, R4's sidebar grouping, notifications that name the host, the palette and the approval inbox all work for tailnet hosts.
 - [x] **Remove** on a tailnet host calls `mobile.unpair` when the host is connected, then forgets the host and its token. When the host is not connected, it forgets them only, and the dialog says "studio-mini will still list this Mac until you remove it there." (`tailnet-host.e2e.ts` for a connected host; `settingsPage.test.ts` "asks before removing a tailnet host it cannot tell")
 
+### Where the app keeps its tokens (2026-11-19)
+
+Until this change the token for each tailnet host sat in `app-hosts.json`. The file is 0600, but every process of the user can read it, agents included, and the token gives everything a paired Mac's app may do on the host.
+
+- [x] On a Mac, the app keeps each tailnet host's token in the Keychain, in X91's one item (service `dev.onedevstudio.moonlet.trackers`, account `tokens`) under the key `host:<device id>`, beside the tracker tokens. The app reads that item once per start for both, so a start still asks for the password once at most, and the signed release, which created the item or was allowed with **Always Allow**, does not ask. `app-hosts.json` keeps the host's id, device id and addresses, `"token": ""`, and `token_sha256`, the token's SHA-256 in hex. (`host_tokens.rs` a_token_in_the_file_moves_into_the_keychain_and_out_of_the_file, a_host_already_moved_needs_nothing_written; `tailnet-host.e2e.ts` "pairs with a pasted link and connects")
+- [x] A host is keyed by this Mac's device id on it, not by its name, so a dev build with a scratch home that pairs with the same host never replaces the app's token. Pairing again gives a new device id and puts the new token in the Keychain; Remove deletes the host's key. A token found in the file for a host already in the Keychain (written by a build from before) replaces the Keychain's. (`host_tokens.rs` pairing_again_puts_the_new_token_in_the_keychain; `tailnet-host.e2e.ts` "removes it, and the host forgets this Mac")
+- [x] An existing install moves its tokens at the first start of this version: the app reads them from the file, connects with them, saves them in the Keychain, and writes the file without them only after the Keychain has kept them. When the Keychain refuses (the user cancels the prompt, or the save fails), the file stays as it was and the host connects with the file's token; the move is tried again at the next save or start. Nothing is lost, and the user never has to pair again. (`host_tokens.rs` a_keychain_that_refuses_the_token_leaves_the_file_as_it_was)
+- [x] The app writes `app-hosts.json` once per start, after every host is known, so a prompt left open never leaves a host out of the file. (manual; the start path is in `hosts.rs` `HostManager::new`)
+- [x] A token the Keychain does not give at start (the user cancelled the prompt) leaves the host without a token for that start, and the file as it was. The host's line says "moonlet could not read this Mac's token for the host from the Keychain. Quit moonlet and open it again." in place of connecting, and Make central host and Update refuse with the same words. (`host_tokens.rs` a_token_the_keychain_cannot_read_leaves_the_host_without_one_and_the_file_as_it_was)
+- [x] A host whose token moved keeps `"token": ""` in the file, so a build from before still lists every host (it cannot connect to them) instead of reading the file as empty and saving over it. (`ssh.rs` a_host_whose_token_moved_still_reads_in_builds_from_before)
+- [x] This Mac's daemon tells "the app handed its token to the link" from "only the link holds it" (X41) by the token in the file or, once moved, by `token_sha256`. It never reads the Keychain. (`tests/link.rs` a_link_set_with_the_apps_token_kept_in_the_keychain_leaves_the_app_its_token, a_link_set_with_the_apps_own_token_leaves_the_app_its_token)
+- [x] e2e builds keep the tokens in `$MOONLET_HOME/secrets.json` (0600), X91's store for them, so a test never reads or writes the user's Keychain. Which store a build uses is fixed at compile time (the `e2e` feature), not by an environment variable, so a release build cannot be pointed at the file (#672). (`tailnet-host.e2e.ts`)
+
 ### What differs from SSH hosts
 
 - [x] A tailnet host has no Install helper or Reinstall helper button. (`tailnet-host.e2e.ts`)
@@ -112,7 +125,7 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
 ## Data and config
 
 - `~/.moonlet/mobile.json`: each device gains `kind`. A missing kind reads as `phone`.
-- `~/.moonlet/app-hosts.json` is written with mode 0600, because it now holds tokens. `remotes` stays as it is, so phones' routing and older builds keep reading it:
+- `~/.moonlet/app-hosts.json` is written with mode 0600. `remotes` stays as it is, so phones' routing and older builds keep reading it. Since 2026-11-19 the token is in the Keychain (see [Where the app keeps its tokens](#where-the-app-keeps-its-tokens-2026-11-19)); `token` is `""` and `token_sha256` is its SHA-256 in hex. A non-empty `token` is one not moved yet:
 
   ```json
   {
@@ -122,16 +135,26 @@ Adding a remote host no longer needs `~/.ssh/config`, SSH keys or a helper insta
         "id": "studio-mini",
         "device_id": "…",
         "addrs": ["100.101.102.103:47428"],
-        "token": "…"
+        "token": "",
+        "token_sha256": "…"
       }
     ]
   }
   ```
+- Keychain: X91's item (service `dev.onedevstudio.moonlet.trackers`, account `tokens`) gains a key `host:<device id>` per tailnet host. Tracker connection ids are `<kind>:<site>`, so none starts with `host:`.
 
 ## Security considerations
 
 - A typed name sends the code only to a Tailscale address, so a typo that resolves to a public host cannot receive it. A pasted link's addresses must be on the tailnet too (or loopback), so a forged link cannot point the app at a machine off the tailnet. The tailnet encrypts the pairing, and X39's limits apply: one use, 5 minutes, 5 wrong attempts.
-- A desktop token gives the same full access as a phone token (X39). It is stored in `app-hosts.json` with mode 0600 inside the private `~/.moonlet`, as X41 stores the worker's token in `link.json`. The webview never receives it, and `host_list` does not include it.
+- A desktop token gives the same full access as a phone token (X39). Since 2026-11-19 the app keeps it in the login Keychain, in X91's item, and `app-hosts.json` keeps only its SHA-256. The webview never receives it, and `host_list` does not include it.
+- What that protects against: a process of the user that reads files (an agent, a script, a tool that copies `~/.moonlet`) no longer finds the token. Reading the Keychain item from a binary the item does not trust makes macOS show its password prompt naming the item, and without the user's password and approval it gets nothing.
+- What it does not protect against:
+  - The item trusts the binary that created it and every binary the user allowed with **Always Allow**, such as a dev build. Those read it without a prompt.
+  - The token is in the app's memory while it runs. A dev build has no hardened runtime, so a debugger run by the same user can read that memory; the notarized release has the hardened runtime (notarization requires it) and does not allow that.
+  - A process the user has granted Accessibility (macOS asks first) can drive the app's window and do what the app's UI does on the host.
+  - A process can talk to this Mac's daemon as an unproven local caller, limited to A6's allowlist; the app's proof on the local socket (X75) is unchanged by this. The daemon's `link.json` holds the link's worker credential (X41). After **Make central host** it holds the app's own token until the link has traded it for a worker link, and keeps it while the central host is from before worker links.
+  - Deleting the Keychain item is not prevented. The hosts would then need pairing again.
+- On Linux there is no desktop app, and nothing writes these tokens. The app's store off macOS is X91's 0600 file under `$MOONLET_HOME`, as ADR 0014 says.
 - On the host, a paired desktop cannot pair, list or remove other devices. It can only remove itself.
 - `moonletd pair` runs on the host, so anyone who can run commands there, including an agent, can start a pairing. That is X39's accepted boundary for client names (ADR 0011). The code is still useless without a device on the tailnet.
 
@@ -151,6 +174,7 @@ Every criterion maps to a test. Expected values are literals from this spec.
   - `moonletd` mobile module: a device paired with `kind: "desktop"` is stored and listed as `desktop`; a `mobile.json` device without `kind` reads as `phone`.
   - The tailnet address filter on resolved names: `studio-mini` resolving to `[100.101.102.103]` gives `["100.101.102.103:47428"]`; `build-box:47500` gives port 47500; `[203.0.113.7]` gives the "not on your tailnet" error with that address; no result gives "was not found".
   - `app-hosts.json`: the round trip keeps `remotes` and `tailnet`, the file's mode is 0600, and `host_list` output contains no `token`.
+  - `host_tokens.rs` (2026-11-19), against a stand-in for the Keychain: a token in the file moves into the Keychain and out of the file; a refused save leaves the file as it was; an already-moved host writes nothing; an unreadable token leaves the host without one and the file as it was; pairing again stores the new token. `ssh.rs`: a file with a moved token still reads in builds from before. `tests/link.rs`: the daemon's X41 check works with only the token's hash in the file.
 - **`crates/moonlet-link/tests/tailnet.rs`** (a fake daemon on 127.0.0.1):
   - pairing with a code returns the token and who answered, and sends `kind`;
   - a token connects;
@@ -176,6 +200,7 @@ Every criterion maps to a test. Expected values are literals from this spec.
   - sees the host in the Add project dialog's Host list (the sidebar lists a host only once it has projects);
   - is refused a second host with the same name;
   - removes it and sees the second daemon no longer list the device.
+  - (2026-11-19) after pairing, `app-hosts.json` has `"token": ""` and a `token_sha256`, and the e2e build's `secrets.json` holds `host:<device id>`; after Remove it no longer does.
 - **Manual:** pair the MacBook with the real Mac mini over Tailscale by name and code, open a session there, close the lid, and reopen it.
 
 ## Open questions
