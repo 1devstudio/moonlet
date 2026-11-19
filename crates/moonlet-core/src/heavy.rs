@@ -1014,10 +1014,12 @@ pub fn check(heavy: &HeavyConfig) -> Result<(), String> {
 /// Where a candidate worker runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// A Mac or remote host linked to the central host (X41, X61).
+    /// Another host: a Mac or remote host linked to the central host (X41,
+    /// X61), or, for a member's session, the central host and the other
+    /// members (X89).
     Linked,
-    /// The central host itself.
-    Central,
+    /// The session's own host.
+    Own,
     /// A cloud machine of the project (X63).
     Cloud,
 }
@@ -1030,51 +1032,57 @@ pub struct Candidate {
     /// `macos` or `linux`.
     pub os: String,
     pub cores: u32,
-    /// The 1-minute load average.
+    /// The 1-minute load average, as the host last said. Shown in the job,
+    /// never a reason to skip a host: agent sessions keep it high.
     pub load: f64,
     /// How many routed commands it runs at once.
     pub slots: u32,
-    /// How many it runs now.
+    /// How many it runs or prepares now, for any host.
     pub used: u32,
     pub rtt_ms: Option<u64>,
 }
 
 impl Candidate {
-    /// At least 0.7 × its cores busy.
-    pub fn busy(&self) -> bool {
-        self.load >= 0.7 * f64::from(self.cores.max(1))
+    /// It has a free slot.
+    pub fn has_room(&self) -> bool {
+        self.used < self.slots
     }
 
-    fn per_core(&self) -> f64 {
-        self.load / f64::from(self.cores.max(1))
+    /// The share of its slots in use.
+    fn share(&self) -> f64 {
+        f64::from(self.used) / f64::from(self.slots.max(1))
     }
 
-    fn fits(&self, os: HeavyOs) -> bool {
-        let os_ok = match os {
+    fn runs(&self, os: HeavyOs) -> bool {
+        match os {
             HeavyOs::Any => true,
             HeavyOs::Macos => self.os == "macos",
             HeavyOs::Linux => self.os == "linux",
-        };
-        os_ok && self.used < self.slots && !self.busy()
+        }
     }
 }
 
-/// The free candidate a heavy command goes to, or `None` when none is free
-/// and it runs on the central host anyway. Linked machines come first by
-/// lowest load per core, then the shortest round trip, then id; then the
-/// central host; then cloud machines by lowest load per core. A session
-/// that asked for the cloud tries cloud machines first.
-pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<&Candidate> {
+/// How long a command waits for a free slot when every host is full,
+/// before it runs on the session's host anyway (X62).
+pub const SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `candidates` that can run a command for `os`, in the order a command
+/// tries them, whether they have room or not: cloud machines first when
+/// the session asked for the cloud; then the session's own host; then
+/// other hosts, by the lowest share of their slots in use, then the
+/// shortest round trip, then id; then cloud machines, the same way.
+pub fn ranked(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Vec<&Candidate> {
     let rank = |c: &Candidate| match (c.kind, cloud_first) {
         (Kind::Cloud, true) => 0,
-        (Kind::Linked, _) => 1,
-        (Kind::Central, _) => 2,
+        (Kind::Own, _) => 1,
+        (Kind::Linked, _) => 2,
         (Kind::Cloud, false) => 3,
     };
-    candidates.iter().filter(|c| c.fits(os)).min_by(|a, b| {
+    let mut out: Vec<&Candidate> = candidates.iter().filter(|c| c.runs(os)).collect();
+    out.sort_by(|a, b| {
         rank(a)
             .cmp(&rank(b))
-            .then(a.per_core().total_cmp(&b.per_core()))
+            .then(a.share().total_cmp(&b.share()))
             // A round trip not measured yet counts as the longest.
             .then(
                 a.rtt_ms
@@ -1082,7 +1090,61 @@ pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<
                     .cmp(&b.rtt_ms.unwrap_or(u64::MAX)),
             )
             .then(a.id.cmp(&b.id))
-    })
+    });
+    out
+}
+
+/// The candidate with room a heavy command goes to, first in [`ranked`]'s
+/// order, or `None` when every one is full.
+pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<&Candidate> {
+    ranked(candidates, os, cloud_first)
+        .into_iter()
+        .find(|c| c.has_room())
+}
+
+/// Where a command goes now.
+#[derive(Debug, PartialEq)]
+pub enum Placement<'a> {
+    /// To this candidate, which has a free slot.
+    Run(&'a Candidate),
+    /// Every host it could run on is full, or its free slots go to the
+    /// commands waiting ahead of it: it waits.
+    Wait,
+    /// It waited [`SLOT_WAIT`]: it runs on the session's host anyway.
+    Anyway,
+}
+
+/// Where a command goes, as [`pick`] has it, after the commands waiting
+/// ahead of it in this host's line took their slots: `ahead` lists, for
+/// each, in the order they came, the ids of the machines it could run on.
+/// One that waited `bound` runs on the session's host anyway, and so does
+/// one no candidate could run at all.
+pub fn place<'a>(
+    candidates: &'a [Candidate],
+    os: HeavyOs,
+    cloud_first: bool,
+    ahead: &[Vec<String>],
+    waited: std::time::Duration,
+    bound: std::time::Duration,
+) -> Placement<'a> {
+    let order = ranked(candidates, os, cloud_first);
+    // Nothing could ever take it, such as a Linux project's command with
+    // no Linux machine: waiting would only hold it up.
+    if order.is_empty() {
+        return Placement::Anyway;
+    }
+    let mut free: Vec<u32> = order.iter().map(|c| c.slots.saturating_sub(c.used)).collect();
+    // Each command ahead takes the first free slot it could run on.
+    for could in ahead {
+        if let Some(i) = (0..order.len()).find(|&i| free[i] > 0 && could.contains(&order[i].id)) {
+            free[i] -= 1;
+        }
+    }
+    match (0..order.len()).find(|&i| free[i] > 0) {
+        Some(i) => Placement::Run(order[i]),
+        None if waited >= bound => Placement::Anyway,
+        None => Placement::Wait,
+    }
 }
 
 /// Replaces paths in a run's output as it streams (X62): a routing copy's
@@ -1582,9 +1644,10 @@ mod tests {
         }
     }
 
+    /// The session's own host.
     fn central(load: f64, cores: u32, used: u32) -> Candidate {
         Candidate {
-            kind: Kind::Central,
+            kind: Kind::Own,
             rtt_ms: None,
             ..mac("studio-mini", load, cores, used)
         }
@@ -1598,33 +1661,30 @@ mod tests {
         }
     }
 
-    /// X89's order table, for a session on the MacBook: the session's host
-    /// is the fallback, so `None` runs it there.
+    /// X89's order table, for a session on the MacBook: `None` waits.
     #[test]
     fn picks_as_in_the_mesh_order_table() {
-        let host = |load: f64| Candidate {
-            kind: Kind::Central,
+        let host = |used: u32| Candidate {
+            kind: Kind::Own,
             rtt_ms: None,
-            ..mac("macbook", load, 10, 0)
+            ..mac("macbook", 21.3, 10, used)
         };
-        let mini = |load: f64, used: u32| mac("studio-mini", load, 10, used);
-        let devbox = Candidate {
+        let mini = |used: u32| mac("studio-mini", 2.6, 10, used);
+        let devbox = |used: u32| Candidate {
             os: "linux".into(),
             slots: 4,
-            ..mac("devbox", 1.0, 16, 0)
+            ..mac("devbox", 1.0, 16, used)
         };
+        let shop = || cloud("moonlet-shop-7k2q", 0.1, 8, 0);
         let rows: [(Vec<Candidate>, Option<&str>); 7] = [
-            (vec![host(21.3), mini(2.6, 0)], Some("studio-mini")),
+            (vec![host(0), mini(0)], Some("macbook")),
+            (vec![host(2), mini(0)], Some("studio-mini")),
             // studio-mini's switch is off: it is no candidate.
-            (vec![host(21.3)], None),
-            (vec![host(1.0), mini(2.6, 0)], Some("studio-mini")),
-            (vec![host(21.3), mini(2.6, 2), devbox.clone()], Some("devbox")),
-            (vec![host(21.3), mini(3.0, 0), devbox.clone()], Some("devbox")),
-            (
-                vec![host(21.3), mini(8.0, 0), cloud("moonlet-shop-7k2q", 0.1, 8, 0)],
-                Some("moonlet-shop-7k2q"),
-            ),
-            (vec![host(21.3), mini(8.0, 0)], None),
+            (vec![host(2)], None),
+            (vec![host(2), mini(2), devbox(0)], Some("devbox")),
+            (vec![host(2), mini(1), devbox(1)], Some("devbox")),
+            (vec![host(2), mini(2), shop()], Some("moonlet-shop-7k2q")),
+            (vec![host(2), mini(2)], None),
         ];
         for (i, (candidates, want)) in rows.into_iter().enumerate() {
             assert_eq!(
@@ -1636,36 +1696,41 @@ mod tests {
         }
     }
 
-    /// X62's order table: load / cores, slots used of 2.
+    /// X62's order table, for a session on studio-mini: load / cores,
+    /// slots used of 2. `None` waits.
     #[test]
     fn picks_as_in_the_order_table() {
         let any = HeavyOs::Any;
         let rows: [(Vec<Candidate>, Option<&str>); 6] = [
             (
                 vec![mac("macbook", 1.0, 10, 0), central(0.5, 10, 0)],
+                Some("studio-mini"),
+            ),
+            (
+                vec![mac("macbook", 0.4, 10, 0), central(31.0, 10, 1)],
+                Some("studio-mini"),
+            ),
+            (
+                vec![mac("macbook", 7.2, 10, 0), central(4.3, 10, 2)],
                 Some("macbook"),
             ),
             (
-                vec![mac("macbook", 7.2, 10, 0), central(4.3, 10, 1)],
-                Some("studio-mini"),
-            ),
-            (
-                vec![mac("macbook", 1.0, 10, 2), central(1.0, 10, 0)],
-                Some("studio-mini"),
-            ),
-            (
                 vec![
-                    mac("a", 3.0, 10, 0),
-                    mac("b", 1.0, 8, 0),
-                    central(0.1, 10, 0),
+                    mac("a", 0.2, 10, 1),
+                    mac("b", 6.0, 8, 0),
+                    central(0.1, 10, 2),
                 ],
                 Some("b"),
             ),
             (
-                vec![central(9.0, 10, 2), cloud("moonlet-shop-7k2q", 0.1, 8, 0)],
+                vec![
+                    mac("macbook", 1.0, 10, 2),
+                    central(9.0, 10, 2),
+                    cloud("moonlet-shop-7k2q", 0.1, 8, 0),
+                ],
                 Some("moonlet-shop-7k2q"),
             ),
-            (vec![central(9.0, 10, 2)], None),
+            (vec![mac("macbook", 1.0, 10, 2), central(9.0, 10, 2)], None),
         ];
         for (i, (candidates, want)) in rows.into_iter().enumerate() {
             assert_eq!(
@@ -1684,9 +1749,10 @@ mod tests {
             pick(&[far, mac("b", 1.0, 10, 0)], any, false).unwrap().id,
             "b"
         );
-        // A session that asked for the cloud tries cloud machines first.
+        // A session that asked for the cloud tries cloud machines first,
+        // ahead of its own idle host.
         let both = [
-            mac("macbook", 0.1, 10, 0),
+            central(0.1, 10, 0),
             cloud("moonlet-shop-7k2q", 2.0, 8, 0),
         ];
         assert_eq!(pick(&both, any, true).unwrap().id, "moonlet-shop-7k2q");
@@ -1718,15 +1784,80 @@ mod tests {
         assert_eq!(pick(&both, HeavyOs::Macos, true).unwrap().id, "macbook");
     }
 
+    /// The user's machines sit at a load average of 25 to 45 with agent
+    /// sessions running: a free slot is room whatever the load.
     #[test]
-    fn a_worker_at_seven_tenths_of_its_cores_is_busy() {
+    fn a_host_at_a_high_load_average_with_a_free_slot_takes_the_command() {
+        let host = Candidate {
+            kind: Kind::Own,
+            rtt_ms: None,
+            ..mac("macbook", 38.0, 10, 1)
+        };
         assert_eq!(
-            pick(&[mac("macbook", 6.9, 10, 0)], HeavyOs::Any, false)
-                .unwrap()
-                .id,
-            "macbook"
+            pick(&[host, mac("studio-mini", 45.0, 10, 0)], HeavyOs::Any, false).map(|c| c.id.as_str()),
+            Some("macbook")
         );
-        assert!(pick(&[mac("macbook", 7.0, 10, 0)], HeavyOs::Any, false).is_none());
+    }
+
+    const S: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// The line's order: a slot that frees goes to the command that waited
+    /// longest, from any session, among those that could run there.
+    #[test]
+    fn commands_waiting_ahead_take_the_free_slots_first() {
+        let hosts = [central(9.0, 10, 2), mac("macbook", 3.0, 10, 1)];
+        let any = HeavyOs::Any;
+        let mini_mac = vec!["studio-mini".to_string(), "macbook".to_string()];
+        // Alone in line, it takes the MacBook's free slot.
+        assert_eq!(
+            place(&hosts, any, false, &[], 5 * S, SLOT_WAIT),
+            Placement::Run(&hosts[1])
+        );
+        // fix-cart's command came first and takes it: this one waits.
+        assert_eq!(
+            place(&hosts, any, false, &[mini_mac.clone()], 5 * S, SLOT_WAIT),
+            Placement::Wait
+        );
+        // A command ahead that runs only on devbox leaves the slot.
+        assert_eq!(
+            place(&hosts, any, false, &[vec!["devbox".into()]], 5 * S, SLOT_WAIT),
+            Placement::Run(&hosts[1])
+        );
+        // Two free slots: the one ahead takes the first, this the second.
+        let two = [central(9.0, 10, 0), mac("macbook", 3.0, 10, 2)];
+        assert_eq!(
+            place(&two, any, false, &[mini_mac.clone()], 5 * S, SLOT_WAIT),
+            Placement::Run(&two[0])
+        );
+        assert_eq!(
+            place(&two, any, false, &[mini_mac.clone(), mini_mac], 5 * S, SLOT_WAIT),
+            Placement::Wait
+        );
+    }
+
+    /// A command waits up to [`SLOT_WAIT`], a minute, then runs on its
+    /// session's host anyway.
+    #[test]
+    fn a_command_waits_a_minute_for_a_slot_then_runs_anyway() {
+        let full = [central(9.0, 10, 2), mac("macbook", 3.0, 10, 2)];
+        let any = HeavyOs::Any;
+        assert_eq!(SLOT_WAIT, 60 * S);
+        assert_eq!(place(&full, any, false, &[], 59 * S, SLOT_WAIT), Placement::Wait);
+        assert_eq!(place(&full, any, false, &[], 60 * S, SLOT_WAIT), Placement::Anyway);
+        // A slot that frees in time is taken, however long it waited.
+        let freed = [central(9.0, 10, 1), mac("macbook", 3.0, 10, 2)];
+        assert_eq!(
+            place(&freed, any, false, &[], 90 * S, SLOT_WAIT),
+            Placement::Run(&freed[0])
+        );
+    }
+
+    /// A project for Linux on a Mac with no Linux machine at all: nothing
+    /// could ever take it, so it runs on the session's host at once.
+    #[test]
+    fn a_command_no_machine_could_run_runs_on_its_own_host_without_waiting() {
+        let hosts = [central(1.0, 10, 0), mac("macbook", 1.0, 10, 0)];
+        assert_eq!(place(&hosts, HeavyOs::Linux, false, &[], S, SLOT_WAIT), Placement::Anyway);
     }
 
     #[test]

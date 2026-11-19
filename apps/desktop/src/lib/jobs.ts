@@ -1,6 +1,7 @@
 // Jobs (X62): every routed command of a session, as the Jobs tab, a job's
 // detail, its tab and the chat's Bash rows show it. Pure.
 
+import { waitingNote } from "./cloudMachines";
 import { clock } from "./subagents";
 import type { Job, JobChunk, JobStayed } from "./protocol";
 
@@ -19,6 +20,30 @@ const wentAway = (j: Job) => j.timeline.some((e) => e.text.endsWith(" went away"
 /** It then ran again where its session is: only a command the project marked safe to. */
 const reran = (j: Job) => j.timeline.some((e) => e.text.startsWith("Ran again on "));
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** It waits for a free slot on any host, not for a cloud machine (X62). */
+const forSlot = (j: Job) => j.state.kind === "waiting" && !!j.state.slot;
+
+/** What the timeline says of where a command went and why (X62): a host
+ * that refused it, the wait for a slot, running here anyway or now. */
+const PLACED: [RegExp, PhaseRow["state"]][] = [
+  [/ refused it: /, "warn"],
+  [/^Waited .+ for a slot on /, "done"],
+  [/^Ran on .+: every host was full$/, "warn"],
+  [/^Ran on .+ now, as asked from the Jobs panel$/, "done"],
+];
+
+const placed = (j: Job): PhaseRow[] =>
+  j.timeline.flatMap((e) => {
+    const hit = PLACED.find(([re]) => re.test(e.text));
+    return hit ? [{ name: e.text, state: hit[1], took: hms(e.at), detail: e.detail ?? null }] : [];
+  });
+
+/** The note above a waiting job's footer. `host` is the session's host's name. */
+export const jobWaitNote = (j: Job, session: string, host: string): string =>
+  forSlot(j)
+    ? `Every host that runs ${session}'s heavy commands is full. This one starts on the first free slot, or on ${host} within a minute.`
+    : waitingNote(session, host);
 
 /** Whether a job waits, runs or brings its changes back. */
 export const going = (j: Job) => j.state.kind === "waiting" || j.state.kind === "running" || j.state.kind === "bringing_back";
@@ -52,7 +77,7 @@ export function jobRowLine(j: Job, now: number): { tone: JobTone; icon: JobIcon;
   const s = j.state;
   switch (s.kind) {
     case "waiting":
-      return { tone: "accent", icon: "cloud", text: `Waiting for ${s.for}` };
+      return { tone: "accent", icon: s.slot ? "worker" : "cloud", text: `Waiting for ${s.for}` };
     case "running":
       return { tone: "accent", icon: icon(j), text: `Running on ${s.worker} · ${clock(now - j.started_at)}` };
     case "bringing_back":
@@ -84,7 +109,7 @@ function stateLine(j: Job, now: number, session: string, tab: boolean): { tone: 
   const tail = (parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" · ");
   switch (s.kind) {
     case "waiting":
-      return { tone: "accent", text: tail(["Waiting for a cloud machine", clock(now - j.started_at), who]) };
+      return { tone: "accent", text: tail([s.slot ? "Waiting for a free slot" : "Waiting for a cloud machine", clock(now - j.started_at), who]) };
     case "running":
       return { tone: "accent", text: tail(["Running", clock(now - j.started_at), who]) };
     case "bringing_back":
@@ -112,17 +137,24 @@ const hms = (ms: number) => {
 
 /** A job's steps: its phases, or once its worker went away what happened when. */
 export function phaseList(j: Job, now: number): PhaseRow[] {
-  // Waiting for a cloud machine (X63): what comes once it is ready.
-  if (j.state.kind === "waiting")
-    return ["Copy matches the session", "Running", "Bring changes back"].map((name) => ({ name, state: "pending", took: null, detail: null }));
+  // Waiting for a cloud machine (X63) or a slot (X62): what comes once it is ready.
+  if (j.state.kind === "waiting") {
+    const pending: PhaseRow[] = ["Copy matches the session", "Running", "Bring changes back"].map((name) => ({ name, state: "pending", took: null, detail: null }));
+    if (!forSlot(j)) return pending;
+    const why = [...j.timeline].reverse().find((e) => e.text === "Waiting for a free slot")?.detail ?? null;
+    return [...placed(j), { name: "Waiting for a free slot", state: "running", took: clock(now - j.started_at), detail: why }, ...pending];
+  }
   if (wentAway(j))
     return j.timeline.map((e) => ({ name: e.text, state: e.text.endsWith(" went away") ? "warn" : "done", took: hms(e.at), detail: e.detail ?? null }));
-  const rows: PhaseRow[] = j.phases.map((p) => ({
-    name: p.name,
-    state: "done",
-    took: p.name === "Exit status to Claude" || p.took_ms == null ? null : took(p.took_ms),
-    detail: null,
-  }));
+  const rows: PhaseRow[] = [
+    ...placed(j),
+    ...j.phases.map((p): PhaseRow => ({
+      name: p.name,
+      state: "done",
+      took: p.name === "Exit status to Claude" || p.took_ms == null ? null : took(p.took_ms),
+      detail: null,
+    })),
+  ];
   if (j.ended_at != null || j.state.kind === "done" || j.state.kind === "stopped") return rows;
   const has = (prefix: string) => rows.some((r) => r.name.startsWith(prefix));
   if (!has("Ran on")) rows.push({ name: "Running", state: "running", took: clock(now - j.started_at), detail: null });
@@ -179,7 +211,7 @@ export function workerLine(w: Worker): string {
 
 /** The chip beside a routed Bash row: where its job runs or ran. */
 export function chipFromJob(j: Job): { icon: JobIcon; text: string; rerun: boolean } {
-  if (j.state.kind === "waiting") return { icon: "cloud", text: `on ${j.state.for}`, rerun: false };
+  if (j.state.kind === "waiting") return j.state.slot ? { icon: "worker", text: "waiting for a slot", rerun: false } : { icon: "cloud", text: `on ${j.state.for}`, rerun: false };
   const name = j.worker?.name ?? (j.state.kind === "running" ? j.state.worker : "");
   if (reran(j)) return { icon: "rerun", text: `ran again on ${name}`, rerun: true };
   return { icon: icon(j), text: `on ${name}`, rerun: false };

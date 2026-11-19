@@ -1969,6 +1969,13 @@ async fn collect(mut c: Client, run: u32) -> Ran {
     }
 }
 
+/// The central host's own heavy commands fill its slots: none is free
+/// anywhere, and a command runs there at once without waiting for one.
+const FULL: &[(&str, &str)] = &[
+    ("MOONLET_TEST_OWN_SLOTS_USED", "2"),
+    ("MOONLET_TEST_SLOT_WAIT_MS", "0"),
+];
+
 /// A central host whose project routes `sh run.sh` and `sh -c`, approved.
 async fn routing(env: &[(&str, &str)]) -> Cloud {
     let c = cloud_with(ROUTE_CONFIG, env).await;
@@ -1978,8 +1985,8 @@ async fn routing(env: &[(&str, &str)]) -> Cloud {
 
 #[tokio::test]
 async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
-    // The central host is busy.
-    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    // The central host has no free slot.
+    let c = routing(FULL).await;
     c.set_project(json!({ "overflow": true })).await;
     let s = c.session("fix-cart", false).await;
     // No worker is free: it runs here, and a machine starts.
@@ -1995,10 +2002,43 @@ async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
     assert_eq!((next.stdout.as_str(), next.status), ("out\n", 0));
 }
 
+/// X63's overflow on X62's room: a light load, but the one slot taken.
+/// The command waits for a slot, and the machine it started is the first.
+#[tokio::test]
+async fn overflow_starts_a_machine_once_every_slot_is_taken_whatever_the_load() {
+    let c = routing(&[("MOONLET_TEST_SLOT_WAIT_MS", "20000")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    let _: Value = c.d.call("link.set", json!({ "worker": { "slots": 1 } })).await;
+    let s = c.session("fix-cart", false).await;
+    let (mut long, long_run) = c.start(&s, &["sh", "-c", "echo started; sleep 30"]).await;
+    loop {
+        if let Frame::RunOutput { stream: 1, data, .. } = long.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    assert_eq!(c.machines().await["machines"], json!([]));
+    let next = c.run(&s, &["sh", "run.sh"]).await;
+    let m = c.machines().await["machines"][0].clone();
+    assert_eq!(m["project"], json!("shop"));
+    let name = m["name"].as_str().unwrap();
+    assert_eq!(ran_on(&next), name, "{next:?}");
+    let lines: Vec<&str> = next.stderr.lines().collect();
+    assert_eq!(
+        lines[0],
+        "moonlet: every host is full (studio-mini 1 of 1). Waiting for a free slot, up to 0:20 (0:00)"
+    );
+    assert!(lines.iter().any(|l| l.starts_with("moonlet: waited 0:") && l.ends_with(&format!(" for a slot on {name}"))), "{lines:?}");
+    assert_eq!((next.stdout.as_str(), next.status), ("out\n", 0));
+    let _: bool = long.request("exec.cancel", json!({ "run": long_run })).await.unwrap();
+}
+
 #[tokio::test]
 async fn overflow_starts_no_machine_while_the_central_host_is_free() {
-    // Its other Macs are busy or absent, but studio-mini has room.
-    let c = routing(&[("MOONLET_TEST_LOAD", "0.1")]).await;
+    // Its other Macs are busy or absent, but studio-mini has room, at
+    // whatever load.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
     c.set_project(json!({ "overflow": true })).await;
     let s = c.session("fix-cart", false).await;
     let ran = c.run(&s, &["sh", "run.sh"]).await;
@@ -2009,8 +2049,8 @@ async fn overflow_starts_no_machine_while_the_central_host_is_free() {
 
 #[tokio::test]
 async fn overflow_starts_no_second_machine_while_one_is_starting() {
-    // The central host is busy.
-    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    // The central host has no free slot.
+    let c = routing(FULL).await;
     c.set_project(json!({ "overflow": true })).await;
     c.steer("slow-create", "5000");
     let s = c.session("fix-cart", false).await;
@@ -2035,8 +2075,8 @@ impl Cloud {
 
 #[tokio::test]
 async fn a_machine_that_could_not_be_made_is_not_tried_again_on_every_busy_command() {
-    // The central host is busy, and a minute lasts 5 s here.
-    let c = routing(&[("MOONLET_TEST_LOAD", "100"), ("MOONLET_TEST_CLOUD_MINUTE_MS", "5000")]).await;
+    // The central host has no free slot, and a minute lasts 5 s here.
+    let c = routing(&[FULL[0], FULL[1], ("MOONLET_TEST_CLOUD_MINUTE_MS", "5000")]).await;
     c.set_project(json!({ "overflow": true })).await;
     // No Tailscale credential: every machine fails before it is made.
     c.steer("tailnet-key", "");
@@ -2073,8 +2113,8 @@ async fn a_machine_that_could_not_be_made_is_not_tried_again_on_every_busy_comma
 
 #[tokio::test]
 async fn a_machine_removed_on_request_before_it_was_ready_does_not_hold_overflow_back() {
-    // The central host is busy.
-    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    // The central host has no free slot.
+    let c = routing(FULL).await;
     c.set_project(json!({ "overflow": true })).await;
     c.steer("slow-create", "3000");
     let first = c.up().await;
@@ -2693,8 +2733,9 @@ async fn turning_the_switch_off_takes_the_copied_files_off_the_cloud_machine() {
 }
 
 /// X89: a member linked to the central host `c`, with a clone of `shop`
-/// whose heavy commands it approved, and session `Fix cart`. Its own load
-/// is past busy, so nothing runs on it while another machine is free.
+/// whose heavy commands it approved, and session `Fix cart`. Its own
+/// heavy commands fill its slots, so nothing runs on it while another
+/// machine has room, and with none it runs there at once.
 async fn busy_member(c: &Cloud) -> (Daemon, Value) {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -2706,7 +2747,8 @@ async fn busy_member(c: &Cloud) -> (Daemon, Value) {
         home,
         &[
             ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
-            ("MOONLET_TEST_LOAD", "100"),
+            ("MOONLET_TEST_OWN_SLOTS_USED", "2"),
+            ("MOONLET_TEST_SLOT_WAIT_MS", "0"),
             ("SHELL", "/bin/sh"),
         ],
     )
@@ -2991,11 +3033,11 @@ async fn a_members_busy_command_starts_an_overflow_machine() {
         )
         .await;
     let (book, session) = busy_member(&c).await;
-    // No machine yet: it runs on the busy MacBook, and one starts.
+    // No machine yet: it runs on the full MacBook, and one starts.
     let (_, err, status) = run_in(&book, &session, &["sh", "-c", "true"]).await;
     assert_eq!(
         (err.as_str(), status),
-        ("moonlet: running on Alex's MacBook Pro\n", 0)
+        ("moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n", 0)
     );
     for _ in 0..100 {
         if c.machines().await["machines"]

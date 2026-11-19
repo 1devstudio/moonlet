@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stayedLine, stderrCount, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobWaitNote, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stayedLine, stderrCount, workerFacts, workerLine } from "./jobs";
 import type { Job, JobChunk } from "./protocol";
 import { lastOf } from "./showEarlier";
 
@@ -139,6 +139,65 @@ describe("the Jobs tab (X62)", () => {
     expect(
       chipFromOutput("moonlet: running on Alex's MacBook Pro\nmoonlet: Alex's MacBook Pro went away during the run. The command may have run in part there; it was not run again.\n"),
     ).toEqual({ icon: "worker", text: "on Alex's MacBook Pro", rerun: false });
+  });
+});
+
+describe("a job that waited for a slot (X62)", () => {
+  const at = new Date(2026, 10, 19, 10, 41, 58).getTime();
+  const full = "Every host is full: studio-mini 2 of 2, Alex's MacBook Pro 2 of 2.";
+
+  it("says it waits for a free slot, not for a cloud machine", () => {
+    const waiting = job({ state: { kind: "waiting", for: "a free slot", slot: true }, worker: null, started_at: 0, timeline: [{ at, text: "Waiting for a free slot", detail: full }] });
+    expect(jobRowLine(waiting, 12_000)).toEqual({ tone: "accent", icon: "worker", text: "Waiting for a free slot" });
+    expect(jobStateLine(waiting, 12_000, "fix-cart")).toEqual({ tone: "accent", text: "Waiting for a free slot · 0:12 · Claude in fix-cart" });
+    expect(chipFromJob(waiting)).toEqual({ icon: "worker", text: "waiting for a slot", rerun: false });
+    expect(jobWaitNote(waiting, "fix-cart", "studio-mini")).toBe(
+      "Every host that runs fix-cart's heavy commands is full. This one starts on the first free slot, or on studio-mini within a minute.",
+    );
+    expect(jobWaitNote(job({ state: { kind: "waiting", for: "moonlet-shop-m3x9" } }), "fix-cart", "studio-mini")).toBe(
+      "fix-cart runs its heavy commands in the cloud, so this one waits for its machine instead of running on studio-mini.",
+    );
+    expect(phaseList(waiting, 12_000)).toEqual([
+      { name: "Waiting for a free slot", state: "running", took: "0:12", detail: full },
+      { name: "Copy matches the session", state: "pending", took: null, detail: null },
+      { name: "Running", state: "pending", took: null, detail: null },
+      { name: "Bring changes back", state: "pending", took: null, detail: null },
+    ]);
+  });
+
+  it("lists where it ran and why above its phases", () => {
+    const waited = done(1, 0, {
+      worker: { name: "studio-mini", kind: "central", load: 31.4, cores: 10, slot: 2, slots: 2 },
+      timeline: [
+        { at, text: "Waiting for a free slot", detail: full },
+        { at: at + 40_000, text: "Waited 40 s for a slot on studio-mini" },
+        { at: at + 40_000, text: "Started on studio-mini" },
+        { at: at + 52_000, text: "Exited 0 · status went to Claude" },
+      ],
+      phases: [
+        { name: "Ran on studio-mini", took_ms: 12_000 },
+        { name: "Exit status to Claude", took_ms: 0 },
+      ],
+    });
+    expect(phaseList(waited, 0)).toEqual([
+      { name: "Waited 40 s for a slot on studio-mini", state: "done", took: "10:42:38", detail: null },
+      { name: "Ran on studio-mini", state: "done", took: "12s", detail: null },
+      { name: "Exit status to Claude", state: "done", took: null, detail: null },
+    ]);
+    const anyway = done(1, 0, {
+      timeline: [
+        { at, text: "Alex's MacBook Pro refused it: no free slot (2 of 2 in use)" },
+        { at, text: "Waiting for a free slot", detail: full },
+        { at: at + 60_000, text: "Ran on studio-mini: every host was full", detail: "It waited 1:00 for a slot, the longest a command waits." },
+        { at: at + 61_000, text: "Exited 0 · status went to Claude" },
+      ],
+      phases: [{ name: "Ran on studio-mini", took_ms: 1000 }],
+    });
+    expect(phaseList(anyway, 0)).toEqual([
+      { name: "Alex's MacBook Pro refused it: no free slot (2 of 2 in use)", state: "warn", took: "10:41:58", detail: null },
+      { name: "Ran on studio-mini: every host was full", state: "warn", took: "10:42:58", detail: "It waited 1:00 for a slot, the longest a command waits." },
+      { name: "Ran on studio-mini", state: "done", took: "1.0s", detail: null },
+    ]);
   });
 });
 

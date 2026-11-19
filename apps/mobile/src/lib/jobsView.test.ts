@@ -42,6 +42,14 @@ describe("jobFooter (X62, X63)", () => {
     });
   });
 
+  it("runs a job waiting for a free slot on the session's host now, or stops it", () => {
+    expect(jobFooter(job({ state: { kind: "waiting", for: "a free slot", slot: true }, worker: null }), "Fix checkout", "studio-mini")).toEqual({
+      note: "Every host that runs Fix checkout's heavy commands is full. This one starts on the first free slot, or on studio-mini within a minute.",
+      runHere: "Run on studio-mini now",
+      stop: "",
+    });
+  });
+
   it("offers nothing for a job that ended", () => {
     expect(jobFooter(job({ state: { kind: "done", exit: 1 }, ended_at: 9000 }), "Fix checkout", "studio-mini")).toBeNull();
   });

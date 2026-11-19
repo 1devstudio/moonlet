@@ -1129,6 +1129,27 @@ async fn linked_in(
     phones: Option<u16>,
     before_x89: bool,
 ) -> (Central, Daemon) {
+    linked_on(config, BUSY_CENTRAL, worker_env, mac_approves, phones, before_x89).await
+}
+
+/// The central host's own heavy commands fill its 2 slots, so its
+/// session's commands go to the Mac while the Mac has room; with none
+/// anywhere, one runs on the central host at once, without waiting for a
+/// slot.
+const BUSY_CENTRAL: &[(&str, &str)] = &[
+    ("MOONLET_TEST_OWN_SLOTS_USED", "2"),
+    ("MOONLET_TEST_SLOT_WAIT_MS", "0"),
+];
+
+/// [`linked_in`], with `central_env` for the central host's daemon.
+async fn linked_on(
+    config: &str,
+    central_env: &[(&str, &str)],
+    worker_env: &[(&str, &str)],
+    mac_approves: bool,
+    phones: Option<u16>,
+    before_x89: bool,
+) -> (Central, Daemon) {
     let tools = tempfile::tempdir().unwrap().keep();
     // A tool only the central host has, on its login shell's PATH.
     write(&tools.join("bin/shop-tool"), "#!/bin/sh\necho tool\n");
@@ -1141,16 +1162,14 @@ async fn linked_in(
         &tools.join(".profile"),
         &format!("PATH=\"{}/bin:$PATH\"\n", tools.display()),
     );
-    let (c, addr) = central_listening_with(
-        config,
-        &[
-            ("MOONLET_TEST_LOAD", "0.5"),
-            ("MOONLET_WORKER_PING_MS", "200"),
-            ("SHELL", "/bin/sh"),
-            ("HOME", tools.to_str().unwrap()),
-        ],
-    )
-    .await;
+    let mut env = vec![
+        ("MOONLET_TEST_LOAD", "0.5"),
+        ("MOONLET_WORKER_PING_MS", "200"),
+        ("SHELL", "/bin/sh"),
+        ("HOME", tools.to_str().unwrap()),
+    ];
+    env.extend_from_slice(central_env);
+    let (c, addr) = central_listening_with(config, &env).await;
     c.approve_runs().await;
     let home = tempfile::tempdir().unwrap();
     write(
@@ -1592,12 +1611,12 @@ async fn outputs_over_one_gib_stay_on_the_worker_and_say_so() {
     assert!(!c.worktree.join("coverage").exists());
 }
 
-/// Where a run went, from its first line.
+/// Where the run ran: its last "running on" line, as after a wait.
 fn ran_on(ran: &Ran) -> &str {
     ran.stderr
         .lines()
-        .next()
-        .and_then(|l| l.strip_prefix("moonlet: running on "))
+        .filter_map(|l| l.strip_prefix("moonlet: running on "))
+        .next_back()
         .unwrap_or("")
 }
 
@@ -1805,6 +1824,14 @@ async fn a_worker_with_no_free_slot_is_skipped() {
     );
     assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
     assert_eq!(collect(first, run).await.status, 0);
+    // Once the Mac says its slot is free again.
+    for _ in 0..100 {
+        let list: Value = c.daemon.call("worker.list", json!({})).await;
+        if list[0]["used"] == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     // Two at once: the Mac takes one, whatever the central host thought.
     // Long enough to overlap however slow preparing the other one is.
     let (a, b) = tokio::join!(
@@ -1816,10 +1843,236 @@ async fn a_worker_with_no_free_slot_is_skipped() {
     assert_eq!(on, ["Alex's MacBook Pro", "studio-mini"]);
 }
 
+/// The user's Macs sit at a load average of 25 to 45 with agent sessions
+/// running: a free slot is room whatever the load.
 #[tokio::test]
-async fn a_command_with_no_free_worker_runs_on_the_central_host() {
+async fn a_host_at_a_high_load_average_with_a_free_slot_takes_the_command() {
     let (c, _mac) = linked_as(&[("MOONLET_TEST_LOAD", "1000")]).await;
-    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "Alex's MacBook Pro");
+    // The session's host too, with nowhere else to send it.
+    let alone = central_with(RUN_CONFIG, &[("MOONLET_TEST_LOAD", "1000")]).await;
+    alone.approve_runs().await;
+    let ran = alone.run(&["sh", "run.sh"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on studio-mini\nerr\n");
+}
+
+/// A session's host with a free slot keeps its command, however free the
+/// other hosts are: no copy, fence or bringing back.
+#[tokio::test]
+async fn an_idle_session_host_keeps_its_command() {
+    let (c, _mac) = linked_on(RUN_CONFIG, &[], &[], true, None, false).await;
+    let ran = c.run(&["sh", "run.sh"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on studio-mini\nerr\n");
+    let jobs = jobs(&c).await;
+    assert_eq!(jobs[0]["worker"]["kind"], json!("central"));
+    assert_eq!(jobs[0]["worker"]["slot"], json!(1));
+}
+
+impl Central {
+    /// Gives this host `n` slots, as its This Mac page does.
+    async fn set_slots(&self, n: u32) {
+        let _: Value = self
+            .daemon
+            .call("link.set", json!({ "worker": { "slots": n } }))
+            .await;
+    }
+
+    /// Another session of the project, its id.
+    async fn another_session(&self, name: &str) -> String {
+        let s: Value = self
+            .daemon
+            .call(
+                "session.create",
+                json!({ "project_id": self.project, "name": name }),
+            )
+            .await;
+        s["id"].as_str().unwrap().into()
+    }
+
+    /// Starts `argv` in session `session`, at the top of its worktree.
+    async fn start_in(&self, session: &str, argv: &[&str]) -> (Client, u32) {
+        let mut c = self.daemon.app().await;
+        let sessions: Value = c.request("session.list", json!({})).await.unwrap();
+        let path = sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == json!(session))
+            .map(|s| s["path"].as_str().unwrap().to_string())
+            .unwrap();
+        let started: ExecRunStarted = c
+            .request(
+                "exec.run",
+                json!({ "session": session, "argv": argv, "cwd": path, "env": {} }),
+            )
+            .await
+            .unwrap();
+        (c, started.run)
+    }
+
+    /// The job of the command whose stderr starts `moonlet: ` lines, by
+    /// its command.
+    async fn job_of(&self, session: &str, command: &str) -> Value {
+        let list: Vec<Value> = self
+            .daemon
+            .call("job.list", json!({ "session": session }))
+            .await;
+        list.into_iter()
+            .find(|j| j["command"] == json!(command))
+            .unwrap_or_else(|| panic!("no job {command}"))
+    }
+}
+
+/// Reads `client`'s output until stdout has `text`.
+async fn until_printed(client: &mut Client, text: &[u8]) {
+    let mut out = Vec::new();
+    while !out.windows(text.len()).any(|w| w == text) {
+        if let Frame::RunOutput { stream: 1, data, .. } = client.next_frame().await.unwrap().unwrap() {
+            out.extend(data);
+        }
+    }
+}
+
+/// The timeline's lines of `job`.
+fn timeline(job: &Value) -> Vec<String> {
+    job["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn with_every_slot_taken_a_command_waits_and_starts_when_one_frees() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.set_slots(1).await;
+    let (mut first, run) = c
+        .start(&["sh", "-c", "echo started; sleep 2"], &c.worktree.clone(), json!({}))
+        .await;
+    until_printed(&mut first, b"started").await;
+    let (next, next_run) = c.start(&["sh", "run.sh"], &c.worktree.clone(), json!({})).await;
+    // It waits, and its job says for what.
+    let mut waiting = Value::Null;
+    for _ in 0..50 {
+        waiting = c.job_of(&c.session, "sh run.sh").await;
+        if waiting["state"]["kind"] == json!("waiting") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(waiting["state"], json!({ "kind": "waiting", "for": "a free slot", "slot": true }));
+    let (first, next) = tokio::join!(collect(first, run), collect(next, next_run));
+    assert_eq!(first.status, 0);
+    assert_eq!(next.status, 0);
+    let lines: Vec<&str> = next.stderr.lines().collect();
+    assert_eq!(
+        lines[0],
+        "moonlet: every host is full (studio-mini 1 of 1). Waiting for a free slot, up to 1:00 (0:00)"
+    );
+    assert!(lines[1].starts_with("moonlet: waited 0:0"), "{lines:?}");
+    assert!(lines[1].ends_with(" for a slot on studio-mini"), "{lines:?}");
+    assert_eq!(&lines[2..], ["moonlet: running on studio-mini", "err"]);
+    let job = c.job_of(&c.session, "sh run.sh").await;
+    let said = timeline(&job);
+    assert_eq!(said[0], "Waiting for a free slot");
+    assert_eq!(job["timeline"][0]["detail"], json!("Every host is full: studio-mini 1 of 1."));
+    assert!(said[1].starts_with("Waited ") && said[1].ends_with(" s for a slot on studio-mini"), "{said:?}");
+    assert_eq!(said[2], "Started on studio-mini");
+}
+
+#[tokio::test]
+async fn a_command_waits_a_bounded_time_then_runs_on_its_own_host() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_SLOT_WAIT_MS", "1500")]).await;
+    c.approve_runs().await;
+    c.set_slots(1).await;
+    let (mut first, run) = c
+        .start(&["sh", "-c", "echo started; sleep 20"], &c.worktree.clone(), json!({}))
+        .await;
+    until_printed(&mut first, b"started").await;
+    let waited = std::time::Instant::now();
+    let next = c.run(&["sh", "run.sh"]).await;
+    assert!(waited.elapsed() >= Duration::from_millis(1500));
+    assert_eq!(
+        next.stderr,
+        "moonlet: every host is full (studio-mini 1 of 1). Waiting for a free slot, up to 0:01 (0:00)\n\
+         moonlet: every host was still full after 0:01. Running on studio-mini anyway.\n\
+         moonlet: running on studio-mini\nerr\n"
+    );
+    let job = c.job_of(&c.session, "sh run.sh").await;
+    assert_eq!(timeline(&job)[1], "Ran on studio-mini: every host was full");
+    assert_eq!(
+        job["timeline"][1]["detail"],
+        json!("It waited 0:01 for a slot, the longest a command waits.")
+    );
+    // Both ran at once: the first is still going.
+    assert_eq!(c.job_of(&c.session, "sh -c 'echo started; sleep 20'").await["state"]["kind"], json!("running"));
+    let _: bool = first.request("exec.cancel", json!({ "run": run })).await.unwrap();
+}
+
+#[tokio::test]
+async fn commands_waiting_from_two_sessions_are_served_in_the_order_they_came() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.set_slots(1).await;
+    let other = c.another_session("Fix search").await;
+    let order = tempfile::tempdir().unwrap();
+    let log = order.path().join("order");
+    let step = |name: &str| format!("echo {name} >> '{}'", log.display());
+    let (mut first, run) = c.start_in(&c.session, &["sh", "-c", "echo started; sleep 1"]).await;
+    until_printed(&mut first, b"started").await;
+    // Fix search's command waits for the slot.
+    let (b, b_run) = c.start_in(&other, &["sh", "-c", &step("b")]).await;
+    assert_eq!(collect(first, run).await.status, 0);
+    // Fix cart's next comes as the slot frees: it goes behind Fix search's.
+    let (cc, c_run) = c.start_in(&c.session, &["sh", "-c", &step("c")]).await;
+    let (b, cc) = tokio::join!(collect(b, b_run), collect(cc, c_run));
+    assert_eq!((b.status, cc.status), (0, 0));
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "b\nc\n");
+}
+
+#[tokio::test]
+async fn a_waiting_command_can_run_here_now_or_be_stopped() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    c.set_slots(1).await;
+    let (mut first, run) = c
+        .start(&["sh", "-c", "echo started; sleep 20"], &c.worktree.clone(), json!({}))
+        .await;
+    until_printed(&mut first, b"started").await;
+    let waiting = |command: &'static str| {
+        let c = &c;
+        async move {
+            for _ in 0..100 {
+                let j = c.job_of(&c.session, command).await;
+                if j["state"]["kind"] == json!("waiting") {
+                    return j["id"].as_str().unwrap().to_string();
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            panic!("{command} never waited");
+        }
+    };
+    let (now, now_run) = c.start(&["sh", "run.sh"], &c.worktree.clone(), json!({})).await;
+    let id = waiting("sh run.sh").await;
+    let _: bool = c.daemon.call("job.run_here", json!({ "job": id })).await;
+    let ran = collect(now, now_run).await;
+    assert_eq!(ran.status, 0);
+    assert!(
+        ran.stderr.ends_with(
+            "moonlet: running on studio-mini instead, as asked from the Jobs panel\nmoonlet: running on studio-mini\nerr\n"
+        ),
+        "{}",
+        ran.stderr
+    );
+    let (stop, stop_run) = c.start(&["cat", "package.json"], &c.worktree.clone(), json!({})).await;
+    let id = waiting("cat package.json").await;
+    let _: bool = c.daemon.call("job.stop", json!({ "job": id })).await;
+    let stopped = collect(stop, stop_run).await;
+    assert_eq!(stopped.status, 143);
+    assert_eq!(c.job_of(&c.session, "cat package.json").await["state"]["kind"], json!("stopped"));
+    let _: bool = first.request("exec.cancel", json!({ "run": run })).await.unwrap();
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@
 
 Since ADR 0015, a session's agent runs where the user works, usually the MacBook. But X62 routes only the central host's sessions. When the MacBook is loaded (21.3 / 10 one afternoon) and the central host `studio-mini` sits at 2.6 / 10, the MacBook's `pnpm check` still runs on the MacBook. Its daemon has no workers, so it picks itself.
 
-With this spec, routing works as a mesh. Every member of the account routes its own sessions' heavy commands, and every member can run them for the others. The **session's host** picks the free member with the lowest load, as X62's central host does now, and runs the command there in a routing copy. Its candidates are:
+With this spec, routing works as a mesh. Every member of the account routes its own sessions' heavy commands, and every member can run them for the others. The **session's host** keeps the command while it has a free slot, else picks a member with one, as X62's central host does (by slots since 2026-11-19, see X62's [Picking a worker](X62-routed-commands.md#picking-a-worker)), and runs the command there in a routing copy. Its candidates are:
 
 - the central host;
 - every other member, through the central host;
@@ -34,7 +34,7 @@ The account has three members: the central host `studio-mini`, the MacBook `Alex
 1. On the MacBook, Settings › Machines › Workers lists all three members. Each row has a **Takes heavy commands from other hosts** switch and a **Run at most [− 2 +] at once** stepper. All three switches are off.
 2. The user turns the switch on for `studio-mini` and for `devbox`, and sets `devbox` to 4. A toast reads "studio-mini takes heavy commands from your other hosts". `devbox`'s row reads "Linux · 16 cores · 0 of 4".
 3. In Settings › Projects › shop (Alex's MacBook Pro), **Heavy commands** shows `pnpm check` as **Not approved**. The user clicks **Approve**. The toast reads "Approved pnpm check for shop on every host of your account".
-4. In session `fix-cart` on the MacBook, the agent runs `pnpm check` in the background (X90). The MacBook is busy and `studio-mini` is free, so the Bash row's chip reads **on studio-mini**. `studio-mini` has no routing copy of `fix-cart` yet, so it makes one and runs shop's setup in it, once, after the user approves the setup in the modal (X60).
+4. In session `fix-cart` on the MacBook, the agent runs `pnpm check` in the background (X90). The MacBook's two slots are taken by other sessions' builds and `studio-mini` has a free one, so the Bash row's chip reads **on studio-mini**. `studio-mini` has no routing copy of `fix-cart` yet, so it makes one and runs shop's setup in it, once, after the user approves the setup in the modal (X60).
 5. The output streams into the chat. After the command exits, its changes are in the MacBook's worktree before the agent reads the result. The session's **Jobs** tab, on the MacBook, lists the job: "studio-mini · exit 0".
 6. Later `studio-mini` runs two commands and has no free slot, so the next `pnpm check` goes to `devbox`, through `studio-mini`. The chip reads **on devbox**.
 7. The user restarts `studio-mini` mid-run. `devbox` may have run part of `pnpm check`, which is not listed under `[heavy] rerun`, so it is not run again: the agent gets exit status 125 and "moonlet: devbox went away during the run. The command may have run in part there; it was not run again.", and `devbox` stops the command once it finds its link connected again. A command listed under `rerun` would get "moonlet: devbox went away. Running again on Alex's MacBook Pro." and run again on the MacBook.
@@ -88,30 +88,33 @@ The worker settings, a project's approval and its copied files (X74) act as perm
 
 - [x] The session's host asks its central host when a command is routed: `worker.status` for the central host itself, and `worker.peers` for the other members that take other hosts' commands, each with its slots, the slots it uses now (`used`) and its last load. A member before this spec, and a member with `heavy` off, is never a candidate. (`a_host_with_heavy_commands_off_takes_none_from_other_hosts`)
 - [x] The candidates for a session on host H are:
-  - every other member with `heavy` on, linked now, with a free slot and a load below busy (X62's 0.7 × cores), on the project's `os`;
   - H itself;
+  - every other member with `heavy` on, linked now, on the project's `os`;
   - the project's ready cloud machines (X63).
-- [x] Order:
-  1. other members, by lowest load per core, then lowest round trip, then worker id;
-  2. H;
-  3. ready cloud machines, by lowest load per core.
 
-  A session that asked for the cloud (X63) tries cloud machines first. The round trip to a member reached through the central host is H's round trip to the central host plus the central host's to that member. Worked examples, for a session on the MacBook (load / cores, slots used of total):
+  One with a free slot has room, whatever its load (X62, 2026-11-19).
+- [x] Order, as X62's:
+  1. ready cloud machines, when the session asked for the cloud (X63);
+  2. H, while it has a free slot;
+  3. other members, by the lowest share of their slots in use, then lowest round trip, then worker id;
+  4. ready cloud machines, by the lowest share of their slots in use.
+
+  The round trip to a member reached through the central host is H's round trip to the central host plus the central host's to that member. Worked examples, for a session on the MacBook (load / cores, slots used of total):
 
   | Machines | Runs on |
   |---|---|
-  | MacBook 21.3/10, studio-mini 2.6/10 on (0 of 2) | studio-mini |
-  | MacBook 21.3/10, studio-mini 2.6/10 **off** | MacBook (the session's host, busy or not) |
-  | MacBook 1.0/10, studio-mini 2.6/10 on (0 of 2) | studio-mini (another member before the session's host) |
-  | MacBook 21.3/10, studio-mini 2.6/10 on (2 of 2), devbox 1.0/16 on (0 of 4) | devbox |
-  | MacBook 21.3/10, studio-mini 3.0/10 on, devbox 1.0/16 on | devbox (0.0625 < 0.3) |
-  | MacBook 21.3/10, studio-mini 8.0/10 on (busy), a ready cloud machine | the cloud machine |
-  | MacBook 21.3/10, studio-mini 8.0/10 on (busy), no cloud machine | MacBook anyway |
+  | MacBook 21.3/10 (0 of 2), studio-mini 2.6/10 on (0 of 2) | MacBook (the session's host has room, whatever its load) |
+  | MacBook (2 of 2), studio-mini on (0 of 2) | studio-mini |
+  | MacBook (2 of 2), studio-mini **off** | waits for a slot on the MacBook |
+  | MacBook (2 of 2), studio-mini on (2 of 2), devbox 1.0/16 on (0 of 4) | devbox |
+  | MacBook (2 of 2), studio-mini on (1 of 2), devbox on (1 of 4) | devbox (1 of 4 before 1 of 2) |
+  | MacBook (2 of 2), studio-mini on (2 of 2), a ready cloud machine | the cloud machine |
+  | MacBook (2 of 2), studio-mini on (2 of 2), no cloud machine | waits for a slot |
 
-  (`picks_as_in_the_mesh_order_table`)
-- [x] The central host's own sessions pick in the same order. For them, the central host is H. The order of X62's table is unchanged: a linked member with `heavy` on comes before the central host. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
-- [x] A command never waits for a slot. When no candidate is free, it runs on H, and a project that allows cloud overflow gets a machine for the next command (X63).
-- [x] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy`, and the session's host tries the next candidate. It never refuses its own sessions' commands, as they have nowhere else to go. A member also sees the central host's slots in use in `worker.status`, so a full central host is not asked at all. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`)
+  (`picks_as_in_the_mesh_order_table`; `an_idle_session_host_keeps_its_command`)
+- [x] The central host's own sessions pick in the same order. For them, the central host is H. (`picks_as_in_the_mesh_order_table`, X62's `picks_as_in_the_order_table`)
+- [x] With no room anywhere, the command waits in H's line for the first free slot on any machine it could run on, up to a minute, then runs on H anyway, as X62 says; a project that allows cloud overflow gets a machine (X63). Until 2026-11-19 a command never waited, and ran on H at once. While it waits, H asks the central host for `worker.status` and `worker.peers` again every second. (`a_host_runs_its_own_sessions_commands_when_no_other_is_free`, `a_member_without_its_central_host_runs_its_own_commands`, X62's `with_every_slot_taken_a_command_waits_and_starts_when_one_frees`)
+- [x] A host's `slots` count every routed command it runs, for its own sessions and for other hosts' sessions. A host with every slot in use refuses another host's command with `busy` ("no free slot (2 of 2 in use)"), and the session's host decides again, leaving that host out of the command's picks for 10 s. Its own sessions' commands wait in its line instead, and run on it anyway after a minute. A member also sees the central host's slots in use in `worker.status`, so a full central host is not asked at all. (`a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`)
 - [x] Two sessions' hosts may pick the same member at once. The member takes what its slots allow, refuses the rest with `busy`, and each session's host goes on to its next candidate. (`two_hosts_picking_one_slot_run_one_there_and_one_elsewhere`)
 
 ### Reaching another member
@@ -148,7 +151,7 @@ The worker settings, a project's approval and its copied files (X74) act as perm
 ### Cloud machines
 
 - [x] A session on any member may use the project's cloud machines, under X63's rules for the project: overflow when the project allows it, and the composer's cloud checkbox. The machines stay the central host's, made with its provider and limits. (`a_members_session_runs_on_the_projects_cloud_machine`)
-- [x] The session's host asks for them with `worker.peers {identity}`: the central host adds the project's ready machines, found by identity, marked `cloud`, and the session's host ranks them as cloud machines (after itself). When nothing is free, it sends `cloud.overflow {identity}`, and the central host starts a machine when the project's overflow is on. A session that asked for the cloud sends `cloud.overflow {identity, asked: true}`: the machine on its way, or a new one, whatever the overflow setting; it then waits for it as X63 says, "waiting for moonlet-shop-m3x9 to start (0:10)", up to 20 minutes, and **Run on … now** still runs it on the session's host. (`a_members_busy_command_starts_an_overflow_machine`, `a_members_cloud_session_waits_for_the_central_hosts_machine`)
+- [x] The session's host asks for them with `worker.peers {identity}`: the central host adds the project's ready machines, found by identity, marked `cloud`, and the session's host ranks them as cloud machines (after itself). When nothing has room, it sends `cloud.overflow {identity}`, and the central host starts a machine when the project's overflow is on. A session that asked for the cloud sends `cloud.overflow {identity, asked: true}`: the machine on its way, or a new one, whatever the overflow setting; it then waits for it as X63 says, "waiting for moonlet-shop-m3x9 to start (0:10)", up to 20 minutes, and **Run on … now** still runs it on the session's host. (`a_members_busy_command_starts_an_overflow_machine`, `a_members_cloud_session_waits_for_the_central_hosts_machine`)
 - [x] The session's host reaches the machine through the central host with `peer.call`. The central host passes `exec.prepare` to a machine only with the identity of the machine's own project, and the other calls only once that member prepared it. A cloud machine sends only the calls back to that member. It runs what its central host passes on, as it runs the central host's own commands (X63): the central host is the one that checked the member. (`a_cloud_machine_takes_a_members_command_of_its_own_project_only`)
 - [x] The central host counts a member's command on its cloud machine as X63 counts its own, from the `exec.prepare` it passes on until the command's `exec.done` goes back or the member goes away, so the machine's idle time never removes it under the command. (`a_machine_running_a_members_command_outlives_its_idle_time_and_goes_after_it`, `a_members_command_counts_on_its_machine_while_its_copy_is_prepared`, `a_members_command_stops_counting_on_its_machine_once_the_member_goes_silent`)
 - [x] A cloud machine gets a member's copied files (X74) when the project's **Also to cloud machines** is on: it asks the member with `session.files_fetch` through the central host, and the member answers only a machine the central host offered it, for a session it asked that machine to run. (`a_cloud_machine_gets_a_members_copied_files_when_the_switch_is_on`)
@@ -169,7 +172,7 @@ The worker settings, a project's approval and its copied files (X74) act as perm
 ## UI
 
 - **Settings › Machines › Workers** ([workers-page.png](design/x62-x63/workers-page.png) as the starting point):
-  - The title badge names the account's central host, "studio-mini · Central host", as now. The text under it changes to: "Your hosts run each other's heavy commands. A command goes to the free host with the lowest load, and runs where its session is when none is free."
+  - The title badge names the account's central host, "studio-mini · Central host", as now. The text under it changes to: "Your hosts run each other's heavy commands. A command runs where its session is while that host has a free slot, else on another host with one, and waits up to a minute when every slot is taken." (2026-11-19, with X62's slots)
   - **Macs and hosts**: one row per member of the account. Badges are "This Mac" and "Central host". Columns: Worker (name, OS and cores, skip reasons in the attention colour), Load, Slots ("1 of 2"), Round trip.
   - Under each row's name: a **Takes heavy commands from other hosts** switch and a **Run at most [− 2 +] at once** stepper, as on the Hosts page. They are enabled for every member, linked or not. A change shows at once, and a toast reads "studio-mini takes heavy commands from your other hosts" (or "… no longer takes …"). The page sets them on the central host when the app reaches it; on a member whose app does not, a change to another host's row is refused, and the error toast names the central host and that host as where to set it (Who a permission counts from).
   - A running command sits under its row: spinner, "fix-cart on Alex's MacBook Pro", command, elapsed time.

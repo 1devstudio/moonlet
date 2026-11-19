@@ -149,7 +149,8 @@ export function workersPage(input: WorkersInput): WorkersPageView {
   if (members) rows.sort((a, b) => a.name.localeCompare(b.name));
   const h = status.host;
   const hostLoad = load(h.load, h.cores);
-  const busy = h.used >= h.slots || !!hostLoad?.busy;
+  // Room is a free slot, whatever the load (X62).
+  const busy = h.used >= h.slots;
   const basics = `${osName(h.os)} · ${h.cores} cores`;
   // The central host's own runs, then what it runs for members (X89).
   const centralRunning = [

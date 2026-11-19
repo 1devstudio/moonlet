@@ -254,8 +254,8 @@ export function WorkersPage() {
       }
     >
       {data?.settings
-        ? "Your hosts run each other's heavy commands. A command goes to the free host with the lowest load, and runs where its session is when none is free."
-        : `Machines that run heavy commands for ${name}'s sessions. A command goes to the free worker with the lowest load, and runs on ${name} when none is free.`}
+        ? "Your hosts run each other's heavy commands. A command runs where its session is while that host has a free slot, else on another host with one, and waits up to a minute when every slot is taken."
+        : `Machines that run heavy commands for ${name}'s sessions. A command runs on ${name} while it has a free slot, else on a worker with one, and waits up to a minute when every slot is taken.`}
     </PageHeading>
   );
   // The central host's cloud machines (X63), and those removed in the last hour.

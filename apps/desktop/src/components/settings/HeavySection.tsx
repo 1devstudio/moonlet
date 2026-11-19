@@ -101,7 +101,7 @@ export function HeavySection({
         <div data-setting="project-heavy" className="flex flex-col gap-2.5 px-4 py-3.5">
           <div className="flex flex-col gap-[3px]">
             <span className="ui-text-13">Commands</span>
-            <span className="ui-text-12 text-muted">A Bash call that starts with one of these goes to the free worker with the lowest load. Chained, piped or redirected calls run where the agent is.</span>
+            <span className="ui-text-12 text-muted">A Bash call that starts with one of these runs where there is a free slot: its session's host first, then another host. Chained, piped or redirected calls run where the agent is.</span>
           </div>
           {draft.commands.map((c, i) => {
             const approved = !!states.get(c.trim());

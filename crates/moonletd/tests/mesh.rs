@@ -46,9 +46,10 @@ async fn central_of(extra: &[(&str, &str)], central: Value) -> (Daemon, String) 
             &[
                 ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
                 ("MOONLET_WORKER_PING_MS", "200"),
-                // A light load, whatever this machine's is: a busy host is
-                // skipped (X62).
+                // A light load, whatever this machine's is.
                 ("MOONLET_TEST_LOAD", "0.5"),
+                ("MOONLET_TEST_OWN_SLOTS_USED", OWN_SLOTS_USED.0),
+                ("MOONLET_TEST_SLOT_WAIT_MS", OWN_SLOTS_USED.1),
             ]
             .into_iter()
             .chain(extra.iter().copied())
@@ -71,6 +72,12 @@ async fn central_of(extra: &[(&str, &str)], central: Value) -> (Daemon, String) 
 }
 
 const MINI: &str = "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70";
+
+/// Every host's own heavy commands fill its 2 slots, so a session's
+/// commands go to another host while one has room (X62); with none, one
+/// runs on the session's host at once, without waiting for a slot. A
+/// test's own environment comes later and wins.
+const OWN_SLOTS_USED: (&str, &str) = ("2", "0");
 
 /// A Mac with a fixed worker id and `worker` settings in its `link.json`,
 /// not linked yet. Its own "Tailscale address" is 127.0.0.2, so linking to
@@ -96,6 +103,8 @@ async fn mac_env(id: &str, name: &str, worker: Value, extra: &[(&str, &str)]) ->
         &[
             ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
             ("MOONLET_TEST_LOAD", "0.5"),
+            ("MOONLET_TEST_OWN_SLOTS_USED", OWN_SLOTS_USED.0),
+            ("MOONLET_TEST_SLOT_WAIT_MS", OWN_SLOTS_USED.1),
         ]
         .into_iter()
         .chain(extra.iter().copied())
@@ -831,7 +840,7 @@ async fn a_member_that_writes_an_approval_itself_does_not_get_its_command_run_on
     // The MacBook's own word is enough for it to send the command on;
     // studio-mini, where the user approved nothing, refuses it.
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
     // On the MacBook itself, its own word counts.
     assert_eq!(approved(&book, &project).await, json!({ "commands": ["sh -c", "pnpm check"], "env": [] }));
@@ -875,12 +884,12 @@ async fn a_runner_with_its_own_checkout_runs_only_what_that_checkout_lists_too()
     let _ = shop_on(&mini, repo.path()).await;
     mini_takes(&mini, true).await;
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
     // A config it cannot read names nothing either.
     std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), "[heavy\n").unwrap();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     // Once it lists `sh -c` too, it runs it.
     std::fs::write(mini.home.path().join("src/shop/.moonlet/config.toml"), RUN_HEAVY).unwrap();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
@@ -896,7 +905,7 @@ async fn a_host_with_heavy_commands_off_takes_none_from_other_hosts() {
     mini_takes(&mini, true).await;
     mini_takes(&mini, false).await;
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
 }
 
@@ -909,7 +918,7 @@ async fn a_member_without_its_central_host_runs_its_own_commands() {
     mini.stop();
     let started = std::time::Instant::now();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert_eq!(ran.status, 0);
     // It never waits for the central host to answer.
     assert!(
@@ -1133,7 +1142,7 @@ async fn a_routing_copy_runs_the_setup_of_the_sessions_main_checkout() {
     mini_takes(&mini, true).await;
     // studio-mini asks first, so this run stays on the MacBook.
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     let setups: Vec<Value> = within_value(Duration::from_secs(10), "studio-mini asks", || async {
         let s: Vec<Value> = mini.call("exec.setups", json!({})).await;
         (!s.is_empty()).then_some(s)
@@ -1253,7 +1262,7 @@ async fn a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (studio-mini 1 of 1, Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     // Not asked at all: worker.status said its one slot was taken.
     let st: Value = book.call("exec.status", json!({})).await;
     assert_eq!(st["skips"], json!([]), "{st}");
@@ -1538,10 +1547,10 @@ async fn two_hosts_picking_one_slot_run_one_there_and_one_elsewhere() {
     let mini_runs = |r: &Ran| r.stderr == "moonlet: running on studio-mini\n";
     assert!(mini_runs(&a) != mini_runs(&b), "{a:?} {b:?}");
     if !mini_runs(&a) {
-        assert_eq!(a.stderr, "moonlet: running on Alex's MacBook Pro\n");
+        assert_eq!(a.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     }
     if !mini_runs(&b) {
-        assert_eq!(b.stderr, "moonlet: running on Alex's MacBook Air\n");
+        assert_eq!(b.stderr, "moonlet: every host is full (Alex's MacBook Air 2 of 2). Running on Alex's MacBook Air anyway.\nmoonlet: running on Alex's MacBook Air\n");
     }
     assert_eq!((a.status, b.status), (0, 0));
 }
@@ -1585,6 +1594,8 @@ async fn exec_status_lists_what_a_host_runs_for_other_hosts() {
     let status: Value = mini.call("exec.status", json!({})).await;
     let serving = status["serving"].as_array().cloned().unwrap_or_default();
     assert_eq!(serving.len(), 1, "{status}");
+    // The slot it takes counts as one of studio-mini's in use (X62).
+    assert_eq!(status["host"]["used"], json!(1), "{status}");
     assert_eq!(serving[0]["host"], json!("Alex's MacBook Pro"));
     assert_eq!(serving[0]["session"], json!("Fix cart"));
 }
@@ -1639,13 +1650,26 @@ async fn turning_heavy_off_takes_no_new_commands_and_lets_running_ones_finish() 
     );
     // The next one runs on the MacBook, and studio-mini's copy goes.
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     within(
         Duration::from_secs(10),
         "studio-mini's copies gone",
         || async { mini_copies(&mini).is_empty() },
     )
     .await;
+}
+
+/// The user's MacBook with nothing heavy running keeps its command, with
+/// studio-mini free and taking other hosts' commands (X62's order).
+#[tokio::test]
+async fn an_idle_session_host_keeps_its_command() {
+    let (mini, _addr, book, _air) = account_with(&[], &[("MOONLET_TEST_OWN_SLOTS_USED", "0")]).await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session(&book, repo.path()).await;
+    mini_takes(&mini, true).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
 }
 
 #[tokio::test]
@@ -1656,7 +1680,7 @@ async fn a_host_runs_its_own_sessions_commands_when_no_other_is_free() {
     let session = book_session(&mini, repo.path()).await;
     assert_eq!(own(&mini).await.0, false);
     let ran = run(&mini, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on studio-mini\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (studio-mini 2 of 2). Running on studio-mini anyway.\nmoonlet: running on studio-mini\n");
     assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0));
     let _ = book;
 }
@@ -1687,6 +1711,6 @@ async fn a_central_host_before_this_spec_leaves_members_running_their_own_comman
     mini_takes(&mini, true).await;
     let started = std::time::Instant::now();
     let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
-    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert!(started.elapsed() < Duration::from_secs(5));
 }
