@@ -771,6 +771,10 @@ export interface SessionOwner {
   /** Since when its link has been down (ms since the epoch, X73); absent
    *  while it is up. */
   unreachable_since?: number;
+  /** It told the listing host it is going to sleep and has not been back
+   *  since (X73): its sessions continue there without the 30 s wait. A
+   *  host from before never says so. */
+  asleep?: boolean;
 }
 
 /** A tracker issue a session is linked to (X46). */

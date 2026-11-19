@@ -1,6 +1,6 @@
 // Messages and answers for a session another member owns, sent through the
-// central host (X73). When that member is away for 30 s, the central host
-// takes the session over and delivers them there. Before then, or while
+// central host (X73). When that member is away for 30 s, or said it went to
+// sleep, the central host takes the session over and delivers them there. Before then, or while
 // the member's link is silent, it refuses them unsent: the phone holds the
 // message or the answer, says when it goes, and sends it again itself,
 // once. What nothing will send is shown, never only logged.
@@ -48,7 +48,7 @@ export function sentOutcome(
         : null;
     return {
       kind: "sent",
-      note: on ? `${owner} is not reachable. Continuing on ${on}.` : null,
+      note: on ? `${owner} is ${awayAs(s)}. Continuing on ${on}.` : null,
     };
   }
   const code = codeOf(r.error);
@@ -78,6 +78,10 @@ export function sentOutcome(
 }
 
 const away = (s: Session) => !!s.owner && !s.owner.reachable;
+/** How the Mac is away: it said it went to sleep, or it is only not
+ * reachable. */
+const awayAs = (s: Session) =>
+  s.owner?.asleep ? "asleep" : "not reachable";
 
 /** The line for a message or an answer held for `s` at `now` (ms). */
 export function heldLine(
@@ -89,12 +93,12 @@ export function heldLine(
   const owner = s.owner?.name ?? "Its Mac";
   if (!s.owner) return `Sending your ${what} to ${central}…`;
   if (away(s) && s.pinned)
-    return `Kept on ${owner} · not reachable. Your ${what} goes when ${owner} is back.`;
+    return `Kept on ${owner} · ${awayAs(s)}. Your ${what} goes when ${owner} is back.`;
   if (away(s)) {
     const wait = continueWait(s, now);
     return wait > 0
-      ? `${owner} is not reachable. Your ${what} goes on ${central} in ${wait} s.`
-      : `${owner} is not reachable. Continuing on ${central}…`;
+      ? `${owner} is ${awayAs(s)}. Your ${what} goes on ${central} in ${wait} s.`
+      : `${owner} is ${awayAs(s)}. Continuing on ${central}…`;
   }
   return `${owner} is not responding. Your ${what} goes as soon as it answers, or on ${central} once it has been away for 30 s.`;
 }

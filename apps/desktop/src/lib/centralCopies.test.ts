@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyEntries, copyOffers, copyRefused, copyView } from "./centralCopies";
+import { continueOffer, continueWait, copyEntries, copyOffers, copyRefused, copyView, readOnlyLine } from "./centralCopies";
 import type { Session } from "./protocol";
 
 const s = (id: string, extra: Partial<Session> = {}): Session => ({
@@ -96,5 +96,25 @@ describe("what a copy offers (X88)", () => {
     expect(copyRefused(copy, "open new tabs")).toBe("fix-cart runs on MacBook: open new tabs there.");
     expect(copyRefused(copy, "run its scripts")).toBe("fix-cart runs on MacBook: run its scripts there.");
     expect(copyRefused(copy, "change its project settings")).toBe("fix-cart runs on MacBook: change its project settings there.");
+  });
+});
+
+describe("continuing a session whose member said it is going to sleep (X73)", () => {
+  // The MacBook said so 5 s ago: its link may still be up, silent.
+  const asleep = s("fix-cart", { owner: { worker: "book-id", name: "MacBook", reachable: false, unreachable_since: 1790000000000, asleep: true } });
+
+  it("offers Continue at once, with no count-down", () => {
+    expect(continueWait(asleep, 1790000005000)).toBe(0);
+    expect(continueOffer(asleep, "studio-mini", 1790000005000)).toBe("Continue on studio-mini");
+    expect(readOnlyLine(asleep, "studio-mini")).toBe("MacBook is asleep. This is the copy on studio-mini, read only.");
+  });
+
+  it("still counts down for a member that went away without saying so", () => {
+    const away = s("fix-cart", { owner: { worker: "book-id", name: "MacBook", reachable: false, unreachable_since: 1790000000000 } });
+    expect(continueOffer(away, "studio-mini", 1790000005000)).toBe("Continue on studio-mini in 25 s");
+  });
+
+  it("offers nothing for a session kept on that member", () => {
+    expect(continueOffer({ ...asleep, pinned: "book-id" }, "studio-mini", 1790000005000)).toBeNull();
   });
 });
