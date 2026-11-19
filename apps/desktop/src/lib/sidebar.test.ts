@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, clampSidebarWidth, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -383,5 +383,15 @@ describe("clampSidebarWidth", () => {
     expect(clampSidebarWidth(259)).toBe(260);
     expect(clampSidebarWidth(300)).toBe(300);
     expect(clampSidebarWidth(500)).toBe(420);
+  });
+});
+
+describe("lastActive", () => {
+  const s = { id: "s1", created_at: 100 } as Session;
+
+  it("is the latest output among the session's own terminals, or when the session was made", () => {
+    expect(lastActive([{ last_output_at: 300 }, { last_output_at: 700 }, { last_output_at: 50 }], s)).toBe(700);
+    expect(lastActive([{ last_output_at: 50 }], s)).toBe(100);
+    expect(lastActive([], s)).toBe(100);
   });
 });
