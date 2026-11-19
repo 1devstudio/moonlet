@@ -2708,18 +2708,22 @@ async fn a_mac_removed_while_it_said_it_sleeps_is_no_longer_listed_asleep() {
 #[tokio::test]
 async fn a_mac_that_wakes_away_from_the_central_host_soon_after_its_notice_keeps_its_agents_stopped_for_the_30_s() {
     let origin = Origin::new();
-    // The central host's wait as the MacBook knows it: 8 s here.
+    // The central host's wait as the MacBook knows it: 12 s here.
     let (_mini, book, network, _made, agent) =
-        idle_session_through_a_network(&origin, &[], &[("MOONLET_TEST_UNREACHABLE_MS", "8000")]).await;
-    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
+        idle_session_through_a_network(&origin, &[], &[("MOONLET_TEST_UNREACHABLE_MS", "12000")]).await;
+    // The notice goes out first thing in the sleep, so the 12 s count
+    // from no earlier than this.
     let slept = std::time::Instant::now();
+    let _: Value = book.call("power.simulate", json!({ "event": "sleep" })).await;
     network.cut(true);
 
     // The lid opens at once, away from studio-mini: the agents stay
     // stopped while studio-mini may still take the session over, as long
     // as it would have waited without the notice, not the wake's 5 s.
+    let woke = std::time::Instant::now();
     let _: Value = book.call("power.simulate", json!({ "event": "wake" })).await;
-    assert!(slept.elapsed() >= Duration::from_millis(7500), "agents went on after {:?}", slept.elapsed());
+    assert!(woke.elapsed() >= Duration::from_secs(6), "agents went on {:?} after the wake", woke.elapsed());
+    assert!(slept.elapsed() >= Duration::from_secs(11), "agents went on {:?} after the sleep began", slept.elapsed());
     // Then they go on, as offline work does.
     let _: Value = book.call("chat.send", json!({ "id": agent, "text": "Offline" })).await;
     within(Duration::from_secs(30), "a turn after waking", || async {
