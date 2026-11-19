@@ -3519,14 +3519,14 @@ mod tests {
         req.agent = Some("claude".into());
         req.add_dirs = vec![extra.display().to_string()];
         let s = mgr.create_session(req).await.unwrap();
-        // The fake records its arguments in its working directory, the worktree.
+        // The fake records its arguments in its working directory, the
+        // worktree, as one line: read once the line is whole, not as soon
+        // as the file is made.
         let args = std::path::Path::new(&s.path).join("claude-args");
-        for _ in 0..200 {
-            if args.exists() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        wait_until("the agent's arguments", || {
+            std::fs::read_to_string(&args).is_ok_and(|t| t.ends_with('\n'))
+        })
+        .await;
         let started = std::fs::read_to_string(&args).unwrap();
         assert!(started.contains(&format!("--add-dir {}", extra.display())), "{started}");
     }
