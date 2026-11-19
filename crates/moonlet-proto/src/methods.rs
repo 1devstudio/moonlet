@@ -3920,6 +3920,23 @@ pub struct ExecPrepare {
     /// command it passes on to a cloud machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
+    /// The files the setup reads, from the same main checkout as `setup`:
+    /// its `setup_inputs`, when it has the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_inputs: Option<Vec<String>>,
+    /// Asked again once the copy holds the fence's files (2026-11-19): the
+    /// runner runs the setup again first when what it reads changed since
+    /// it last ran there, and answers `setup_running` until it ends. A
+    /// runner from before ignores it and answers as for the first ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fence: Option<ExecFence>,
+}
+
+/// The session's files and commit a routing copy was just brought to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecFence {
+    pub tree: String,
+    pub head: String,
 }
 
 /// A routing copy's setup the user is asked to approve, as for a live
@@ -3978,7 +3995,8 @@ pub struct ExecAnswerSetup {
 pub struct ExecPrepared {
     pub copy: String,
     /// `ready`, `making`, `setup_pending`, `setup_failed` (with the
-    /// failure as `reason`) or `failed`.
+    /// failure as `reason`) or `failed`; to an ask with `fence`, also
+    /// `setup_running`, with why it runs again as `reason`.
     pub state: String,
     #[serde(default)]
     pub reason: Option<String>,

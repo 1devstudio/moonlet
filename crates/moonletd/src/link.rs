@@ -1689,7 +1689,7 @@ impl Requests for WorkerRequests {
                         return Err(RpcError::new("not_approved", "heavy commands are off here"));
                     }
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
-                    Ok(serde_json::to_value(sync.prepare_run(req.session, None, req.setup).await?).unwrap())
+                    Ok(serde_json::to_value(sync.prepare_run(req.session, None, req.setup, req.setup_inputs, req.fence).await?).unwrap())
                 }
                 m::EXEC_START => {
                     let req: m::ExecStart = serde_json::from_value(params)
@@ -1921,7 +1921,7 @@ async fn relayed(link: Arc<WorkerLink>, from: String, method: String, params: Va
     match method.as_str() {
         m::EXEC_PREPARE => {
             let req: m::ExecPrepare = serde_json::from_value(params).map_err(bad)?;
-            Ok(serde_json::to_value(sync.prepare_run(req.session, Some((from, name)), req.setup).await?).unwrap())
+            Ok(serde_json::to_value(sync.prepare_run(req.session, Some((from, name)), req.setup, req.setup_inputs, req.fence).await?).unwrap())
         }
         m::EXEC_START => {
             let req: m::ExecStart = serde_json::from_value(params).map_err(bad)?;
