@@ -1447,6 +1447,20 @@ async fn a_link_set_with_the_apps_token_kept_in_the_keychain_leaves_the_app_its_
     assert!(authenticates(&addr, &apps).await, "the app's token stopped working");
 }
 
+/// The app's host list holds the hash of a token of its own, not the one
+/// the link was set with: that one is the link's alone and is replaced.
+#[tokio::test]
+async fn a_link_whose_token_the_apps_hash_does_not_match_replaces_it() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let paired = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let apps = pair(&central, &addr, "Alex's MacBook Pro").await;
+    keep_in_app_hosts_without_the_token(worker.home.path(), &addr, &apps);
+    link(&worker, &addr, &paired).await;
+    eventually("the paired token is gone", || async { !authenticates(&addr, &paired).await }).await;
+    assert!(authenticates(&addr, &apps).await, "the app's token stopped working");
+}
+
 /// A central host from before worker links does not know
 /// `worker.credential`: the member keeps linking with its paired token,
 /// and asks again once the central host has updated.

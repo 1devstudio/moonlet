@@ -18,7 +18,7 @@ const sock = join(w.root, "remote.sock");
 const env = { ...w.env, MOONLET_HOME: home, MOONLET_SOCK: sock };
 const dialog = '//div[@role="dialog"][@aria-label="Add host"]';
 
-type SavedHost = { id: string; device_id: string; token: string; token_sha256?: string };
+type SavedHost = { id: string; device_id: string; addrs: string[]; token: string; token_sha256?: string };
 /** The app's tailnet hosts as `app-hosts.json` keeps them. */
 const savedHosts = (): SavedHost[] => JSON.parse(readFileSync(join(w.home, "app-hosts.json"), "utf8")).tailnet;
 /** The e2e build's secret store, in place of the Keychain (X91). */
@@ -86,7 +86,9 @@ describe("tailnet host", () => {
     const [saved] = savedHosts();
     expect(saved.token).toEqual("");
     expect(saved.token_sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(secrets()[`host:${saved.device_id}`]).toMatch(/^.{16,}$/);
+    const kept = JSON.parse(secrets()[`host:${saved.id}:${saved.device_id}`]) as { token: string; addrs: string[] };
+    expect(kept.token).toMatch(/^.{16,}$/);
+    expect(kept.addrs).toEqual(saved.addrs);
   });
 
   it("offers it for new projects", async () => {
@@ -122,6 +124,6 @@ describe("tailnet host", () => {
       timeout: 10000,
       timeoutMsg: "the host still lists this Mac",
     });
-    expect(Object.keys(secrets())).not.toContain(`host:${saved.device_id}`);
+    expect(Object.keys(secrets())).not.toContain(`host:${saved.id}:${saved.device_id}`);
   });
 });

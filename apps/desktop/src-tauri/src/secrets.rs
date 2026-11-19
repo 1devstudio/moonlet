@@ -1,5 +1,5 @@
-//! Tracker tokens (X44): the macOS Keychain, one generic password holding
-//! every connection's token (X91). e2e builds use a 0600 file instead, so
+//! Tracker tokens (X44) and the app's tailnet host tokens (X57): the macOS
+//! Keychain, one generic password holding every token (X91). e2e builds use a 0600 file instead, so
 //! tests never prompt.
 
 use std::collections::{BTreeMap, BTreeSet};

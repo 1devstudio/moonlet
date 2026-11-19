@@ -138,11 +138,9 @@ struct NoToken;
 
 impl Connector for NoToken {
     fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
-        Box::pin(async { bail!("{NO_TOKEN}") })
+        Box::pin(async { bail!("{}", host_tokens::NO_TOKEN) })
     }
 }
-
-const NO_TOKEN: &str = "moonlet could not read this Mac's token for the host from the Keychain. Quit moonlet and open it again.";
 
 impl Connector for RemoteDaemon {
     fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
@@ -165,6 +163,9 @@ pub struct HostManager {
     /// Held while the central host is chosen, or checked before a host is
     /// forgotten, so the two never interleave.
     central: tokio::sync::Mutex<()>,
+    /// Held while the hosts are saved, which may wait on a Keychain prompt,
+    /// so a save from before a host was removed cannot bring it back.
+    saving: Mutex<()>,
 }
 
 impl HostManager {
@@ -174,6 +175,7 @@ impl HostManager {
             hosts: Mutex::new(HashMap::new()),
             tailnet: Mutex::new(HashMap::new()),
             central: tokio::sync::Mutex::new(()),
+            saving: Mutex::new(()),
         });
         mgr.start(LOCAL, false);
         let saved = moonlet_core::ssh::saved_hosts();
@@ -195,6 +197,12 @@ impl HostManager {
     }
 
     fn persist(&self) {
+        let _saving = self.saving.lock().unwrap();
+        self.persist_saving();
+    }
+
+    /// Saves the hosts; the caller holds `saving`.
+    fn persist_saving(&self) {
         // The Keychain may prompt: it is asked without the lock, so the
         // host list stays answerable meanwhile.
         let mut held: Vec<HeldHost> = self.tailnet.lock().unwrap().values().cloned().collect();
@@ -204,11 +212,12 @@ impl HostManager {
             .collect();
         {
             let mut now = self.tailnet.lock().unwrap();
-            for h in held.into_iter().filter(|h| h.in_store) {
+            for h in held {
                 if let Some(n) = now.get_mut(&h.host.id)
                     && n.host.device_id == h.host.device_id
                 {
-                    n.in_store = true;
+                    n.in_store = h.in_store;
+                    n.refused = h.refused;
                 }
             }
         }
@@ -386,6 +395,7 @@ impl HostManager {
                 })?;
             }
         }
+        let _saving = self.saving.lock().unwrap();
         let forgotten = self.tailnet.lock().unwrap().remove(id);
         if let Some(h) = &forgotten {
             host_tokens::forget(h, crate::secrets::store());
@@ -393,7 +403,7 @@ impl HostManager {
         if let Some(h) = self.hosts.lock().unwrap().remove(id) {
             h.stop();
         }
-        self.persist();
+        self.persist_saving();
         Ok(())
     }
 
@@ -436,9 +446,7 @@ impl HostManager {
         let Some(saved) = saved else {
             return Err(RpcError::new("unknown_host", format!("{id} is not a host on your tailnet")));
         };
-        if saved.token.is_empty() {
-            return Err(RpcError::new("no_token", NO_TOKEN));
-        }
+        host_tokens::usable(&saved).map_err(|m| RpcError::new("no_token", m))?;
         Ok(saved)
     }
 }
