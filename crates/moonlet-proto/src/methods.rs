@@ -1979,6 +1979,10 @@ pub struct SessionUpdate {
         skip_serializing_if = "Option::is_none"
     )]
     pub task: Option<Option<crate::types::TaskRef>>,
+    /// Moves the session to this workspace, one with a section holding its
+    /// project (X106).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

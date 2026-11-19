@@ -15,9 +15,11 @@ export type MenuItem =
       description?: ReactNode;
       /** Drawn at the row's right, before its check: the board switcher's column bars. */
       aside?: ReactNode;
+      /** Why it can't be picked now: shown greyed, the reason as its tooltip. */
+      disabled?: string;
       onSelect: () => void;
     }
-  | { kind: "submenu"; label: string; icon?: ReactNode; items: MenuItem[] }
+  | { kind: "submenu"; label: string; icon?: ReactNode; items: MenuItem[]; disabled?: string }
   | { kind: "divider" }
   | { kind: "label"; label: string };
 
@@ -47,6 +49,14 @@ export function MenuItems({
               {it.label}
             </div>
           );
+        if (it.kind === "submenu" && it.disabled)
+          return (
+            <button key={i} type="button" disabled title={it.disabled} className="flex w-full cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 opacity-50">
+              {it.icon}
+              <span className="flex-1">{it.label}</span>
+              <ChevronRight size={14} className="text-muted" />
+            </button>
+          );
         if (it.kind === "submenu")
           return (
             <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen((o) => (o === i ? null : o))}>
@@ -74,7 +84,9 @@ export function MenuItems({
             key={i}
             data-active={active === i + offset || undefined}
             onMouseMove={onActive && active !== i + offset ? () => onActive(i + offset) : undefined}
-            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14", onActive ? active === i + offset && "bg-hover" : "hover:bg-hover", it.danger && "text-error")}
+            disabled={!!it.disabled}
+            title={it.disabled}
+            className={cx("flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14", it.disabled ? "opacity-50" : onActive ? active === i + offset && "bg-hover" : "hover:bg-hover", it.danger && "text-error")}
             onClick={() => {
               onClose();
               it.onSelect();

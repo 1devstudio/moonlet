@@ -1,15 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Eye, FolderInput, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
-import { closeClaudeUpdate, errorToast, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
+import { closeClaudeUpdate, errorToast, markRead, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
 import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
-import { archiveSession, openProjectSettings, restoreSession } from "../lib/actions";
+import { archiveSession, archiveSessions, moveSessions, openProjectSettings, restoreSession, visibleSessionOrder } from "../lib/actions";
+import { boxClickPick, clickPick, escClearsPick, moveTargets, NO_PICK, pickedSessions, pickLine, shownPick, type HostPlaces, type PickedSession } from "../lib/sessionPick";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
@@ -18,7 +19,7 @@ import { syncChoice } from "../lib/sync";
 import { keepInSync, stopSync, useSync } from "../lib/syncStore";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { WorkspaceMark, WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ModeSwitch, TaskGlyph, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
 import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
 import { numberColumn, rowStyle, taskGroups, type RowStyle, type TaskGroup } from "../lib/sessionRows";
@@ -304,6 +305,7 @@ function RowView({
   name,
   badge,
   selected,
+  picked,
   nested,
   ...rest
 }: {
@@ -312,6 +314,8 @@ function RowView({
   name: ReactNode;
   badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
   selected: boolean;
+  /** Picked with ⌘- or ⇧-click (X106): tinted. */
+  picked?: boolean;
   nested?: boolean;
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
@@ -321,7 +325,7 @@ function RowView({
         // Filled with the pane's tone when shown (X94); taller with a bigger font.
         "group relative mx-2 flex cursor-default items-center gap-2.5 rounded-md pr-2 text-left transition-colors",
         nested ? "h-ui-34 pl-[calc(0.5rem+20px)]" : "h-ui-38 pl-2",
-        selected ? "bg-bg" : "hover:bg-tab-hover",
+        picked ? "bg-selected" : selected ? "bg-bg" : "hover:bg-tab-hover",
       )}
     >
       <span className="flex w-[15px] shrink-0 justify-center">{glyph}</span>
@@ -379,6 +383,9 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const unread = useStore((st) => sessionTerminals(st, host, s.id).some((x) => st.unread[termKey(host, x.id)]));
   const creating = useStore((st) => sessionTerminals(st, host, s.id).some((x) => x.kind === "setup" && !x.exit));
   const archiving = useStore((st) => st.archiving[sesKey(host, s.id)]);
+  // Several picked (X106): every row shows its box in the glyph's place.
+  const picking = useStore((st) => st.pick.keys.length > 0);
+  const picked = useStore((st) => st.pick.keys.includes(sesKey(host, s.id)));
   const from = useStore((st) => spawnedFrom(s, st.sessions[host] ?? []));
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
@@ -406,19 +413,37 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
       role="button"
       aria-current={selected ? "true" : undefined}
       title={`${task}${s.branch} → ${s.base}${host !== "local" ? ` · ${host}` : ""}${from ? `\n${from}` : ""}`}
-      onClick={() => {
+      aria-selected={picking ? picked : undefined}
+      // ⇧-click picks a range: keep it from selecting the rows' text.
+      onMouseDown={(e) => e.shiftKey && e.preventDefault()}
+      onClick={(e) => {
+        const rows = visibleSessionOrder().map((t) => sesKey(t.host, t.id));
+        const { pick, open } = clickPick(useStore.getState().pick, { key: sesKey(host, s.id), cmd: e.metaKey, shift: e.shiftKey }, rows);
+        useStore.setState({ pick });
+        if (!open) return;
         useStore.setState({ showHistory: false });
         selectSession(host, s.id);
       }}
-      onDoubleClick={() => !s.owner && setRenaming(true)}
+      onDoubleClick={(e) => !s.owner && !e.metaKey && !e.shiftKey && setRenaming(true)}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e);
       }}
       selected={selected}
+      picked={picked}
       nested={nested}
       cell={cell}
-      glyph={notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+      glyph={
+        picking ? (
+          <PickBox
+            on={picked}
+            name={s.name}
+            onPick={(shift) => {
+              const rows = visibleSessionOrder().map((t) => sesKey(t.host, t.id));
+              useStore.setState({ pick: boxClickPick(useStore.getState().pick, { key: sesKey(host, s.id), shift }, rows) });
+            }}
+          />
+        ) : notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
       badge={renaming ? null : badge}
       name={
         renaming ? (
@@ -454,6 +479,120 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
         )
       }
     />
+  );
+}
+
+/** A row's box while sessions are picked (X106), in its glyph's place: a
+ * click picks or unpicks the row, as ⌘-click does, with ⇧ a range. The
+ * padding widens what takes the click past the 14px box. */
+function PickBox({ on, name, onPick }: { on: boolean; name: string; onPick: (shift: boolean) => void }) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={on}
+      aria-label={`Select ${name}`}
+      className="-m-1 flex p-1"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPick(e.shiftKey);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <span className={cx("flex h-[14px] w-[14px] items-center justify-center rounded-[3px] border", on ? "border-accent bg-accent text-bg" : "border-border-strong bg-raised hover:border-muted")}>
+        {on && <Check size={10} strokeWidth={3} />}
+      </span>
+    </span>
+  );
+}
+
+/** The picked sessions the hosts still list (X106). */
+const pickedTargets = (): PickedSession[] => pickedSessions(useStore.getState().pick, useStore.getState().sessions);
+
+function hostPlaces(): HostPlaces[] {
+  const st = useStore.getState();
+  return Object.keys(st.hosts).map((host) => ({ host, workspaces: st.workspaces[host] ?? [], sections: st.sections[host] ?? [], projects: st.projects[host] ?? [], profiles: st.profiles[host] ?? [] }));
+}
+
+/** Move to's workspaces for the picked sessions (X106), as menu items. */
+function moveItems(picked: PickedSession[]): { disabled: string | null; items: MenuItem[] } {
+  const { disabled, targets } = moveTargets(picked, hostPlaces());
+  const items = targets.map(
+    (t): MenuItem => ({
+      label: t.name,
+      icon: <WorkspaceMark name={t.name} color={t.color} size={14} />,
+      checked: t.current,
+      disabled: t.disabled ?? undefined,
+      hint: t.note ?? undefined,
+      onSelect: () => void moveSessions(picked, t),
+    }),
+  );
+  return { disabled, items };
+}
+
+const markReadItem = (picked: PickedSession[]): MenuItem => ({
+  label: "Mark as read",
+  icon: <Eye size={14} className="text-muted" />,
+  onSelect: () => markRead(picked.map((p) => ({ host: p.host, id: p.ws.id }))),
+});
+
+/** The right-click menu of a picked row (X106): it acts on every pick. */
+function bulkItems(picked: PickedSession[]): MenuItem[] {
+  const move = moveItems(picked);
+  const n = picked.length === 1 ? "1 session" : `${picked.length} sessions`;
+  return [
+    { kind: "label", label: n },
+    markReadItem(picked),
+    { kind: "submenu", label: "Move to workspace", icon: <FolderInput size={14} className="text-muted" />, items: move.items, disabled: move.disabled ?? undefined },
+    { kind: "divider" },
+    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} className="text-muted" />, onSelect: () => void archiveSessions(picked) },
+  ];
+}
+
+/** The sidebar's footer while sessions are picked (X106): how many, Clear,
+ * Archive, Move to and ⋯ (Mark as read). */
+function PickBar() {
+  const keys = useStore((st) => st.pick.keys);
+  const sessions = useStore((st) => st.sessions);
+  const projects = useStore((st) => st.projects);
+  const picked = useMemo(() => pickedSessions({ keys, anchor: null }, sessions), [keys, sessions]);
+  const line = pickLine(picked.map((p) => (projects[p.host] ?? []).find((x) => x.id === p.ws.project_id)?.name ?? p.ws.project_id));
+  const move = moveItems(picked);
+  const moveButton = (open?: () => void) => (
+    <Button size="sm" disabled={!!move.disabled} title={move.disabled ?? undefined} onClick={open}>
+      <FolderInput size={13} />
+      Move to
+      <ChevronDown size={12} />
+    </Button>
+  );
+  return (
+    <div role="toolbar" aria-label={line.count} className="mx-2 mb-2 rounded-xl border border-border-strong bg-[#232323] p-2 shadow-2xl">
+      <div className="flex items-center gap-2 pb-2 pl-1">
+        <span className="ui-text-13 font-semibold text-fg">{line.count}</span>
+        {line.where && <span className="min-w-0 flex-1 truncate ui-text-11.5 text-faint">{line.where}</span>}
+        <IconButton title="Clear selection (Esc)" className="ml-auto h-6 w-6" onClick={() => useStore.setState({ pick: NO_PICK })}>
+          <X size={14} />
+        </IconButton>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" onClick={() => void archiveSessions(picked)}>
+          <Archive size={13} />
+          Archive
+        </Button>
+        {move.disabled ? moveButton() : <Menu side="top" items={[{ kind: "label", label: `Move ${picked.length} to workspace` }, ...move.items]} trigger={moveButton} />}
+        <Menu
+          side="top"
+          align="right"
+          width={180}
+          items={[markReadItem(picked)]}
+          trigger={(open) => (
+            <IconButton title="More actions" className="ml-auto h-6 w-6" onClick={open}>
+              <MoreHorizontal size={15} />
+            </IconButton>
+          )}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -760,9 +899,11 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const central = useSync((st) => st.central);
   const copy = useSync((st) => (s ? st.copies[sesKey(host, s.id)] : undefined));
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
-  const items = s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  // A picked row acts on every pick (X106).
+  const bulk = useStore((st) => !!s && st.pick.keys.includes(sesKey(host, s.id)));
+  const items = bulk ? bulkItems(pickedTargets()) : s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
   // Another member's session, through its copy here, cannot be renamed (X88).
-  const renames = !!s && !s.owner;
+  const renames = !!s && !s.owner && !bulk;
   return (
     <div
       className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
@@ -1023,6 +1164,29 @@ export function Sidebar() {
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
   const ordered = useMemo(() => Object.values(hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id)), [hosts]);
+  const picking = useStore((s) => s.pick.keys.length > 0);
+  // A picked session archived, moved away, folded or in another workspace
+  // leaves the picks (X106).
+  const allSessions = useStore((s) => s.sessions);
+  const collapsed = useStore((s) => s.collapsed);
+  useEffect(() => {
+    const st = useStore.getState();
+    if (!st.pick.keys.length && !st.pick.anchor) return;
+    const kept = shownPick(st.pick, visibleSessionOrder().map((t) => sesKey(t.host, t.id)));
+    if (kept !== st.pick) useStore.setState({ pick: kept });
+  }, [allSessions, collapsed, shown, mode, showHistory]);
+  // Esc clears them, unless it is for a field, a terminal or the open
+  // right-click menu, which it only closes.
+  useEffect(() => {
+    if (!picking || rowMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || useStore.getState().confirm) return;
+      if (!escClearsPick(e.target instanceof Element ? e.target : null)) return;
+      useStore.setState({ pick: NO_PICK });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [picking, rowMenu]);
 
   return (
     <TaskLines.Provider value={taskLines}>
@@ -1092,6 +1256,9 @@ export function Sidebar() {
       </>
       )}
       <ClaudeUpdateBanner />
+      {picking && mode === "sessions" && !showHistory ? (
+        <PickBar />
+      ) : (
       <div className="flex items-center gap-1 px-3 py-2.5">
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPage: { page: "general" } })}>
           <Settings size={14} />
@@ -1101,6 +1268,7 @@ export function Sidebar() {
         <UpdateButton />
         {mode === "design" && <span className="ml-auto shrink-0 font-mono ui-text-11.5 text-faint">~/.moonlet/design</span>}
       </div>
+      )}
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>
     </TaskLines.Provider>

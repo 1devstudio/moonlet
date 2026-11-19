@@ -15,6 +15,9 @@ import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
+import { bulkArchivePrompt, type BulkArchiveItem } from "./bulkArchive";
+import { BULK_LIMIT, runPooled } from "./pool";
+import { moveConfirm, NO_PICK, type MoveTarget, type PickedSession } from "./sessionPick";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { setMode, toggleMode } from "./mode";
@@ -375,23 +378,10 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const c = target ?? current();
   if (!c) return;
   const s = useStore.getState();
-  const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
-  const git = gitSettingsOf(s.gitSettings, c.host);
-  const pr = s.prs[sesKey(c.host, c.ws.id)];
-  const plan = archivePlan(git, pr?.state, c.ws.branch, base);
+  const { git, plan, params, found } = archiveLookup(c);
   // Work only on this machine that the archive would take (X55).
   // A copy's work is on the member running it (X88).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.ws.owner?.name ?? c.host);
-  const params = unpushedParams(c.ws, pr);
-  // What still runs in it, beyond its tabs, is named and stopped too (X83);
-  // a daemon that cannot say archives as before.
-  const found = Promise.all([
-    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
-    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
-      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
-      () => null,
-    ),
-  ]);
   // The prompt opens at once and fills in what the host found (X55).
   const prompt = found.then(([work, running]) => {
     const view = work && unpushedView(work, plan, c.ws.branch, where);
@@ -401,8 +391,6 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const answer = await askConfirm({ ...archivePrompt(c.ws.name, plan), checking }, prompt);
   if (!answer) return;
   const [, running] = await found;
-  // A daemon that cannot list processes cannot stop them either.
-  const stops = running !== null;
   const flags = archiveFlags(plan, answer.checked, !!answer.alt);
   if (answer.alt) {
     try {
@@ -412,13 +400,104 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
       return;
     }
   }
+  // A daemon that cannot list processes cannot stop them either.
+  await runArchive(c, flags, running !== null);
+}
+
+/** What archiving session `c` would do by its host's Git settings (X55),
+ * and what the host finds: its work only there (when the settings warn) and
+ * what still runs in it beyond its tabs (X83), each null when it can't say. */
+function archiveLookup(c: PickedSession) {
+  const s = useStore.getState();
+  const base = s.projects[c.host]?.find((p) => p.id === c.ws.project_id)?.base_branch ?? c.ws.base;
+  const git = gitSettingsOf(s.gitSettings, c.host);
+  const pr = s.prs[sesKey(c.host, c.ws.id)];
+  const plan = archivePlan(git, pr?.state, c.ws.branch, base);
+  const params = unpushedParams(c.ws, pr);
+  const found = Promise.all([
+    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
+    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
+      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
+      () => null,
+    ),
+  ]);
+  return { git, plan, params, found };
+}
+
+/** Archive for several sessions at once (X106): one confirm listing them
+ * all, then each archives as Archive does for one. With **Push N, then
+ * archive all**, those with work only on their host are pushed first; one
+ * whose push fails stays. One picked session is asked as Archive asks. */
+export async function archiveSessions(picked: PickedSession[]) {
+  if (picked.length <= 1) {
+    if (picked.length) useStore.setState({ pick: NO_PICK });
+    return picked.length ? archiveSession(picked[0]) : undefined;
+  }
+  const s = useStore.getState();
+  const sessions = picked.map((c) => ({
+    c,
+    ...archiveLookup(c),
+    state: sessionState(s, c.host, c.ws.id),
+    where: c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.ws.owner?.name ?? c.host),
+  }));
+  const asItem = (x: (typeof sessions)[number], work: UnpushedWork | null, running: SessionProcesses | null): BulkArchiveItem => ({ name: x.c.ws.name, where: x.where, state: x.state, plan: x.plan, work, running });
+  const hostAnswers = Promise.all(sessions.map((x) => x.found));
+  const prompt = hostAnswers.then((all) => bulkArchivePrompt(sessions.map((x, i) => asItem(x, all[i][0], all[i][1]))));
+  const checking = sessions.some((x) => x.git.warn_unpushed) ? "Checking for unpushed work…" : "Checking what still runs…";
+  const answer = await askConfirm({ ...bulkArchivePrompt(sessions.map((x) => asItem(x, null, null))), checking }, prompt);
+  if (!answer) return;
+  useStore.setState({ pick: NO_PICK });
+  const all = await hostAnswers;
+  // Every row plays its scene at once; at most BULK_LIMIT archive at a time.
+  const loaders = sessions.map((x) => {
+    const loader = pickLoader();
+    setArchiving(sesKey(x.c.host, x.c.ws.id), { loader, done: false, folding: false });
+    return loader;
+  });
+  await runPooled(sessions, BULK_LIMIT, async (x, i) => {
+    const [work, running] = all[i];
+    const pushes = !!answer.alt && !!work && !!unpushedView(work, x.plan, x.c.ws.branch, "");
+    if (pushes) {
+      try {
+        await rpc(x.c.host, M.gitPush, x.params);
+      } catch (e) {
+        setArchiving(sesKey(x.c.host, x.c.ws.id), null);
+        errorToast(e);
+        return;
+      }
+    }
+    await runArchive(x.c, archiveFlags(x.plan, answer.checked, pushes), running !== null, loaders[i]);
+  });
+}
+
+/** Move to workspace for picked sessions (X106): asks first when Claude
+ * agents running in them would switch profiles (X33), as moving a section
+ * does, then moves each; one refused is a toast, the others move. */
+export async function moveSessions(picked: PickedSession[], to: MoveTarget) {
+  const st = useStore.getState();
+  const hosts = [...new Set(picked.map((p) => p.host))].map((host) => ({
+    host,
+    workspaces: st.workspaces[host] ?? [],
+    profiles: st.profiles[host] ?? [],
+    sessions: st.sessions[host] ?? [],
+    terminals: Object.values(st.terminals[host] ?? {}),
+  }));
+  const message = moveConfirm(picked, to, hosts);
+  if (message && !(await askConfirm({ title: "Change Claude profile", message, action: `Move to ${to.name}` }))) return;
+  useStore.setState({ pick: NO_PICK });
+  await runPooled(picked, BULK_LIMIT, (p) => rpc(p.host, M.sessionUpdate, { id: p.ws.id, workspace_id: to.id }).catch(errorToast));
+}
+
+/** Archives session `c` once confirmed (X21, X83): stops what it runs when
+ * `stops`, plays its row's scene (`loader`, one already shown when it
+ * waited in a bulk archive's pool) and folds it away. */
+async function runArchive(c: PickedSession, flags: ReturnType<typeof archiveFlags>, stops: boolean, loader = pickLoader()) {
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
   if (wasSelected) useStore.setState({ selected: null });
   // The row plays a pixel scene while the daemon works, then folds away (X21).
   const key = sesKey(c.host, c.ws.id);
-  const loader = pickLoader();
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {
