@@ -465,6 +465,9 @@ pub struct LiveCopies {
     states: Mutex<HashMap<String, CopyState>>,
     /// One at a time per kept copy, and per served session.
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// One save of `file` at a time, each of the state as it is then: two
+    /// at once could leave the older last.
+    saving: Mutex<()>,
     watchers: Arc<Watchers>,
     /// Wakes the loop that sends a session's changes, by its folder.
     kicks: Mutex<HashMap<PathBuf, Arc<Notify>>>,
@@ -533,6 +536,7 @@ impl LiveCopies {
                 data: Mutex::new(data),
                 states: Mutex::new(HashMap::new()),
                 locks: Mutex::new(HashMap::new()),
+                saving: Mutex::new(()),
                 watchers,
                 kicks: Mutex::new(HashMap::new()),
                 offering: Mutex::new(HashMap::new()),
@@ -550,6 +554,7 @@ impl LiveCopies {
     }
 
     fn save(&self) {
+        let _one = self.saving.lock().unwrap_or_else(|e| e.into_inner());
         let bytes = serde_json::to_vec_pretty(&*self.data.lock().unwrap()).unwrap();
         if let Err(e) = crate::mobile::write_private(&self.file, &bytes) {
             tracing::warn!("cannot write {}: {e:#}", self.file.display());
