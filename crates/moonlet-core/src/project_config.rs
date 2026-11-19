@@ -236,6 +236,7 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
     };
     ProjectConfig {
         setup: s(&c.setup),
+        setup_inputs: c.setup_inputs.clone(),
         run: s(&c.run),
         archive: s(&c.archive),
         default_agent: s(&c.default_agent),
@@ -486,6 +487,27 @@ fn version(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn setup_inputs_are_read_and_a_save_keeps_them() {
+        let text = "setup = \"pnpm install\"\nsetup_inputs = [\"pnpm-lock.yaml\", \"patches/*.patch\"]\n";
+        let dir = repo_with(Some(text));
+        let file = load(dir.path(), "main".into());
+        assert_eq!(
+            file.config.setup_inputs,
+            Some(vec!["pnpm-lock.yaml".to_string(), "patches/*.patch".to_string()])
+        );
+        // The app's dialog does not know the key: its save leaves it.
+        let config = ProjectConfig {
+            setup: Some("pnpm i".into()),
+            ..ProjectConfig::default()
+        };
+        save(dir.path(), &file.version, &config).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path(dir.path())).unwrap(),
+            "setup = \"pnpm i\"\nsetup_inputs = [\"pnpm-lock.yaml\", \"patches/*.patch\"]\n"
+        );
+    }
 
     #[test]
     fn saving_the_config_leaves_the_heavy_table_as_it_is() {

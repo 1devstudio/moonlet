@@ -560,6 +560,14 @@ pub struct SessionArchived {
 pub struct ProjectConfig {
     #[serde(default)]
     pub setup: Option<String>,
+    /// The files `setup` reads (X60, X62): when one of them changed since
+    /// the setup last ran in a copy, it runs there again before the next
+    /// heavy command. Names or paths with `*` (see
+    /// `moonlet_core::setup_inputs`); none means the default list, an
+    /// empty list never runs it again. The file's own key: the app does not
+    /// edit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_inputs: Option<Vec<String>>,
     #[serde(default)]
     pub run: Option<String>,
     #[serde(default)]
