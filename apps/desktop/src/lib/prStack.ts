@@ -31,3 +31,20 @@ export function latestOnly() {
     },
   };
 }
+
+/** The stack chip on opening a session (X108): the daemon's saved stack
+ *  shows at once, until GitHub's answer comes; a saved answer arriving
+ *  after it, even after a failed fetch's `null`, is dropped. */
+export function savedUntilFetched<T>(show: (v: T) => void) {
+  let fetched = false;
+  return {
+    saved(v: T) {
+      if (!fetched) show(v);
+    },
+    fetched(v: T) {
+      fetched = true;
+      show(v);
+    },
+    hasFetched: () => fetched,
+  };
+}

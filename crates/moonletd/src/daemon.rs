@@ -7793,10 +7793,11 @@ impl Daemon {
             }
             m::GH_PR_STACK => {
                 let r: m::PrStackParams = params(p)?;
-                ok(git::pr_stack(&path(&r.path), r.number)
+                ok(w.pr_stack(&path(&r.path), r.number, moonlet_core::pr_cache::StackAsk::from_flags(r.known, r.refresh))
                     .await
                     .map_err(internal)?)
             }
+            m::GH_PR_KNOWN => ok(w.known_prs()),
             m::FS_LIST => {
                 let r: m::FsList = params(p)?;
                 ok(blocking(move || fs::list(&r.path, r.show_ignored)).await?)

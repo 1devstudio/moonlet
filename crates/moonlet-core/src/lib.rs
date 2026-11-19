@@ -29,6 +29,7 @@ pub mod leftovers;
 pub mod job_summary;
 pub mod node;
 pub mod paths;
+pub mod pr_cache;
 pub mod profiles;
 pub mod repo_clone;
 pub mod project_config;

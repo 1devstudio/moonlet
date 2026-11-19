@@ -78,7 +78,7 @@ export function PrTab({ host, session }: { host: string; session: Session }) {
     return () => clearInterval(t);
   }, [host, session.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (pr) void rpc<PrStack | null>(host, M.prStack, { path: session.path, number: pr.number }).then(setStack).catch(() => setStack(null));
+    if (pr) void rpc<PrStack | null>(host, M.prStack, { path: session.path, number: pr.number, refresh: true }).then(setStack).catch(() => setStack(null));
   }, [host, session.path, pr?.number]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (pr === undefined) return <div className="p-6 text-[14px] text-muted">Loading the pull request…</div>;

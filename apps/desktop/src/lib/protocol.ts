@@ -1056,6 +1056,12 @@ export interface PullRequest {
   head_oid?: string | null;
 }
 
+/** A session's PR as the daemon last heard it from GitHub (X108). */
+export interface KnownPr {
+  pr: PullRequest | null;
+  checked_at: number;
+}
+
 /** A GitHub stack of dependent PRs (spec X11); `prs` is bottom first. */
 export interface PrStack {
   number: number;
@@ -1637,6 +1643,7 @@ export const M = {
   repoCloneCancel: "repo.clone_cancel",
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
+  prKnown: "gh.pr_known",
   fsList: "fs.list",
   fsFiles: "fs.files",
   fsRead: "fs.read",

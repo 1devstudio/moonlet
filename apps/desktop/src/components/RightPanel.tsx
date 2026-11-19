@@ -6,7 +6,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
-import { latestOnly, stackView, type StackView } from "../lib/prStack";
+import { latestOnly, savedUntilFetched, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
@@ -164,31 +164,48 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   useEffect(() => {
     if (repo) void rpc<ProjectConfig>(host, M.projectConfig, { id: repo.id }).then(setConfig).catch(() => setConfig(null));
   }, [host, repo]);
+  // The saved stack shows at once, until the one fetched on opening the
+  // session comes (X108).
+  const answers = useRef(savedUntilFetched<PrStack | null>(() => {}));
   useEffect(() => {
     let live = true;
     const polls = latestOnly();
-    const load = () => {
+    const shown = savedUntilFetched<PrStack | null>((st) => live && setStack(st));
+    answers.current = shown;
+    // Opening the session asks GitHub for its stack again, however fresh
+    // the saved one is; the minute polls after it share the saved one.
+    const load = (refresh = false) => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();
       void pollPr(host, ws.id, ws.path)
         .then((p) => {
           if (!latest()) return;
-          if (!p) return setStack(null);
-          void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
-            .then((st) => latest() && setStack(st))
-            .catch(() => latest() && setStack(null));
+          if (!p) return shown.fetched(null);
+          void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number, refresh })
+            .then((st) => latest() && shown.fetched(st))
+            .catch(() => latest() && shown.fetched(null));
         })
         .catch(() => {
           /* keeps the last known PR and stack, as the sidebar's poll does */
         });
     };
-    load();
-    const t = setInterval(load, 60_000);
+    load(true);
+    const t = setInterval(() => load(), 60_000);
     return () => {
       live = false;
       clearInterval(t);
     };
   }, [host, ws.id, ws.path]);
+  // Asked for as soon as the session's PR is known, also when the saved
+  // PRs arrive after the session opened (a reopened app).
+  const prNumber = pr?.number;
+  useEffect(() => {
+    const shown = answers.current;
+    if (prNumber === undefined || shown.hasFetched()) return;
+    void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: prNumber, known: true })
+      .then(shown.saved)
+      .catch(() => {});
+  }, [host, ws.id, ws.path, prNumber]);
   return (
     <div data-tauri-drag-region="deep" className="drag @container flex h-ui-44 shrink-0 items-center gap-1 px-4">
       <button

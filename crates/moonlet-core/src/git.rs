@@ -1701,16 +1701,35 @@ pub async fn pr_stack(path: &Path, number: u64) -> Result<Option<PrStack>> {
         return Ok(None);
     }
     let stack: u64 = stack.parse().context("stack number")?;
-    let out = gh(
-        &root,
-        &["api", &format!("repos/{{owner}}/{{repo}}/stacks/{stack}")],
-    )
-    .await?;
-    Ok(parse_stack(&serde_json::from_slice(&out)?, number))
+    Ok(fetch_stack(path, stack).await?.and_then(|st| stack_at(&st, number)))
 }
 
-/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response.
-fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
+/// Stack `number` of the repository at `path`, as seen from none of its PRs
+/// (`position` 0; see [`stack_at`]), or `None` when GitHub's answer has no PRs.
+pub async fn fetch_stack(path: &Path, number: u64) -> Result<Option<PrStack>> {
+    let root = toplevel(path).await?;
+    let out = gh(
+        &root,
+        &["api", &format!("repos/{{owner}}/{{repo}}/stacks/{number}")],
+    )
+    .await?;
+    Ok(parse_stack(&serde_json::from_slice(&out)?))
+}
+
+/// `stack` as seen from PR `number`: its 1-based position (1 is closest to
+/// the base) and the stack's size, or `None` when it is not in the stack.
+pub fn stack_at(stack: &PrStack, number: u64) -> Option<PrStack> {
+    let position = stack.prs.iter().position(|p| p.number == number)? as u64 + 1;
+    Some(PrStack {
+        position,
+        size: stack.prs.len() as u64,
+        ..stack.clone()
+    })
+}
+
+/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response, as seen
+/// from none of its PRs (`position` 0).
+fn parse_stack(v: &serde_json::Value) -> Option<PrStack> {
     let prs: Vec<StackPr> = v["pull_requests"]
         .as_array()?
         .iter()
@@ -1727,11 +1746,10 @@ fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
             branch: p["head"]["ref"].as_str().unwrap_or("").into(),
         })
         .collect();
-    let position = prs.iter().position(|p| p.number == current)? as u64 + 1;
     Some(PrStack {
         number: v["number"].as_u64().unwrap_or(0),
         base: v["base"]["ref"].as_str().unwrap_or("").into(),
-        position,
+        position: 0,
         size: prs.len() as u64,
         prs,
     })
@@ -2735,7 +2753,7 @@ pub(crate) mod tests {
                  "head": {"ref": "c"}}
             ]
         });
-        let s = parse_stack(&v, 4).unwrap();
+        let s = stack_at(&parse_stack(&v).unwrap(), 4).unwrap();
         assert_eq!((s.number, s.base.as_str()), (17, "main"));
         assert_eq!((s.position, s.size), (3, 3));
         let states: Vec<_> = s.prs.iter().map(|p| p.state.as_str()).collect();
@@ -2743,10 +2761,10 @@ pub(crate) mod tests {
         assert_eq!(s.prs[0].url, "https://github.com/o/r/pull/1");
         assert_eq!(s.prs[1].branch, "b");
         assert!(s.prs[2].draft && s.prs[2].url.is_empty());
-        assert_eq!(parse_stack(&v, 1).unwrap().position, 1);
+        assert_eq!(stack_at(&parse_stack(&v).unwrap(), 1).unwrap().position, 1);
         // A PR that left the stack between the two API calls.
-        assert!(parse_stack(&v, 3).is_none());
-        assert!(parse_stack(&serde_json::json!({}), 1).is_none());
+        assert!(stack_at(&parse_stack(&v).unwrap(), 3).is_none());
+        assert!(parse_stack(&serde_json::json!({})).is_none());
     }
 
     /// `gh pr list --head moonlet/users-cotampanie-downloads-screenshot

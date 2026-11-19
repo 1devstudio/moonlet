@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { latestOnly, stackView } from "./prStack";
+import { latestOnly, savedUntilFetched, stackView } from "./prStack";
 import type { PrStack, StackPr } from "./protocol";
 
 const pr = (number: number, state = "open"): StackPr => ({
@@ -42,5 +42,26 @@ describe("latestOnly", () => {
     const second = gate.start();
     expect(first()).toBe(false);
     expect(second()).toBe(true);
+  });
+});
+
+describe("savedUntilFetched (X108)", () => {
+  it("shows the saved answer until GitHub's comes, and never after it", () => {
+    const shown: (string | null)[] = [];
+    const answers = savedUntilFetched<string | null>((v) => shown.push(v));
+    answers.saved("saved stack 4");
+    answers.fetched("stack 4 from GitHub");
+    answers.saved("saved stack 4, late");
+    expect(shown).toEqual(["saved stack 4", "stack 4 from GitHub"]);
+    expect(answers.hasFetched()).toBe(true);
+  });
+
+  it("keeps a failed fetch's empty answer over a late saved one", () => {
+    const shown: (string | null)[] = [];
+    const answers = savedUntilFetched<string | null>((v) => shown.push(v));
+    expect(answers.hasFetched()).toBe(false);
+    answers.fetched(null);
+    answers.saved("saved stack 4");
+    expect(shown).toEqual([null]);
   });
 });
