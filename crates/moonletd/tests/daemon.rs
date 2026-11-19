@@ -1,5 +1,8 @@
 //! End-to-end tests against a real `moonletd` process.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -34,6 +37,7 @@ impl TestDaemon {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15))
@@ -465,6 +469,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home.path())
         .spawn()
         .unwrap();
     wait_for_socket(&socket, Duration::from_secs(15))
@@ -1138,6 +1143,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(&home.path().join(".moonlet"))
         .spawn()
         .unwrap();
     wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
@@ -1211,7 +1217,8 @@ impl HomeDaemon {
             .env_remove("CODEX_HOME")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .keep_logs(&home.join(".moonlet"));
         if let Some(p) = path {
             cmd.env("PATH", p);
         }
@@ -1991,6 +1998,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(d.home.path())
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -2047,6 +2055,7 @@ async fn a_daemon_started_for_a_process_already_gone_stops() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home.path())
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);

@@ -233,6 +233,23 @@ pub struct Daemon {
 
 pub type HandlerResult = Result<Value, RpcError>;
 
+/// A request this daemon answered, at debug: enough to follow a link, a
+/// sync round, a routed run or a session move in a test's kept log. What
+/// only reads, which apps and tests ask for many times a second, only when
+/// refused.
+fn log_call(conn: &Conn, method: &str, r: &HandlerResult) {
+    let reads = method.rsplit('.').next().is_some_and(|v| {
+        ["status", "info", "list", "get", "read", "ping"]
+            .iter()
+            .any(|r| v == *r || v.strip_prefix(r).is_some_and(|rest| rest.starts_with('_')))
+    });
+    match r {
+        Err(e) => tracing::debug!(client = %conn.client, conn = conn.id, method, "refused: {}: {}", e.code, e.message),
+        Ok(_) if !reads => tracing::debug!(client = %conn.client, conn = conn.id, method, "answered"),
+        Ok(_) => {}
+    }
+}
+
 /// How long edits by hand stop before their snapshot is taken (X65).
 const EDITS_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -1423,6 +1440,12 @@ impl Daemon {
     }
 
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
+        let r = Box::pin(self.handle_call(conn, method, p)).await;
+        log_call(conn, method, &r);
+        r
+    }
+
+    async fn handle_call(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         // A cloud machine reaches only what a worker needs (X63), for the
         // whole life of its connection: its device is forgotten while its
         // machine is being removed, but the connection stays a cloud one.

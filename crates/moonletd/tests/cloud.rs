@@ -2,6 +2,9 @@
 //! provider, idle time, limits and the sweep. Needs `moonletd` built
 //! (`cargo test --workspace`).
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -82,6 +85,7 @@ async fn spawn(home: &Path, socket: &Path, env: &[(&str, &str)]) -> Child {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home)
         .spawn()
         .unwrap();
     wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15))
@@ -551,6 +555,7 @@ async fn cloud_with(config: &str, env: &[(&str, &str)]) -> Cloud {
     ];
     all.extend_from_slice(env);
     let d = Daemon::start(home, &all).await;
+    common::logs::machines_in(fake.path());
     let addr = format!("127.0.0.1:{port}");
     for _ in 0..100 {
         let st: Value = d.call("mobile.status", json!({})).await;

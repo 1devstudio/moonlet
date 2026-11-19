@@ -2,6 +2,10 @@
 //! fast enough for the PRD target (blocked to notified < 2 s).
 //! Needs `moonletd` built next to this test binary (`cargo test --workspace`).
 
+#[path = "../../moonletd/tests/common/logs.rs"]
+mod logs;
+use logs::KeepLogs;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -54,6 +58,7 @@ async fn claude_hook_raises_attention_quickly() {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap(),
     );
@@ -140,6 +145,7 @@ async fn hook_in_a_terminal_jaunt_opened_reaches_its_terminal() {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap(),
     );

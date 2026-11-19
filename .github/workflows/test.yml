@@ -41,6 +41,17 @@ jobs:
 
       - run: pnpm check
 
+      # A failing daemon test keeps its daemons' logs there, one folder per
+      # test (crates/moonletd/tests/common/logs.rs); their homes are gone.
+      - name: Keep the logs of failing tests
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-logs-attempt-${{ github.run_attempt }}
+          path: target/tmp/test-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
   # The Linux install script (X58) on a real systemd: install, a damaged
   # download, an update that keeps a session (the unit follows the new
   # daemon), uninstall. Debug builds stand in for the release's static ones.

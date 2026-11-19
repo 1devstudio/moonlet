@@ -1,5 +1,8 @@
 //! S3: a new daemon binary takes over live sessions without killing them.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -27,7 +30,8 @@ fn moonletd(home: &std::path::Path, socket: &PathBuf, args: &[&str]) -> Command 
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .keep_logs(home);
     c
 }
 
@@ -154,7 +158,8 @@ async fn start_takes_over_a_jaunt_daemon() {
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .keep_logs(home.path());
         c
     };
     // jaunt's daemon listens on run/jauntd.sock and has JAUNT_SOCK in its

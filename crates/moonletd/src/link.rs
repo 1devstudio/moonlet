@@ -604,6 +604,7 @@ impl WorkerLink {
             if *s == state {
                 return;
             }
+            tracing::debug!(from = ?*s, to = ?state, "link state");
             // Since when the central host has been out of reach (X73).
             let mut down = self.down_since.lock().unwrap();
             if out_of_reach {
@@ -1099,6 +1100,7 @@ impl WorkerLink {
         match host.request(m::WORKER_REGISTER, params).await {
             // The central host serves copies to registered workers only.
             Ok(_) => {
+                tracing::debug!(host = %host.id, "registered with the central host");
                 if let Some(sync) = self.sync() {
                     sync.link_up();
                 }
@@ -1148,7 +1150,7 @@ impl WorkerLink {
                 // could not be read, has none to share; one that takes this
                 // machine for no member shares none with it.
                 Err(e) if e.code == "unknown_method" || e.code == "no_account" || e.code == "forbidden" => {
-                    tracing::info!("the central host shares no account: {}", e.message);
+                    tracing::info!("the central host shares no account: {}: {}", e.code, e.message);
                     // Nor does it say anything of the account's size now.
                     self.set_not_syncing(None);
                     self.in_step_on(&host);
@@ -1291,8 +1293,10 @@ impl WorkerLink {
         // Its app's approvals and copied files, until the central host made
         // them its own (X89, X74).
         let asks = self.sessions.permission_asks();
+        let sending = changes.len();
         let send = m::AccountSync { version, changes, now_ms: Some(sent), asks };
         let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(send).unwrap()).await?)?;
+        tracing::debug!(sent = sending, got = got.changes.len(), "account sync round");
         if !self.is_current(host) {
             return Err(RpcError::new("gone", "the central host changed meanwhile"));
         }
@@ -1643,7 +1647,8 @@ impl Requests for WorkerRequests {
         params: Value,
     ) -> BoxFuture<'static, Result<Value, RpcError>> {
         let link = self.0.upgrade();
-        Box::pin(async move {
+        let asked = method.clone();
+        let answer = async move {
             match method.as_str() {
                 m::WORKER_PING => {
                     let runs = link.as_ref().and_then(|l| l.runs());
@@ -1813,6 +1818,16 @@ impl Requests for WorkerRequests {
                     format!("unknown method {method}"),
                 )),
             }
+        };
+        Box::pin(async move {
+            let r = answer.await;
+            // Pings come every few hundred ms: only those refused.
+            match &r {
+                Err(e) => tracing::debug!(method = %asked, "the central host's request refused: {}: {}", e.code, e.message),
+                Ok(_) if asked != m::WORKER_PING => tracing::debug!(method = %asked, "the central host's request answered"),
+                Ok(_) => {}
+            }
+            r
         })
     }
 }

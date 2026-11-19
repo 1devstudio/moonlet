@@ -2,11 +2,14 @@
 //! tailnet connections. Each test file uses part of it.
 #![allow(dead_code)]
 
+pub mod logs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use moonlet_core::client::{Client, wait_for_socket};
+use logs::KeepLogs;
 use moonlet_proto::{Frame, Message};
 use serde_json::{Value, json};
 
@@ -18,6 +21,10 @@ pub struct Daemon {
     pub child: Child,
     /// The `moonletd` it runs.
     pub exe: PathBuf,
+    /// Scratch folders the daemon uses outside its home, such as its fake
+    /// agents' (central_copies.rs): they go with the last daemon that
+    /// holds them.
+    pub also: Vec<std::sync::Arc<tempfile::TempDir>>,
 }
 
 fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
@@ -34,6 +41,7 @@ fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Ch
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home)
         .spawn()
         .unwrap()
 }
@@ -61,6 +69,7 @@ impl Daemon {
             env,
             child,
             exe: exe.to_path_buf(),
+            also: Vec::new(),
         }
     }
 
