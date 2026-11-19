@@ -727,11 +727,21 @@ impl WorkerLink {
     /// Tells the central host this worker's details again, now, when the
     /// link is up: what it lists of the worker changed.
     pub fn register_again(self: &Arc<Self>) {
-        if matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
-            && let Some(host) = self.host.lock().unwrap().clone()
+        // The link's own connection, whatever the link says meanwhile: one
+        // still trading its token says connecting (X41).
+        if let Some(host) = self.host.lock().unwrap().clone()
+            && matches!(host.info().status, HostStatus::Connected)
         {
             tokio::spawn(self.clone().register(host));
         }
+    }
+
+    /// Whether this link's paired token is still to be traded for a
+    /// worker link (X41) once connected: the connection it makes then
+    /// replaces this one.
+    fn trade_pending(&self) -> bool {
+        let store = self.store.lock().unwrap();
+        store.central().is_some() && !store.worker_link() && !store.worker().cloud
     }
 
     /// `link.pair` (X61): pairs this machine with the central host using a
@@ -1071,6 +1081,14 @@ impl WorkerLink {
         }
         if self.take_worker_link(&host).await {
             return;
+        }
+        // No trade after all (a central host from before X41, or a host
+        // list that cannot be read): this connection is the link's.
+        if self.is_current(&host)
+            && matches!(host.info().status, HostStatus::Connected)
+            && matches!(*self.state.lock().unwrap(), LinkState::Connecting)
+        {
+            self.set_state(LinkState::Connected { since: now_ms() });
         }
         let worker = self.store.lock().unwrap().worker().clone();
         let projects = self
@@ -1520,8 +1538,16 @@ impl WorkerLink {
                 LinkState::Reconnecting
             }
             HostStatus::Connected => {
+                // A paired token is traded first (X41), and the worker
+                // link's own connection replaces this one: until then the
+                // link is still connecting, so it says connected once.
+                let trading = self.trade_pending();
                 tokio::spawn(self.clone().register(host));
-                LinkState::Connected { since: now_ms() }
+                if trading {
+                    LinkState::Connecting
+                } else {
+                    LinkState::Connected { since: now_ms() }
+                }
             }
             HostStatus::NeedsUpdate => LinkState::NeedsUpdate {
                 daemon_version: info.daemon_version.clone().unwrap_or_default(),
