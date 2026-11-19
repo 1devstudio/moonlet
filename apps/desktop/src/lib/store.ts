@@ -587,10 +587,28 @@ export function selectedSession(s: State = get()): Session | undefined {
   return s.sessions[s.selected.host]?.find((w) => w.id === s.selected!.session);
 }
 
+/** A host's terminals by session, in id order, built once per terminals
+ *  object: every sidebar row asks for its own on every state change, and a
+ *  scan of every terminal each time froze the app at start. The lists are
+ *  shared, so callers never change them. */
+const bySession = new WeakMap<Record<number, TerminalInfo>, Map<string, TerminalInfo[]>>();
+const NO_TERMINALS: TerminalInfo[] = [];
+
 export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): TerminalInfo[] {
-  return Object.values(s.terminals[host] ?? {})
-    .filter((x) => x.session_id === wsId)
-    .sort((a, b) => a.id - b.id);
+  const all = s.terminals[host];
+  if (!all) return NO_TERMINALS;
+  let index = bySession.get(all);
+  if (!index) {
+    index = new Map();
+    for (const x of Object.values(all).sort((a, b) => a.id - b.id)) {
+      if (x.session_id === undefined) continue;
+      const list = index.get(x.session_id);
+      if (list) list.push(x);
+      else index.set(x.session_id, [x]);
+    }
+    bySession.set(all, index);
+  }
+  return index.get(wsId) ?? NO_TERMINALS;
 }
 
 const RANK: Record<AgentState, number> = { blocked: 5, error: 4, working: 3, done: 2, idle: 1 };
