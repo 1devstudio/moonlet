@@ -1928,29 +1928,10 @@ async fn air_idle(air: &Daemon) {
     .await;
 }
 
-/// Whether `session`'s last job was refused at its fence because another
-/// snapshot of the session's worktree held its index lock: a race on the
-/// session's host, before the runner looks at its setup.
-async fn lost_the_index_lock(book: &Daemon, session: &Value) -> bool {
-    last_job(book, session).await["timeline"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| e["text"].as_str().is_some_and(|t| t.contains("moonlet-sync-index.lock")))
-}
-
-/// [`run`] on the MacBook once the Air is idle, again while the fence
-/// lost the index lock.
+/// [`run`] on the MacBook once the Air is idle.
 async fn run_when_idle(book: &Daemon, air: &Daemon, session: &Value, argv: &[&str]) -> Ran {
-    for _ in 0..10 {
-        air_idle(air).await;
-        let ran = run(book, session, argv).await;
-        if !lost_the_index_lock(book, session).await {
-            return ran;
-        }
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-    panic!("the fence kept losing the index lock");
+    air_idle(air).await;
+    run(book, session, argv).await
 }
 
 /// The session's worktree on the MacBook.
@@ -2089,18 +2070,8 @@ async fn two_commands_arriving_together_after_a_lockfile_change_run_the_setup_on
     let (_mini, book, air, session, _repo) = air_set_up(&slow).await;
     std::fs::write(worktree(&session).join("pnpm-lock.yaml"), "left-pad: 1.3.0\n").unwrap();
     let read = &["sh", "-c", "cat node_modules/installed 2>/dev/null; grep -c run node_modules/runs 2>/dev/null; true"];
-    let (a, b) = {
-        let mut tries = 0;
-        loop {
-            air_idle(&air).await;
-            let (a, b) = tokio::join!(run(&book, &session, read), run(&book, &session, read));
-            tries += 1;
-            let on_air = [&a, &b].iter().any(|r| r.stderr.contains("running on Alex's MacBook Air"));
-            if on_air || tries == 10 || !lost_the_index_lock(&book, &session).await {
-                break (a, b);
-            }
-        }
-    };
+    air_idle(&air).await;
+    let (a, b) = tokio::join!(run(&book, &session, read), run(&book, &session, read));
     let on_air: Vec<&Ran> = [&a, &b].into_iter().filter(|r| r.stderr.contains("running on Alex's MacBook Air")).collect();
     assert!(!on_air.is_empty(), "{a:?} {b:?}");
     for r in &on_air {
