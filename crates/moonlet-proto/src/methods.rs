@@ -4177,7 +4177,8 @@ pub struct ExecHost {
     pub cores: u32,
     pub load: Option<f64>,
     pub slots: u32,
-    /// Its own slots in use.
+    /// Its slots in use, by its own sessions' commands and other hosts'
+    /// (X62, 2026-11-19; before, its own sessions' only).
     pub used: u32,
 }
 

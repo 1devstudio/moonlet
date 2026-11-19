@@ -1117,7 +1117,8 @@ pub enum Placement<'a> {
 /// Where a command goes, as [`pick`] has it, after the commands waiting
 /// ahead of it in this host's line took their slots: `ahead` lists, for
 /// each, in the order they came, the ids of the machines it could run on.
-/// One that waited `bound` runs on the session's host anyway.
+/// One that waited `bound` runs on the session's host anyway, and so does
+/// one no candidate could run at all.
 pub fn place<'a>(
     candidates: &'a [Candidate],
     os: HeavyOs,
@@ -1127,6 +1128,11 @@ pub fn place<'a>(
     bound: std::time::Duration,
 ) -> Placement<'a> {
     let order = ranked(candidates, os, cloud_first);
+    // Nothing could ever take it, such as a Linux project's command with
+    // no Linux machine: waiting would only hold it up.
+    if order.is_empty() {
+        return Placement::Anyway;
+    }
     let mut free: Vec<u32> = order.iter().map(|c| c.slots.saturating_sub(c.used)).collect();
     // Each command ahead takes the first free slot it could run on.
     for could in ahead {
@@ -1844,6 +1850,14 @@ mod tests {
             place(&freed, any, false, &[], 90 * S, SLOT_WAIT),
             Placement::Run(&freed[0])
         );
+    }
+
+    /// A project for Linux on a Mac with no Linux machine at all: nothing
+    /// could ever take it, so it runs on the session's host at once.
+    #[test]
+    fn a_command_no_machine_could_run_runs_on_its_own_host_without_waiting() {
+        let hosts = [central(1.0, 10, 0), mac("macbook", 1.0, 10, 0)];
+        assert_eq!(place(&hosts, HeavyOs::Linux, false, &[], S, SLOT_WAIT), Placement::Anyway);
     }
 
     #[test]

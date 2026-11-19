@@ -1594,6 +1594,8 @@ async fn exec_status_lists_what_a_host_runs_for_other_hosts() {
     let status: Value = mini.call("exec.status", json!({})).await;
     let serving = status["serving"].as_array().cloned().unwrap_or_default();
     assert_eq!(serving.len(), 1, "{status}");
+    // The slot it takes counts as one of studio-mini's in use (X62).
+    assert_eq!(status["host"]["used"], json!(1), "{status}");
     assert_eq!(serving[0]["host"], json!("Alex's MacBook Pro"));
     assert_eq!(serving[0]["session"], json!("Fix cart"));
 }

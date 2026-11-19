@@ -532,6 +532,9 @@ impl Runs {
                 }
                 let chosen = match decided {
                     Decided::Run(c) => c,
+                    // No machine for the project's `os` at all: it runs
+                    // here, as it always did.
+                    Decided::Anyway(full) if full.is_empty() => break,
                     Decided::Anyway(full) => {
                         let waited = clock(entered.elapsed().as_secs());
                         // Its tries elsewhere took the time it may wait.
@@ -583,11 +586,20 @@ impl Runs {
                         continue;
                     }
                 };
+                if chosen.kind == Kind::Own {
+                    // Its slot here, taken above, keeps the Mac awake too.
+                    self.runs_changed();
+                }
                 let name = self.name_of(&chosen, workers, &linked, plan);
-                if let Some((since, _)) = waiting {
+                if let Some((since, _)) = waiting.take() {
                     let secs = since.elapsed().as_secs();
                     say(format!("waited {} for a slot on {name}", clock(secs)));
+                    // It no longer waits: the Jobs panel's Run now, asked
+                    // meanwhile, is for a waiting job only.
+                    let mut asked = self.here_now.lock().unwrap();
+                    asked.remove(&run);
                     self.jobs.update(job, |j| {
+                        j.state = JobState::Running { worker: name.clone() };
                         event(j, format!("Waited {} for a slot on {name}", seconds(secs)), None)
                     });
                 }
@@ -999,10 +1011,14 @@ impl Runs {
         let peers = serde_json::to_value(m::WorkerPeers { identity: plan.identity.clone() }).unwrap();
         // `worker.status`'s own round trip is this host's to the central
         // host, which a member reached through it adds to its own (X89).
-        let asked = std::time::Instant::now();
-        let central = ask(m::WORKER_STATUS, serde_json::json!({})).await;
-        let leg = asked.elapsed().as_millis() as u64;
-        let others = ask(m::WORKER_PEERS, peers).await;
+        // Both at once, so a slow central host holds a waiting command's
+        // next look, and its Stop, for one timeout, not two.
+        let timed = async {
+            let asked = std::time::Instant::now();
+            let central = ask(m::WORKER_STATUS, serde_json::json!({})).await;
+            (central, asked.elapsed().as_millis() as u64)
+        };
+        let ((central, leg), others) = tokio::join!(timed, ask(m::WORKER_PEERS, peers));
         let central = central
             .and_then(|v| serde_json::from_value::<m::WorkerStatus>(v).ok())
             .map(|s| m::WorkerStatus { rtt_ms: Some(leg), ..s });
@@ -1493,7 +1509,7 @@ impl Runs {
         skips.sort_by(|a, b| (&a.worker, &a.project).cmp(&(&b.worker, &b.project)));
         m::ExecStatus {
             host: m::ExecHost {
-                used: self.running.lock().unwrap().len() as u32,
+                used: self.used_here(),
                 ..host
             },
             running,

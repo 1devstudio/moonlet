@@ -1611,7 +1611,6 @@ async fn outputs_over_one_gib_stay_on_the_worker_and_say_so() {
     assert!(!c.worktree.join("coverage").exists());
 }
 
-/// Where a run went, from its first line.
 /// Where the run ran: its last "running on" line, as after a wait.
 fn ran_on(ran: &Ran) -> &str {
     ran.stderr
