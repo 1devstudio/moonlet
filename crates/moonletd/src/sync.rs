@@ -3049,6 +3049,7 @@ impl LiveCopies {
             }
         };
         self.set_setup(id, Some(running(SetupState::Running)));
+        tracing::debug!(copy = %id, run, "setup started");
         // A routing copy's setup runs on the files of its fence (X62): what
         // it read there is kept, so the next run knows when it changed.
         let fence = k.base.clone().filter(|_| k.kind == CopyKind::Run);
@@ -3060,6 +3061,7 @@ impl LiveCopies {
                 Ok(status) => status.code().unwrap_or(-1),
                 Err(_) => -1,
             };
+            tracing::debug!(copy = %id, run, exit, "setup ended");
             reaped.store(true, std::sync::atomic::Ordering::SeqCst);
             let current = || me.setups.lock().unwrap().get(&id).is_some_and(|s| s.run == run);
             let mut read = None;
@@ -3165,6 +3167,7 @@ impl LiveCopies {
         let Some(s) = self.setups.lock().unwrap().remove(id) else {
             return;
         };
+        tracing::debug!(copy = %id, run = s.run, "setup stopped");
         // A setup still running when stopped reads as ended by a signal.
         self.update_kept(id, |k| {
             k.setup_sid = None;
@@ -5230,6 +5233,9 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
                 command: setup.command.clone(),
                 approved: false,
             });
+        if let Some(f) = &failed {
+            tracing::debug!(copy = %k.id, state = ?f.state, "a setup the daemon's stop ended");
+        }
         if k.setup_sid.is_some() || failed.is_some() {
             sync.update_kept(&k.id, |k| {
                 if let Some(failed) = failed {
