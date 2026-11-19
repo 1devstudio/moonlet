@@ -985,7 +985,7 @@ const prCheckedAt: Record<string, number> = {};
 
 /** Shows the PRs the host's daemon saved (X108). A daemon from before it
  *  has none to give, and the poll asks about every session as before. */
-async function loadKnownPrs(host: string) {
+export async function loadKnownPrs(host: string) {
   try {
     const known = await rpc<Record<string, KnownPr>>(host, M.prKnown);
     const { prs, checkedAt } = knownPrs(host, get().prs, known);
@@ -999,6 +999,9 @@ async function loadKnownPrs(host: string) {
 /** PR state per session (purple branch icon); slow-moving, so polled rarely.
  *  A few sessions at a time, so many sessions do not queue up behind one. */
 export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}) {
+  // Each check counts from when the poll started, however late in the
+  // queue it was asked, so the next 5-minute poll asks it again (X108).
+  const startedAt = Date.now();
   const queue = (get().sessions[host] ?? []).filter((w) => {
     const key = sesKey(host, w.id);
     return !w.archived && needsPrPoll(get().prs[key], { ...opts, checkedAt: prCheckedAt[key] });
@@ -1006,7 +1009,7 @@ export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}
   const worker = async () => {
     for (let w = queue.shift(); w; w = queue.shift()) {
       try {
-        await pollPr(host, w.id, w.path);
+        await pollPr(host, w.id, w.path, startedAt);
       } catch {
         /* no gh, no remote, or not a GitHub repo */
       }
@@ -1017,12 +1020,10 @@ export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}
 
 const prPolls = latestPerKey();
 /** Reads a session's PR and records it, unless a newer poll for the same
- *  session started meanwhile; that one records instead. */
-export async function pollPr(host: string, sessionId: string, path: string): Promise<PullRequest | null> {
+ *  session started meanwhile; that one records instead. `askedAt` is when
+ *  the check counts as made (X108). */
+export async function pollPr(host: string, sessionId: string, path: string, askedAt = Date.now()): Promise<PullRequest | null> {
   const isLatest = prPolls.start(sesKey(host, sessionId));
-  // Counted from the ask, so the 5-minute poll is not a few seconds early
-  // for the 5-minute pause (X108).
-  const askedAt = Date.now();
   const pr = await rpc<PullRequest | null>(host, M.prStatus, { path });
   if (isLatest()) recordPr(host, sessionId, pr, askedAt);
   return pr;

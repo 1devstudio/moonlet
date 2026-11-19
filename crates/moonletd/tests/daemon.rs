@@ -1955,6 +1955,94 @@ async fn a_merged_pr_is_answered_from_what_the_daemon_saved() {
     assert_eq!(known, serde_json::json!({}), "an archived session's PR is not listed");
 }
 
+/// X108: a failed lookup leaves the saved PR as it was, `gh.pr_known` never
+/// asks GitHub, and a path no session owns is looked up without being saved.
+#[tokio::test]
+async fn a_failed_lookup_keeps_the_saved_pr_and_a_path_no_session_owns_saves_nothing() {
+    // An open PR made after the session; `gh` fails while `gh.log.fail` exists.
+    let d = fake_gh_home_daemon(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+         [ -f \"$GH_LOG.fail\" ] && { echo 'error connecting to api.github.com' >&2; exit 1; }\n\
+         pr='{\"number\":12,\"url\":\"https://github.com/acme/web/pull/12\",\"state\":\"OPEN\",\"title\":\"Gift cards\",\"isDraft\":false,\"reviewDecision\":\"\",\"statusCheckRollup\":[],\"headRefOid\":\"4b825dc\",\"createdAt\":\"2099-01-01T00:00:00Z\"}'\n\
+         case \"$1 $2\" in\n\
+         \"pr list\") echo \"[$pr]\";;\n\
+         \"pr view\") echo \"$pr\";;\n\
+         *) exit 1;;\n\
+         esac\n",
+    )
+    .await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let open: serde_json::Value = c.request(methods::GH_PR_STATUS, serde_json::json!({"path": s.path})).await.unwrap();
+    assert_eq!((open["number"].as_u64(), open["state"].as_str()), (Some(12), Some("open")), "{open}");
+    let saved: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+
+    let fail = d.home.path().join("bin/gh.log.fail");
+    std::fs::write(&fail, "").unwrap();
+    let err = c.request::<_, serde_json::Value>(methods::GH_PR_STATUS, serde_json::json!({"path": s.path})).await.unwrap_err();
+    assert!(err.to_string().contains("api.github.com"), "{err}");
+    let calls = gh_pr_calls(&d).len();
+    let known: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+    assert_eq!(known, saved, "the failed lookup changed nothing");
+    assert_eq!(gh_pr_calls(&d).len(), calls, "gh.pr_known asks GitHub nothing");
+
+    std::fs::remove_file(&fail).unwrap();
+    let repo = d.home.path().join("repo");
+    let branch_pr: serde_json::Value = c.request(methods::GH_PR_STATUS, serde_json::json!({"path": repo})).await.unwrap();
+    assert_eq!(branch_pr["number"].as_u64(), Some(12));
+    let known: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+    assert_eq!(known, saved, "a path no session owns is not saved");
+}
+
+/// X108: a PR found in no stack is saved as such, and a PR that has left its
+/// saved stack is looked up again rather than shown in it.
+#[tokio::test]
+async fn a_pr_in_no_stack_is_saved_and_one_that_left_its_stack_is_looked_up_again() {
+    // #13 is in no stack. #12 is in stack 4 with #11, until `gh.log.left`
+    // exists: then stack 4 holds only #11 and #12 is in none.
+    let d = fake_gh_home_daemon(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+         left=; [ -f \"$GH_LOG.left\" ] && left=1\n\
+         case \"$*\" in\n\
+         \"api repos/{owner}/{repo}/pulls/13 --jq .stack.number // empty\") ;;\n\
+         \"api repos/{owner}/{repo}/pulls/12 --jq .stack.number // empty\") if [ -z \"$left\" ]; then echo 4; fi;;\n\
+         \"api repos/{owner}/{repo}/stacks/4\")\n\
+         one='{\"number\":11,\"title\":\"Gift card model\",\"html_url\":\"https://github.com/acme/web/pull/11\",\"state\":\"open\",\"merged_at\":null,\"draft\":false,\"head\":{\"ref\":\"moonlet/gift-card-model\"}}'\n\
+         two='{\"number\":12,\"title\":\"Gift cards\",\"html_url\":\"https://github.com/acme/web/pull/12\",\"state\":\"open\",\"merged_at\":null,\"draft\":false,\"head\":{\"ref\":\"moonlet/gift-cards\"}}'\n\
+         if [ -z \"$left\" ]; then prs=\"$one,$two\"; else prs=\"$one\"; fi\n\
+         echo \"{\\\"number\\\":4,\\\"base\\\":{\\\"ref\\\":\\\"main\\\"},\\\"pull_requests\\\":[$prs]}\";;\n\
+         *) exit 1;;\n\
+         esac\n",
+    )
+    .await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let ask = |number: u64, extra: serde_json::Value| {
+        let mut params = serde_json::json!({"path": s.path, "number": number});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        params
+    };
+    for _ in 0..2 {
+        let none: serde_json::Value = c.request(methods::GH_PR_STACK, ask(13, serde_json::json!({}))).await.unwrap();
+        assert_eq!(none, serde_json::Value::Null);
+    }
+    assert_eq!(gh_pr_calls(&d), ["api repos/{owner}/{repo}/pulls/13 --jq .stack.number // empty"], "asked once");
+
+    let stack: serde_json::Value = c.request(methods::GH_PR_STACK, ask(12, serde_json::json!({}))).await.unwrap();
+    assert_eq!(stack["size"].as_u64(), Some(2), "{stack}");
+    std::fs::write(d.home.path().join("bin/gh.log.left"), "").unwrap();
+    let left: serde_json::Value = c.request(methods::GH_PR_STACK, ask(12, serde_json::json!({"refresh": true}))).await.unwrap();
+    assert_eq!(left, serde_json::Value::Null);
+    assert_eq!(
+        gh_pr_calls(&d)[3..],
+        ["api repos/{owner}/{repo}/stacks/4", "api repos/{owner}/{repo}/pulls/12 --jq .stack.number // empty"]
+    );
+    let saved: serde_json::Value = c.request(methods::GH_PR_STACK, ask(12, serde_json::json!({"known": true}))).await.unwrap();
+    assert_eq!(saved, serde_json::Value::Null, "the saved stack no longer holds #12");
+}
+
 /// X108: a stack fetched for one PR answers for every PR in it within a
 /// minute, and `known: true` answers from the saved stack after a restart,
 /// neither asking GitHub.

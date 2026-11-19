@@ -7793,7 +7793,7 @@ impl Daemon {
             }
             m::GH_PR_STACK => {
                 let r: m::PrStackParams = params(p)?;
-                ok(w.pr_stack(&path(&r.path), r.number, r.known, r.refresh)
+                ok(w.pr_stack(&path(&r.path), r.number, moonlet_core::pr_cache::StackAsk::from_flags(r.known, r.refresh))
                     .await
                     .map_err(internal)?)
             }

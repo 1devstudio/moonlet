@@ -8,11 +8,39 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use moonlet_proto::types::{PrStack, PullRequest};
+
+use crate::git::stack_at;
 use serde::{Deserialize, Serialize};
 
 /// How long a saved stack with an open PR in it, or a PR found not to be in
 /// a stack, answers for every asker before GitHub is asked again.
 pub const STACK_FRESH_MS: u64 = 60_000;
+
+/// A saved stack not fetched for this long is dropped from the file.
+const STACK_KEPT_MS: u64 = 30 * 86_400_000;
+
+/// How a stack may be answered (X108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackAsk {
+    /// Only from what is saved, never asking GitHub.
+    Saved,
+    /// From the saved stack while it is fresh, or for good once no PR in it
+    /// is open: what the minute polls use.
+    Shared,
+    /// From GitHub however fresh the saved stack is, as on opening a session.
+    Fresh,
+}
+
+impl StackAsk {
+    /// From `gh.pr_stack`'s `known` and `refresh`; `known` wins.
+    pub fn from_flags(known: bool, refresh: bool) -> Self {
+        match (known, refresh) {
+            (true, _) => StackAsk::Saved,
+            (false, true) => StackAsk::Fresh,
+            (false, false) => StackAsk::Shared,
+        }
+    }
+}
 
 /// A session's PR as last heard, `None` when it had none, and when.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,21 +73,15 @@ pub struct PrCache {
     saved: Mutex<Saved>,
 }
 
+/// Whether something saved `age_ms` ago still answers every asker.
+pub fn fresh(age_ms: u64) -> bool {
+    age_ms < STACK_FRESH_MS
+}
+
 /// Whether a stack saved `age_ms` ago answers without asking GitHub: it is
 /// fresh, or no PR in it is open, so it cannot change any more.
 pub fn stack_fresh(stack: &PrStack, age_ms: u64) -> bool {
-    age_ms < STACK_FRESH_MS || !stack.prs.iter().any(|p| p.state == "open")
-}
-
-/// `stack` as seen from PR `number`: its 1-based position (1 is closest to
-/// the base) and the stack's size, or `None` when it is not in the stack.
-pub fn stack_at(stack: &PrStack, number: u64) -> Option<PrStack> {
-    let position = stack.prs.iter().position(|p| p.number == number)? as u64 + 1;
-    Some(PrStack {
-        position,
-        size: stack.prs.len() as u64,
-        ..stack.clone()
-    })
+    fresh(age_ms) || !stack.prs.iter().any(|p| p.state == "open")
 }
 
 fn unstacked_key(project: &str, number: u64) -> String {
@@ -111,7 +133,7 @@ impl PrCache {
                 checked_at: now,
             },
         );
-        self.save(&saved);
+        self.save(&mut saved, now);
     }
 
     /// The saved stack of `project` holding PR `number`, as seen from it,
@@ -146,24 +168,42 @@ impl PrCache {
             stack: stack.clone(),
             checked_at: now,
         });
-        self.save(&saved);
+        self.save(&mut saved, now);
     }
 
     /// Saves that PR `number` of `project` was in no stack at `now`.
     pub fn set_unstacked(&self, project: &str, number: u64, now: u64) {
         let mut saved = self.saved.lock().unwrap();
         saved.unstacked.insert(unstacked_key(project, number), now);
-        self.save(&saved);
+        self.save(&mut saved, now);
     }
 
-    /// Writes the file whole; a failure only costs asking GitHub again.
-    fn save(&self, saved: &Saved) {
+    /// Drops what no longer answers anything (PRs found in no stack over a
+    /// minute ago, stacks not fetched for 30 days), then writes the file
+    /// whole. It is not synced to disk: losing it to a power cut, or failing
+    /// to write it, only costs asking GitHub again.
+    fn save(&self, saved: &mut Saved, now: u64) {
+        saved
+            .unstacked
+            .retain(|_, at| fresh(now.saturating_sub(*at)));
+        for stacks in saved.stacks.values_mut() {
+            stacks.retain(|k| now.saturating_sub(k.checked_at) < STACK_KEPT_MS);
+        }
+        saved.stacks.retain(|_, stacks| !stacks.is_empty());
         let write = || -> anyhow::Result<()> {
+            use std::os::unix::fs::OpenOptionsExt;
             if let Some(dir) = self.file.parent() {
                 crate::paths::ensure_private_dir(dir)?;
             }
             let tmp = self.file.with_extension("json.tmp");
-            crate::paths::write_whole(&self.file, &tmp, &serde_json::to_vec(saved)?, 0o600)?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            std::io::Write::write_all(&mut f, &serde_json::to_vec(saved)?)?;
+            std::fs::rename(&tmp, &self.file)?;
             Ok(())
         };
         if let Err(e) = write() {
@@ -215,10 +255,10 @@ mod tests {
     #[test]
     fn a_saved_stack_is_seen_from_the_asked_pr() {
         let s = stack(&["merged", "open", "open"]);
-        let at = stack_at(&s, 12).unwrap();
+        let at = crate::git::stack_at(&s, 12).unwrap();
         assert_eq!((at.position, at.size), (2, 3));
-        assert_eq!(stack_at(&s, 11).unwrap().position, 1);
-        assert!(stack_at(&s, 99).is_none());
+        assert_eq!(crate::git::stack_at(&s, 11).unwrap().position, 1);
+        assert!(crate::git::stack_at(&s, 99).is_none());
     }
 
     #[test]
@@ -230,5 +270,19 @@ mod tests {
         assert_eq!(cache.session("s1"), None);
         cache.set_unstacked("p1", 12, 1_000);
         assert_eq!(PrCache::load(file).unstacked_at("p1", 12), Some(1_000));
+    }
+
+    #[test]
+    fn a_pr_found_in_no_stack_a_minute_ago_is_forgotten_on_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("prs.json");
+        let cache = PrCache::load(file.clone());
+        cache.set_unstacked("p1", 12, 1_000);
+        cache.set_unstacked("p1", 13, 61_000);
+        let again = PrCache::load(file);
+        assert_eq!(
+            (again.unstacked_at("p1", 12), again.unstacked_at("p1", 13)),
+            (None, Some(61_000))
+        );
     }
 }

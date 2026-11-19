@@ -19,6 +19,7 @@ use moonlet_proto::types::{
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 
+use crate::pr_cache::StackAsk;
 use crate::{git, git_settings};
 use crate::paths::now_ms;
 use crate::pty::user_shell;
@@ -2161,35 +2162,43 @@ impl SessionManager {
     }
 
     /// The GitHub stack PR `number` of the session at `path` belongs to
-    /// (X11). Saved stacks answer every asker within a minute, or for good
-    /// once no PR in them is open; `known` answers only from what is saved,
-    /// and `refresh` always asks GitHub (X108). A path no session owns is
+    /// (X11), answered as `ask` allows (X108). A path no session owns is
     /// asked about every time.
-    pub async fn pr_stack(&self, path: &Path, number: u64, known: bool, refresh: bool) -> Result<Option<PrStack>> {
-        use crate::pr_cache::{STACK_FRESH_MS, stack_at, stack_fresh};
+    pub async fn pr_stack(&self, path: &Path, number: u64, ask: StackAsk) -> Result<Option<PrStack>> {
+        use crate::pr_cache::{fresh, stack_fresh};
         let Some(s) = self.session_at(path) else {
-            return if known { Ok(None) } else { git::pr_stack(path, number).await };
+            return match ask {
+                StackAsk::Saved => Ok(None),
+                StackAsk::Shared | StackAsk::Fresh => git::pr_stack(path, number).await,
+            };
         };
         let project = s.project_id;
         let now = now_ms();
+        let shared = |at: u64, stack: Option<&PrStack>| {
+            ask == StackAsk::Shared
+                && match stack {
+                    Some(st) => stack_fresh(st, now.saturating_sub(at)),
+                    None => fresh(now.saturating_sub(at)),
+                }
+        };
         match self.prs.stack(&project, number) {
-            Some((saved, at)) if known || (!refresh && stack_fresh(&saved, now.saturating_sub(at))) => return Ok(Some(saved)),
+            Some((saved, at)) if ask == StackAsk::Saved || shared(at, Some(&saved)) => return Ok(Some(saved)),
             // Only the stack is asked again; when the PR has left it, its
-            // stack is looked up below.
-            Some((saved, _)) => match git::stack(path, saved.number).await {
-                Ok(Some(fresh)) => {
-                    self.prs.set_stack(&project, &fresh, now);
-                    if let Some(st) = stack_at(&fresh, number) {
+            // stack is looked up below. GitHub not answering leaves the
+            // saved one.
+            Some((saved, _)) => match git::fetch_stack(path, saved.number).await {
+                Ok(Some(fetched)) => {
+                    self.prs.set_stack(&project, &fetched, now);
+                    if let Some(st) = git::stack_at(&fetched, number) {
                         return Ok(Some(st));
                     }
                 }
                 Ok(None) => {}
                 Err(_) => return Ok(Some(saved)),
             },
-            None if known => return Ok(None),
+            None if ask == StackAsk::Saved => return Ok(None),
             None => {
-                let at = self.prs.unstacked_at(&project, number);
-                if !refresh && at.is_some_and(|at| now.saturating_sub(at) < STACK_FRESH_MS) {
+                if self.prs.unstacked_at(&project, number).is_some_and(|at| shared(at, None)) {
                     return Ok(None);
                 }
             }
