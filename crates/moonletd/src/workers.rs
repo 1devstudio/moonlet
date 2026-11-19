@@ -28,6 +28,10 @@ const MISSES: u32 = 3;
 /// did not sleep.
 const SLEEP_HOLD_LIMIT_MS: u64 = 30_000;
 
+/// [`Workers::hold_asleep`]: what the central host knows of its workers'
+/// sleep, held unchanged (X73).
+pub type SleepHold<'a> = std::sync::MutexGuard<'a, HashMap<String, Sleep>>;
+
 /// What a worker said of its sleep (X73): when it said it is going to
 /// sleep, and whether it went silent since.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,7 +378,7 @@ impl Workers {
     /// hold is dropped (X73): a session taken over under it has its new
     /// owner recorded before the waking worker's word is answered, and so
     /// before the worker asks who owns it. None while it is not asleep.
-    pub fn hold_asleep(&self, id: &str) -> Option<std::sync::MutexGuard<'_, HashMap<String, Sleep>>> {
+    pub fn hold_asleep(&self, id: &str) -> Option<SleepHold<'_>> {
         let sleeping = self.sleeping.lock().unwrap();
         let linked = self.list.lock().unwrap().contains_key(id);
         sleeping.get(id).is_some_and(|m| m.silent || !linked).then_some(sleeping)

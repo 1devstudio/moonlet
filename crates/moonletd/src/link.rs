@@ -1403,13 +1403,14 @@ impl WorkerLink {
 
     /// Asks the central host now for what of the account this member lacks,
     /// and takes it in (X73, after a sleep): true once it answered, within
-    /// `wait`. A Mac that told the central host it was going to sleep says
-    /// it is awake first, so the central host takes no session over from
-    /// then on, before the account's answer says who owns each. The link's state is not taken at its word, as a link from
+    /// `wait`. At a wake (`awake`), a Mac that told the central host it was
+    /// going to sleep says it is awake first, so the central host takes no
+    /// session over from then on, before the account's answer says who
+    /// owns each; any other caller leaves that word to the wake. The link's state is not taken at its word, as a link from
     /// before a sleep can look up long after the central host dropped it:
     /// it proves itself first with a round trip, and one that gives no
     /// answer within [`ANSWER_BEFORE_RELINKING`] is made again, once.
-    pub async fn sync_now(self: &Arc<Self>, wait: std::time::Duration) -> bool {
+    pub async fn sync_now(self: &Arc<Self>, wait: std::time::Duration, awake: bool) -> bool {
         if self.central_name().is_none() || !self.sessions.has_account() || self.is_cloud() {
             return false;
         }
@@ -1428,7 +1429,7 @@ impl WorkerLink {
                     // much the account has to catch up.
                     Ok(Ok(_)) => {
                         let left = until.saturating_duration_since(tokio::time::Instant::now());
-                        if self.told_asleep.lock().unwrap().is_some() {
+                        if awake && self.told_asleep.lock().unwrap().is_some() {
                             let awake = serde_json::to_value(m::WorkerSleep { asleep: false }).unwrap_or_default();
                             match tokio::time::timeout(left, host.request(m::WORKER_SLEEP, awake)).await {
                                 // Heard; or a central host from before, which

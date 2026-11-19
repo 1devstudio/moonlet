@@ -1749,6 +1749,7 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only an app or a phone continues a session here"));
                 }
                 let r: m::SessionContinueHere = params(p)?;
+                self.hear_if_asleep(&r.session).await;
                 ok(self.continue_here(&r.session, "could not be reached", true).await?)
             }
             m::SESSION_FORWARD => {
@@ -4260,9 +4261,6 @@ impl Daemon {
 
     /// [`Self::continue_here`]; with `pin`, the session is kept here after.
     async fn continue_here_as(self: &Arc<Self>, session: &str, why: &str, only_unreachable: bool, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
-        if only_unreachable {
-            self.hear_if_asleep(session).await;
-        }
         let record = self.continuable(session, only_unreachable, pin)?;
         let info = self.session_copies.copy_info(session)?;
         if info.path.is_empty() {
@@ -4301,18 +4299,8 @@ impl Daemon {
         if record.get("archived").and_then(Value::as_bool).unwrap_or(false) {
             return Err(RpcError::new("archived", "that session is archived"));
         }
-        // A member that said it is going to sleep and went silent is
-        // asleep, not merely unreachable (X73).
-        let asleep = self.workers.asleep(&owner);
-        if only_unreachable && self.workers.conn(&owner).is_some() && !asleep {
-            return Err(RpcError::new("reachable", "the member running that session is reachable"));
-        }
-        // Not for a short drop: only once it has been away for 30 s, or
-        // asleep. Tests set a shorter wait.
-        let wait: u64 = std::env::var("MOONLET_TEST_UNREACHABLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
-        if only_unreachable && !asleep && self.workers.unreachable_since(&owner).is_some_and(|t| now_ms().saturating_sub(t) < wait) {
-            let name = self.sessions.member_names().remove(&owner).unwrap_or(owner);
-            return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
+        if only_unreachable {
+            self.away_for_now(&owner)?;
         }
         // A move (`pin`) pins it here instead.
         if !pin && text("pinned").is_some_and(|p| p != me.id) {
@@ -4322,6 +4310,27 @@ impl Daemon {
             return Err(RpcError::new("invalid_params", "this host already has that session"));
         }
         Ok(record)
+    }
+
+    /// Whether member `owner` is away so that this host may continue its
+    /// sessions (X73): asleep, its hold given so it stays asleep until the
+    /// hold is dropped; or not linked, for 30 s (tests set a shorter
+    /// wait), so a short drop never moves a session. Otherwise `reachable`
+    /// or `not_yet`.
+    fn away_for_now(&self, owner: &str) -> Result<Option<crate::workers::SleepHold<'_>>, RpcError> {
+        let asleep = self.workers.hold_asleep(owner);
+        if asleep.is_some() {
+            return Ok(asleep);
+        }
+        if self.workers.conn(owner).is_some() {
+            return Err(RpcError::new("reachable", "the member running that session is reachable"));
+        }
+        let wait: u64 = std::env::var("MOONLET_TEST_UNREACHABLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
+        if self.workers.unreachable_since(owner).is_some_and(|t| now_ms().saturating_sub(t) < wait) {
+            let name = self.sessions.member_names().remove(owner).unwrap_or_else(|| owner.to_string());
+            return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
+        }
+        Ok(None)
     }
 
     /// `session.give_back` from member `worker` (X73): the session this
@@ -4505,10 +4514,7 @@ impl Daemon {
         // it is back waits for that, so the account it asks for next says
         // the session moved (X73).
         let owner = text("owner").unwrap_or_default();
-        let _asleep = if only_unreachable { self.workers.hold_asleep(&owner) } else { None };
-        if only_unreachable && self.workers.conn(&owner).is_some() && _asleep.is_none() {
-            return Err(RpcError::new("reachable", "the member running that session is reachable"));
-        }
+        let _asleep = if only_unreachable { self.away_for_now(&owner)? } else { None };
         let adopted = self
             .sessions
             .adopt_session(moonlet_proto::types::Session {
@@ -4995,7 +5001,7 @@ impl Daemon {
                 // answer, the agents go on, as offline work does (ADR 0014),
                 // but not before the central host, which heard this Mac
                 // was going to sleep, would have waited 30 s (X73).
-                let heard = self.link.sync_now(self.link.wake_wait()).await;
+                let heard = self.link.sync_now(self.link.wake_wait(), true).await;
                 if !heard {
                     tracing::info!("no word from the central host after the wake; agents go on by this Mac's records");
                 }
@@ -5166,7 +5172,7 @@ impl Daemon {
         // The wake settles it itself.
         let Ok(_one) = self.handing_over.try_lock() else { return };
         // Records from before the stop do not say whether it was taken.
-        if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
+        if !self.link.sync_now(std::time::Duration::from_secs(5), false).await {
             return;
         }
         let (_, again) = self.settle_moves(&info.worker.id);
@@ -5414,7 +5420,7 @@ impl Daemon {
                 // One that said it is going to sleep is asleep now: the
                 // session goes on here at once (X73).
                 if self.workers.asleep(&owner) {
-                    return Box::pin(self.continue_for(conn, r)).await;
+                    return Box::pin(self.continue_for(conn, r, true)).await;
                 }
                 return Err(RpcError::new("owner_not_responding", format!("{} is not responding", name())));
             }
@@ -5456,7 +5462,7 @@ impl Daemon {
             }
             // A message or an answer continues the session here first, as
             // Continue here does (X73).
-            method if takes_over(method) => Box::pin(self.continue_for(conn, r)).await,
+            method if takes_over(method) => Box::pin(self.continue_for(conn, r, false)).await,
             _ => Err(offline()),
         }
     }
@@ -5465,7 +5471,8 @@ impl Daemon {
     /// this host takes the session over as `session.continue_here` does,
     /// by the same rules (30 s away, never one kept on its member), and
     /// delivers it here. Answers `{continued_on}`, this host's name.
-    async fn continue_for(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward) -> HandlerResult {
+    /// `probed` when the member was just pinged for it, so it is not again.
+    async fn continue_for(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward, probed: bool) -> HandlerResult {
         let one = lock_of(&self.continuing, &r.session);
         let _one = one.lock().await;
         let me = self.link.info().worker;
@@ -5477,7 +5484,9 @@ impl Daemon {
         if ours(self) {
             return Box::pin(self.deliver_here(conn, r)).await;
         }
-        self.hear_if_asleep(&r.session).await;
+        if !probed {
+            self.hear_if_asleep(&r.session).await;
+        }
         self.continuable(&r.session, true, false)?;
         // Only a chat of the session's, before anything moves.
         let chat = r.params.get("id").and_then(Value::as_u64);
@@ -5745,7 +5754,7 @@ impl Daemon {
             return;
         }
         // Records from before do not say what the central host did.
-        if !self.link.sync_now(std::time::Duration::from_secs(5)).await {
+        if !self.link.sync_now(std::time::Duration::from_secs(5), false).await {
             return;
         }
         let Some(host) = self.link.host() else { return };
@@ -7107,7 +7116,7 @@ impl Daemon {
                             // up, silent, for 30 s (X73).
                             let asleep_at = self.workers.said_asleep_at(&owner);
                             let gone = self.workers.unreachable_since(&owner);
-                            (self.workers.conn(&owner).is_some() && asleep_at.is_none(), gone.or(asleep_at), asleep_at.is_some())
+                            (self.workers.conn(&owner).is_some() && asleep_at.is_none(), asleep_at.or(gone), asleep_at.is_some())
                         };
                         SessionOwner {
                             name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
