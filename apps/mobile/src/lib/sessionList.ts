@@ -96,7 +96,7 @@ export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<str
       const sectionKey = `${ref.account ?? ref.host}:${ws.id}:${sec.id}`;
       const shared = arrangeShared(ws.id, sectionParts(holding, { ...sec, view: BY_PROJECT }, of), {
         stateOf: (h, s) => sessionState(data[h], s),
-        activeAt: (h, s) => lastActive(data[h].terminals, s),
+        activeAt: (h, s) => lastActive(Object.values(data[h].terminals).filter((t) => t.session_id === s.id), s),
         archiving: () => false,
         taskOf: () => null,
       });
