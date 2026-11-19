@@ -16,8 +16,10 @@ Each workspace has tabs, and each tab holds a tree of split panes (`src/lib/layo
   - Tabs and panes: ⌘T new agent tab, ⇧⌘T new terminal tab ([X38](X38-new-agent-tab-context.md)), ⌘W close pane (asks before stopping a running agent), ⌥⌘←/→ focus pane, ⇧⌘[ / ⇧⌘] switch tab.
   - Navigation: ⌘1–9 workspace, ⌘B sidebar, ⌘\ review panel, ⌘K palette.
 - [x] Only the active tab's panes mount terminals.
-- [x] An exited pane shows its exit code with Restart and Close.
+- [x] An exited pane shows its exit code with Restart and Close. The bar lies over the terminal's last rows, and its buttons take every click on them, also while the terminal's scrollbar shows.
 
 ## Test plan
 
 `src/lib/layout.test.ts` covers reconcile, split/collapse, focus cycling and validation of stored layouts.
+
+`e2e/specs/exit-bar.e2e.ts` checks that every spot of Restart and Close, at their centre and corners, hits the button rather than a terminal layer, with and without the scrollbar showing.
