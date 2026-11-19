@@ -48,15 +48,14 @@ impl HeldHost {
     }
 }
 
-/// The hosts in `app-hosts.json`, with their tokens. A token still in the
-/// file is used as it is and moved at the next save; the others come from
-/// the store.
+/// The hosts in `app-hosts.json`, with their tokens. What the store keeps
+/// for a host wins over the file, so a token and addresses written into the
+/// file can neither redirect the app nor replace the kept token; the next
+/// save drops them. A host the store has nothing for uses the file's token,
+/// moved at the next save.
 pub fn load(file: Vec<TailnetHost>, store: &dyn Secrets) -> Vec<HeldHost> {
     file.into_iter()
         .map(|t| {
-            if !t.token.is_empty() {
-                return HeldHost::paired(t);
-            }
             let kept = store
                 .get(&key(&t))
                 .and_then(|v| serde_json::from_str::<Kept>(&v).ok());
@@ -340,14 +339,16 @@ mod tests {
             [entry("host:studio-mini:d2", &kept("tok-2"))]
         );
 
-        // A build from before this change paired again and wrote its token
-        // into the file under the same device id: the Keychain takes it.
-        let (tokens, written) = start(vec![mini("d2", "tok-3", "")], &keychain);
-        assert_eq!(tokens, ["tok-3"]);
-        assert_eq!(written[0].token, "");
+        // Another process of the user writes a token and an address of its
+        // own into the file: the kept ones win, and the next save drops them.
+        let mut forged = mini("d2", "tok-3", "");
+        forged.addrs = vec!["127.0.0.1:47999".into()];
+        let (tokens, written) = start(vec![forged], &keychain);
+        assert_eq!(tokens, ["tok-2"]);
+        assert_eq!(written, [mini("d2", "", TOK_2_SHA256)]);
         assert_eq!(
             keychain.tokens(),
-            [entry("host:studio-mini:d2", &kept("tok-3"))]
+            [entry("host:studio-mini:d2", &kept("tok-2"))]
         );
     }
 }
