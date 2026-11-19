@@ -23,6 +23,11 @@ pub const DEFAULT: &[&str] = &[
     "bun.lock",
     "bun.lockb",
     ".npmrc",
+    ".nvmrc",
+    ".node-version",
+    "deno.json",
+    "deno.lock",
+    "patches/**",
     // Rust
     "Cargo.toml",
     "Cargo.lock",
@@ -39,6 +44,8 @@ pub const DEFAULT: &[&str] = &[
     "Pipfile",
     "Pipfile.lock",
     "requirements*.txt",
+    "requirements/*.txt",
+    ".python-version",
     // Ruby, PHP, Elixir, Dart, Swift, CocoaPods
     "Gemfile",
     "Gemfile.lock",
@@ -52,6 +59,12 @@ pub const DEFAULT: &[&str] = &[
     "Package.resolved",
     "Podfile",
     "Podfile.lock",
+    // .NET
+    "*.csproj",
+    "*.fsproj",
+    "packages.lock.json",
+    "Directory.Packages.props",
+    "global.json",
     // JVM
     "pom.xml",
     "build.gradle",

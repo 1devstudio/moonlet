@@ -2044,8 +2044,9 @@ async fn a_changed_setup_command_asks_again_and_runs_nothing_until_approved() {
     let _: bool = book
         .call("exec.answer_setup", json!({ "id": ask["copy"], "command": changed, "run": true }))
         .await;
-    let ran = run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/.changed && cat node_modules/installed"]).await;
-    assert_eq!((ran.stdout.as_str(), ran.status), ("left-pad: 1.3.0\n", 0), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
+    // Nothing ran before it: this is the setup's second run in the copy.
+    let ran = run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/.changed && cat node_modules/installed && grep -c run node_modules/runs"]).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("left-pad: 1.3.0\n2\n", 0), "{ran:?} {}", last_job(&book, &session).await["timeline"]);
 }
 
 #[tokio::test]

@@ -139,12 +139,12 @@ struct Kept {
     /// checkout lists them (`setup_inputs`); none for the copy's own list,
     /// or the default one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    setup_watch: Option<Vec<String>>,
+    setup_inputs: Option<Vec<String>>,
     /// Those files as the copy's last setup that ended well read them, by
     /// path and blob id: a routing copy runs its setup again when they
     /// changed (X62). None for a copy whose setup ran before this was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    setup_inputs: Option<moonlet_core::setup_inputs::Inputs>,
+    setup_read: Option<moonlet_core::setup_inputs::Inputs>,
     /// Why the setup running now runs again, for a run that waits for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     setup_why: Option<String>,
@@ -3047,7 +3047,7 @@ impl LiveCopies {
         // A routing copy's setup runs on the files of its fence (X62): what
         // it read there is kept, so the next run knows when it changed.
         let fence = k.base.clone().filter(|_| k.kind == CopyKind::Run);
-        let watch = setup_watch_of(&k);
+        let watch = setup_inputs_of(&k);
         let me = self.clone();
         let id = id.to_string();
         tokio::spawn(async move {
@@ -3087,7 +3087,7 @@ impl LiveCopies {
                     k.setup = Some(running(state));
                     k.setup_why = None;
                     if read.is_some() {
-                        k.setup_inputs = read;
+                        k.setup_read = read;
                     }
                 });
                 drop(setups);
@@ -3925,8 +3925,8 @@ fn setup_of_copy(k: &Kept) -> Option<String> {
 
 /// The files copy `k`'s setup reads: the list the host that routes its
 /// commands sent, else the copy's own `setup_inputs`, else the default.
-fn setup_watch_of(k: &Kept) -> Vec<String> {
-    k.setup_watch
+fn setup_inputs_of(k: &Kept) -> Vec<String> {
+    k.setup_inputs
         .clone()
         .or_else(|| moonlet_core::project_config::load(Path::new(&k.path), String::new()).config.setup_inputs)
         .unwrap_or_else(|| moonlet_core::setup_inputs::DEFAULT.iter().map(|p| p.to_string()).collect())
@@ -4236,7 +4236,7 @@ impl LiveCopies {
         session: String,
         member: Option<(String, String)>,
         setup: Option<String>,
-        watch: Option<Vec<String>>,
+        inputs: Option<Vec<String>>,
         fence: Option<m::ExecFence>,
     ) -> Result<m::ExecPrepared, RpcError> {
         let (host, peer) = match member {
@@ -4292,7 +4292,7 @@ impl LiveCopies {
             if setup.is_some() {
                 k.setup_command = setup.clone();
             }
-            k.setup_watch = watch;
+            k.setup_inputs = inputs;
         });
         self.save();
         // A routing copy has nobody to retry it: one whose folder went, or
@@ -4368,9 +4368,9 @@ impl LiveCopies {
             return;
         }
         let Some(command) = setup_of_copy(&k) else { return };
-        let watch = setup_watch_of(&k);
+        let watch = setup_inputs_of(&k);
         let Some(now) = setup_inputs_at(Path::new(&k.path), &fence.tree, &watch).await else { return };
-        let why = match &k.setup_inputs {
+        let why = match &k.setup_read {
             Some(last) => {
                 let last = moonlet_core::setup_inputs::select(last.iter().map(|(p, b)| (p.as_str(), b.as_str())), &watch);
                 let changed = moonlet_core::setup_inputs::changed(&last, &now);

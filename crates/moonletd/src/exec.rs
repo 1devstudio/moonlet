@@ -1220,7 +1220,8 @@ impl Runs {
                     // As long as a copy may take to make; then the next
                     // host runs it.
                     if setup_again.as_ref().is_some_and(|(_, began)| began.elapsed() > PREPARE_TIMEOUT) {
-                        return Err(Fail::Refused("setup_pending".into(), "its setup still runs after 10 minutes".into()));
+                        let minutes = PREPARE_TIMEOUT.as_secs() / 60;
+                        return Err(Fail::Refused("setup_running".into(), format!("its setup still runs after {minutes} minutes")));
                     }
                     self.unless_stopped(run, client, tokio::time::sleep(SETUP_POLL)).await?;
                 }
@@ -1425,7 +1426,6 @@ impl Runs {
         stopped.or_else(|| client.is_gone().then_some(130))
     }
 
-    /// `f`'s result, unless run `run` is stopped first.
     /// `exec.prepare` on the worker `conn` leads to, until the job stops.
     async fn prepare_on(&self, run: u32, client: &Conn, conn: &Peer, prepare: &m::ExecPrepare) -> Result<ExecPrepared, Fail> {
         self.unless_stopped(
@@ -1439,6 +1439,7 @@ impl Runs {
         .ok_or_else(|| Fail::Refused("failed".into(), "it could not make its copy".into()))
     }
 
+    /// `f`'s result, unless run `run` is stopped first.
     async fn unless_stopped<T>(
         &self,
         run: u32,

@@ -270,7 +270,7 @@ Added 2026-11-19. Until then a routing copy's setup (X62, X89) was asked about o
   - id, session, path and repository;
   - base tree and base commit;
   - the paths that differ;
-  - for a routing copy, `setup_inputs`, the files its last setup that ended well read, by path and blob id, and `setup_watch`, the list the session's host sent (X62).
+  - for a routing copy, `setup_read`, the files its last setup that ended well read, by path and blob id, and `setup_inputs`, the list the session's host sent (X62).
 
   On the central host, it also records each copy's worker id. No token is in it.
 - **On this Mac,** `$MOONLET_HOME/sync/projects.json` holds, per central host and project identity (the key is `<host> <origin> <root>`, made only when the root is a full hex commit id and the origin has no spaces, so it reads one way only; otherwise nothing is remembered):
