@@ -108,9 +108,24 @@ fn glob_match(pattern: &[u8], name: &[u8]) -> bool {
 }
 
 /// The private index a worktree's snapshots go through, beside its own
-/// index: the session's staging area is never touched.
-async fn private_index(worktree: &Path) -> Result<PathBuf> {
-    Ok(git_dir(worktree).await?.join("moonlet-sync-index"))
+/// index: the session's staging area is never touched. One user of it at a
+/// time in this process: a routed run's fence and a sync round can take a
+/// snapshot of one worktree at once (X62, X60), and two gits on one index
+/// refuse each other (`moonlet-sync-index.lock: File exists`). The index is
+/// the worktree's for as long as the guard is held.
+async fn private_index(worktree: &Path) -> Result<(PathBuf, tokio::sync::OwnedMutexGuard<()>)> {
+    type Locks = std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>;
+    static LOCKS: std::sync::Mutex<Option<Locks>> = std::sync::Mutex::new(None);
+    let index = git_dir(worktree).await?.join("moonlet-sync-index");
+    let lock = {
+        let mut all = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        let all = all.get_or_insert_with(Default::default);
+        // Worktrees no one is using go, so the map stays as small as the
+        // worktrees in use.
+        all.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
+        all.entry(index.clone()).or_default().clone()
+    };
+    Ok((index, lock.lock_owned().await))
 }
 
 /// NUL-separated pathspecs for `--pathspec-from-file=- --pathspec-file-nul`,
@@ -136,7 +151,7 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 /// bytes ([`MAX_FILE`] outside tests), or it stays out if no snapshot took
 /// it yet.
 pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Result<Snapshot> {
-    let index = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
     // A pattern the list could not hold is left out, as the copied-files
@@ -689,7 +704,7 @@ pub async fn apply(worktree: &Path, from: &str, to: &str) -> Result<(), ApplyErr
     if let Some(path) = unsafe_path(&read_files(worktree, to).await?) {
         return Err(ApplyError::Unsafe(path));
     }
-    let index = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
     git_env(worktree, &env, &["read-tree", from], None).await?;
@@ -1207,7 +1222,7 @@ pub async fn branch_exists(repo: &Path, name: &str) -> bool {
 /// they became ignored or grew past the limit and changed since. Plain
 /// ignored files, such as build output, are not among them. Sorted.
 pub async fn local_only(worktree: &Path) -> Result<Vec<String>> {
-    let index = private_index(worktree).await?;
+    let (index, _only) = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
     // Files whose content matches the snapshot only lack fresh stat data.
@@ -1633,6 +1648,32 @@ mod tests {
         .await
         .unwrap();
         dir
+    }
+
+    /// Snapshots of one worktree taken at once, as a routed run's fence and
+    /// a sync round take them (X62, X60): each one goes through, and each
+    /// gives the tree one taken alone gives.
+    #[tokio::test]
+    async fn snapshots_of_one_worktree_taken_at_once_all_go_through() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        let alone = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
+        let _ = std::fs::remove_file(p.join(".git/moonlet-sync-index"));
+        for _ in 0..5 {
+            let all = snapshots_at_once(p, 8).await;
+            for r in all {
+                assert_eq!(r.map_err(|e| format!("{e:#}")).map(|s| s.tree), Ok(alone.clone()));
+            }
+        }
+    }
+
+    async fn snapshots_at_once(p: &Path, n: usize) -> Vec<Result<Snapshot>> {
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..n {
+            let p = p.to_path_buf();
+            set.spawn(async move { snapshot(&p, MAX_FILE, &[]).await });
+        }
+        set.join_all().await
     }
 
     /// A fast-forward while another git holds the staging area's lock, as

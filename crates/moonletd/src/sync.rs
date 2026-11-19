@@ -465,6 +465,9 @@ pub struct LiveCopies {
     states: Mutex<HashMap<String, CopyState>>,
     /// One at a time per kept copy, and per served session.
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// One save of `file` at a time, each of the state as it is then: two
+    /// at once could leave the older last.
+    saving: Mutex<()>,
     watchers: Arc<Watchers>,
     /// Wakes the loop that sends a session's changes, by its folder.
     kicks: Mutex<HashMap<PathBuf, Arc<Notify>>>,
@@ -533,6 +536,7 @@ impl LiveCopies {
                 data: Mutex::new(data),
                 states: Mutex::new(HashMap::new()),
                 locks: Mutex::new(HashMap::new()),
+                saving: Mutex::new(()),
                 watchers,
                 kicks: Mutex::new(HashMap::new()),
                 offering: Mutex::new(HashMap::new()),
@@ -550,6 +554,7 @@ impl LiveCopies {
     }
 
     fn save(&self) {
+        let _one = self.saving.lock().unwrap_or_else(|e| e.into_inner());
         let bytes = serde_json::to_vec_pretty(&*self.data.lock().unwrap()).unwrap();
         if let Err(e) = crate::mobile::write_private(&self.file, &bytes) {
             tracing::warn!("cannot write {}: {e:#}", self.file.display());
@@ -3044,6 +3049,7 @@ impl LiveCopies {
             }
         };
         self.set_setup(id, Some(running(SetupState::Running)));
+        tracing::debug!(copy = %id, run, "setup started");
         // A routing copy's setup runs on the files of its fence (X62): what
         // it read there is kept, so the next run knows when it changed.
         let fence = k.base.clone().filter(|_| k.kind == CopyKind::Run);
@@ -3055,6 +3061,7 @@ impl LiveCopies {
                 Ok(status) => status.code().unwrap_or(-1),
                 Err(_) => -1,
             };
+            tracing::debug!(copy = %id, run, exit, "setup ended");
             reaped.store(true, std::sync::atomic::Ordering::SeqCst);
             let current = || me.setups.lock().unwrap().get(&id).is_some_and(|s| s.run == run);
             let mut read = None;
@@ -3160,6 +3167,7 @@ impl LiveCopies {
         let Some(s) = self.setups.lock().unwrap().remove(id) else {
             return;
         };
+        tracing::debug!(copy = %id, run = s.run, "setup stopped");
         // A setup still running when stopped reads as ended by a signal.
         self.update_kept(id, |k| {
             k.setup_sid = None;
@@ -5208,15 +5216,26 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
         if let Some(sid) = k.setup_sid {
             end_recorded_session(sid, k.setup_started);
         }
+        // A routing copy's setup the stop ended runs again by itself while
+        // its command stays approved, and is asked for otherwise (X60), so
+        // an upgrade does not leave a host failed. A live copy's reads as
+        // ended by a signal.
         let failed = k
             .setup
             .as_ref()
             .filter(|s| s.state == SetupState::Running)
             .map(|setup| CopySetup {
-                state: SetupState::Failed { exit: -1 },
+                state: if k.kind == CopyKind::Run {
+                    SetupState::NeedsApproval
+                } else {
+                    SetupState::Failed { exit: -1 }
+                },
                 command: setup.command.clone(),
                 approved: false,
             });
+        if let Some(f) = &failed {
+            tracing::debug!(copy = %k.id, state = ?f.state, "a setup the daemon's stop ended");
+        }
         if k.setup_sid.is_some() || failed.is_some() {
             sync.update_kept(&k.id, |k| {
                 if let Some(failed) = failed {
@@ -5232,6 +5251,11 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(sync.link_holders());
+    // The setups the stop ended, now waiting again: those still approved
+    // run (the account attached before the copies loaded), and the others
+    // are asked for, here and on the other members (X60).
+    sync.report_setups();
+    sync.run_approved_setups();
     sync.sweep_run_copies();
     // New sessions that waited for the composer are looked at again.
     let due = sync.clone();

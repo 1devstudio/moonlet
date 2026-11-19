@@ -734,6 +734,32 @@ async fn one_link_set_says_link_changed_once() {
     assert_eq!(changes, [json!("off")]);
 }
 
+/// On its first link a member trades its paired token for a worker link
+/// (X41), whose connection replaces the first one: the app sees the link
+/// set (off, as link.set first closes any link), connecting until the
+/// trade is done, then connected, once.
+#[tokio::test]
+async fn a_first_link_says_connecting_until_its_worker_link_is_made_then_connected_once() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    let mut events = worker.app().await;
+    link(&worker, &addr, &token).await;
+    eventually("the worker is listed", || async { workers(&central).await.len() == 1 }).await;
+    let mut changes: Vec<Value> = Vec::new();
+    let quiet = tokio::time::Instant::now() + Duration::from_millis(700);
+    while let Ok(Ok(Some(frame))) = tokio::time::timeout_at(quiet, events.next_frame()).await {
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "link.changed"
+            && changes.last() != Some(&data["state"]["kind"])
+        {
+            changes.push(data["state"]["kind"].clone());
+        }
+    }
+    assert_eq!(changes, [json!("off"), json!("connecting"), json!("connected")]);
+    assert_ne!(link_token(&worker), token);
+}
+
 #[tokio::test]
 async fn another_paired_device_cannot_take_a_workers_id() {
     let (central, addr) = central().await;

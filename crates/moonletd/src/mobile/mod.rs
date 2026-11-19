@@ -1174,28 +1174,77 @@ impl Mobile {
 
 /// Writes `bytes` to `path` with mode 0600, through a temporary file.
 pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         moonlet_core::paths::ensure_private_dir(dir)?;
     }
+    // One write of a file at a time: two at once, as the copies file is
+    // saved from several tasks, truncated and renamed each other's temp
+    // file.
+    type Writing = std::collections::HashMap<std::path::PathBuf, std::sync::Arc<std::sync::Mutex<()>>>;
+    static WRITING: std::sync::Mutex<Option<Writing>> = std::sync::Mutex::new(None);
+    let one = {
+        let mut all = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+        let all = all.get_or_insert_with(Default::default);
+        all.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
+        all.entry(path.to_path_buf()).or_default().clone()
+    };
+    let _one = one.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = path.with_extension("json.tmp");
+    let written = write_through(&tmp, path, bytes);
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Writes `bytes` to `tmp`, private, then renames it to `path`.
+fn write_through(tmp: &std::path::Path, path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(&tmp)
+        .open(tmp)
         .with_context(|| format!("open {}", tmp.display()))?;
     f.write_all(bytes)?;
     f.sync_all()?;
-    std::fs::rename(&tmp, path)?;
+    std::fs::rename(tmp, path)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Files written from several tasks at once, as the copies file is
+    /// saved: every write goes through, and the file always holds one
+    /// whole write, never two mixed or none.
+    #[test]
+    fn a_file_written_from_several_threads_at_once_is_always_one_whole_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copies.json");
+        let writers: Vec<_> = (0..8)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let text = format!("{{\"writer\": {n}, \"pad\": \"{}\"}}", "x".repeat(64 * 1024));
+                    for _ in 0..50 {
+                        write_private(&path, text.as_bytes()).map_err(|e| format!("{e:#}"))?;
+                    }
+                    Ok::<(), String>(())
+                })
+            })
+            .collect();
+        for w in writers {
+            assert_eq!(w.join().unwrap(), Ok(()));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(v["writer"].is_u64(), "{v}");
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, [std::ffi::OsString::from("copies.json")]);
+    }
 
     #[test]
     fn tailscale_is_asked_on_the_path_first_then_where_its_installs_put_it() {

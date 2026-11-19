@@ -283,6 +283,13 @@ fn keep_current() {
             return;
         }
     }
+    let started: Vec<(String, PathBuf)> = STARTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|s| s.test == test)
+        .map(|s| (s.name.clone(), s.home.clone()))
+        .collect();
     let mut daemons: Vec<(String, PathBuf, PathBuf)> = STARTED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -335,6 +342,14 @@ fn keep_current() {
     }
     let all = merge(&logs);
     let _ = std::fs::write(dir.join("all.log"), &all);
+    // What each copy's setup printed (X60), from homes still there.
+    for (name, home) in &started {
+        for e in std::fs::read_dir(home.join("sync/logs")).into_iter().flatten().flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            let text = private.scrub(&tail_of(&e.path(), KEEP_BYTES));
+            let _ = std::fs::write(dir.join(format!("{name}.setup-{file}")), text);
+        }
+    }
 
     // Through eprint!, so libtest shows it with the test's own output.
     let names: Vec<&str> = logs.iter().map(|(n, _)| n.as_str()).collect();
