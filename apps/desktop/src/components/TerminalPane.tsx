@@ -91,7 +91,10 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
         if (l.focused !== session) setLayout(host, wsId, { ...l, focused: session });
       }}
     >
-      <div className="relative min-h-0 flex-1">
+      {/* `isolate` keeps xterm's stacked layers (WebGL link layer,
+          scrollbar, block headers) under the exit bar, which overlaps the
+          terminal's last rows; without it they took clicks on its buttons. */}
+      <div className="relative isolate min-h-0 flex-1">
         <div ref={ref} className="absolute inset-0" />
       </div>
       {editing && visible && (
