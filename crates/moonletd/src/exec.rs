@@ -1182,7 +1182,7 @@ impl Runs {
             fence: None,
         };
         sync.expect_open(worker, &plan.session);
-        let prepared = self.prepare_on(run, client, &conn, &prepare).await?;
+        let prepared = self.prepare_on(run, client, &conn, &prepare, PREPARE_TIMEOUT).await?;
         if prepared.state != "ready" {
             return Err(not_ready(prepared));
         }
@@ -1201,8 +1201,17 @@ impl Runs {
         // host. A runner from before answers `ready` at once.
         prepare.fence = Some(m::ExecFence { tree: tree.clone(), head: head.clone() });
         let mut setup_again: Option<(String, std::time::Instant)> = None;
+        // One deadline for the whole wait, as long as a copy may take to
+        // make; then the next host runs it.
+        let left = |setup_again: &Option<(String, std::time::Instant)>| {
+            setup_again.as_ref().map_or(PREPARE_TIMEOUT, |(_, began)| PREPARE_TIMEOUT.saturating_sub(began.elapsed()))
+        };
         loop {
-            let prepared = self.prepare_on(run, client, &conn, &prepare).await?;
+            if left(&setup_again).is_zero() {
+                let minutes = PREPARE_TIMEOUT.as_secs() / 60;
+                return Err(Fail::Refused("setup_running".into(), format!("its setup still runs after {minutes} minutes")));
+            }
+            let prepared = self.prepare_on(run, client, &conn, &prepare, left(&setup_again)).await?;
             match prepared.state.as_str() {
                 "ready" => break,
                 "setup_running" => {
@@ -1217,13 +1226,7 @@ impl Runs {
                         );
                         setup_again = Some((why, std::time::Instant::now()));
                     }
-                    // As long as a copy may take to make; then the next
-                    // host runs it.
-                    if setup_again.as_ref().is_some_and(|(_, began)| began.elapsed() > PREPARE_TIMEOUT) {
-                        let minutes = PREPARE_TIMEOUT.as_secs() / 60;
-                        return Err(Fail::Refused("setup_running".into(), format!("its setup still runs after {minutes} minutes")));
-                    }
-                    self.unless_stopped(run, client, tokio::time::sleep(SETUP_POLL)).await?;
+                    self.unless_stopped(run, client, tokio::time::sleep(SETUP_POLL.min(left(&setup_again)))).await?;
                 }
                 _ => return Err(not_ready(prepared)),
             }
@@ -1427,11 +1430,11 @@ impl Runs {
     }
 
     /// `exec.prepare` on the worker `conn` leads to, until the job stops.
-    async fn prepare_on(&self, run: u32, client: &Conn, conn: &Peer, prepare: &m::ExecPrepare) -> Result<ExecPrepared, Fail> {
+    async fn prepare_on(&self, run: u32, client: &Conn, conn: &Peer, prepare: &m::ExecPrepare, timeout: Duration) -> Result<ExecPrepared, Fail> {
         self.unless_stopped(
             run,
             client,
-            conn.request(m::EXEC_PREPARE, serde_json::to_value(prepare).unwrap(), PREPARE_TIMEOUT),
+            conn.request(m::EXEC_PREPARE, serde_json::to_value(prepare).unwrap(), timeout),
         )
         .await?
         .ok()

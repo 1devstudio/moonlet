@@ -4289,7 +4289,10 @@ impl LiveCopies {
         // The router's setup command, kept for the copy's setup (X89), and
         // the files it reads.
         self.update_kept(&id, |k| {
-            if setup.is_some() {
+            // A host that asks at the fence sends its main checkout's
+            // setup, or none when it has none: a removed setup is not run
+            // again from what an earlier ask sent.
+            if setup.is_some() || fence.is_some() {
                 k.setup_command = setup.clone();
             }
             k.setup_inputs = inputs;
@@ -4319,13 +4322,16 @@ impl LiveCopies {
         // files changed start it once.
         let checking = self.lock(&format!("setup:{id}"));
         let _checking = checking.lock().await;
-        if let Some(fence) = &fence {
-            self.setup_again_if_changed(&id, fence).await;
-        }
+        let unread = match &fence {
+            Some(fence) => self.setup_again_if_changed(&id, fence).await.err(),
+            None => None,
+        };
         let k = self
             .kept(&id)
             .ok_or_else(|| RpcError::new("not_found", "the routing copy went"))?;
-        let (state, reason) = if let Some(p) = k.paused {
+        let (state, reason) = if let Some(why) = unread {
+            ("failed", Some(why))
+        } else if let Some(p) = k.paused {
             ("failed", Some(p))
         } else if k.base.is_none() {
             ("making", None)
@@ -4358,24 +4364,32 @@ impl LiveCopies {
     /// reads differ in `fence` from those it last ran on and its command
     /// is still the approved one; asks for the command when it is not.
     /// Only a setup that ended well runs again: one skipped, failed or
-    /// waiting stays as it is. Call holding the copy's `setup:` lock.
-    async fn setup_again_if_changed(self: &Arc<Self>, id: &str, fence: &m::ExecFence) {
-        let Some(k) = self.kept(id) else { return };
+    /// waiting stays as it is. Call holding the copy's `setup:` lock. Fails
+    /// when the fence's files cannot be read: the command does not run on
+    /// files the setup may not have seen.
+    async fn setup_again_if_changed(self: &Arc<Self>, id: &str, fence: &m::ExecFence) -> Result<(), String> {
+        let Some(k) = self.kept(id) else { return Ok(()) };
         if k.paused.is_some()
             || k.base.as_deref() != Some(fence.tree.as_str())
             || k.setup.as_ref().is_none_or(|s| s.state != SetupState::Done)
         {
-            return;
+            return Ok(());
         }
-        let Some(command) = setup_of_copy(&k) else { return };
+        let Some(command) = setup_of_copy(&k) else { return Ok(()) };
         let watch = setup_inputs_of(&k);
-        let Some(now) = setup_inputs_at(Path::new(&k.path), &fence.tree, &watch).await else { return };
+        // `setup_inputs = []`: never again by itself.
+        if watch.is_empty() {
+            return Ok(());
+        }
+        let Some(now) = setup_inputs_at(Path::new(&k.path), &fence.tree, &watch).await else {
+            return Err("cannot read the files its setup reads".into());
+        };
         let why = match &k.setup_read {
             Some(last) => {
                 let last = moonlet_core::setup_inputs::select(last.iter().map(|(p, b)| (p.as_str(), b.as_str())), &watch);
                 let changed = moonlet_core::setup_inputs::changed(&last, &now);
                 if changed.is_empty() {
-                    return;
+                    return Ok(());
                 }
                 moonlet_core::setup_inputs::why(&changed)
             }
@@ -4391,11 +4405,12 @@ impl LiveCopies {
                     approved: false,
                 }),
             );
-            return;
+            return Ok(());
         }
         tracing::info!(copy = %id, "running the setup again: {why}");
         self.update_kept(id, |k| k.setup_why = Some(why));
         self.run_setup_now(id, command);
+        Ok(())
     }
 
     /// The routing copy `copy`'s folder, when it holds exactly the fence's

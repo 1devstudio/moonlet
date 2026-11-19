@@ -125,16 +125,38 @@ fn names(pattern: &str, path: &str) -> bool {
 }
 
 /// `**` matches any run of bytes, `*` any run without `/`; everything else
-/// matches itself.
+/// matches itself. One pass per part of the pattern, so no pattern makes
+/// it try every split of a name.
 fn glob(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern {
-        [] => text.is_empty(),
-        [b'*', b'*', rest @ ..] => (0..=text.len()).any(|i| glob(rest, &text[i..])),
-        [b'*', rest @ ..] => (0..=text.len())
-            .take_while(|&i| i == 0 || text[i - 1] != b'/')
-            .any(|i| glob(rest, &text[i..])),
-        [c, rest @ ..] => text.first() == Some(c) && glob(rest, &text[1..]),
+    // `ends[j]`: the pattern so far matches `text[..j]`.
+    let mut ends = vec![false; text.len() + 1];
+    ends[0] = true;
+    let mut i = 0;
+    while i < pattern.len() {
+        let mut next = vec![false; text.len() + 1];
+        match pattern[i] {
+            b'*' => {
+                let any = pattern.get(i + 1) == Some(&b'*');
+                let mut open = false;
+                for j in 0..=text.len() {
+                    if !any && j > 0 && text[j - 1] == b'/' {
+                        open = false;
+                    }
+                    open |= ends[j];
+                    next[j] = open;
+                }
+                i += if any { 2 } else { 1 };
+            }
+            c => {
+                for j in 1..=text.len() {
+                    next[j] = ends[j - 1] && text[j - 1] == c;
+                }
+                i += 1;
+            }
+        }
+        ends = next;
     }
+    ends[text.len()]
 }
 
 /// Why the setup runs again, for the job's timeline: "pnpm-lock.yaml
@@ -267,6 +289,16 @@ mod tests {
                 "patches/old/right-pad.patch"
             ]
         );
+    }
+
+    #[test]
+    fn a_pattern_with_many_stars_that_never_matches_is_quick_to_say_so() {
+        let name = "a".repeat(64);
+        let tree = [(name.as_str(), "1b2c3d4e5f60718293a4b5c6d7e8f90123456789")];
+        let started = std::time::Instant::now();
+        assert_eq!(select(tree, &["*a*a*a*a*a*a*a*a*a*a*b".to_string()]), Inputs::new());
+        assert_eq!(select(tree, &["**a**a**a**a**a**a**a**b".to_string()]), Inputs::new());
+        assert!(started.elapsed() < std::time::Duration::from_millis(100), "{:?}", started.elapsed());
     }
 
     #[test]
