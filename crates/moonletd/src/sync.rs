@@ -5241,7 +5241,9 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
     }
     sync.link.set_synced(sync.link_holders());
     // The setups the stop ended, now waiting again: those still approved
-    // run (the account attached before the copies loaded).
+    // run (the account attached before the copies loaded), and the others
+    // are asked for, here and on the other members (X60).
+    sync.report_setups();
     sync.run_approved_setups();
     sync.sweep_run_copies();
     // New sessions that waited for the composer are looked at again.

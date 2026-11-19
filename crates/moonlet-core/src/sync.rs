@@ -1660,14 +1660,14 @@ mod tests {
         let alone = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         let _ = std::fs::remove_file(p.join(".git/moonlet-sync-index"));
         for _ in 0..5 {
-            let all = futures_join(p, 8).await;
+            let all = snapshots_at_once(p, 8).await;
             for r in all {
                 assert_eq!(r.map_err(|e| format!("{e:#}")).map(|s| s.tree), Ok(alone.clone()));
             }
         }
     }
 
-    async fn futures_join(p: &Path, n: usize) -> Vec<Result<Snapshot>> {
+    async fn snapshots_at_once(p: &Path, n: usize) -> Vec<Result<Snapshot>> {
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..n {
             let p = p.to_path_buf();

@@ -1541,8 +1541,8 @@ impl WorkerLink {
                 // A paired token is traded first (X41), and the worker
                 // link's own connection replaces this one: until then the
                 // link is still connecting, so it says connected once.
+                // `register` runs once the state is set, below.
                 let trading = self.trade_pending();
-                tokio::spawn(self.clone().register(host));
                 if trading {
                     LinkState::Connecting
                 } else {
@@ -1562,6 +1562,11 @@ impl WorkerLink {
         };
         let up = matches!(state, LinkState::Connected { .. });
         self.set_state(state);
+        // Only now: a registration that finds no trade to make says
+        // connected, which must come after this state, not before it.
+        if matches!(info.status, HostStatus::Connected) {
+            tokio::spawn(self.clone().register(host));
+        }
         // Up counts once this Mac is registered (see `register`).
         if !up && let Some(sync) = self.sync() {
             sync.link_down();
