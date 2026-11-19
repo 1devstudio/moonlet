@@ -132,6 +132,9 @@ struct Central {
     /// The project's main checkout, whose `.moonlet/config.toml` lists the
     /// heavy commands (X90).
     checkout: PathBuf,
+    /// The daemon's `HOME`, when a test gave it one: it goes after the
+    /// daemon.
+    tools: Option<tempfile::TempDir>,
 }
 
 async fn central_with(config: &str, env: &[(&str, &str)]) -> Central {
@@ -182,6 +185,7 @@ async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)])
         session: session["id"].as_str().unwrap().into(),
         worktree: PathBuf::from(session["path"].as_str().unwrap()),
         checkout: repo,
+        tools: None,
     }
 }
 
@@ -1154,7 +1158,8 @@ async fn linked_on(
     phones: Option<u16>,
     before_x89: bool,
 ) -> (Central, Daemon) {
-    let tools = tempfile::tempdir().unwrap().keep();
+    let tools_dir = tempfile::tempdir().unwrap();
+    let tools = tools_dir.path().to_path_buf();
     // A tool only the central host has, on its login shell's PATH.
     write(&tools.join("bin/shop-tool"), "#!/bin/sh\necho tool\n");
     std::fs::set_permissions(
@@ -1173,7 +1178,8 @@ async fn linked_on(
         ("HOME", tools.to_str().unwrap()),
     ];
     env.extend_from_slice(central_env);
-    let (c, addr) = central_listening_with(config, &env).await;
+    let (mut c, addr) = central_listening_with(config, &env).await;
+    c.tools = Some(tools_dir);
     c.approve_runs().await;
     let home = tempfile::tempdir().unwrap();
     write(

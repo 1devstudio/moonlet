@@ -21,6 +21,10 @@ pub struct Daemon {
     pub child: Child,
     /// The `moonletd` it runs.
     pub exe: PathBuf,
+    /// Scratch folders the daemon uses outside its home, such as its fake
+    /// agents' (central_copies.rs): they go with the last daemon that
+    /// holds them.
+    pub also: Vec<std::sync::Arc<tempfile::TempDir>>,
 }
 
 fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
@@ -65,6 +69,7 @@ impl Daemon {
             env,
             child,
             exe: exe.to_path_buf(),
+            also: Vec::new(),
         }
     }
 
