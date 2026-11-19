@@ -690,11 +690,18 @@ export interface MachineType {
 
 /** A routing copy's setup waiting for the user's approval (X62), from `exec.setups` and `exec.setup`. */
 export interface ExecSetup {
+  /** The routing copy here, or the account's record of the setup on the member `on` names (X60). */
   copy: string;
-  /** The central host's name. */
+  /** The session's host's name; empty for another member's setup. */
   host: string;
   project: string;
   command: string;
+  /** The member whose setup it is, by name, when not this Mac (X60). */
+  on?: string | null;
+  /** How it failed, when it ran and failed rather than waits (`exec.setups {all: true}`). */
+  failed?: { exit: number; line: string } | null;
+  /** Another member's setup already approved for the account, which runs there unasked once it hears. */
+  approved?: boolean;
 }
 
 /** `exec.status` (X62): this machine, the routed commands going on, and why workers were skipped. */
@@ -1694,6 +1701,7 @@ export const M = {
   workerSettingsSet: "worker.settings.set",
   execStatus: "exec.status",
   execSetups: "exec.setups",
+  execAnswerSetup: "exec.answer_setup",
   cloudGet: "cloud.get",
   cloudSet: "cloud.set",
   cloudTypes: "cloud.types",
@@ -1785,6 +1793,7 @@ export const EV = {
   jobChanged: "job.changed",
   jobStayed: "job.stayed",
   execSetup: "exec.setup",
+  execSetupsChanged: "exec.setups_changed",
   cloudChanged: "cloud.changed",
   jobOutput: "job.output",
   designChanged: "design.changed",

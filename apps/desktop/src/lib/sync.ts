@@ -80,13 +80,26 @@ export function centralPrompt(session: string, host: string): ConfirmOptions {
 }
 
 /** Asks before a copy runs its project's setup, showing the exact command. */
-export function setupPrompt(project: string, command: string): ConfirmOptions & { code: string } {
+export function setupPrompt(project: string, command: string, on?: string | null): ConfirmOptions & { code: string } {
   return {
     title: "Run setup",
-    message: `Run ${project}'s setup in the copy on this Mac? (from .moonlet/config.toml)`,
+    message: `Run ${project}'s setup in the copy on ${on || "this Mac"}? (from .moonlet/config.toml)`,
     code: command,
     action: "Run setup",
     cancel: "Skip",
+  };
+}
+
+/** A routing copy's setup that failed, here or on the member `on` names
+ * (X60): heavy commands stay off that host until it runs. */
+export function failedSetupPrompt(project: string, command: string, failed: { exit: number; line: string }, on?: string | null): ConfirmOptions & { code: string } {
+  const line = failed.line ? `: ${failed.line}` : "";
+  return {
+    title: "Setup failed",
+    message: `${project}'s setup failed in the copy on ${on || "this Mac"} (exit ${failed.exit})${line}. Heavy commands do not run there until it does.`,
+    code: command,
+    action: "Run setup again",
+    cancel: "Not now",
   };
 }
 

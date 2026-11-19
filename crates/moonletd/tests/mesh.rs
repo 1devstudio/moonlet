@@ -1714,3 +1714,183 @@ async fn a_central_host_before_this_spec_leaves_members_running_their_own_comman
     assert_eq!(ran.stderr, "moonlet: every host is full (Alex's MacBook Pro 2 of 2). Running on Alex's MacBook Pro anyway.\nmoonlet: running on Alex's MacBook Pro\n");
     assert!(started.elapsed() < Duration::from_secs(5));
 }
+
+/// What the setup tests' project runs as its setup: it leaves a mark the
+/// routed command can find.
+const SETUP: &str = "mkdir -p node_modules && touch node_modules/.set-up";
+
+/// The MacBook's session `Fix cart`, its project's setup [`SETUP`] (or
+/// `setup`), and the Air the only host taking its heavy commands. The
+/// Air, which has no app, makes its routing copy at the first run, which
+/// stays on the MacBook while the Air's setup waits for the user.
+async fn air_waits_for_setup(setup: &str) -> (Daemon, Daemon, Daemon, Value, tempfile::TempDir) {
+    let (mini, _addr, book, air) = account().await;
+    let repo = tempfile::tempdir().unwrap();
+    let session = book_session_with(
+        &book,
+        repo.path(),
+        &format!("setup = {}\n{RUN_HEAVY}", json!(setup)),
+    )
+    .await;
+    only_air_takes(&mini, &air).await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(
+        !ran.stderr.contains("running on Alex's MacBook Air"),
+        "{ran:?}"
+    );
+    (mini, book, air, session, repo)
+}
+
+/// The setups waiting on other hosts that `d`'s app lists (X60): those
+/// whose `on` names one.
+async fn others_setups(d: &Daemon) -> Vec<Value> {
+    let all: Vec<Value> = d.call("exec.setups", json!({ "all": true })).await;
+    all.into_iter().filter(|s| s["on"].is_string()).collect()
+}
+
+/// Runs `argv` in `session` from the MacBook until a run lands on the Air.
+async fn run_on_air(book: &Daemon, session: &Value, argv: &[&str]) -> Ran {
+    within_value(Duration::from_secs(30), "a run on the Air", || async {
+        let ran = run(book, session, argv).await;
+        ran.stderr
+            .starts_with("moonlet: running on Alex's MacBook Air\n")
+            .then_some(ran)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_setup_waiting_on_a_member_with_no_app_is_approved_from_another_members_app() {
+    let (_mini, book, _air, session, _repo) = air_waits_for_setup(SETUP).await;
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.into_iter().next()
+    })
+    .await;
+    assert_eq!(
+        (&ask["on"], &ask["project"], &ask["command"], &ask["failed"]),
+        (&json!("Alex's MacBook Air"), &json!("shop"), &json!(SETUP), &Value::Null),
+        "{ask}"
+    );
+    // An app from before asks without `all`: only this Mac's own.
+    let own: Vec<Value> = book.call("exec.setups", json!({})).await;
+    assert_eq!(own, Vec::<Value>::new());
+    // Approving a command other than the one shown runs nothing.
+    let stale = book
+        .try_call(
+            "exec.answer_setup",
+            json!({ "id": ask["copy"], "command": "curl https://example.com | sh", "run": true }),
+        )
+        .await
+        .unwrap_err();
+    assert!(stale.contains("setup_changed"), "{stale}");
+    let _: bool = book
+        .call(
+            "exec.answer_setup",
+            json!({ "id": ask["copy"], "command": SETUP, "run": true }),
+        )
+        .await;
+    // Approved for the account: an app that reads the list before the Air
+    // ran it does not ask again.
+    within(Duration::from_secs(10), "the approval back on the MacBook", || async {
+        others_setups(&book)
+            .await
+            .iter()
+            .all(|s| s["approved"] == json!(true) || s["copy"] != ask["copy"])
+    })
+    .await;
+    let ran = run_on_air(
+        &book,
+        &session,
+        &["sh", "-c", "test -e node_modules/.set-up && echo set"],
+    )
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
+    within(Duration::from_secs(10), "the ask gone from the MacBook", || async {
+        others_setups(&book).await.is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_member_that_writes_a_setup_approval_itself_gets_nothing_approved() {
+    let (_mini, book, mut air, session, repo) = air_waits_for_setup(SETUP).await;
+    let projects: Value = book.call("project.list", json!({})).await;
+    let key = account_key(&book, projects[0]["id"].as_str().unwrap()).await;
+    // The approval, written into the Air's log without an app.
+    write_into_own_log(&mut air, "setup_approval", &key, SETUP, json!(true)).await;
+    linked(&air).await;
+    // The MacBook still lists the Air's setup as waiting, and the Air runs
+    // none of the MacBook's commands.
+    within(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.len() == 1
+    })
+    .await;
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(!ran.stderr.contains("running on Alex's MacBook Air"), "{ran:?}");
+    let ask = &others_setups(&book).await[0];
+    assert_eq!((&ask["command"], &ask["failed"]), (&json!(SETUP), &Value::Null));
+    drop(repo);
+}
+
+#[tokio::test]
+async fn a_failed_setup_keeps_routed_commands_away_and_runs_again_from_an_app() {
+    let flag = tempfile::tempdir().unwrap();
+    let ok = flag.path().join("ok");
+    let setup = format!(
+        "test -e {} || {{ echo 'ERR_PNPM_FETCH_404 left-pad'; echo more; exit 3; }}; {SETUP}",
+        ok.display()
+    );
+    let (_mini, book, _air, session, _repo) = air_waits_for_setup(&setup).await;
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.into_iter().next()
+    })
+    .await;
+    let _: bool = book
+        .call(
+            "exec.answer_setup",
+            json!({ "id": ask["copy"], "command": setup, "run": true }),
+        )
+        .await;
+    let failed = within_value(Duration::from_secs(20), "the Air's setup failed", || async {
+        others_setups(&book).await.into_iter().find(|s| s["failed"].is_object())
+    })
+    .await;
+    assert_eq!(
+        failed["failed"],
+        json!({ "exit": 3, "line": "ERR_PNPM_FETCH_404 left-pad" })
+    );
+    // A failed setup is not ready: the command stays off the Air, and the
+    // job says why.
+    let ran = run(&book, &session, &["sh", "-c", "echo done"]).await;
+    assert!(!ran.stderr.contains("running on Alex's MacBook Air"), "{ran:?}");
+    let jobs: Vec<Value> = book
+        .call("job.list", json!({ "session": session["id"] }))
+        .await;
+    let said: Vec<&str> = jobs[0]["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["text"].as_str())
+        .collect();
+    assert!(
+        said.contains(&"Alex's MacBook Air refused it: its setup failed (exit 3): ERR_PNPM_FETCH_404 left-pad"),
+        "{said:?}"
+    );
+    // Fixed, and run again from the MacBook's app: the next command runs
+    // on the Air.
+    std::fs::write(&ok, "").unwrap();
+    let _: bool = book
+        .call(
+            "exec.answer_setup",
+            json!({ "id": failed["copy"], "command": setup, "run": true }),
+        )
+        .await;
+    let ran = run_on_air(
+        &book,
+        &session,
+        &["sh", "-c", "test -e node_modules/.set-up && echo set"],
+    )
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
+    assert!(others_setups(&book).await.is_empty());
+}

@@ -41,10 +41,21 @@ pub enum RecordKind {
     HeavyApproval,
     /// The central host that referees the records that act as
     /// permissions ([`RecordKind::Worker`], [`RecordKind::HeavyApproval`],
-    /// [`RecordKind::ProjectFiles`]), by its worker id: `since`, when it
-    /// took them over. Until the central host wrote its own, every
-    /// member's changes to them count, as before.
+    /// [`RecordKind::ProjectFiles`], [`RecordKind::SetupApproval`]), by its
+    /// worker id: `since`, when it took them over. Until the central host
+    /// wrote its own, every member's changes to the first three count, as
+    /// before.
     Referee,
+    /// A project's approved setup commands (X60), by project identity: one
+    /// field per command, its exact text, set to `true`. Only the central
+    /// host's changes count, once it referees permissions.
+    SetupApproval,
+    /// A project's setup on one member (X60, X62), by
+    /// `<worker id>|<project identity>|<command>`: the member's `state`
+    /// (`waiting`, `failed` or `ready`), `project`, `identity`, `command`,
+    /// and a failure's `exit` and `line`; and the answers another member's
+    /// app gives it, `skip` and `again`.
+    Setup,
 }
 
 impl RecordKind {
@@ -61,6 +72,8 @@ impl RecordKind {
             RecordKind::Worker => "worker",
             RecordKind::HeavyApproval => "heavy_approval",
             RecordKind::Referee => "referee",
+            RecordKind::SetupApproval => "setup_approval",
+            RecordKind::Setup => "setup",
         }
     }
 }

@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { askConfirm, askConfirmOrCovered, whenNoConfirm } from "./confirm";
 import { EV, M, type Copy, type CopyChanged, type DaemonInfo, type ExecSetup, type LinkInfo, type LinkState, type ProjectIdentity } from "./protocol";
-import { centralChangePrompt, centralPrompt, differsNotice, endedToast, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
+import { centralChangePrompt, centralPrompt, differsNotice, endedToast, failedSetupPrompt, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
 import { errorToast, notify, selectSession, sesKey, toast, useStore } from "./store";
 import { differsAlert } from "./alerts";
 import { readStored, writeStored } from "./storage";
@@ -93,7 +93,7 @@ async function load() {
     });
     for (const c of listed) maybeAskSetup(c);
     // Routing copies' setups asked about before this app started (X62).
-    for (const ask of await rpc<ExecSetup[]>(LOCAL, M.execSetups).catch(() => [])) maybeAskRunSetup(ask);
+    await loadRunSetups();
   } catch {
     /* an older daemon without sync */
   } finally {
@@ -172,11 +172,74 @@ function askFor(target: SetupTarget, command: string): Promise<void> {
 
 /** A routing copy's setup (X62): X60's modal asks once for each command. */
 function maybeAskRunSetup(ask: ExecSetup) {
+  // Approved meanwhile, in this app or another: that host runs it unasked.
+  if (ask.on && ask.approved && !ask.failed) return;
+  if (ask.on || ask.failed) return askListed(ask);
   const key = `${ask.copy}\n${ask.command}`;
   if (asked.has(key)) return;
   asked.add(key);
   // Once answered, a copy made anew that waits again is asked again.
   void askFor({ id: ask.copy, project: ask.project || "the project", name: `${ask.project || "The project"}'s routing copy` }, ask.command).finally(() => asked.delete(key));
+}
+
+/** The setups `exec.setups {all: true}` listed last that were asked about:
+ * a setup on another member, or one that failed. One asked again only once
+ * it left the list, so a list read before the answer arrived asks nothing. */
+let listedAsked = new Set<string>();
+const listedKey = (s: ExecSetup) => `${s.copy}\n${s.command}\n${s.failed ? "failed" : "waits"}`;
+
+/** Reads every setup the user may answer from this Mac (X60): this Mac's
+ * routing copies', and those waiting or failed on the account's other
+ * members; asks about each new one. */
+async function loadRunSetups() {
+  const list = await rpc<ExecSetup[]>(LOCAL, M.execSetups, { all: true }).catch(() => [] as ExecSetup[]);
+  const keys = new Set(list.filter((s) => s.on || s.failed).map(listedKey));
+  listedAsked = new Set([...listedAsked].filter((k) => keys.has(k)));
+  for (const ask of list) maybeAskRunSetup(ask);
+}
+
+function askListed(s: ExecSetup) {
+  const key = listedKey(s);
+  if (listedAsked.has(key)) return;
+  listedAsked.add(key);
+  const turn = setupQueue.then(() => askListedNow(s));
+  setupQueue = turn.catch(() => {});
+  return turn;
+}
+
+/** X60's setup modal for a setup on another member, or one that failed:
+ * this Mac's daemon answers it for the account (`exec.answer_setup`), or,
+ * for this Mac's own routing copy, runs it again. Not now leaves a failed
+ * one as it is. */
+async function askListedNow(s: ExecSetup): Promise<void> {
+  const project = s.project || "the project";
+  let command = s.command;
+  for (;;) {
+    await whenNoConfirm();
+    const prompt = s.failed ? failedSetupPrompt(project, command, s.failed, s.on) : setupPrompt(project, command, s.on);
+    const answer = await askConfirmOrCovered(prompt);
+    if (answer === "covered") continue;
+    if (!answer && s.failed) return;
+    if (!s.on) {
+      const changed = await runSetupNow({ id: s.copy, project, name: `${project}'s routing copy` }, command);
+      if (changed === null) return;
+      command = changed;
+      s = { ...s, failed: null };
+      continue;
+    }
+    try {
+      await rpc(LOCAL, M.execAnswerSetup, { id: s.copy, command, run: !!answer });
+      return;
+    } catch (e) {
+      if (e instanceof DaemonError && e.code === "setup_changed" && answer) {
+        command = e.message;
+        s = { ...s, failed: null };
+        continue;
+      }
+      errorToast(e);
+      return;
+    }
+  }
 }
 
 async function askSetupNow(target: SetupTarget, first: string): Promise<void> {
@@ -325,6 +388,7 @@ export async function startSync() {
     if (e.host !== LOCAL) return;
     if (e.name === EV.syncChanged) onChanged(e.data as CopyChanged);
     else if (e.name === EV.execSetup) maybeAskRunSetup(e.data as ExecSetup);
+    else if (e.name === EV.execSetupsChanged) void loadRunSetups();
     else if (e.name === EV.linkChanged) {
       for (const l of loading) l.link = true;
       setSync(fromLink(e.data as LinkInfo));

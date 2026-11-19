@@ -713,6 +713,11 @@ impl LiveCopies {
         if k.kind == CopyKind::Run && self.link.info().worker.cloud {
             return true;
         }
+        // Approved for the account, in an app on any member, once the
+        // central host made it its own (X60).
+        if k.identity.as_ref().is_some_and(|i| self.sessions.setup_approved(i, command)) {
+            return true;
+        }
         k.identity
             .as_ref()
             .and_then(|i| project_key(&k.host, i))
@@ -2049,6 +2054,9 @@ impl LiveCopies {
         self.data.lock().unwrap().worker.retain(|w| w.id != id);
         self.save();
         self.states.lock().unwrap().remove(id);
+        if k.kind == CopyKind::Run {
+            self.report_setups();
+        }
         // The last copy gone closes the link, a moment later.
         let me = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -2685,17 +2693,228 @@ impl LiveCopies {
         if let Some(ask) = self.kept(id).as_ref().and_then(run_setup_ask) {
             (self.emit)(Message::event(m::EV_EXEC_SETUP, ask));
         }
+        self.run_setup_moved(id);
     }
 
-    /// `exec.setups`: the routing copies whose setup waits for the user.
-    pub fn run_setups(&self) -> Vec<m::ExecSetup> {
-        self.data
-            .lock()
-            .unwrap()
-            .worker
+    /// A routing copy's setup moved on: the account says so for the apps
+    /// on other members, and this host's app reads `exec.setups` again
+    /// (X60).
+    fn run_setup_moved(&self, id: &str) {
+        if self.kept(id).is_some_and(|k| k.kind == CopyKind::Run) {
+            self.report_setups();
+            (self.emit)(Message::event(m::EV_EXEC_SETUPS_CHANGED, serde_json::json!({})));
+        }
+    }
+
+    /// `exec.setups`: the routing copies whose setup waits for the user;
+    /// with `all`, also those whose setup failed, and the setups waiting
+    /// or failed on the account's other members (X60).
+    pub fn run_setups(&self, all: bool) -> Vec<m::ExecSetup> {
+        let kept = self.data.lock().unwrap().worker.clone();
+        let mut out: Vec<m::ExecSetup> = kept.iter().filter_map(run_setup_ask).collect();
+        if !all {
+            return out;
+        }
+        for k in kept.iter().filter(|k| k.kind == CopyKind::Run) {
+            let Some(SetupState::Failed { exit }) = k.setup.as_ref().map(|s| s.state.clone()) else { continue };
+            out.push(m::ExecSetup {
+                copy: k.id.clone(),
+                host: k.host.clone(),
+                project: k.project.clone(),
+                command: k.setup.as_ref().map(|s| s.command.clone()).unwrap_or_default(),
+                on: None,
+                failed: Some(m::SetupFailed { exit, line: self.setup_line(&k.id) }),
+                approved: false,
+            });
+        }
+        let me = self.link.info().worker.id;
+        let names = self.sessions.member_names();
+        for (id, r) in self.sessions.setup_records() {
+            let Some(worker) = id.split('|').next().filter(|w| *w != me) else { continue };
+            let text = |f: &str| r.get(f).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+            let failed = match text("state").as_str() {
+                "waiting" => None,
+                "failed" => Some(m::SetupFailed {
+                    exit: r.get("exit").and_then(serde_json::Value::as_i64).unwrap_or(-1) as i32,
+                    line: text("line"),
+                }),
+                _ => continue,
+            };
+            let approved = r
+                .get("identity")
+                .and_then(|i| serde_json::from_value::<ProjectIdentity>(i.clone()).ok())
+                .is_some_and(|i| self.sessions.setup_approved(&i, &text("command")));
+            out.push(m::ExecSetup {
+                copy: id.clone(),
+                host: String::new(),
+                project: text("project"),
+                command: text("command"),
+                on: Some(names.get(worker).cloned().unwrap_or_else(|| worker.to_string())),
+                failed,
+                approved,
+            });
+        }
+        out
+    }
+
+    /// The first line of copy `id`'s last setup output, for a failure:
+    /// what the job's timeline and the app show of it (X60).
+    fn setup_line(&self, id: &str) -> String {
+        let log = self.home.join("sync").join("logs").join(format!("{id}.log"));
+        let text = std::fs::read(&log).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
+        line.chars().take(200).collect()
+    }
+
+    /// Tells the account how this host's routing copies' setups are, by
+    /// project and command (X60): one waiting for approval, or one that
+    /// failed, so an app on any member can answer it. A setup it reported
+    /// before that neither waits nor failed any more reads `ready`.
+    pub fn report_setups(&self) {
+        let me = self.link.info().worker;
+        if me.cloud || !self.sessions.has_account() {
+            return;
+        }
+        let kept = self.data.lock().unwrap().worker.clone();
+        let mut now: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>> = Default::default();
+        for k in kept.iter().filter(|k| k.kind == CopyKind::Run) {
+            let (Some(setup), Some(identity)) = (k.setup.as_ref(), k.identity.as_ref()) else { continue };
+            let Some(id) = setup_record_id(&me.id, identity, &setup.command) else { continue };
+            let (state, failure) = match &setup.state {
+                SetupState::NeedsApproval => ("waiting", None),
+                SetupState::Failed { exit } => ("failed", Some((*exit, self.setup_line(&k.id)))),
+                _ => ("ready", None),
+            };
+            let rank = |s: &str| match s {
+                "waiting" => 2,
+                "failed" => 1,
+                _ => 0,
+            };
+            let had = now.get(&id).and_then(|f| f.get("state")).and_then(serde_json::Value::as_str).map_or(-1, rank);
+            if rank(state) <= had {
+                continue;
+            }
+            let mut fields = serde_json::Map::new();
+            fields.insert("state".into(), state.into());
+            fields.insert("project".into(), k.project.clone().into());
+            fields.insert("identity".into(), serde_json::to_value(identity).unwrap());
+            fields.insert("command".into(), setup.command.clone().into());
+            if let Some((exit, line)) = failure {
+                fields.insert("exit".into(), exit.into());
+                fields.insert("line".into(), line.into());
+            }
+            now.insert(id, fields);
+        }
+        let records = self.sessions.setup_records();
+        let mine = format!("{}|", me.id);
+        for (id, r) in records.iter().filter(|(id, _)| id.starts_with(&mine)) {
+            if !now.contains_key(id) && r.get("state").and_then(serde_json::Value::as_str) != Some("ready") {
+                now.insert(id.clone(), serde_json::Map::from_iter([("state".to_string(), "ready".into())]));
+            }
+        }
+        for (id, fields) in now {
+            // A setup that never waited nor failed needs no record.
+            if !records.contains_key(&id) && fields.get("state").and_then(serde_json::Value::as_str) == Some("ready") {
+                continue;
+            }
+            if let Err(e) = self.sessions.set_setup_record(&id, fields.into_iter().collect()) {
+                tracing::warn!("cannot tell the account about a setup: {e:#}");
+            }
+        }
+    }
+
+    /// The account's news of setups (X60): an approval that counts now runs
+    /// the routing copies' setups waiting for it; another member's app
+    /// skipping one of this host's setups, or asking to run a failed one
+    /// again, does so here.
+    pub fn setups_news(self: &Arc<Self>, changes: &[moonlet_proto::types::Change]) {
+        use moonlet_core::account::RecordKind;
+        let approval = changes.iter().any(|c| c.kind == RecordKind::SetupApproval.as_str());
+        let mine = format!("{}|", self.link.info().worker.id);
+        let answers: Vec<(String, String)> = changes
             .iter()
-            .filter_map(run_setup_ask)
-            .collect()
+            .filter(|c| c.kind == RecordKind::Setup.as_str() && c.id.starts_with(&mine))
+            .filter_map(|c| match &c.op {
+                moonlet_proto::types::ChangeOp::Set { field, .. } if field == "skip" || field == "again" => {
+                    Some((c.id.clone(), field.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        if approval || changes.iter().any(|c| c.kind == RecordKind::Setup.as_str()) {
+            (self.emit)(Message::event(m::EV_EXEC_SETUPS_CHANGED, serde_json::json!({})));
+        }
+        if !approval && answers.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        tokio::spawn(async move { me.answer_setups(approval, answers).await });
+    }
+
+    /// Runs the routing copies' setups whose command is approved by now,
+    /// such as one approved for the account while this host was away.
+    pub fn run_approved_setups(self: &Arc<Self>) {
+        let me = self.clone();
+        tokio::spawn(async move { me.answer_setups(true, Vec::new()).await });
+    }
+
+    /// [`Self::setups_news`]'s work, each copy under its lock.
+    async fn answer_setups(self: &Arc<Self>, approval: bool, answers: Vec<(String, String)>) {
+        let me = self.link.info().worker.id;
+        let kept = self.data.lock().unwrap().worker.clone();
+        for k in kept.iter().filter(|k| k.kind == CopyKind::Run) {
+            let lock = self.lock(&k.id);
+            let _one = lock.lock().await;
+            let Some(k) = self.kept(&k.id) else { continue };
+            let (Some(setup), Some(identity)) = (k.setup.clone(), k.identity.clone()) else { continue };
+            let id = setup_record_id(&me, &identity, &setup.command);
+            let answer = |f: &str| answers.iter().any(|(r, field)| Some(r) == id.as_ref() && field == f);
+            match setup.state {
+                SetupState::NeedsApproval if answer("skip") => {
+                    self.set_setup(&k.id, Some(CopySetup { state: SetupState::Skipped, ..setup }));
+                }
+                SetupState::NeedsApproval if approval && self.approved(&k, &setup.command) => {
+                    self.run_setup_now(&k.id, setup.command);
+                }
+                SetupState::Failed { .. } if answer("again") && self.approved(&k, &setup.command) => {
+                    self.run_setup_now(&k.id, setup.command);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `exec.answer_setup`: an app's answer to another member's setup
+    /// record `id` (X60). Running it approves `command`, the record's, for
+    /// the whole account, and asks for a failed one to run again; the
+    /// member then runs it. Skipping it leaves it unrun there.
+    pub fn answer_setup(&self, id: &str, command: &str, run: bool) -> Result<bool, RpcError> {
+        let me = self.link.info().worker.id;
+        let r = self
+            .sessions
+            .setup_records()
+            .remove(id)
+            .filter(|_| id.split('|').next().is_some_and(|w| w != me))
+            .ok_or_else(|| RpcError::new("not_found", "no such setup on another host"))?;
+        let text = |f: &str| r.get(f).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+        if text("command") != command {
+            return Err(RpcError::new("setup_changed", text("command")));
+        }
+        let internal = |e: anyhow::Error| RpcError::new("internal", format!("{e:#}"));
+        let at = serde_json::Value::from(moonlet_core::account::now_ms());
+        if run {
+            let identity: ProjectIdentity = r
+                .get("identity")
+                .and_then(|i| serde_json::from_value(i.clone()).ok())
+                .ok_or_else(|| RpcError::new("not_found", "the setup names no project"))?;
+            self.sessions.approve_setup(&identity, command).map_err(internal)?;
+            if text("state") == "failed" {
+                self.sessions.set_setup_record(id, [("again".to_string(), at)].into_iter().collect()).map_err(internal)?;
+            }
+        } else {
+            self.sessions.set_setup_record(id, [("skip".to_string(), at)].into_iter().collect()).map_err(internal)?;
+        }
+        Ok(true)
     }
 
     /// A copy just made: its setup runs when this exact command was
@@ -2744,6 +2963,13 @@ impl LiveCopies {
                     p.approved_setup.push(current.clone());
                 }
             })?;
+        }
+        // And for every member of the account, once its central host makes
+        // it its own (X60).
+        if let Some(i) = k.identity.as_ref().filter(|_| self.sessions.has_account())
+            && let Err(e) = self.sessions.approve_setup(i, &current)
+        {
+            tracing::warn!(copy = %copy, "cannot approve the setup for the account: {e:#}");
         }
         self.run_setup_now(copy, current);
         self.copy(copy)
@@ -2825,6 +3051,7 @@ impl LiveCopies {
                 me.update_kept(&id, |k| k.setup = Some(running(state)));
                 drop(setups);
                 me.changed(&id);
+                me.run_setup_moved(&id);
             }
         });
     }
@@ -4025,6 +4252,12 @@ impl LiveCopies {
         } else {
             match k.setup.map(|s| s.state) {
                 Some(SetupState::Running | SetupState::NeedsApproval) => ("setup_pending", None),
+                // A failed setup is not ready: the command would fail here
+                // for want of what the setup installs (X60).
+                Some(SetupState::Failed { exit }) => (
+                    "setup_failed",
+                    Some(format!("its setup failed (exit {exit}): {}", self.setup_line(&id))),
+                ),
                 _ => ("ready", None),
             }
         };
@@ -4665,7 +4898,18 @@ fn run_setup_ask(k: &Kept) -> Option<m::ExecSetup> {
         host: k.host.clone(),
         project: k.project.clone(),
         command: setup.command.clone(),
+        on: None,
+        failed: None,
+        approved: false,
     })
+}
+
+/// The account's record of worker `worker`'s setup `command` of project
+/// `identity` (X60): `<worker>|<origin>|<root>|<command>`. None for a
+/// project without a root, whose setup only this host's app approves.
+fn setup_record_id(worker: &str, identity: &ProjectIdentity, command: &str) -> Option<String> {
+    let root = identity.root.as_deref()?;
+    Some(format!("{worker}|{}|{root}|{command}", identity.origin.as_deref().unwrap_or("")))
 }
 
 /// A folder under `root` for `name`'s leftovers, named for now:

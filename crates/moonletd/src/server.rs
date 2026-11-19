@@ -440,7 +440,8 @@ where
                 // paired phones (X62, X40).
                 Ok(Message::Event { name, .. })
                     if (no_jobs || not_app || (phone && !approves_setup))
-                        && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
+                        && (name == moonlet_proto::methods::EV_EXEC_SETUP
+                            || name == moonlet_proto::methods::EV_EXEC_SETUPS_CHANGED) => {}
                 // A URL to open goes to where the user is: this Mac's app or
                 // a paired phone (X75), never an agent or another Mac.
                 Ok(Message::Event { name, .. })
