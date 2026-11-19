@@ -16,6 +16,7 @@ import { hasRunCommand } from "./projectSettings";
 import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./archiveLoader";
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
 import { bulkArchivePrompt, type BulkArchiveItem } from "./bulkArchive";
+import { BULK_LIMIT, runPooled } from "./pool";
 import { moveConfirm, NO_PICK, type MoveTarget, type PickedSession } from "./sessionPick";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
@@ -447,21 +448,26 @@ export async function archiveSessions(picked: PickedSession[]) {
   if (!answer) return;
   useStore.setState({ pick: NO_PICK });
   const all = await hostAnswers;
-  await Promise.all(
-    sessions.map(async (x, i) => {
-      const [work, running] = all[i];
-      const pushes = !!answer.alt && !!work && !!unpushedView(work, x.plan, x.c.ws.branch, "");
-      if (pushes) {
-        try {
-          await rpc(x.c.host, M.gitPush, x.params);
-        } catch (e) {
-          errorToast(e);
-          return;
-        }
+  // Every row plays its scene at once; at most BULK_LIMIT archive at a time.
+  const loaders = sessions.map((x) => {
+    const loader = pickLoader();
+    setArchiving(sesKey(x.c.host, x.c.ws.id), { loader, done: false, folding: false });
+    return loader;
+  });
+  await runPooled(sessions, BULK_LIMIT, async (x, i) => {
+    const [work, running] = all[i];
+    const pushes = !!answer.alt && !!work && !!unpushedView(work, x.plan, x.c.ws.branch, "");
+    if (pushes) {
+      try {
+        await rpc(x.c.host, M.gitPush, x.params);
+      } catch (e) {
+        setArchiving(sesKey(x.c.host, x.c.ws.id), null);
+        errorToast(e);
+        return;
       }
-      await runArchive(x.c, archiveFlags(x.plan, answer.checked, pushes), running !== null);
-    }),
-  );
+    }
+    await runArchive(x.c, archiveFlags(x.plan, answer.checked, pushes), running !== null, loaders[i]);
+  });
 }
 
 /** Move to workspace for picked sessions (X106): asks first when Claude
@@ -479,19 +485,19 @@ export async function moveSessions(picked: PickedSession[], to: MoveTarget) {
   const message = moveConfirm(picked, to, hosts);
   if (message && !(await askConfirm({ title: "Change Claude profile", message, action: `Move to ${to.name}` }))) return;
   useStore.setState({ pick: NO_PICK });
-  await Promise.all(picked.map((p) => rpc(p.host, M.sessionUpdate, { id: p.ws.id, workspace_id: to.id }).catch(errorToast)));
+  await runPooled(picked, BULK_LIMIT, (p) => rpc(p.host, M.sessionUpdate, { id: p.ws.id, workspace_id: to.id }).catch(errorToast));
 }
 
 /** Archives session `c` once confirmed (X21, X83): stops what it runs when
- * `stops`, plays its row's scene and folds it away. */
-async function runArchive(c: PickedSession, flags: ReturnType<typeof archiveFlags>, stops: boolean) {
+ * `stops`, plays its row's scene (`loader`, one already shown when it
+ * waited in a bulk archive's pool) and folds it away. */
+async function runArchive(c: PickedSession, flags: ReturnType<typeof archiveFlags>, stops: boolean, loader = pickLoader()) {
   // Close its views first: they would reload while the worktree is deleted.
   const sel = useStore.getState().selected;
   const wasSelected = sel?.host === c.host && sel.session === c.ws.id;
   if (wasSelected) useStore.setState({ selected: null });
   // The row plays a pixel scene while the daemon works, then folds away (X21).
   const key = sesKey(c.host, c.ws.id);
-  const loader = pickLoader();
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {

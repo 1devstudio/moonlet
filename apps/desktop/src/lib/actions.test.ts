@@ -72,6 +72,37 @@ describe("archiveSessions (X106)", () => {
     expect(useStore.getState().pick).toEqual({ keys: [], anchor: null });
   });
 
+  it("archives at most 5 at once, every row showing the archive scene from the start", async () => {
+    const seven = Array.from({ length: 7 }, (_, i): Session => ({ ...ws, id: `p${i}`, name: `p${i}`, branch: `moonlet/p${i}`, path: `/w/p${i}` }));
+    useStore.setState({ sessions: { local: seven } });
+    reply = { ok: true, checked: false };
+    let inFlight = 0;
+    let most = 0;
+    const holds: (() => void)[] = [];
+    daemon.rpc.mockImplementation(async (_h: string, method: string) => {
+      if (method === "git.unpushed") return { files: [], commits: 0, upstream: null };
+      if (method === "session.processes") return { processes: [], leftovers: [] };
+      if (method !== "session.archive") return true;
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await new Promise<void>((r) => holds.push(r));
+      inFlight--;
+      return true;
+    });
+    const done = archiveSessions(seven.map((x) => ({ host: "local", ws: x })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Object.keys(useStore.getState().archiving).sort()).toEqual(seven.map((x) => `local/${x.id}`));
+    expect(archived().length).toBe(5);
+    // Each one ends, and its row's scene finishes, before the next starts.
+    while (archived().length < 7 || holds.length) {
+      while (holds.length) holds.shift()!();
+      await vi.runAllTimersAsync();
+    }
+    await done;
+    expect(archived().map((c) => c[2].id)).toEqual(["p0", "p1", "p2", "p3", "p4", "p5", "p6"]);
+    expect(most).toBe(5);
+  });
+
   it("asks one picked session as Archive does for one", async () => {
     answers(undefined);
     reply = { ok: true, checked: false };
