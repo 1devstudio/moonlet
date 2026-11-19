@@ -41,7 +41,7 @@ None.
 
 - Keychain: service `dev.onedevstudio.moonlet.trackers`, account `tokens`, holding a JSON object from connection id to token. Connection ids are `<kind>:<site>`, so no connection's id is `tokens`. A Linear OAuth sign-in's value is still its tokens as JSON, now a string inside the object.
 - Items of the old kind (account `<connection id>`) are deleted once their token has moved.
-- Since 2026-11-19 the same object also holds the app's tokens for tailnet hosts, under `host:<device id>` (X57, "Where the app keeps its tokens"). They share the item, and its one read per start, so hosts add no prompt of their own. A start reads the item whenever the app has a tailnet host whose token moved, not only once Tasks mode needs a tracker.
+- Since 2026-11-19 the same object also holds the app's tokens for tailnet hosts, under `host:<host name>:<device id>` (X57, "Where the app keeps its tokens"). They share the item, and its one read per start, so hosts add no prompt of their own. A start reads the item whenever the app has a tailnet host whose token moved, not only once Tasks mode needs a tracker.
 
 ## Security considerations
 
