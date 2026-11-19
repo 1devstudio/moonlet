@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
+use crate::host_tokens::{self, HeldHost};
 use moonlet_core::ssh::{SavedHosts, TailnetHost};
 pub use moonlet_link::HostInfo;
 use moonlet_link::tailnet::TailnetConnector;
@@ -130,6 +131,19 @@ impl Connector for LocalDaemon {
 
 struct RemoteDaemon(String);
 
+/// A tailnet host whose token the Keychain did not give this start, as when
+/// the user cancelled the password prompt: it cannot connect until the app
+/// starts again and asks again.
+struct NoToken;
+
+impl Connector for NoToken {
+    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
+        Box::pin(async { bail!("{NO_TOKEN}") })
+    }
+}
+
+const NO_TOKEN: &str = "moonlet could not read this Mac's token for the host from the Keychain. Quit moonlet and open it again.";
+
 impl Connector for RemoteDaemon {
     fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
         Box::pin(connect_remote(&self.0))
@@ -147,7 +161,7 @@ pub struct HostManager {
     app: AppHandle,
     hosts: Mutex<HashMap<String, Arc<Host>>>,
     /// The hosts paired over the tailnet, with their tokens (X57).
-    tailnet: Mutex<HashMap<String, TailnetHost>>,
+    tailnet: Mutex<HashMap<String, HeldHost>>,
     /// Held while the central host is chosen, or checked before a host is
     /// forgotten, so the two never interleave.
     central: tokio::sync::Mutex<()>,
@@ -161,19 +175,43 @@ impl HostManager {
             tailnet: Mutex::new(HashMap::new()),
             central: tokio::sync::Mutex::new(()),
         });
-        mgr.add(LOCAL, false);
+        mgr.start(LOCAL, false);
         let saved = moonlet_core::ssh::saved_hosts();
+        // Tokens come from the Keychain; one still in the file moves there
+        // at the one save below, so a start tries the Keychain once per
+        // token, and no save leaves a host out of the file meanwhile.
+        let tailnet = host_tokens::load(saved.tailnet, crate::secrets::store());
+        let any = !saved.remotes.is_empty() || !tailnet.is_empty();
         for r in saved.remotes {
-            mgr.add(&r, true);
+            mgr.start(&r, true);
         }
-        for t in saved.tailnet {
-            mgr.add_tailnet(t);
+        for t in tailnet {
+            mgr.start_tailnet(t);
+        }
+        if any {
+            mgr.persist();
         }
         mgr
     }
 
     fn persist(&self) {
-        let tailnet: Vec<TailnetHost> = self.tailnet.lock().unwrap().values().cloned().collect();
+        // The Keychain may prompt: it is asked without the lock, so the
+        // host list stays answerable meanwhile.
+        let mut held: Vec<HeldHost> = self.tailnet.lock().unwrap().values().cloned().collect();
+        let tailnet: Vec<TailnetHost> = held
+            .iter_mut()
+            .map(|h| host_tokens::file_entry(h, crate::secrets::store()))
+            .collect();
+        {
+            let mut now = self.tailnet.lock().unwrap();
+            for h in held.into_iter().filter(|h| h.in_store) {
+                if let Some(n) = now.get_mut(&h.host.id)
+                    && n.host.device_id == h.host.device_id
+                {
+                    n.in_store = true;
+                }
+            }
+        }
         let mut remotes: Vec<String> = self
             .hosts
             .lock()
@@ -230,15 +268,30 @@ impl HostManager {
     }
 
     /// Adds a host paired over the tailnet and connects to it (X57).
-    pub fn add_tailnet(self: &Arc<Self>, saved: TailnetHost) -> HostEntry {
-        if let Ok(h) = self.get(&saved.id) {
+    pub fn add_tailnet(self: &Arc<Self>, saved: HeldHost) -> HostEntry {
+        let entry = self.start_tailnet(saved);
+        self.persist();
+        entry
+    }
+
+    fn start_tailnet(self: &Arc<Self>, saved: HeldHost) -> HostEntry {
+        if let Ok(h) = self.get(&saved.host.id) {
             return self.entry(&h);
         }
-        let id = saved.id.clone();
+        let id = saved.host.id.clone();
+        let connector: Arc<dyn Connector> = if saved.host.token.is_empty() {
+            Arc::new(NoToken)
+        } else {
+            Arc::new(TailnetConnector {
+                addrs: saved.host.addrs.clone(),
+                token: saved.host.token.clone(),
+                route: None,
+            })
+        };
         self.tailnet
             .lock()
             .unwrap()
-            .insert(id.clone(), saved.clone());
+            .insert(id.clone(), saved);
         let host = Host::start(
             HostOptions {
                 id: id.clone(),
@@ -246,20 +299,23 @@ impl HostManager {
                 remote: true,
                 client: CLIENT.into(),
             },
-            Arc::new(TailnetConnector {
-                addrs: saved.addrs,
-                token: saved.token,
-                route: None,
-            }),
+            connector,
             Arc::new(WebviewEvents(self.app.clone(), HostKind::Tailnet)),
             tauri::async_runtime::handle().inner().clone(),
         );
         self.hosts.lock().unwrap().insert(id, host.clone());
-        self.persist();
         self.entry(&host)
     }
 
     pub fn add(self: &Arc<Self>, id: &str, remote: bool) -> HostEntry {
+        let entry = self.start(id, remote);
+        if remote {
+            self.persist();
+        }
+        entry
+    }
+
+    fn start(self: &Arc<Self>, id: &str, remote: bool) -> HostEntry {
         if let Ok(h) = self.get(id) {
             return self.entry(&h);
         }
@@ -294,9 +350,6 @@ impl HostManager {
             .lock()
             .unwrap()
             .insert(id.to_string(), host.clone());
-        if remote {
-            self.persist();
-        }
         self.entry(&host)
     }
 
@@ -333,7 +386,10 @@ impl HostManager {
                 })?;
             }
         }
-        self.tailnet.lock().unwrap().remove(id);
+        let forgotten = self.tailnet.lock().unwrap().remove(id);
+        if let Some(h) = &forgotten {
+            host_tokens::forget(h, crate::secrets::store());
+        }
         if let Some(h) = self.hosts.lock().unwrap().remove(id) {
             h.stop();
         }
@@ -351,9 +407,7 @@ impl HostManager {
 
     async fn link_central(&self, id: Option<&str>) -> Result<Value, RpcError> {
         let saved = match id {
-            Some(id) => Some(self.tailnet.lock().unwrap().get(id).cloned().ok_or_else(|| {
-                RpcError::new("unknown_host", format!("{id} is not a host on your tailnet"))
-            })?),
+            Some(id) => Some(self.token_of(id)?),
             None => None,
         };
         let params = serde_json::to_value(central_link_set(saved.as_ref())).unwrap();
@@ -371,11 +425,21 @@ impl HostManager {
     /// of `hello`, so it works whatever protocol the host speaks. The token
     /// stays in the app, never in the webview.
     pub async fn update(&self, id: &str, version: &str) -> Result<moonlet_proto::types::DaemonUpdated, RpcError> {
-        let saved = self.tailnet.lock().unwrap().get(id).cloned();
-        let Some(saved) = saved else {
-            return Err(RpcError::new("invalid_params", format!("{id} is not a tailnet host")));
-        };
+        let saved = self.token_of(id)?;
         moonlet_link::tailnet::update(&saved.addrs, &saved.token, version).await
+    }
+
+    /// Tailnet host `id` with its token, which the app has unless the
+    /// Keychain did not give it this start.
+    fn token_of(&self, id: &str) -> Result<TailnetHost, RpcError> {
+        let saved = self.tailnet.lock().unwrap().get(id).map(|h| h.host.clone());
+        let Some(saved) = saved else {
+            return Err(RpcError::new("unknown_host", format!("{id} is not a host on your tailnet")));
+        };
+        if saved.token.is_empty() {
+            return Err(RpcError::new("no_token", NO_TOKEN));
+        }
+        Ok(saved)
     }
 }
 
@@ -593,12 +657,13 @@ pub async fn pair_tailnet(
     )
     .await
     .map_err(|e| failed(moonlet_link::tailnet::pair_error_text(&id, &e)))?;
-    Ok(mgr.add_tailnet(TailnetHost {
+    Ok(mgr.add_tailnet(HeldHost::paired(TailnetHost {
         id,
         device_id: paired.device_id,
         addrs,
         token: paired.token,
-    }))
+        token_sha256: String::new(),
+    })))
 }
 
 /// `link.set` params that make `saved` this Mac's central host (X41), or
@@ -654,6 +719,7 @@ mod tests {
             device_id: "d1".into(),
             addrs: vec!["100.101.102.103:47428".into()],
             token: "ab".repeat(32),
+            token_sha256: String::new(),
         };
         assert_eq!(
             serde_json::to_value(central_link_set(Some(&mini))).unwrap(),

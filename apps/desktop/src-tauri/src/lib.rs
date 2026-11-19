@@ -6,6 +6,7 @@ mod attach;
 mod design_download;
 mod design_render;
 mod design_scheme;
+mod host_tokens;
 mod hosts;
 #[cfg(target_os = "macos")]
 mod isolation;

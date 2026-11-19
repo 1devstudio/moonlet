@@ -2,9 +2,11 @@
 // listening on loopback instead of a Tailscale address. `moonletd pair`
 // prints its link; the app pairs with it from Settings › Hosts, connects,
 // offers it for new projects, and on Remove the host forgets this Mac.
+// The token goes to the app's secret store (the Keychain; in e2e builds
+// `secrets.json`), and `app-hosts.json` keeps only its hash.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { BIN_DIR, closeSettings, fill, openSettings, sel, socketRpc, world } from "../fixtures";
@@ -15,6 +17,12 @@ const home = join(w.root, "remote-home");
 const sock = join(w.root, "remote.sock");
 const env = { ...w.env, MOONLET_HOME: home, MOONLET_SOCK: sock };
 const dialog = '//div[@role="dialog"][@aria-label="Add host"]';
+
+type SavedHost = { id: string; device_id: string; token: string; token_sha256?: string };
+/** The app's tailnet hosts as `app-hosts.json` keeps them. */
+const savedHosts = (): SavedHost[] => JSON.parse(readFileSync(join(w.home, "app-hosts.json"), "utf8")).tailnet;
+/** The e2e build's secret store, in place of the Keychain (X91). */
+const secrets = (): Record<string, string> => JSON.parse(readFileSync(join(w.home, "secrets.json"), "utf8"));
 
 /** One request to the remote daemon over its socket, as any client may send it. */
 const remoteRpc = <T>(method: string, params: object = {}) => socketRpc<T>(sock, env, method, params);
@@ -74,6 +82,11 @@ describe("tailnet host", () => {
     await expect($(dialog)).not.toBeExisting();
     const devices = await remoteRpc<{ devices: { name: string; kind: string }[] }>("mobile.status");
     expect(devices.devices.map((d) => d.kind)).toEqual(["desktop"]);
+
+    const [saved] = savedHosts();
+    expect(saved.token).toEqual("");
+    expect(saved.token_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(secrets()[`host:${saved.device_id}`]).toMatch(/^.{16,}$/);
   });
 
   it("offers it for new projects", async () => {
@@ -102,11 +115,13 @@ describe("tailnet host", () => {
   });
 
   it("removes it, and the host forgets this Mac", async () => {
+    const [saved] = savedHosts();
     await $(`button[title="Remove ${name}"]`).click();
     await expect($(`//*[@data-setting="host-${name}"]`)).not.toBeExisting();
     await browser.waitUntil(async () => (await remoteRpc<{ devices: unknown[] }>("mobile.status")).devices.length === 0, {
       timeout: 10000,
       timeoutMsg: "the host still lists this Mac",
     });
+    expect(Object.keys(secrets())).not.toContain(`host:${saved.device_id}`);
   });
 });
