@@ -2730,7 +2730,9 @@ impl LiveCopies {
         let me = self.link.info().worker.id;
         let names = self.sessions.member_names();
         for (id, r) in self.sessions.setup_records() {
-            let Some(worker) = id.split('|').next().filter(|w| *w != me) else { continue };
+            let worker = moonlet_core::account::setup_record_worker(&id);
+            // Only a member the account still names.
+            let Some(name) = names.get(worker).filter(|_| worker != me) else { continue };
             let text = |f: &str| r.get(f).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
             let failed = match text("state").as_str() {
                 "waiting" => None,
@@ -2749,7 +2751,7 @@ impl LiveCopies {
                 host: String::new(),
                 project: text("project"),
                 command: text("command"),
-                on: Some(names.get(worker).cloned().unwrap_or_else(|| worker.to_string())),
+                on: Some(name.clone()),
                 failed,
                 approved,
             });
@@ -2779,7 +2781,7 @@ impl LiveCopies {
         let mut now: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>> = Default::default();
         for k in kept.iter().filter(|k| k.kind == CopyKind::Run) {
             let (Some(setup), Some(identity)) = (k.setup.as_ref(), k.identity.as_ref()) else { continue };
-            let Some(id) = setup_record_id(&me.id, identity, &setup.command) else { continue };
+            let Some(id) = moonlet_core::account::setup_record_id(&me.id, identity, &setup.command) else { continue };
             let (state, failure) = match &setup.state {
                 SetupState::NeedsApproval => ("waiting", None),
                 SetupState::Failed { exit } => ("failed", Some((*exit, self.setup_line(&k.id)))),
@@ -2806,8 +2808,7 @@ impl LiveCopies {
             now.insert(id, fields);
         }
         let records = self.sessions.setup_records();
-        let mine = format!("{}|", me.id);
-        for (id, r) in records.iter().filter(|(id, _)| id.starts_with(&mine)) {
+        for (id, r) in records.iter().filter(|(id, _)| moonlet_core::account::setup_record_worker(id) == me.id) {
             if !now.contains_key(id) && r.get("state").and_then(serde_json::Value::as_str) != Some("ready") {
                 now.insert(id.clone(), serde_json::Map::from_iter([("state".to_string(), "ready".into())]));
             }
@@ -2830,10 +2831,10 @@ impl LiveCopies {
     pub fn setups_news(self: &Arc<Self>, changes: &[moonlet_proto::types::Change]) {
         use moonlet_core::account::RecordKind;
         let approval = changes.iter().any(|c| c.kind == RecordKind::SetupApproval.as_str());
-        let mine = format!("{}|", self.link.info().worker.id);
+        let me = self.link.info().worker.id;
         let answers: Vec<(String, String)> = changes
             .iter()
-            .filter(|c| c.kind == RecordKind::Setup.as_str() && c.id.starts_with(&mine))
+            .filter(|c| c.kind == RecordKind::Setup.as_str() && moonlet_core::account::setup_record_worker(&c.id) == me)
             .filter_map(|c| match &c.op {
                 moonlet_proto::types::ChangeOp::Set { field, .. } if field == "skip" || field == "again" => {
                     Some((c.id.clone(), field.clone()))
@@ -2867,7 +2868,7 @@ impl LiveCopies {
             let _one = lock.lock().await;
             let Some(k) = self.kept(&k.id) else { continue };
             let (Some(setup), Some(identity)) = (k.setup.clone(), k.identity.clone()) else { continue };
-            let id = setup_record_id(&me, &identity, &setup.command);
+            let id = moonlet_core::account::setup_record_id(&me, &identity, &setup.command);
             let answer = |f: &str| answers.iter().any(|(r, field)| Some(r) == id.as_ref() && field == f);
             match setup.state {
                 SetupState::NeedsApproval if answer("skip") => {
@@ -2894,7 +2895,7 @@ impl LiveCopies {
             .sessions
             .setup_records()
             .remove(id)
-            .filter(|_| id.split('|').next().is_some_and(|w| w != me))
+            .filter(|_| moonlet_core::account::setup_record_worker(id) != me)
             .ok_or_else(|| RpcError::new("not_found", "no such setup on another host"))?;
         let text = |f: &str| r.get(f).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
         if text("command") != command {
@@ -4254,10 +4255,11 @@ impl LiveCopies {
                 Some(SetupState::Running | SetupState::NeedsApproval) => ("setup_pending", None),
                 // A failed setup is not ready: the command would fail here
                 // for want of what the setup installs (X60).
-                Some(SetupState::Failed { exit }) => (
-                    "setup_failed",
-                    Some(format!("its setup failed (exit {exit}): {}", self.setup_line(&id))),
-                ),
+                Some(SetupState::Failed { exit }) => {
+                    let line = self.setup_line(&id);
+                    let why = if line.is_empty() { format!("its setup failed (exit {exit})") } else { format!("its setup failed (exit {exit}): {line}") };
+                    ("setup_failed", Some(why))
+                }
                 _ => ("ready", None),
             }
         };
@@ -4902,14 +4904,6 @@ fn run_setup_ask(k: &Kept) -> Option<m::ExecSetup> {
         failed: None,
         approved: false,
     })
-}
-
-/// The account's record of worker `worker`'s setup `command` of project
-/// `identity` (X60): `<worker>|<origin>|<root>|<command>`. None for a
-/// project without a root, whose setup only this host's app approves.
-fn setup_record_id(worker: &str, identity: &ProjectIdentity, command: &str) -> Option<String> {
-    let root = identity.root.as_deref()?;
-    Some(format!("{worker}|{}|{root}|{command}", identity.origin.as_deref().unwrap_or("")))
 }
 
 /// A folder under `root` for `name`'s leftovers, named for now:

@@ -1894,3 +1894,79 @@ async fn a_failed_setup_keeps_routed_commands_away_and_runs_again_from_an_app() 
     assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
     assert!(others_setups(&book).await.is_empty());
 }
+
+#[tokio::test]
+async fn skipping_a_setup_waiting_on_a_member_from_another_members_app_lets_commands_run_there_without_it() {
+    let (_mini, book, _air, session, _repo) = air_waits_for_setup(SETUP).await;
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.into_iter().next()
+    })
+    .await;
+    let _: bool = book
+        .call(
+            "exec.answer_setup",
+            json!({ "id": ask["copy"], "command": SETUP, "run": false }),
+        )
+        .await;
+    // Skipped counts as ready: the command runs on the Air, with no setup.
+    let ran = run_on_air(
+        &book,
+        &session,
+        &["sh", "-c", "test -e node_modules/.set-up && echo set || echo unset"],
+    )
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("unset\n", 0), "{ran:?}");
+    assert!(others_setups(&book).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_setup_approved_for_a_copy_in_its_own_hosts_app_runs_unasked_on_another_member() {
+    let (mini, book, air, session, _repo) = air_waits_for_setup(SETUP).await;
+    // The Air's own app approves its copy's setup, as before.
+    let own: Vec<Value> = air.call("exec.setups", json!({})).await;
+    let _: Value = air
+        .call(
+            "sync.run_setup",
+            json!({ "copy": own[0]["copy"], "command": SETUP }),
+        )
+        .await;
+    run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/.set-up"]).await;
+    // Now only studio-mini takes the MacBook's commands: its new routing
+    // copy runs the same setup without asking anyone.
+    let _: bool = mini
+        .call("worker.settings.set", json!({ "worker": AIR, "heavy": false }))
+        .await;
+    mini_takes(&mini, true).await;
+    let ran = within_value(Duration::from_secs(30), "a run on studio-mini", || async {
+        let ran = run(&book, &session, &["sh", "-c", "test -e node_modules/.set-up && echo set"]).await;
+        ran.stderr.starts_with("moonlet: running on studio-mini\n").then_some(ran)
+    })
+    .await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
+    let asked: Vec<Value> = mini.call("exec.setups", json!({})).await;
+    assert_eq!(asked, Vec::<Value>::new());
+}
+
+#[tokio::test]
+async fn an_approved_setup_a_restart_of_its_hosts_daemon_ended_runs_again_when_its_copy_is_made_again() {
+    let flag = tempfile::tempdir().unwrap();
+    let started = flag.path().join("started");
+    // The first run never ends by itself; the next one does.
+    let setup = format!(
+        "test -e {0} || {{ touch {0}; sleep 120; }}; {SETUP}",
+        started.display()
+    );
+    let (_mini, book, mut air, session, _repo) = air_waits_for_setup(&setup).await;
+    let ask = within_value(Duration::from_secs(10), "the MacBook lists the Air's setup", || async {
+        others_setups(&book).await.into_iter().next()
+    })
+    .await;
+    let _: bool = book
+        .call("exec.answer_setup", json!({ "id": ask["copy"], "command": setup, "run": true }))
+        .await;
+    within(Duration::from_secs(20), "the Air's setup started", || async { started.exists() }).await;
+    air.restart().await;
+    linked(&air).await;
+    let ran = run_on_air(&book, &session, &["sh", "-c", "test -e node_modules/.set-up && echo set"]).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("set\n", 0), "{ran:?}");
+}

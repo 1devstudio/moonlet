@@ -2352,10 +2352,11 @@ impl Daemon {
                 ok(self.sync.run_setups(r.all))
             }
             m::EXEC_ANSWER_SETUP => {
-                // As `sync.run_setup`: the user answers in this Mac's app
-                // or on a paired phone, and the approval is this member's,
-                // which its central host makes its own (X60).
+                // The user answers in this Mac's app (the phone app does not
+                // send it), and the approval is this member's, which its
+                // central host makes its own (X60).
                 self.app_or_paired_phone(conn)?;
+                app_only(conn, "setups")?;
                 let r: m::ExecAnswerSetup = params(p)?;
                 ok(self.sync.answer_setup(&r.id, &r.command, r.run)?)
             }

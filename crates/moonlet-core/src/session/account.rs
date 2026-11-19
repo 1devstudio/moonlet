@@ -1396,7 +1396,7 @@ fn setup_approved_in(log: &Log, key: &str, command: &str) -> bool {
 fn setup_records_in(log: &Log) -> Map<String, Record> {
     log.records_where(SETUP, |c| match &c.op {
         ChangeOp::Set { field, .. } if SETUP_REPORT.contains(&field.as_str()) => {
-            log_owner(&c.stamp.member).is_some_and(|w| c.id.split('|').next() == Some(w))
+            log_owner(&c.stamp.member) == Some(crate::account::setup_record_worker(&c.id))
         }
         ChangeOp::Set { .. } => true,
         ChangeOp::Delete => false,
@@ -1472,11 +1472,7 @@ fn section_fields(st: &State, s: &Section) -> Record {
 /// The key of a project identity in a section's fields; `None` for a
 /// project without a root, which is this member's alone.
 fn identity_key(i: &ProjectIdentity) -> Option<String> {
-    Some(format!(
-        "{}|{}",
-        i.origin.as_deref().unwrap_or(""),
-        i.root.as_deref()?
-    ))
+    crate::account::identity_key(i)
 }
 
 /// A section's projects by identity, in its order: this member's own that

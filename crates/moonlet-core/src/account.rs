@@ -723,6 +723,25 @@ pub fn new_log_name(worker: &str) -> String {
     )
 }
 
+/// A project identity as the account keys records by it (X68):
+/// `<origin>|<root>`; none for a project without a root, which is one
+/// member's alone.
+pub fn identity_key(i: &moonlet_proto::types::ProjectIdentity) -> Option<String> {
+    Some(format!("{}|{}", i.origin.as_deref().unwrap_or(""), i.root.as_deref()?))
+}
+
+/// The id of [`RecordKind::Setup`]'s record of `worker`'s setup `command`
+/// of project `identity` (X60): `<worker>|<origin>|<root>|<command>`.
+/// Read back with [`setup_record_worker`].
+pub fn setup_record_id(worker: &str, identity: &moonlet_proto::types::ProjectIdentity, command: &str) -> Option<String> {
+    Some(format!("{worker}|{}|{command}", identity_key(identity)?))
+}
+
+/// The worker a [`setup_record_id`] names.
+pub fn setup_record_worker(id: &str) -> &str {
+    id.split('|').next().unwrap_or_default()
+}
+
 /// The worker a log belongs to, from the log's name, when it is one.
 pub fn log_owner(name: &str) -> Option<&str> {
     let (worker, suffix) = name.rsplit_once('.')?;
