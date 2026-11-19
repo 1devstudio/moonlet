@@ -78,6 +78,20 @@ describe("Select several sessions (X106)", () => {
     await expect($(bar("3 selected"))).not.toBeExisting();
   });
 
+  it("a click on a row's box picks or unpicks it, and the last one out ends picking", async () => {
+    const box = (name: string) => `${sel.sessionRow(name)}//span[@role="checkbox"]`;
+    await modClick(sel.sessionRow("Pick one"), { metaKey: true });
+    // A plain click on another row's box adds it, as ⌘-click does.
+    await $(box("Pick three")).click();
+    await expect($(bar("2 selected"))).toBeDisplayed();
+    await expect($(picked("Pick three"))).toBeExisting();
+    await $(box("Pick one")).click();
+    await expect($(bar("1 selected"))).toBeDisplayed();
+    await $(box("Pick three")).click();
+    await expect($(bar("1 selected"))).not.toBeExisting();
+    await expect($(box("Pick three"))).not.toBeExisting();
+  });
+
   it("the right-click menu of a picked row acts on all of them", async () => {
     await modClick(sel.sessionRow("Pick one"), { metaKey: true });
     await modClick(sel.sessionRow("Pick two"), { metaKey: true });

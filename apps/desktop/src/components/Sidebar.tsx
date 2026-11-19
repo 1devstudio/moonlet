@@ -10,7 +10,7 @@ import { bringHere, moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, archiveSessions, moveSessions, openProjectSettings, restoreSession, visibleSessionOrder } from "../lib/actions";
-import { clickPick, escClearsPick, moveTargets, NO_PICK, pickedSessions, pickLine, shownPick, type HostPlaces, type PickedSession } from "../lib/sessionPick";
+import { boxClickPick, clickPick, escClearsPick, moveTargets, NO_PICK, pickedSessions, pickLine, shownPick, type HostPlaces, type PickedSession } from "../lib/sessionPick";
 import { askConfirm } from "../lib/confirm";
 import { ARCHIVE_FOLD_MS, type Archiving } from "../lib/archiveLoader";
 import { ArchiveLoader } from "./ArchiveLoader";
@@ -433,7 +433,17 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
       picked={picked}
       nested={nested}
       cell={cell}
-      glyph={picking ? <PickBox on={picked} /> : notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+      glyph={
+        picking ? (
+          <PickBox
+            on={picked}
+            name={s.name}
+            onPick={(shift) => {
+              const rows = visibleSessionOrder().map((t) => sesKey(t.host, t.id));
+              useStore.setState({ pick: boxClickPick(useStore.getState().pick, { key: sesKey(host, s.id), shift }, rows) });
+            }}
+          />
+        ) : notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
       badge={renaming ? null : badge}
       name={
         renaming ? (
@@ -472,11 +482,26 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   );
 }
 
-/** A row's box while sessions are picked (X106), in its glyph's place. */
-function PickBox({ on }: { on: boolean }) {
+/** A row's box while sessions are picked (X106), in its glyph's place: a
+ * click picks or unpicks the row, as ⌘-click does, with ⇧ a range. The
+ * padding widens what takes the click past the 14px box. */
+function PickBox({ on, name, onPick }: { on: boolean; name: string; onPick: (shift: boolean) => void }) {
   return (
-    <span aria-hidden className={cx("flex h-[14px] w-[14px] items-center justify-center rounded-[3px] border", on ? "border-accent bg-accent text-bg" : "border-border-strong bg-raised")}>
-      {on && <Check size={10} strokeWidth={3} />}
+    <span
+      role="checkbox"
+      aria-checked={on}
+      aria-label={`Select ${name}`}
+      className="-m-1 flex p-1"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPick(e.shiftKey);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <span className={cx("flex h-[14px] w-[14px] items-center justify-center rounded-[3px] border", on ? "border-accent bg-accent text-bg" : "border-border-strong bg-raised hover:border-muted")}>
+        {on && <Check size={10} strokeWidth={3} />}
+      </span>
     </span>
   );
 }

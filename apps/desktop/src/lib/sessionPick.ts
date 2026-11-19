@@ -48,6 +48,12 @@ export function clickPick(p: SessionPick, c: PickClick, rows: string[]): { pick:
   return { pick: { keys: [], anchor: c.key }, open: true };
 }
 
+/** A click on a row's box while picking (X106): it picks or unpicks the row
+ * as ⌘-click does, a range with ⇧, and never opens the session. */
+export function boxClickPick(p: SessionPick, c: { key: string; shift: boolean }, rows: string[]): SessionPick {
+  return clickPick(p, { key: c.key, cmd: !c.shift, shift: c.shift }, rows).pick;
+}
+
 /** `keys` once each, in the order of `rows`. */
 function inOrder(keys: string[], rows: string[]): string[] {
   const want = new Set(keys);

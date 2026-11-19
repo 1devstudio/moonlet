@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClaudeProfile, Section, Session, TerminalInfo, Workspace } from "./protocol";
-import { clickPick, escClearsPick, moveConfirm, moveTargets, pickedSessions, pickLine, shownPick } from "./sessionPick";
+import { boxClickPick, clickPick, escClearsPick, moveConfirm, moveTargets, pickedSessions, pickLine, shownPick } from "./sessionPick";
 
 // The sidebar's rows top to bottom, as `host/session` keys.
 const rows = ["local/fix-checkout", "local/add-search", "local/dark-mode", "local/old-cart", "local/refund", "local/webhooks"];
@@ -52,6 +52,21 @@ describe("clickPick (X106)", () => {
     // "storefront" is in Acme and in Side projects: its sessions show twice.
     const twice = ["local/a", "local/b", "local/c", "local/a", "local/b"];
     expect(clickPick({ keys: [], anchor: "local/b" }, { key: "local/c", cmd: false, shift: true }, twice).pick.keys).toEqual(["local/b", "local/c"]);
+  });
+});
+
+describe("boxClickPick (X106)", () => {
+  it("a click on a row's box picks or unpicks it as ⌘-click does, and the last one out ends picking", () => {
+    const one = { keys: ["local/dark-mode"], anchor: "local/dark-mode" };
+    const two = boxClickPick(one, { key: "local/refund", shift: false }, rows);
+    expect(two).toEqual({ keys: ["local/dark-mode", "local/refund"], anchor: "local/refund" });
+    expect(boxClickPick(two, { key: "local/dark-mode", shift: false }, rows)).toEqual({ keys: ["local/refund"], anchor: "local/dark-mode" });
+    // Unpicking the last one leaves nothing picked: the bar goes.
+    expect(boxClickPick({ keys: ["local/refund"], anchor: "local/refund" }, { key: "local/refund", shift: false }, rows).keys).toEqual([]);
+  });
+
+  it("⇧ on a box picks the range, as ⇧-click on the row does", () => {
+    expect(boxClickPick({ keys: ["local/add-search"], anchor: "local/add-search" }, { key: "local/old-cart", shift: true }, rows).keys).toEqual(["local/add-search", "local/dark-mode", "local/old-cart"]);
   });
 });
 
