@@ -5,11 +5,11 @@
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
 - **Depends on:** [X41](X41-worker-link-and-project-identity.md) (the worker link, `worker.list`, project identity), [X61](X61-remote-hosts-for-heavy-commands.md) (remote hosts as workers) and [X60](X60-keep-in-sync.md) (snapshots, packs, offer and update rounds, setup approval).
-- **Changed by:** [Lines moonlet routes](#lines-moonlet-routes) (2026-11-16: `cd`, variables, `timeout`, redirections and filters around a heavy command), [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
+- **Changed by:** [Picking a worker](#picking-a-worker) (2026-11-19: a free slot is room, whatever the load; the session's host first; a line of commands that wait up to a minute), [Lines moonlet routes](#lines-moonlet-routes) (2026-11-16: `cd`, variables, `timeout`, redirections and filters around a heavy command), [X90](X90-heavy-commands-in-practice.md) (the main checkout's list, background calls, the output file), [X89](X89-every-host-runs-heavy-commands.md) (every member routes and runs heavy commands, approval and worker settings in the account state)
 
 ## Summary
 
-An agent on the central host, such as the Mac mini `studio-mini`, runs `pnpm test`. When the project lists `pnpm test` as a **heavy command** and the user has approved it, moonlet runs it on the free worker with the lowest load: a linked Mac or remote host (X41, X61), the central host itself, or a cloud machine ([X63](X63-cloud-workers.md)). The worker runs it in a **routing copy** of the session's files. Before the command starts, a **fence** makes the copy hold exactly the session's files. Output streams back as it comes. After the command ends, every change it made is back in the session before the agent sees the exit status. If the worker goes away mid-run, the command may have run in part there, so moonlet does not run it again unless the project marked it safe to; the agent hears so and decides.
+An agent on the central host, such as the Mac mini `studio-mini`, runs `pnpm test`. When the project lists `pnpm test` as a **heavy command** and the user has approved it, moonlet runs it where there is a free slot: on the session's own host while it has one, else on a linked Mac or remote host (X41, X61) or a cloud machine ([X63](X63-cloud-workers.md)) with one. With every slot taken, the command waits in line for the first free slot, up to a minute, then runs on the session's host anyway. The worker runs it in a **routing copy** of the session's files. Before the command starts, a **fence** makes the copy hold exactly the session's files. Output streams back as it comes. After the command ends, every change it made is back in the session before the agent sees the exit status. If the worker goes away mid-run, the command may have run in part there, so moonlet does not run it again unless the project marked it safe to; the agent hears so and decides.
 
 Every routed command is a **job** of its session. The session's **Jobs** tab lists its jobs, and each one opens to show its phases, its output, what came back and where it ran, the way X42's Agents tab shows subagents.
 
@@ -165,39 +165,53 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
 
 ### Picking a worker
 
+Until 2026-11-19 a machine was **busy** when its 1-minute load average was at least 0.7 × its cores, and a busy machine took nothing. On the user's Macs the load average sits at 25 to 45 with agent sessions running (190 with several building at once), so every machine looked busy, nothing was routed, and every heavy command ran on its session's host with no limit on how many ran at once. The user approved deciding by slots instead, with a short line (2026-11-19).
+
 - [x] The candidates are:
+  - the session's own host (here, the central host);
   - linked workers: Macs with **Use this Mac for heavy commands** on (X41) and remote hosts with **Use for heavy commands** on (X61), each of which approved the project's list;
-  - the central host;
   - the project's cloud machines that are ready (X63).
 
-  A candidate must have the project's `os` when one is set, a free slot, and a load below busy.
-- [x] Each worker has **slots**: how many routed commands it runs at once, from 1 to 64. The default is 2. Every machine keeps its own in its `link.json` (`link.set {worker: {slots}}`), the central host included, and a linked worker sends them when it registers, and again when they change. The worker's own This Mac page sets them.
-- [x] A worker is **busy** when its 1-minute load average (`getloadavg`) is at least 0.7 × its cores. The worker sends its load in each `worker.ping` answer, and `worker.list` shows it. The central host reads its own load the same way.
+  A candidate must have the project's `os` when one is set. (`a_worker_on_another_os_is_skipped`)
+- [x] Each machine has **slots**: how many routed commands it runs at once, from 1 to 64. The default is 2, for a machine that never set it: a heavy command (a test suite, a build) already uses every core it can, so two at once overlap one's single-threaded and I/O stretches with the other's work without splitting the cores further, and more at once only makes each slower and adds their memory. Every machine keeps its own in its `link.json` (`link.set {worker: {slots}}`), the central host included, and a linked worker sends them when it registers, and again when they change. The worker's own This Mac page sets them. (`slots_default_to_two_and_link_set_changes_them`)
+- [x] A machine **has room** when it has a free slot: its slots minus the heavy commands it runs or has been given and is preparing, its own sessions' and other hosts'. The load average is not a reason to skip a machine: a machine at a load of 38 on 10 cores with a free slot takes the command. The worker still sends its load in each `worker.ping` answer, and the job and the Workers page show it. (`a_host_at_a_high_load_average_with_a_free_slot_takes_the_command`, in core and in `tests/exec.rs`)
+- [x] No other machine-wide signal refuses work. On a 10-core, 32 GB Mac, sampled 120 times over 30 minutes on 2026-11-19 while this change's tests built and ran alongside other sessions, the 1-minute load average went from 2.6 to 27.6. In 46 samples it was at 7 or more (busy by the old rule), and in 22 of those the CPU was more than half idle. At the same load the CPU went from 75.5 % idle to 0.5 % idle 15 s later (load 14.0, then 13.9). macOS's memory pressure level (`kern.memorystatus_vm_pressure_level`) was 1, normal, in all 120. So the load average says little about the next minute, a CPU-idle gate would take and refuse work at random from one second to the next, and memory pressure never moved while agents and builds ran. Slots bound what moonlet itself adds.
 - [x] Order:
-  1. linked workers, by lowest load per core, then lowest round trip, then worker id;
-  2. the central host;
-  3. ready cloud machines, by lowest load per core.
+  1. ready cloud machines, when the session asked for the cloud (X63);
+  2. the session's own host;
+  3. other hosts, by the lowest share of their slots in use, then lowest round trip, then worker id;
+  4. ready cloud machines, by the lowest share of their slots in use.
 
-  A session that asked for the cloud (X63) tries cloud machines first. Worked examples:
+  The session's own host comes first: a command there needs no routing copy, fence or bringing back, and a host with a free slot is not overloaded by heavy commands. An idle session's host keeps its commands; only a session that asked for the cloud sends one away from a host with room. Another host's share of its slots (1 of 4 before 1 of 2) stands where its load per core stood before. Worked examples, for a session on studio-mini (load / cores, slots used of 2):
 
-  | Workers (load / cores, slots used of 2) | Runs on |
+  | Machines | Runs on |
   |---|---|
-  | MacBook 1.0/10 (0), central 0.5/10 (0) | MacBook |
-  | MacBook 7.2/10 (0), central 4.3/10 (1) | central host (the MacBook is busy) |
-  | MacBook 1.0/10 (2), central 1.0/10 (0) | central host (the MacBook has no free slot) |
-  | MacBook A 3.0/10, MacBook B 1.0/8 | B (0.125 < 0.3) |
-  | no linked workers, central 9.0/10 (2), a ready cloud machine | the cloud machine |
-  | no linked workers, central 9.0/10 (2), no cloud machine | central host anyway |
+  | studio-mini 0.5/10 (0), MacBook 1.0/10 (0) | studio-mini (the session's host has room) |
+  | studio-mini 31.0/10 (1), MacBook 0.4/10 (0) | studio-mini (a free slot, whatever the load) |
+  | studio-mini 4.3/10 (2), MacBook 7.2/10 (0) | MacBook |
+  | studio-mini 0.1/10 (2), MacBook A 0.2/10 (1), MacBook B 6.0/8 (0) | B (0 of 2 before 1 of 2) |
+  | studio-mini 9.0/10 (2), MacBook 1.0/10 (2), a ready cloud machine (0) | the cloud machine |
+  | studio-mini 9.0/10 (2), MacBook 1.0/10 (2), no cloud machine | waits for a slot |
 
-- [x] A command never waits for a slot. When no candidate is free, it runs on the central host. If the project allows cloud overflow, a machine is started for the next command (X63).
+  (`picks_as_in_the_order_table`; in the daemon, `an_idle_session_host_keeps_its_command` here and in X89's `tests/mesh.rs`)
+- [x] **A short line.** When no candidate has room, the command waits for the first free slot on any machine it could run on, in this host's **line**. Commands in the line are served in the order they came, whichever session they are from: a slot that frees goes to the command that has waited longest among those that could run there, and a command that comes later goes behind them, even when it sees the free slot first. One session cannot starve the others. (`commands_waiting_ahead_take_the_free_slots_first`, `commands_waiting_from_two_sessions_are_served_in_the_order_they_came`)
+- [x] A command waits at most **one minute**, then runs on the session's host anyway, so nothing waits for ever. A minute lets a typical heavy command elsewhere (a type check, a unit suite) end and free its slot, and leaves most of a Bash call's default two-minute timeout for the run itself. It is not a setting. A command whose tries on other machines (refusals, a copy made) took the minute already runs on the session's host at once. (`a_command_waits_a_minute_for_a_slot_then_runs_anyway`, `with_every_slot_taken_a_command_waits_and_starts_when_one_frees`, `a_command_waits_a_bounded_time_then_runs_on_its_own_host`)
+- [x] A waiting job's state is `waiting {for: "a free slot", slot: true}`. **Stop** ends it with exit 143 and it never runs; **Run on studio-mini now** (`job.run_here`) starts it on the session's host at once. (`a_waiting_command_can_run_here_now_or_be_stopped`)
+- [x] With no room anywhere, the session's host included, a project that allows cloud overflow gets a machine (X63), once per command. A machine that is ready while the command still waits takes it. (`overflow_starts_a_machine_once_every_slot_is_taken_whatever_the_load`, in X63's `tests/cloud.rs`)
+- [x] Each decision uses the slot counts as they are when it is made: this host's own from its runs, under the same lock its `exec.start` for other hosts takes; a linked worker's from its last ping (every 10 s) or the commands this host gave it since, whichever is more; and, for a member, what the central host answers to `worker.status` and `worker.peers`, asked again every second while the command waits. A machine checks its slots again when the start comes, and refuses with `busy` if another host took the last one meanwhile.
 - [x] A worker may refuse a command:
-  - `busy`;
+  - `busy`: "no free slot (2 of 2 in use)", or, from a worker before 2026-11-19, a load at 0.7 × its cores or more, which it also calls "no free slot";
   - `missing_tool`: the command's first word is not on the copy's `PATH`;
   - `setup_pending`;
   - `not_approved`;
   - `not_fenced`.
 
-  The central host then tries the next candidate. The reason shows on the Workers screen, as "missing pnpm" or "waiting for setup approval".
+  The session's host then decides again at once, with what it just learned: a machine that refused `busy` is left out of that command's picks for 10 s, as it may have a slot again soon; any other refusal leaves it out for that command. The refusal goes on the job's timeline ("Alex's MacBook Pro refused it: missing pnpm") and on the Workers screen, as "missing pnpm" or "waiting for setup approval". (`a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced`, X89's `a_host_with_no_free_slot_refuses_busy_and_the_next_one_runs_it`)
+- [x] **What the agent hears.** `moonlet exec`'s stderr says when a command waits and for what: "moonlet: every host is full (studio-mini 2 of 2, Alex's MacBook Pro 2 of 2). Waiting for a free slot, up to 1:00 (0:00)", then "moonlet: waiting for a free slot (0:10)" every 10 s, then "moonlet: waited 0:40 for a slot on studio-mini" or "moonlet: every host was still full after 1:00. Running on studio-mini anyway.", then the usual "moonlet: running on …". (`with_every_slot_taken_a_command_waits_and_starts_when_one_frees`, `a_command_waits_a_bounded_time_then_runs_on_its_own_host`)
+- [x] **Older hosts.** No protocol change: `exec.start`, `worker.ping`, `worker.status` and `worker.peers` keep their fields, and the job state's `slot` is optional.
+  - A session's host from before 2026-11-19 with a newer runner: it still skips a machine by its load and never waits; the runner no longer refuses for load, only for slots.
+  - A newer session's host with a runner from before: the runner refuses `busy` at a high load, which the session's host treats as a full machine (left out 10 s, then tried again), so with every other machine full the command waits its minute and runs on the session's host. A runner from before X89 sends no `used`, and counts only what this host gave it.
+  - An app from before 2026-11-19 shows a job waiting for a slot as "Waiting for a free slot" in the row and as waiting for a cloud machine in its detail.
 
 ### Routing copies
 
@@ -250,20 +264,21 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
 
 - [x] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `job.changed`.
 - [x] **Approve** on a worker's line first shows the project's exact commands and variable names in the confirm modal (X23), as its page has them now, so nothing is approved unseen.
-- [x] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when no other worker is free, "busy, takes commands no one else can".
+- [x] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when every one of its slots is in use, "busy, takes commands no one else can" (whatever its load, since 2026-11-19).
 - [x] The summary line reads "5 commands running · 5 of 13 slots in use": the jobs running now, and used slots of all slots of every linked worker, the central host and ready cloud machines.
 
 ### Jobs
 
 - [x] Every routed command is a **job** of its session. So is every command `exec.route` routed that ran on the central host because no worker was free. The central host keeps each session's last 50 jobs, with their output, until the session is archived, and through daemon restarts.
 - [x] A job's state is one of:
-  - `waiting {for}`: for setup approval, or for a cloud machine (X63). A command never waits for a slot;
+  - `waiting {for, slot?}`: for setup approval, for a cloud machine (X63), or, with `slot: true`, for a free slot (`for` is "a free slot");
   - `running {worker}`;
   - `bringing_back`;
   - `done {exit}`;
   - `stopped`;
   - `lost` (the central daemon stopped, exit 125).
 - [x] A job records its **phases** with their durations: "Copy matched the session", "Ran on <worker>", "Brought back", "Exit status to Claude". It also records its **timeline**:
+  - where it went and why, before it started: "<worker> refused it: <its reason>" for each refusal; "Waiting for a free slot", with the full machines ("Every host is full: studio-mini 2 of 2, Alex's MacBook Pro 2 of 2."); then "Waited 40 s for a slot on studio-mini", "Ran on studio-mini: every host was full" (with "It waited 1:00 for a slot, the longest a command waits."), or "Ran on studio-mini now, as asked from the Jobs panel". The job's detail lists these above its phases, refusals and running anyway in the attention colour, and a job still waiting shows "Waiting for a free slot" with the full machines and how long so far (Vitest "says it waits for a free slot, not for a cloud machine", "lists where it ran and why above its phases");
   - started on <worker>;
   - <worker> went away, with why ("It missed 3 pings.", "Its link closed." or "It went away as the command started."), "The command may have run in part there; it was not run again." when it was not, and "That run's changes were dropped.";
   - ran again on <host>, from the same files, for a command listed under `rerun`;
@@ -301,7 +316,7 @@ Agents rarely run a test or a build alone: they `cd` into a package, set a varia
   The summary ends the job tab's state line ("… · run by Claude in fix-cart · 457 tests passed"). A row's second line adds it only for a job that did not exit 0 ("studio-mini · exit 1 · Type error in src/cart.ts:41").
 - [x] Jobs hold commands' output, so only the app and paired devices list, read and stop them. An agent's `moonlet` CLI and a worker are refused with `forbidden`, as the CLI is for another terminal's output without the user's approval (X31).
 - [x] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
-- [x] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
+- [x] **Run on studio-mini now**, on a job waiting for a cloud machine or a free slot, runs it on the session's host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
 - [x] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
 - [x] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
 
@@ -332,7 +347,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **Settings nav (X43), Machines group** ([settings-nav.png](design/x62-x63/settings-nav.png)): **Hosts**, then **Workers**, then **Cloud workers** (X63), then **Phones**. Workers and Cloud workers carry the central host's name, as project rows carry their host's.
 - **Project page, Heavy commands** ([project-page.png](design/x62-x63/project-page.png)):
   - under the heading, "Approved commands run without asking, on whichever machine is free.";
-  - **Commands:** one editable row per entry, with a state pill (**Approved**, or **Not approved** in the attention colour) and **×** to remove it, plus **Add command**. The help text is "A Bash call that starts with one of these goes to the free worker with the lowest load. Chained, piped or redirected calls run where the agent is.";
+  - **Commands:** one editable row per entry, with a state pill (**Approved**, or **Not approved** in the attention colour) and **×** to remove it, plus **Add command**. The help text is "A Bash call that starts with one of these runs where there is a free slot: its session's host first, then another host. Chained, piped or redirected calls run where the agent is.";
   - **Runs on:** a segmented control, **Any**, **macOS** or **Linux** (`os`), with "Workers on another system are skipped.";
   - **Bring back after a run:** `outputs`, with "Ignored paths that replace the same paths on studio-mini when a run ends. Up to 1 GiB.";
   - **Pass to the worker:** `env`. A name that looks like a secret gets the warning "NPM_TOKEN looks like a secret. It reaches every machine that runs these commands, cloud machines too." Approving the list approves these names too;
@@ -346,7 +361,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the same row under each remote host's **Use for heavy commands** switch, with "Saved on devbox.";
   - the footnote "studio-mini's own slots are on its This Mac page. See what each worker runs in Workers.";
   - the help text "Commands are not routed yet" from X41 and X61 goes away.
-- **Workers page** ([workers-page.png](design/x62-x63/workers-page.png)): the title with a "studio-mini · Central host" badge; "Machines that run heavy commands for studio-mini's sessions. A command goes to the free worker with the lowest load, and runs on studio-mini when none is free."; the summary line; then:
+- **Workers page** ([workers-page.png](design/x62-x63/workers-page.png)): the title with a "studio-mini · Central host" badge; "Machines that run heavy commands for studio-mini's sessions. A command runs on studio-mini while it has a free slot, else on a worker with one, and waits up to a minute when every slot is taken."; the summary line; then:
   - a **Macs and hosts** table, with columns Worker, Load (a bar and "1.2 / 10"), Slots ("1 of 2") and Round trip. Badges are "This Mac" and "Central host", and the skip reasons sit under the name, in the attention colour. The page reads `worker.list` and `exec.status` from the central host every two seconds while it is open, and on `workers.changed` and `job.changed`. Each running job sits under its worker: spinner, session, command, elapsed time. A busy load bar uses the attention colour;
   - **Cloud machines** (X63).
 - **Workers, empty** ([workers-empty.png](design/x62-x63/workers-empty.png)): "Only studio-mini runs heavy commands", "No machine runs heavy commands for studio-mini yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host." and **Open Hosts**. **Set up cloud workers** comes with X63.
@@ -400,7 +415,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 **Central host to worker:**
 
 - `exec.prepare {session}` returns `{copy, state, reason}`, `state` being `ready`, `making`, `setup_pending` or `failed`. The worker makes the routing copy, through X60's `sync.open {kind: "run"}` and `sync.fetch`, if it has none. A worker with heavy commands off answers `not_approved`.
-- `exec.start {run, copy, argv, cwd, env, tree, head, session_path, outputs}` returns `true`, or a refusal: `not_approved` (this machine's own approval), `busy` (slots or load), `not_fenced`, `missing_tool` or `invalid_params` (a folder or `outputs` path outside the copy).
+- `exec.start {run, copy, argv, cwd, env, tree, head, session_path, outputs}` returns `true`, or a refusal: `not_approved` (this machine's own approval), `busy` (no free slot; before 2026-11-19 also a load at 0.7 × its cores), `not_fenced`, `missing_tool` or `invalid_params` (a folder or `outputs` path outside the copy).
 - `exec.cancel {run}`.
 
 **Worker to central host:**
@@ -480,9 +495,11 @@ Where the tests live:
 | `moonlet exec` in a session, and `exec.run`'s own check | `moonlet_exec_in_a_session_runs_through_its_daemon`, `an_unapproved_moonlet_exec_is_refused` |
 | Candidates and `os` | `a_worker_on_another_os_is_skipped` |
 | Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "says how many commands run here, and keeps slots from 1 to 64" |
-| Busy | `a_worker_reports_its_load_with_each_ping`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
-| Order (worked examples) | `picks_as_in_the_order_table` |
-| Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
+| Room is a free slot, whatever the load | `a_host_at_a_high_load_average_with_a_free_slot_takes_the_command` (core and `tests/exec.rs`), `a_worker_reports_its_load_with_each_ping`; Vitest "skip reasons for a project" (a loaded central host with a free slot is not busy) |
+| Order (worked examples) | `picks_as_in_the_order_table`, `an_idle_session_host_keeps_its_command` |
+| The line and its minute | `commands_waiting_ahead_take_the_free_slots_first`, `a_command_waits_a_minute_for_a_slot_then_runs_anyway`, `with_every_slot_taken_a_command_waits_and_starts_when_one_frees`, `a_command_waits_a_bounded_time_then_runs_on_its_own_host`, `commands_waiting_from_two_sessions_are_served_in_the_order_they_came`, `a_waiting_command_can_run_here_now_or_be_stopped` |
+| Waiting in the Jobs tab | Vitest "says it waits for a free slot, not for a cloud machine", "lists where it ran and why above its phases"; mobile Vitest "runs a job waiting for a free slot on the session's host now, or stops it" |
+| Overflow on the same room | `overflow_starts_a_machine_once_every_slot_is_taken_whatever_the_load` (X63's `tests/cloud.rs`) |
 | Refusals | `a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced` |
 | Routing copies, apart from live copies | `a_routing_copy_lives_under_runs_and_not_in_sync_list` |
 | Syncs only at fences | `a_command_starts_only_once_the_copy_matches_the_session` (an edit on the central host between runs waits for the next run) |
@@ -532,7 +549,9 @@ Where the tests live:
 ## Open questions
 
 
-- **Default slots:** 2 per worker. The ADR 0009 trial ran one suite per machine, and a laptop may want 1.
+- **Slots counted across hosts while a copy is prepared.** A session's host counts the commands it gave a worker from the moment it picks it, but the worker counts another host's command only from its `exec.start`. Two hosts can both prepare a copy on the last slot; the second start is refused `busy` and that host decides again. A slot held from `exec.prepare` would need the worker to expire prepares nobody starts.
+- **The line is per session's host.** Commands waiting on two hosts for the same third machine are served in the order their starts reach it, not the order they began waiting.
+- **The wait is not a setting.** One minute for every project. A project setting (`[heavy] wait`) is cheap to add if a project's commands are much longer or shorter.
 - **`updatedInput` without `permissionDecision`.** Claude Code's docs don't say what that does. This spec always sends `allow`, so the question doesn't arise as long as approval stays required.
 - **Codex** has no equivalent of `updatedInput` in its hooks today. Its routing waits for one.
 
@@ -545,4 +564,4 @@ Decided while writing this spec, on 2026-10-22:
 
 - **Approval before routing.** ADR 0009's hook rewrites commands, and Claude Code applies permission rules to the rewritten command. Without an approval, an `allow` rule for `pnpm test` would stop matching, and the user would be prompted. With a silent `allow` instead, an agent could route anything it wrote into the config. Approval in moonlet's UI is the explicit allow.
 - **Routing copies are separate from live copies.** A run in the user's own copy would mix its changes with the user's edits, and an abandoned run's changes could not be thrown away.
-- **Never wait for a slot.** A queued command holds the agent's turn, and the central host can always run it.
+- **Never wait for a slot** (replaced on 2026-11-19 by a line of at most a minute: never waiting meant piling every command on the session's host once load said every machine was busy).
