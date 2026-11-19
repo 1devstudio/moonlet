@@ -54,7 +54,7 @@ async function moveSection(host: string, from: Workspace, sectionId: string, to:
   await rpc(host, M.sectionMove, { id: sectionId, workspace_id: to.id }).catch(errorToast);
 }
 
-const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
+const activeAt = (host: string, s: Session) => lastActive(sessionTerminals(useStore.getState(), host, s.id), s);
 
 /** Project mark: the GitHub owner's avatar (X15), else a dotted glyph like Conductor's. */
 export function ProjectMark({ host, projectId }: { host: string; projectId: string }) {

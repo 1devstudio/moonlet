@@ -589,15 +589,16 @@ export function selectedSession(s: State = get()): Session | undefined {
 
 /** A host's terminals by session, in id order, built once per terminals
  *  object: every sidebar row asks for its own on every state change, and a
- *  scan of every terminal each time froze the app at start. The lists are
- *  shared, so callers never change them. */
-const bySession = new WeakMap<Record<number, TerminalInfo>, Map<string, TerminalInfo[]>>();
-const NO_TERMINALS: TerminalInfo[] = [];
+ *  scan of every terminal each time froze the app at start. */
+const terminalsBySession = new WeakMap<Record<number, TerminalInfo>, Map<string, TerminalInfo[]>>();
+const NO_TERMINALS: readonly TerminalInfo[] = Object.freeze([]);
 
-export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): TerminalInfo[] {
+/** A session's terminals in id order. While the host's terminals are
+ *  unchanged, every call gives the same list, so it is read only. */
+export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): readonly TerminalInfo[] {
   const all = s.terminals[host];
   if (!all) return NO_TERMINALS;
-  let index = bySession.get(all);
+  let index = terminalsBySession.get(all);
   if (!index) {
     index = new Map();
     for (const x of Object.values(all).sort((a, b) => a.id - b.id)) {
@@ -606,7 +607,7 @@ export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId
       if (list) list.push(x);
       else index.set(x.session_id, [x]);
     }
-    bySession.set(all, index);
+    terminalsBySession.set(all, index);
   }
   return index.get(wsId) ?? NO_TERMINALS;
 }

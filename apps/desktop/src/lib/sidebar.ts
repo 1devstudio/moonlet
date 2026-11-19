@@ -390,11 +390,11 @@ export function projectRemoval(sections: Section[], secId: string, project: Proj
   };
 }
 
-/** Latest output of a session's terminals (its "recent" sort key). */
-export function lastActive(terminals: Record<number, { session_id?: string; last_output_at: number }>, s: Session): number {
-  return Object.values(terminals)
-    .filter((t) => t.session_id === s.id)
-    .reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
+/** Latest output of a session's own terminals (its "recent" sort key). A sort
+ *  asks for it on every comparison, so it is given the session's terminals,
+ *  not the host's. */
+export function lastActive(own: readonly { last_output_at: number }[], s: Session): number {
+  return own.reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
 }
 
 /**

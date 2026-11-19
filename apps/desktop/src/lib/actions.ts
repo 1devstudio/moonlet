@@ -559,7 +559,7 @@ export function visibleSessionOrder(): { host: string; id: string }[] {
     projects: s.projects,
     sessions: s.sessions,
     connected: hosts.filter((h) => h.status === "connected").map((h) => h.id),
-    activeAt: (host, x) => lastActive(s.terminals[host] ?? {}, x),
+    activeAt: (host, x) => lastActive(sessionTerminals(s, host, x.id), x),
     stateOf: (host, x) => sessionState(s, host, x.id),
     collapsed: s.collapsed,
   });
