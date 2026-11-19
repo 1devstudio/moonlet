@@ -5208,12 +5208,20 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
         if let Some(sid) = k.setup_sid {
             end_recorded_session(sid, k.setup_started);
         }
+        // A routing copy's setup the stop ended runs again by itself while
+        // its command stays approved, and is asked for otherwise (X60), so
+        // an upgrade does not leave a host failed. A live copy's reads as
+        // ended by a signal.
         let failed = k
             .setup
             .as_ref()
             .filter(|s| s.state == SetupState::Running)
             .map(|setup| CopySetup {
-                state: SetupState::Failed { exit: -1 },
+                state: if k.kind == CopyKind::Run {
+                    SetupState::NeedsApproval
+                } else {
+                    SetupState::Failed { exit: -1 }
+                },
                 command: setup.command.clone(),
                 approved: false,
             });
@@ -5232,6 +5240,9 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(sync.link_holders());
+    // The setups the stop ended, now waiting again: those still approved
+    // run (the account attached before the copies loaded).
+    sync.run_approved_setups();
     sync.sweep_run_copies();
     // New sessions that waited for the composer are looked at again.
     let due = sync.clone();
