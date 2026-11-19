@@ -293,6 +293,9 @@ pub const GH_ISSUE_COMMENT: &str = "gh.issue_comment";
 pub const GH_WHOAMI: &str = "gh.whoami";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
 pub const GH_PR_STACK: &str = "gh.pr_stack";
+/// `{}` → `{ [session id]: { pr, checked_at } }`: each live session's PR as
+/// the daemon last heard it from GitHub, without asking again (X107).
+pub const GH_PR_KNOWN: &str = "gh.pr_known";
 
 // Files
 pub const FS_LIST: &str = "fs.list";
@@ -2355,6 +2358,9 @@ pub struct PrCreate {
 pub struct PrStackParams {
     pub path: String,
     pub number: u64,
+    /// Answer only from the saved stack, without asking GitHub (X107).
+    #[serde(default)]
+    pub known: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

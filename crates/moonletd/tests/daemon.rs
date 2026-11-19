@@ -1872,6 +1872,129 @@ async fn a_pr_context_holds_its_reviews_and_comments() {
     assert_eq!(text, "Fixes #279.\n\nReviews:\n- @jo-park, changes requested: Keep Security for admins.");
 }
 
+/// A daemon in a scratch HOME whose `gh` is `script`, which can log its
+/// arguments to `$GH_LOG` (`bin/gh.log` in that home). Unlike
+/// [`fake_gh_daemon`] it can restart on the same home.
+async fn fake_gh_home_daemon(script: &str) -> HomeDaemon {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    write_script(&bin.join("gh"), script);
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let log = bin.join("gh.log").display().to_string();
+    HomeDaemon::start_with(home, Some(&path), vec![("GH_LOG".into(), log)]).await
+}
+
+/// The `gh pr …` and `gh api …` lines the fake `gh` of
+/// [`fake_gh_home_daemon`] was run with.
+fn gh_pr_calls(d: &HomeDaemon) -> Vec<String> {
+    std::fs::read_to_string(d.home.path().join("bin/gh.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("pr ") || l.starts_with("api "))
+        .map(String::from)
+        .collect()
+}
+
+/// A git repository added as a project of `d`, with one commit on `main`.
+async fn home_project(d: &HomeDaemon, c: &mut Client) -> moonlet_proto::types::Project {
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]).unwrap();
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+    c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap()
+}
+
+/// X107: a merged PR cannot change, so once the daemon has seen a session's
+/// PR merged it answers from what it saved, after a restart too, without
+/// asking GitHub again. The app reads every saved PR in one call.
+#[tokio::test]
+async fn a_merged_pr_is_answered_from_what_the_daemon_saved() {
+    // `gh pr list --head` and `gh pr view`, as gh prints a merged PR made
+    // after the session.
+    let mut d = fake_gh_home_daemon(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+         pr='{\"number\":12,\"url\":\"https://github.com/acme/web/pull/12\",\"state\":\"MERGED\",\"title\":\"Gift cards\",\"isDraft\":false,\"reviewDecision\":\"APPROVED\",\"statusCheckRollup\":[],\"headRefOid\":\"4b825dc\",\"createdAt\":\"2099-01-01T00:00:00Z\"}'\n\
+         case \"$1 $2\" in\n\
+         \"pr list\") echo \"[$pr]\";;\n\
+         \"pr view\") echo \"$pr\";;\n\
+         *) exit 1;;\n\
+         esac\n",
+    )
+    .await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let first: serde_json::Value = c.request(methods::GH_PR_STATUS, serde_json::json!({"path": s.path})).await.unwrap();
+    assert_eq!((first["number"].as_u64(), first["state"].as_str()), (Some(12), Some("merged")), "{first}");
+    let asked = gh_pr_calls(&d);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+
+    d.restart().await;
+    let mut c = d.client().await;
+    let again: serde_json::Value = c.request(methods::GH_PR_STATUS, serde_json::json!({"path": s.path})).await.unwrap();
+    assert_eq!(again, first);
+    assert_eq!(gh_pr_calls(&d), asked, "a merged PR is not asked about again");
+    let known: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+    assert_eq!(known[&s.id]["pr"], first, "{known}");
+    assert!(known[&s.id]["checked_at"].as_u64().is_some_and(|t| t > 0), "{known}");
+
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id})).await.unwrap();
+    let known: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+    assert_eq!(known, serde_json::json!({}), "an archived session's PR is not listed");
+}
+
+/// X107: a stack fetched for one PR answers for every PR in it within a
+/// minute, and `known: true` answers from the saved stack after a restart,
+/// neither asking GitHub.
+#[tokio::test]
+async fn a_saved_stack_answers_for_each_of_its_prs() {
+    // The PR's stack number, and stack 4 as GitHub's stacks API returns it:
+    // #11 merged, #12 open.
+    let mut d = fake_gh_home_daemon(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+         case \"$*\" in\n\
+         \"api repos/{owner}/{repo}/pulls/12 --jq .stack.number // empty\") echo 4;;\n\
+         \"api repos/{owner}/{repo}/stacks/4\") cat <<'JSON'\n\
+         {\"number\":4,\"base\":{\"ref\":\"main\"},\"pull_requests\":[\
+         {\"number\":11,\"title\":\"Gift card model\",\"html_url\":\"https://github.com/acme/web/pull/11\",\"state\":\"closed\",\"merged_at\":\"2026-11-18T10:00:00Z\",\"draft\":false,\"head\":{\"ref\":\"moonlet/gift-card-model\"}},\
+         {\"number\":12,\"title\":\"Gift cards\",\"html_url\":\"https://github.com/acme/web/pull/12\",\"state\":\"open\",\"merged_at\":null,\"draft\":false,\"head\":{\"ref\":\"moonlet/gift-cards\"}}]}\n\
+         JSON\n;;\n\
+         *) exit 1;;\n\
+         esac\n",
+    )
+    .await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let stack: serde_json::Value = c.request(methods::GH_PR_STACK, serde_json::json!({"path": s.path, "number": 12})).await.unwrap();
+    assert_eq!((stack["number"].as_u64(), stack["position"].as_u64(), stack["size"].as_u64()), (Some(4), Some(2), Some(2)), "{stack}");
+    assert_eq!(gh_pr_calls(&d).len(), 2);
+
+    let below: serde_json::Value = c.request(methods::GH_PR_STACK, serde_json::json!({"path": s.path, "number": 11})).await.unwrap();
+    assert_eq!((below["number"].as_u64(), below["position"].as_u64()), (Some(4), Some(1)), "{below}");
+    assert_eq!(below["prs"], stack["prs"]);
+    assert_eq!(gh_pr_calls(&d).len(), 2, "the saved stack answered");
+
+    d.restart().await;
+    let mut c = d.client().await;
+    let saved: serde_json::Value = c
+        .request(methods::GH_PR_STACK, serde_json::json!({"path": s.path, "number": 12, "known": true}))
+        .await
+        .unwrap();
+    assert_eq!(saved, stack);
+    let none: serde_json::Value = c
+        .request(methods::GH_PR_STACK, serde_json::json!({"path": s.path, "number": 99, "known": true}))
+        .await
+        .unwrap();
+    assert_eq!(none, serde_json::Value::Null);
+    assert_eq!(gh_pr_calls(&d).len(), 2, "known answers never ask GitHub");
+}
+
 #[tokio::test]
 async fn an_issues_comments_are_read_and_a_new_one_posted_through_gh() {
     // A fake gh that prints the captured comments for `issue view`, and

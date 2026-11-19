@@ -167,15 +167,29 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   useEffect(() => {
     let live = true;
     const polls = latestOnly();
+    // The saved stack of the saved PR shows at once; the poll below brings
+    // it up to date (X107).
+    let fetched = false;
+    const saved = useStore.getState().prs[sesKey(host, ws.id)];
+    if (saved)
+      void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: saved.number, known: true })
+        .then((st) => live && !fetched && setStack(st))
+        .catch(() => {});
     const load = () => {
       const isLatest = polls.start();
       const latest = () => live && isLatest();
       void pollPr(host, ws.id, ws.path)
         .then((p) => {
           if (!latest()) return;
-          if (!p) return setStack(null);
+          if (!p) {
+            fetched = true;
+            return setStack(null);
+          }
           void rpc<PrStack | null>(host, M.prStack, { path: ws.path, number: p.number })
-            .then((st) => latest() && setStack(st))
+            .then((st) => {
+              fetched = true;
+              if (latest()) setStack(st);
+            })
             .catch(() => latest() && setStack(null));
         })
         .catch(() => {

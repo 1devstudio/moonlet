@@ -13,7 +13,7 @@ use moonlet_proto::methods::{
     WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    ClaudeProfile, Project, ProjectConfig, ProjectIdentity, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, SessionArchived, StartFrom,
+    ClaudeProfile, Project, ProjectConfig, ProjectIdentity, ProjectConfigFile, PrStack, PullRequest, RestoreEntry, Section, SectionView, Session, SessionArchived, StartFrom,
     TerminalInfo, TerminalKind, Workspace, WorkspaceColor,
 };
 use moonlet_proto::{Message, TerminalId};
@@ -356,6 +356,8 @@ pub struct SessionManager {
     /// one taken over while the central host was offline, or brought here
     /// while the news of it is on its way. Listed as its own all the same.
     kept_listed: Mutex<std::collections::BTreeSet<String>>,
+    /// What GitHub last said about each session's PR and about stacks (X107).
+    prs: crate::pr_cache::PrCache,
 }
 
 fn new_id() -> String {
@@ -472,8 +474,10 @@ impl SessionManager {
             // Missing (first start) or unreadable: start empty.
             Err(_) => State::parse(""),
         };
+        let prs = crate::pr_cache::PrCache::load(file.with_file_name("prs.json"));
         let mgr = Arc::new(Self {
             state: Mutex::new(state),
+            prs,
             file,
             worktrees_root,
             terminals,
@@ -2130,12 +2134,75 @@ impl SessionManager {
 
     /// The pull request of the session at `path`. Once known it is read by
     /// number; until then (or after it was closed unmerged) it is looked for
-    /// among the PRs heading the session's branch, and remembered. A path no
-    /// session owns gets its branch's PR.
+    /// among the PRs heading the session's branch, and remembered. The answer
+    /// is saved (X107), and a saved merged PR is answered without asking
+    /// GitHub again. A path no session owns gets its branch's PR.
     pub async fn pr_status(&self, path: &Path) -> Result<Option<PullRequest>> {
         let Some(s) = self.session_at(path) else {
             return git::pr_status(path).await;
         };
+        let saved = self.prs.session(&s.id).and_then(|k| k.pr);
+        if let Some(pr) = saved.filter(|pr| pr.state == "merged" && s.pr == Some(pr.number)) {
+            return Ok(Some(pr));
+        }
+        let found = self.look_up_pr(path, &s).await?;
+        self.prs.set_session(&s.id, found.clone(), now_ms(), &self.live_ids());
+        Ok(found)
+    }
+
+    /// Every live session's PR as last heard from GitHub (X107).
+    pub fn known_prs(&self) -> BTreeMap<String, crate::pr_cache::KnownPr> {
+        self.prs.sessions(&self.live_ids())
+    }
+
+    fn live_ids(&self) -> std::collections::BTreeSet<String> {
+        let st = self.state.lock().unwrap();
+        st.sessions.iter().filter(|s| !s.archived).map(|s| s.id.clone()).collect()
+    }
+
+    /// The GitHub stack PR `number` of the session at `path` belongs to
+    /// (X11). Saved stacks answer every asker within a minute, or for good
+    /// once no PR in them is open; `known` answers only from what is saved
+    /// (X107). A path no session owns is asked about every time.
+    pub async fn pr_stack(&self, path: &Path, number: u64, known: bool) -> Result<Option<PrStack>> {
+        use crate::pr_cache::{STACK_FRESH_MS, stack_at, stack_fresh};
+        let Some(s) = self.session_at(path) else {
+            return if known { Ok(None) } else { git::pr_stack(path, number).await };
+        };
+        let project = s.project_id;
+        let now = now_ms();
+        match self.prs.stack(&project, number) {
+            Some((saved, at)) if known || stack_fresh(&saved, now.saturating_sub(at)) => return Ok(Some(saved)),
+            // Only the stack is asked again; when the PR has left it, its
+            // stack is looked up below.
+            Some((saved, _)) => match git::stack(path, saved.number).await {
+                Ok(Some(fresh)) => {
+                    self.prs.set_stack(&project, &fresh, now);
+                    if let Some(st) = stack_at(&fresh, number) {
+                        return Ok(Some(st));
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => return Ok(Some(saved)),
+            },
+            None if known => return Ok(None),
+            None => {
+                let at = self.prs.unstacked_at(&project, number);
+                if at.is_some_and(|at| now.saturating_sub(at) < STACK_FRESH_MS) {
+                    return Ok(None);
+                }
+            }
+        }
+        let found = git::pr_stack(path, number).await?;
+        match &found {
+            Some(st) => self.prs.set_stack(&project, st, now),
+            None => self.prs.set_unstacked(&project, number, now),
+        }
+        Ok(found)
+    }
+
+    /// The session's PR as GitHub has it now.
+    async fn look_up_pr(&self, path: &Path, s: &Session) -> Result<Option<PullRequest>> {
         let known = match s.pr {
             Some(n) => git::pr_view(path, Some(n)).await?,
             None => None,
@@ -2143,7 +2210,7 @@ impl SessionManager {
         if known.as_ref().is_some_and(|pr| pr.state != "closed") {
             return Ok(known);
         }
-        let branch = git::current_branch(path).await.unwrap_or(s.branch);
+        let branch = git::current_branch(path).await.unwrap_or_else(|_| s.branch.clone());
         let list = match git::pr_list_head(path, &branch).await {
             Ok(list) => list,
             // Still show the closed PR when the search fails.

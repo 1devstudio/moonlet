@@ -27,6 +27,7 @@ import {
   type HostInfo,
   M,
   type Project,
+  type KnownPr,
   type PullRequest,
   type TerminalInfo,
   type Session,
@@ -55,7 +56,7 @@ import { spawnedNotices } from "./spawned";
 import { continueFailed, copyEntries, copyView } from "./centralCopies";
 import { parseCopyHost } from "./copyHost";
 import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
-import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
+import { focusThrottle, knownPrs, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, CloneDone, CloneProgress, ProjectIdentity, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
@@ -646,7 +647,10 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     // Events may have been missed while disconnected: reload the chats in
     // memory. The others load when shown (X81).
     void reloadChats(host, terminals.filter((t) => t.chat).map((t) => t.id));
-    void refreshAllGit(host).then(() => refreshPrs(host));
+    // Saved PRs show at once; the poll then asks only about those that can
+    // still change, alongside the git statuses rather than after them (X107).
+    void loadKnownPrs(host).then(() => refreshPrs(host));
+    void refreshAllGit(host);
     timedFetch[host] = Date.now();
     void refreshAllBases(host, { fetch: true });
     void refreshAvatars(host);
@@ -957,10 +961,29 @@ export async function refreshGit(host: string, id: string) {
   }
 }
 
+/** When each session's PR was last checked, by session key (X107). */
+const prCheckedAt: Record<string, number> = {};
+
+/** Shows the PRs the host's daemon saved (X107). A daemon from before it
+ *  has none to give, and the poll asks about every session as before. */
+async function loadKnownPrs(host: string) {
+  try {
+    const known = await rpc<Record<string, KnownPr>>(host, M.prKnown);
+    const { prs, checkedAt } = knownPrs(host, get().prs, known);
+    Object.assign(prCheckedAt, checkedAt);
+    set((s) => ({ prs: { ...s.prs, ...prs } }));
+  } catch {
+    /* an older daemon, or the host disconnected */
+  }
+}
+
 /** PR state per session (purple branch icon); slow-moving, so polled rarely.
  *  A few sessions at a time, so many sessions do not queue up behind one. */
 export async function refreshPrs(host: string, opts: { openOnly?: boolean } = {}) {
-  const queue = (get().sessions[host] ?? []).filter((w) => !w.archived && needsPrPoll(get().prs[sesKey(host, w.id)], opts));
+  const queue = (get().sessions[host] ?? []).filter((w) => {
+    const key = sesKey(host, w.id);
+    return !w.archived && needsPrPoll(get().prs[key], { ...opts, checkedAt: prCheckedAt[key] });
+  });
   const worker = async () => {
     for (let w = queue.shift(); w; w = queue.shift()) {
       try {
@@ -988,6 +1011,7 @@ export async function pollPr(host: string, sessionId: string, path: string): Pro
 export function recordPr(host: string, sessionId: string, pr: PullRequest | null) {
   const key = sesKey(host, sessionId);
   const prev = get().prs[key];
+  prCheckedAt[key] = Date.now();
   set((s) => ({ prs: { ...s.prs, [key]: pr } }));
   const w = get().sessions[host]?.find((x) => x.id === sessionId);
   if (w && pr && justMerged(prev, pr)) void refreshBase(host, w.project_id, { fetch: true, reason: `after PR #${pr.number} merged` });

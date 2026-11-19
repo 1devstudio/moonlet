@@ -1701,16 +1701,30 @@ pub async fn pr_stack(path: &Path, number: u64) -> Result<Option<PrStack>> {
         return Ok(None);
     }
     let stack: u64 = stack.parse().context("stack number")?;
-    let out = gh(
-        &root,
-        &["api", &format!("repos/{{owner}}/{{repo}}/stacks/{stack}")],
-    )
-    .await?;
-    Ok(parse_stack(&serde_json::from_slice(&out)?, number))
+    Ok(self::stack(path, stack).await?.and_then(|st| crate::pr_cache::stack_at(&st, number)))
 }
 
-/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response.
+/// Stack `number` of the repository at `path`, with no PR's position in it
+/// (0), or `None` when GitHub's answer has no PRs.
+pub async fn stack(path: &Path, number: u64) -> Result<Option<PrStack>> {
+    let root = toplevel(path).await?;
+    let out = gh(
+        &root,
+        &["api", &format!("repos/{{owner}}/{{repo}}/stacks/{number}")],
+    )
+    .await?;
+    Ok(parse_stack_all(&serde_json::from_slice(&out)?))
+}
+
+/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response, as seen from
+/// PR `current`.
+#[cfg(test)]
 fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
+    crate::pr_cache::stack_at(&parse_stack_all(v)?, current)
+}
+
+/// Maps a `GET /repos/{owner}/{repo}/stacks/{number}` response, position 0.
+fn parse_stack_all(v: &serde_json::Value) -> Option<PrStack> {
     let prs: Vec<StackPr> = v["pull_requests"]
         .as_array()?
         .iter()
@@ -1727,11 +1741,10 @@ fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
             branch: p["head"]["ref"].as_str().unwrap_or("").into(),
         })
         .collect();
-    let position = prs.iter().position(|p| p.number == current)? as u64 + 1;
     Some(PrStack {
         number: v["number"].as_u64().unwrap_or(0),
         base: v["base"]["ref"].as_str().unwrap_or("").into(),
-        position,
+        position: 0,
         size: prs.len() as u64,
         prs,
     })
