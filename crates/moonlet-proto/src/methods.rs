@@ -4090,8 +4090,13 @@ pub struct Job {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobState {
-    /// For a cloud machine to start (X63).
-    Waiting { r#for: String },
+    /// For a cloud machine to start (X63), or, with `slot`, for a free
+    /// slot on any host it could run on (X62).
+    Waiting {
+        r#for: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        slot: bool,
+    },
     Running { worker: String },
     BringingBack,
     Done { exit: i32 },

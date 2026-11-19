@@ -1,8 +1,9 @@
-//! Routed commands (X62). On the central host, `exec.run` picks the free
-//! worker with the lowest load, fences its routing copy to the session,
-//! starts the command there and forwards its output to `moonlet exec`; with
-//! no free worker, or when the worker goes away mid-run, the command runs
-//! here. On a worker, `exec.start` runs a command in its routing copy and
+//! Routed commands (X62). On the session's host, `exec.run` keeps the
+//! command here when this host has a free slot; otherwise it picks another
+//! host with one, fences its routing copy to the session, starts the
+//! command there and forwards its output to `moonlet exec`. With every slot
+//! taken it waits in line for the first free one, up to a minute, then runs
+//! here anyway. On a worker, `exec.start` runs a command in its routing copy and
 //! sends the run's changes back with `exec.done`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -52,6 +53,9 @@ const ENDED_KEPT: Duration = Duration::from_secs(300);
 /// The exit status of a run moonlet lost: its runner went away mid-run and
 /// it was not run again, as when the central host's daemon stops (X62).
 const LOST: i32 = 125;
+/// How long a machine that refused a command for want of a slot is left
+/// out of that command's picks.
+const REFUSED_HOLD: Duration = Duration::from_secs(10);
 /// What the agent and the job hear of a run given up on and not run again.
 const LOST_NOT_AGAIN: &str = "The command may have run in part there; it was not run again.";
 
@@ -113,6 +117,9 @@ pub struct Runs {
     /// is picked: a slot is taken at once, and a worker runs one command
     /// of a session at a time, as it has one routing copy of it.
     claims: Mutex<HashMap<u32, (String, String)>>,
+    /// Commands waiting for a free slot, by run, so in the order they came,
+    /// each with the machines it could run on (X62).
+    line: Mutex<BTreeMap<u32, Vec<String>>>,
     /// Runs whose member, reached through the central host, went away, as
     /// the central host said (X89).
     lost: Mutex<HashSet<u32>>,
@@ -195,6 +202,74 @@ fn clock(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+/// How long a command waits for a free slot before it runs on its
+/// session's host anyway; shorter in tests (`MOONLET_TEST_SLOT_WAIT_MS`).
+fn slot_wait() -> Duration {
+    std::env::var("MOONLET_TEST_SLOT_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(heavy::SLOT_WAIT, Duration::from_millis)
+}
+
+/// Slots of this host its own sessions find taken, in tests only
+/// (`MOONLET_TEST_OWN_SLOTS_USED`): it stands for heavy commands of its
+/// own already running, without making it refuse other hosts'.
+fn own_used_in_tests() -> u32 {
+    std::env::var("MOONLET_TEST_OWN_SLOTS_USED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// `40 s`, `1 min 20 s`.
+fn seconds(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s"),
+        _ if secs % 60 == 0 => format!("{} min", secs / 60),
+        _ => format!("{} min {} s", secs / 60, secs % 60),
+    }
+}
+
+/// The machines a waiting command could run on, all full: "studio-mini 2
+/// of 2, Alex's MacBook Pro 1 of 1".
+fn full_line(candidates: &[Candidate], workers: &Workers, linked: &[(Candidate, String)]) -> String {
+    let names: HashMap<String, String> = workers
+        .list()
+        .into_iter()
+        .map(|w| (w.worker.id, w.worker.name))
+        .chain(linked.iter().map(|(c, n)| (c.id.clone(), n.clone())))
+        .collect();
+    candidates
+        .iter()
+        .map(|c| {
+            let name = names.get(&c.id).unwrap_or(&c.id);
+            format!("{name} {} of {}", c.used.min(c.slots), c.slots)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Where the line's placement went.
+enum Decided {
+    Run(Candidate),
+    /// Every machine is full, as said.
+    Wait(String),
+    Anyway(String),
+}
+
+/// A run's place in its host's line, given up when it ends however it
+/// does.
+struct InLine<'a> {
+    runs: &'a Runs,
+    run: u32,
+}
+
+impl Drop for InLine<'_> {
+    fn drop(&mut self) {
+        self.runs.line.lock().unwrap().remove(&self.run);
+    }
+}
+
 enum Fail {
     /// The worker would not run it, with its code and why: the next one is
     /// tried.
@@ -215,6 +290,7 @@ impl Runs {
             owners: Mutex::default(),
             remote: Mutex::default(),
             claims: Mutex::default(),
+            line: Mutex::default(),
             stops: Mutex::default(),
             lost: Mutex::default(),
             here_now: Mutex::default(),
@@ -385,52 +461,139 @@ impl Runs {
                 CloudWait::Here(note) => wait_note = Some(note),
             }
         }
+        // Why it runs here instead of where it was placed, for the job.
+        let mut here_event: Option<(String, Option<String>)> = None;
         if let Some(note) = wait_note {
             say(note);
         } else {
+            // In this host's line from now until a machine takes it, which
+            // keeps its place across refusals (X62).
+            let _spot = InLine { runs: self, run };
+            let bound = slot_wait();
+            let entered = std::time::Instant::now();
+            // Machines that refused it for want of a slot, until when.
+            let mut held: HashMap<String, std::time::Instant> = HashMap::new();
+            // Since when it waits, and the last time it said so.
+            let mut waiting: Option<(std::time::Instant, u64)> = None;
+            let mut fetched = std::time::Instant::now();
+            let mut overflowed = false;
             loop {
                 if let Some(status) = self.stopped(run, client) {
                     return status;
                 }
-                let chosen = {
+                if waiting.is_some() && self.here_now.lock().unwrap().remove(&run) {
+                    say(format!(
+                        "running on {} instead, as asked from the Jobs panel",
+                        plan.host
+                    ));
+                    here_event = Some((
+                        format!("Ran on {} now, as asked from the Jobs panel", plan.host),
+                        None,
+                    ));
+                    break;
+                }
+                held.retain(|_, until| std::time::Instant::now() < *until);
+                let decided = {
                     // Picked and claimed at once, so two runs never both take
-                    // a worker's last slot, nor its copy of the session.
+                    // a machine's last slot, nor its copy of the session; the
+                    // routed lock also keeps other hosts' starts here out
+                    // meanwhile.
                     let mut claims = self.claims.lock().unwrap();
-                    let candidates = self.candidates(plan, workers, &skipped, &claims, &linked);
-                    let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
-                    // None fits, the central host included: it is busy too.
-                    let all_busy = chosen.is_none();
-                    let Some(chosen) = chosen.filter(|c| c.kind != Kind::Central) else {
-                        // It runs here. With every machine busy, the central
-                        // host too, a project that allows it gets a cloud
-                        // machine for the next command (X63).
-                        if all_busy && let Some(m) = self.machines() {
-                            m.overflow(&plan.project_id);
+                    let routed = self.routed.lock().unwrap();
+                    let own_used = (routed.len() + self.running.lock().unwrap().len()) as u32 + own_used_in_tests();
+                    let mut candidates = self.candidates(plan, workers, &skipped, &claims, &linked, own_used);
+                    candidates.retain(|c| !held.contains_key(&c.id));
+                    let could: Vec<String> = heavy::ranked(&candidates, plan.os, plan.cloud)
+                        .into_iter()
+                        .map(|c| c.id.clone())
+                        .collect();
+                    let ahead = self.ahead_in_line(run, could);
+                    match heavy::place(&candidates, plan.os, plan.cloud, &ahead, entered.elapsed(), bound) {
+                        heavy::Placement::Run(c) => {
+                            let c = c.clone();
+                            self.line.lock().unwrap().remove(&run);
+                            if c.kind == Kind::Own {
+                                // Its slot here is taken now: `here` keeps it.
+                                self.running.lock().unwrap().insert(run, Arc::new(Notify::new()));
+                            } else {
+                                claims.insert(run, (c.id.clone(), plan.session.clone()));
+                            }
+                            Decided::Run(c)
                         }
-                        // A member asks its central host, whose machines
-                        // they are (X89).
-                        if all_busy
-                            && let (Some(peer @ Peer::Link(_)), Some(identity)) = (sync.central_peer(), plan.identity.clone())
-                        {
-                            tokio::spawn(async move {
-                                let ask = m::CloudOverflow { identity, asked: false };
-                                let _ = peer
-                                    .request(m::CLOUD_OVERFLOW, serde_json::to_value(ask).unwrap(), Duration::from_secs(10))
-                                    .await;
-                            });
-                        }
-                        break;
-                    };
-                    claims.insert(run, (chosen.id.clone(), plan.session.clone()));
-                    chosen
+                        heavy::Placement::Wait => Decided::Wait(full_line(&candidates, workers, &linked)),
+                        heavy::Placement::Anyway => Decided::Anyway(full_line(&candidates, workers, &linked)),
+                    }
                 };
-                let name = workers
-                    .list()
-                    .into_iter()
-                    .find(|w| w.worker.id == chosen.id)
-                    .map(|w| w.worker.name)
-                    .or_else(|| linked.iter().find(|(c, _)| c.id == chosen.id).map(|(_, n)| n.clone()))
-                    .unwrap_or_else(|| chosen.id.clone());
+                // With every machine full, the session's host too, a project
+                // that allows it gets a cloud machine (X63), once.
+                if !matches!(decided, Decided::Run(_)) && !overflowed {
+                    overflowed = true;
+                    self.overflow(plan, sync);
+                }
+                let chosen = match decided {
+                    Decided::Run(c) => c,
+                    Decided::Anyway(full) => {
+                        let waited = clock(entered.elapsed().as_secs());
+                        // Its tries elsewhere took the time it may wait.
+                        let detail = if waiting.is_some() {
+                            say(format!(
+                                "every host was still full after {waited}. Running on {} anyway.",
+                                plan.host
+                            ));
+                            format!("It waited {waited} for a slot, the longest a command waits.")
+                        } else {
+                            say(format!("every host is full ({full}). Running on {} anyway.", plan.host));
+                            format!("Every host was full: {full}. Trying others took {waited}, the longest a command waits.")
+                        };
+                        here_event = Some((format!("Ran on {}: every host was full", plan.host), Some(detail)));
+                        break;
+                    }
+                    Decided::Wait(full) => {
+                        let now = std::time::Instant::now();
+                        match &mut waiting {
+                            None => {
+                                waiting = Some((now, 0));
+                                self.jobs.update(job, |j| {
+                                    j.state = JobState::Waiting {
+                                        r#for: "a free slot".into(),
+                                        slot: true,
+                                    };
+                                    event(j, "Waiting for a free slot".into(), Some(format!("Every host is full: {full}.")));
+                                });
+                                say(format!(
+                                    "every host is full ({full}). Waiting for a free slot, up to {} (0:00)",
+                                    clock(bound.as_secs())
+                                ));
+                            }
+                            Some((since, said)) => {
+                                let secs = since.elapsed().as_secs();
+                                if secs >= *said + 10 {
+                                    *said = secs - secs % 10;
+                                    say(format!("waiting for a free slot ({})", clock(secs)));
+                                }
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        // What the central host and the members reached
+                        // through it say now (X89).
+                        if fetched.elapsed() >= Duration::from_secs(1) {
+                            fetched = std::time::Instant::now();
+                            linked = self.link_candidates(sync, plan).await;
+                        }
+                        continue;
+                    }
+                };
+                let name = self.name_of(&chosen, workers, &linked, plan);
+                if let Some((since, _)) = waiting {
+                    let secs = since.elapsed().as_secs();
+                    say(format!("waited {} for a slot on {name}", clock(secs)));
+                    self.jobs.update(job, |j| {
+                        event(j, format!("Waited {} for a slot on {name}", seconds(secs)), None)
+                    });
+                }
+                if chosen.kind == Kind::Own {
+                    break;
+                }
                 // This host's own machine; a member's session reaches its
                 // central host's through it (X89), whose relay counts it.
                 let machines = (chosen.kind == Kind::Cloud)
@@ -495,11 +658,24 @@ impl Runs {
                     }
                     Err(Fail::Refused(why, detail)) => {
                         tracing::debug!(worker = %name, "a worker refused a routed command: {why}: {detail}");
+                        self.jobs.update(job, |j| event(j, format!("{name} refused it: {detail}"), None));
+                        // Out of slots, it may have one again soon: it is
+                        // left out a while, the others are tried meanwhile.
+                        // Any other refusal holds for this command.
+                        if why == "busy" {
+                            held.insert(chosen.id.clone(), std::time::Instant::now() + REFUSED_HOLD);
+                        } else {
+                            skipped.insert(chosen.id.clone());
+                        }
                         self.skips.lock().unwrap().insert(
-                            (chosen.id.clone(), plan.project.clone()),
+                            (chosen.id, plan.project.clone()),
                             (why, detail, moonlet_core::paths::now_ms()),
                         );
-                        skipped.insert(chosen.id);
+                        // What the central host and the members say now.
+                        if !linked.is_empty() {
+                            fetched = std::time::Instant::now();
+                            linked = self.link_candidates(sync, plan).await;
+                        }
                     }
                     Err(Fail::Gone(why)) => {
                         // A stopped run is not run again.
@@ -545,20 +721,26 @@ impl Runs {
             }
         }
         if let Some(status) = self.stopped(run, client) {
+            self.running.lock().unwrap().remove(&run);
             return status;
         }
-        // Here, on the central host.
-        let used = self.running.lock().unwrap().len() as u32;
+        // Here, on the session's host: the slots it uses, this run's own
+        // taken already when it was placed here.
+        let used = {
+            let routed = self.routed.lock().unwrap();
+            let running = self.running.lock().unwrap();
+            (routed.len() + running.len()) as u32 - u32::from(running.contains_key(&run))
+        };
         self.jobs.update(job, |j| {
             j.state = JobState::Running {
                 worker: plan.host.clone(),
             };
-            let text = if rerun {
-                format!("Ran again on {}, from the same files", plan.host)
+            let (text, detail) = if rerun {
+                (format!("Ran again on {}, from the same files", plan.host), None)
             } else {
-                format!("Started on {}", plan.host)
+                here_event.unwrap_or_else(|| (format!("Started on {}", plan.host), None))
             };
-            event(j, text, None);
+            event(j, text, detail);
             j.worker = Some(JobWorker {
                 name: plan.host.clone(),
                 kind: "central".into(),
@@ -580,6 +762,45 @@ impl Runs {
             });
         });
         status
+    }
+
+    /// Puts `run` in this host's line, or keeps its place, with the
+    /// machines it `could` run on; gives what the runs ahead of it could.
+    fn ahead_in_line(&self, run: u32, could: Vec<String>) -> Vec<Vec<String>> {
+        let mut line = self.line.lock().unwrap();
+        line.insert(run, could);
+        line.range(..run).map(|(_, could)| could.clone()).collect()
+    }
+
+    /// Every machine is full, the session's host too: a project that
+    /// allows it gets a cloud machine (X63). A member asks its central
+    /// host, whose machines they are (X89).
+    fn overflow(&self, plan: &Plan, sync: &LiveCopies) {
+        if let Some(m) = self.machines() {
+            m.overflow(&plan.project_id);
+        }
+        if let (Some(peer @ Peer::Link(_)), Some(identity)) = (sync.central_peer(), plan.identity.clone()) {
+            tokio::spawn(async move {
+                let ask = m::CloudOverflow { identity, asked: false };
+                let _ = peer
+                    .request(m::CLOUD_OVERFLOW, serde_json::to_value(ask).unwrap(), Duration::from_secs(10))
+                    .await;
+            });
+        }
+    }
+
+    /// A candidate's name, for what the agent and the job hear.
+    fn name_of(&self, c: &Candidate, workers: &Workers, linked: &[(Candidate, String)], plan: &Plan) -> String {
+        if c.kind == Kind::Own {
+            return plan.host.clone();
+        }
+        workers
+            .list()
+            .into_iter()
+            .find(|w| w.worker.id == c.id)
+            .map(|w| w.worker.name)
+            .or_else(|| linked.iter().find(|(l, _)| l.id == c.id).map(|(_, n)| n.clone()))
+            .unwrap_or_else(|| c.id.clone())
     }
 
     /// Waits for the project's cloud machine, starting one if none is on
@@ -614,6 +835,7 @@ impl Runs {
         self.jobs.update(job, |j| {
             j.state = JobState::Waiting {
                 r#for: name.clone(),
+                slot: false,
             }
         });
         m.wait_begin(&id);
@@ -692,7 +914,7 @@ impl Runs {
             Err(e) => return CloudWait::Here(format!("no cloud machine ({}). Running on {}.", e.message, plan.host)),
         };
         self.jobs.update(job, |j| {
-            j.state = JobState::Waiting { r#for: name.clone() }
+            j.state = JobState::Waiting { r#for: name.clone(), slot: false }
         });
         let started = std::time::Instant::now();
         let mut said = None;
@@ -836,7 +1058,8 @@ impl Runs {
 
     /// The machines that might run a command of `plan`: linked workers
     /// that take heavy commands, this member's central host when it does
-    /// (`central`, X89), and this host, the session's.
+    /// (`central`, X89), and this host, the session's, with `own_used` of
+    /// its slots in use.
     fn candidates(
         &self,
         plan: &Plan,
@@ -844,6 +1067,7 @@ impl Runs {
         skipped: &HashSet<String>,
         claims: &HashMap<u32, (String, String)>,
         linked: &[(Candidate, String)],
+        own_used: u32,
     ) -> Vec<Candidate> {
         // Cloud machines run only their own project's commands (X63).
         let (cloud, mine) = match self.machines() {
@@ -861,7 +1085,11 @@ impl Runs {
                     .any(|(id, s)| *id == w.worker.id && *s == plan.session)
             })
             .map(|w| Candidate {
-                used: claims.values().filter(|(id, _)| *id == w.worker.id).count() as u32,
+                // What it said in its last ping, or what this host has
+                // given it since, whichever is more: a start it cannot
+                // take it refuses, and the next is tried.
+                used: (claims.values().filter(|(id, _)| *id == w.worker.id).count() as u32)
+                    .max(w.used.unwrap_or(0)),
                 kind: if mine.contains(&w.worker.id) {
                     Kind::Cloud
                 } else {
@@ -880,17 +1108,17 @@ impl Runs {
                 continue;
             }
             let mut c = c.clone();
-            c.used += claims.values().filter(|(id, _)| *id == c.id).count() as u32;
+            c.used = c.used.max(claims.values().filter(|(id, _)| *id == c.id).count() as u32);
             out.push(c);
         }
         out.push(Candidate {
             id: plan.host.clone(),
-            kind: Kind::Central,
+            kind: Kind::Own,
             os: crate::link::os().into(),
             cores: cores(),
             load: crate::link::load().unwrap_or(0.0),
             slots: plan.slots,
-            used: self.running.lock().unwrap().len() as u32,
+            used: own_used,
             rtt_ms: None,
         });
         out
@@ -1332,7 +1560,7 @@ impl Runs {
     }
 
     /// `exec.start` on a worker: checks the command against this machine's
-    /// own approval, slots, load and the fence, then runs it in the routing
+    /// own approval, slots and the fence, then runs it in the routing
     /// copy and sends its changes back with `exec.done`.
     pub async fn start_here(
         self: &Arc<Self>,
@@ -1373,8 +1601,6 @@ impl Runs {
                 ));
             }
         }
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
-        let load = crate::link::load().unwrap_or(0.0);
         let cancel = Arc::new(Notify::new());
         // A slot and the copy are taken at once, before the copy is
         // checked, and given back on every refusal and at the end.
@@ -1386,11 +1612,12 @@ impl Runs {
             if routed.contains_key(&(from, req.run)) {
                 return Err(RpcError::new("busy", "that run is going on"));
             }
-            // Slots count every routed command this host runs, for its own
-            // sessions too (X89).
-            let used = routed.len() + self.running.lock().unwrap().len();
-            if used as u32 >= slots || load >= 0.7 * f64::from(cores) {
-                return Err(RpcError::new("busy", "no free slot"));
+            // Slots count every routed command this host runs or has
+            // placed here, for its own sessions too (X89). Its load is no
+            // reason: agent sessions keep it high (X62).
+            let used = (routed.len() + self.running.lock().unwrap().len()) as u32;
+            if used >= slots {
+                return Err(RpcError::new("busy", format!("no free slot ({used} of {slots} in use)")));
             }
             if !self.copies_in_use.lock().unwrap().insert(req.copy.clone()) {
                 return Err(RpcError::new("busy", "a command of the session runs here"));
