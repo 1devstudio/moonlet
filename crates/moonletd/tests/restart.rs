@@ -1,6 +1,9 @@
 //! X97: `moonletd restart` hands terminals to a fresh daemon, and
 //! `--force` replaces one that is stuck.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -225,6 +228,7 @@ async fn force_restart_does_not_wait_for_a_killed_daemon_to_be_reaped() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home.dir.path())
         .spawn()
         .unwrap();
     moonlet_core::client::wait_for_socket(&home.socket, std::time::Duration::from_secs(15))

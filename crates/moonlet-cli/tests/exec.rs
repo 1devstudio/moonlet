@@ -2,6 +2,10 @@
 //! heavy command to `moonlet exec`, and stays silent otherwise.
 //! Needs `moonletd` built next to this test binary (`cargo test --workspace`).
 
+#[path = "../../moonletd/tests/common/logs.rs"]
+mod logs;
+use logs::KeepLogs;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -94,6 +98,7 @@ async fn shop_with(config: &str) -> Shop {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap(),
     );

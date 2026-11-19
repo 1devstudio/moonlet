@@ -2,6 +2,9 @@
 //! here is one scratch daemon with project `shop`, whose committed
 //! `.moonlet/config.toml` lists its heavy commands, and session `Fix cart`.
 
+mod common;
+use common::logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -82,6 +85,7 @@ async fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home)
         .spawn()
         .unwrap();
     wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15))

@@ -2,11 +2,14 @@
 //! tailnet connections. Each test file uses part of it.
 #![allow(dead_code)]
 
+pub mod logs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use moonlet_core::client::{Client, wait_for_socket};
+use logs::KeepLogs;
 use moonlet_proto::{Frame, Message};
 use serde_json::{Value, json};
 
@@ -34,6 +37,7 @@ fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Ch
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .keep_logs(home)
         .spawn()
         .unwrap()
 }

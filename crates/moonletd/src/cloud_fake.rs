@@ -100,6 +100,19 @@ impl Fake {
     }
 }
 
+/// Where a fake machine's daemon writes what it prints, beside its log, for
+/// a failing test to keep (tests/common/logs.rs).
+fn machine_stderr(home: &Path) -> std::process::Stdio {
+    let logs = home.join("logs");
+    let _ = moonlet_core::paths::ensure_private_dir(&logs);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join("stderr.log"))
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(|_| std::process::Stdio::null())
+}
+
 /// Boots machine `dir` as its first-boot script would: the daemon, the
 /// join, then the machine setup.
 async fn boot(dir: PathBuf, user_data: String, join: bool) {
@@ -140,7 +153,7 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
         .env_remove("MOONLET_CLOUD_FAKE")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(machine_stderr(&home));
     let Ok(child) = cmd.spawn() else { return };
     if let Some(pid) = child.id() {
         let _ = std::fs::write(dir.join("pid"), pid.to_string());

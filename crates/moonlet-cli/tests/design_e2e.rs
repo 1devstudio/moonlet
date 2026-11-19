@@ -2,6 +2,10 @@
 //! its design system's folder. Needs `moonletd` built next to this test
 //! binary (`cargo test --workspace`).
 
+#[path = "../../moonletd/tests/common/logs.rs"]
+mod logs;
+use logs::KeepLogs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -52,6 +56,7 @@ impl Daemon {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .keep_logs(home.path())
             .spawn()
             .unwrap();
         wait_for_socket(&socket, Duration::from_secs(15))
