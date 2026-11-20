@@ -95,7 +95,7 @@ Settings › Updates gains a row under moonlet's:
 
 - Codex and other agents.
 - Release channels: the banner compares with `latest`. A user on the `stable` channel can see a release `claude update` does not install; the "up to date" answer then hides it.
-- Claude Code on remote hosts: only the local daemon is checked.
+- Claude Code on remote hosts: only the local daemon is checked here; [X109](X109-claude-code-on-remote-hosts.md) adds them to Settings.
 - Restarting running agents on the new version.
 
 ## Test plan
