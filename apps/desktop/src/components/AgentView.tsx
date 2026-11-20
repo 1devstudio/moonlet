@@ -110,7 +110,7 @@ import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { AgentIcon, Button, Dialog, IconButton, StateGlyph, cx, inputCls } from "./ui";
 import { ScrollArea } from "./ScrollArea";
 import { useCopyReadOnly } from "./CopyLine";
 import { PlanPanel } from "./PlanPanel";
@@ -1212,14 +1212,26 @@ function ChatEditor({
               className="relative block min-h-[3em] w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-fg caret-accent outline-none placeholder:text-faint"
             />
           </div>
-          {onAside && layout.asideHint && (
-            <span className="flex shrink-0 items-center gap-1.5 self-end whitespace-nowrap pb-1 ui-text-12 text-faint">
-              <Kbd>⌥↵</Kbd> ask aside
-            </span>
-          )}
-          <button title="Send (↵)" className="flex shrink-0 self-end pb-0.5 text-faint hover:text-fg" onClick={send}>
-            <CornerDownLeft size={18} strokeWidth={1.8} />
-          </button>
+          {/* One text line tall at the bottom, so the hint and the send key sit
+              centred on the last line (design chat-input, B2). */}
+          <div className="flex h-[1.5em] shrink-0 items-center gap-2.5 self-end ui-text-14">
+            {onAside && layout.asideHint && (
+              <span className="flex items-center gap-1.5 whitespace-nowrap ui-text-13 text-faint">
+                <span className="text-muted">⌥↵</span> aside
+              </span>
+            )}
+            {/* Quiet until there is something to send: then the arrow and the edge lift. */}
+            <button
+              title="Send (↵)"
+              className={cx(
+                "flex size-6 items-center justify-center rounded-md border transition-colors hover:border-[#3a3a3a] hover:bg-hover hover:text-fg",
+                text.trim() || images.length ? "border-[#3a3a3a] bg-raised text-fg" : "border-border-strong text-faint",
+              )}
+              onClick={send}
+            >
+              <CornerDownLeft size={13} strokeWidth={2} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
