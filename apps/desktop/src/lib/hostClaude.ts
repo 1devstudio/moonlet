@@ -3,7 +3,7 @@
 // RPCs live in hostClaudeStore. A run is read as on this Mac (X36).
 
 import { isNewer, type ClaudeUpdateState } from "./claudeUpdate";
-import type { HostInfo } from "./protocol";
+import type { HostInfo, HostStatus } from "./protocol";
 import type { StatusLine } from "./settingsPage";
 
 /** What this Mac knows of one host's Claude Code. */
@@ -15,7 +15,8 @@ export interface HostClaude {
   /** The last check got no answer from the host. */
   unasked: boolean;
   checking: boolean;
-  /** A `claude update` there, running or ended: never `available`. */
+  /** A `claude update` there, running or ended: never `available`. One
+   * found running elsewhere has an empty `latest`: the release is npm's. */
   run: ClaudeUpdateState;
 }
 
@@ -31,8 +32,11 @@ export function claudeHosts(hosts: HostInfo[]): HostInfo[] {
 export function hostClaudeLine(h: HostInfo, c: HostClaude, latest: string | null): StatusLine | null {
   const r = c.run;
   switch (r.phase) {
-    case "updating":
-      return { tone: "muted", text: r.step === "install" ? `Installing ${r.latest}…` : `Updating to ${r.latest}…` };
+    case "updating": {
+      const to = r.latest || latest;
+      if (r.step === "install") return { tone: "muted", text: to ? `Installing ${to}…` : "Installing…" };
+      return { tone: "muted", text: to ? `Updating to ${to}…` : "Updating…" };
+    }
     case "updated":
       return { tone: "done", text: `Updated to ${r.version}. New agents on ${h.label} start on it.` };
     case "current":
@@ -42,12 +46,22 @@ export function hostClaudeLine(h: HostInfo, c: HostClaude, latest: string | null
   }
   if (c.checking && !c.answered) return { tone: "muted", text: "Checking…" };
   if (c.unasked) return { tone: "muted", text: `Could not ask ${h.label}` };
-  if (!c.answered || !latest) return null;
+  if (!c.answered) return null;
   if (!c.installed) return { tone: "blocked", text: "Not found on the PATH" };
+  if (!latest) return null;
   return isNewer(latest, c.installed) ? { tone: "accent", text: `${latest} is available` } : { tone: "done", text: "Up to date" };
 }
 
-/** The release to offer the host; null for none. */
+/** The release to offer the host; null for none, and when the last check
+ * got no answer, so what the host runs now is unknown. */
 export function hostClaudeOffer(c: HostClaude, latest: string | null): string | null {
-  return c.run.phase !== "updating" && c.installed && latest && isNewer(latest, c.installed) ? latest : null;
+  return c.run.phase !== "updating" && !c.unasked && c.installed && latest && isNewer(latest, c.installed) ? latest : null;
+}
+
+/** Whether a host's status change calls for asking its Claude Code again:
+ * a remote host Settings asked before is connected again, and its daemon
+ * may have restarted with another PATH. One never asked is left alone, so
+ * starting the app runs no `claude --version` on every host. */
+export function recheckHostClaudeOnReconnect(h: HostInfo, prev: HostStatus | undefined, asked: boolean): boolean {
+  return asked && h.remote && h.status === "connected" && prev !== "connected";
 }

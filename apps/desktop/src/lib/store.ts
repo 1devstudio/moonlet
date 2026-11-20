@@ -12,7 +12,7 @@ import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type 
 import { afterCloneDone, rememberCloneParent, runsAfterProgress, type CloneRuns } from "./addProject";
 import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, recheckClaudeOnReconnect, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
-import { claudeHosts } from "./hostClaude";
+import { claudeHosts, recheckHostClaudeOnReconnect } from "./hostClaude";
 import { checkHostClaude, hostClaudeEvent, useHostClaude } from "./hostClaudeStore";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
@@ -577,7 +577,7 @@ async function finishClaudeUpdate(run: ClaudeUpdateRun) {
 
 /** Asks every connected remote host which Claude Code it runs (X109). */
 export function checkRemoteClaude() {
-  for (const h of claudeHosts(Object.values(get().hosts))) void checkHostClaude(h.id, get().claudeVersions.latest);
+  for (const h of claudeHosts(Object.values(get().hosts))) void checkHostClaude(h.id);
 }
 
 /** Later hides the announced release until a newer one is out; the close
@@ -1555,8 +1555,7 @@ export async function startStore() {
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));
     if (h.status === "connected" && prev?.status !== "connected") void loadHost(h.id);
     if (recheckClaudeOnReconnect(h.id, prev?.status, h.status)) void checkClaudeVersion();
-    // A remote host Settings has asked before: it may have restarted on another PATH (X109).
-    if (h.remote && h.status === "connected" && prev?.status !== "connected" && useHostClaude.getState().hosts[h.id]) void checkHostClaude(h.id, get().claudeVersions.latest);
+    if (recheckHostClaudeOnReconnect(h, prev?.status, !!useHostClaude.getState().hosts[h.id])) void checkHostClaude(h.id);
   });
   const hosts = await hostsApi.list();
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });

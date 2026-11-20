@@ -26,7 +26,7 @@ const message = (e: unknown) => (e && typeof e === "object" && "message" in e ? 
 
 /** Asks host `id` which Claude Code it runs. A check replaces a result
  * shown, leaves a running update alone, and shows one started elsewhere. */
-export async function checkHostClaude(id: string, latest: string | null): Promise<void> {
+export async function checkHostClaude(id: string): Promise<void> {
   const seen = runs.get(id);
   put(id, () => ({ checking: true }));
   let answer: { version: string | null; updating: boolean } | null;
@@ -37,14 +37,11 @@ export async function checkHostClaude(id: string, latest: string | null): Promis
   }
   if (runs.get(id) !== seen) return put(id, () => ({ checking: false }));
   put(id, (c) => {
-    if (!answer) return { checking: false, unasked: true };
+    const idle = { phase: "idle" } as const;
+    if (!answer) return { checking: false, unasked: true, run: c.run.phase === "updating" ? c.run : idle };
     const installed = answer.version;
-    const run =
-      c.run.phase === "updating"
-        ? c.run
-        : answer.updating && installed
-          ? ({ phase: "updating", installed, latest: latest ?? installed, step: "check" } as const)
-          : ({ phase: "idle" } as const);
+    // Started elsewhere: the release it goes to is npm's newest.
+    const run = c.run.phase === "updating" ? c.run : answer.updating && installed ? ({ phase: "updating", installed, latest: "", step: "check" } as const) : idle;
     return { checking: false, unasked: false, answered: true, installed, run };
   });
 }
