@@ -1,0 +1,101 @@
+// Claude Code on remote hosts (X109): asks each host its version, runs
+// `claude update` there, and follows the run from that host's events. The
+// run is read as X36 reads one on this Mac.
+
+import { create } from "zustand";
+import { afterClaudeUpdateExit, afterClaudeUpdateLine, type ClaudeUpdateRun } from "./claudeUpdate";
+import { rpc } from "./daemon";
+import { NOT_ASKED, type HostClaude } from "./hostClaude";
+import { EV, M } from "./protocol";
+
+export const useHostClaude = create<{ hosts: Record<string, HostClaude> }>(() => ({ hosts: {} }));
+
+const now = (id: string) => useHostClaude.getState().hosts[id] ?? NOT_ASKED;
+const put = (id: string, patch: (c: HostClaude) => Partial<HostClaude>) =>
+  useHostClaude.setState((s) => {
+    const c = s.hosts[id] ?? NOT_ASKED;
+    return { hosts: { ...s.hosts, [id]: { ...c, ...patch(c) } } };
+  });
+
+/** Counts updates started or ended per host, so a check that began before
+ * one does not put back the version or the line from before it. */
+const runs = new Map<string, number>();
+const bump = (id: string) => {
+  const n = (runs.get(id) ?? 0) + 1;
+  runs.set(id, n);
+  return n;
+};
+/** The newest check per host: an older one answering later writes nothing. */
+const checks = new Map<string, number>();
+/** Hosts whose `claude.update` this window is waiting on. */
+const own = new Set<string>();
+
+const message = (e: unknown) => (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : String(e));
+
+/** Asks host `id` which Claude Code it runs. A check replaces a result
+ * shown, leaves a running update alone, and shows one started elsewhere. */
+export async function checkHostClaude(id: string): Promise<void> {
+  const seen = runs.get(id);
+  const check = (checks.get(id) ?? 0) + 1;
+  checks.set(id, check);
+  put(id, () => ({ checking: true }));
+  let answer: { version: string | null; updating: boolean } | null;
+  try {
+    answer = await rpc<{ version: string | null; updating: boolean }>(id, M.claudeVersion);
+  } catch {
+    answer = null;
+  }
+  if (checks.get(id) !== check) return;
+  if (runs.get(id) !== seen) return put(id, () => ({ checking: false }));
+  put(id, (c) => {
+    const idle = { phase: "idle" } as const;
+    if (!answer) return { checking: false, unasked: true, run: c.run.phase === "updating" ? c.run : idle };
+    const installed = answer.version;
+    // This window's own run ends on its reply; one seen elsewhere ends when
+    // the host says none runs, in case its claude.update_done was missed.
+    // Started elsewhere, the release it goes to is npm's newest.
+    const running = c.run.phase === "updating" && (own.has(id) || answer.updating);
+    const run = running ? c.run : answer.updating && installed ? ({ phase: "updating", installed, latest: "", step: "check" } as const) : idle;
+    return { checking: false, unasked: false, answered: true, installed, run };
+  });
+}
+
+/** Runs `claude update` on host `id`; its lines come as events. */
+export async function updateHostClaude(id: string, latest: string): Promise<void> {
+  const { installed, run } = now(id);
+  if (!installed || run.phase === "updating") return;
+  const mine = bump(id);
+  put(id, () => ({ run: { phase: "updating", installed, latest, step: "check" } }));
+  own.add(id);
+  let result: ClaudeUpdateRun;
+  try {
+    result = await rpc<{ ok: boolean; output: string }>(id, M.claudeUpdate);
+  } catch (e) {
+    result = { error: message(e) };
+  }
+  // Ended already by the host's claude.update_done, maybe retried since.
+  if (runs.get(id) !== mine) return;
+  own.delete(id);
+  await finish(id, result);
+}
+
+/** Ends host `id`'s run, from the reply or its `claude.update_done`,
+ * whichever comes first, and reads the version it now runs. */
+async function finish(id: string, result: ClaudeUpdateRun) {
+  const { state } = afterClaudeUpdateExit(now(id).run, result);
+  if (state === now(id).run) return;
+  own.delete(id);
+  bump(id);
+  put(id, () => ({ run: state }));
+  const seen = runs.get(id);
+  const answer = await rpc<{ version: string | null }>(id, M.claudeVersion).catch(() => null);
+  if (answer?.version && runs.get(id) === seen) put(id, () => ({ installed: answer.version, answered: true, unasked: false }));
+}
+
+/** A remote host's daemon event: its `claude update` lines and end. */
+export function hostClaudeEvent(id: string, name: string, data: unknown) {
+  // A host Settings never asked has no row to move.
+  if (!useHostClaude.getState().hosts[id]) return;
+  if (name === EV.claudeUpdateOutput) put(id, (c) => ({ run: afterClaudeUpdateLine(c.run, (data as { line: string }).line) }));
+  else if (name === EV.claudeUpdateDone) void finish(id, data as { ok: boolean; output: string });
+}

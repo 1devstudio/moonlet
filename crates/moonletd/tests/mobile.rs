@@ -535,6 +535,70 @@ async fn paired_devices_cannot_stop_or_upgrade_the_daemon() {
     assert_eq!(after.pid, before.pid);
 }
 
+/// X109: the Mac's app updates Claude Code on a host over the tailnet, as
+/// X36 does on its own daemon, and sees the run's lines and end; a phone
+/// may do neither.
+#[tokio::test]
+async fn a_paired_mac_updates_claude_code_on_its_host_but_a_phone_may_not() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let fake = bin.path().join("claude");
+    // The lines `claude update` 2.1.292 prints for a native install.
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  --version) echo "2.1.292 (Claude Code)" ;;
+  update)
+    echo "Current version: 2.1.292"
+    echo "Checking for updates to latest version..."
+    echo "Updating to 2.1.296..."
+    echo "Successfully updated from 2.1.292 to version 2.1.296"
+    ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mac = Mac::start(Some(bin.path())).await;
+    let addr = mac.allow_phones().await;
+    let phone_token = mac.pair(&addr).await;
+    let mut app = mac.app().await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
+    let (_, reply) = auth(&addr, json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" })).await;
+    let Some(Message::Authed { token: Some(desktop_token), .. }) = reply else { panic!("{reply:?}") };
+
+    let (mut phone, _) = auth(&addr, json!({ "token": phone_token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    for (id, method) in [(1, "claude.version"), (2, "claude.update")] {
+        let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
+            panic!("{method} worked from a phone")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "a phone does not do that"), "{method}");
+    }
+
+    let (mut other, _) = auth(&addr, json!({ "token": desktop_token })).await;
+    hello(&mut other, "moonlet-app").await;
+    let Message::Response { result: Some(version), error: None, .. } = call(&mut other, 1, "claude.version").await else {
+        panic!("claude.version failed from a Mac")
+    };
+    assert_eq!(version, json!({ "version": "2.1.292", "updating": false }));
+
+    // A second window of the same Mac watches the run it did not start.
+    let (mut watcher, _) = auth(&addr, json!({ "token": desktop_token })).await;
+    hello(&mut watcher, "moonlet-app").await;
+    let expected = json!({
+        "ok": true,
+        "output": "Current version: 2.1.292\nChecking for updates to latest version...\nUpdating to 2.1.296...\nSuccessfully updated from 2.1.292 to version 2.1.296\n"
+    });
+    let Message::Response { result: Some(run), error: None, .. } = call(&mut other, 2, "claude.update").await else {
+        panic!("claude.update failed from a Mac")
+    };
+    assert_eq!(run, expected);
+    assert_eq!(phone_event(&mut watcher, "claude.update_output").await, json!({ "line": "Current version: 2.1.292" }));
+    assert_eq!(phone_event(&mut watcher, "claude.update_done").await, expected);
+}
+
 /// Where a `moonlet_link::Host`'s statuses go.
 #[derive(Default)]
 struct Statuses(std::sync::Mutex<Vec<moonlet_link::HostInfo>>);
