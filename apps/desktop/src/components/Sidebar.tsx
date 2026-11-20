@@ -102,6 +102,11 @@ function BranchIcon({ state }: { state?: string }) {
   );
 }
 
+/** A session row's leading glyph (see `sessionGlyph`). */
+function RowGlyph({ glyph, pr }: { glyph: ReturnType<typeof sessionGlyph>; pr?: string }) {
+  return glyph === "branch" ? <BranchIcon state={pr} /> : <StateGlyph state={glyph} size={15} />;
+}
+
 function InlineInput({ initial, placeholder, onDone }: { initial: string; placeholder?: string; onDone: (value: string | null) => void }) {
   const [v, setV] = useState(initial);
   const done = useRef(false);
@@ -449,7 +454,9 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
               useStore.setState({ pick: boxClickPick(useStore.getState().pick, { key: sesKey(host, s.id), shift }, rows) });
             }}
           />
-        ) : glyph === "branch" ? <BranchIcon state={pr?.state} /> : <StateGlyph state={glyph} size={15} />}
+        ) : (
+          <RowGlyph glyph={glyph} pr={pr?.state} />
+        )}
       badge={renaming ? null : badge}
       name={
         renaming ? (
@@ -626,7 +633,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         selected={id === "1"}
         nested={nested}
         cell={cellOf(column, id)}
-        glyph={glyph === "branch" ? <BranchIcon state={p.pr} /> : <StateGlyph state={glyph} size={15} />}
+        glyph={<RowGlyph glyph={glyph} pr={p.pr} />}
         badge={p.badge}
         name={<span className={cx("min-w-0 flex-1 truncate ui-text-14", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
       />
