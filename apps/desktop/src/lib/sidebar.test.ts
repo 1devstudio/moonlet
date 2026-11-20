@@ -345,8 +345,12 @@ describe("sessionBadge", () => {
     expect(sessionBadge({ ...base, agents: 5, creating: true })).toEqual({ text: "creating", tone: "muted" });
   });
 
-  it("shows merged, and nothing without changes", () => {
-    expect(sessionBadge({ ...base, merged: true })).toEqual({ text: "merged", tone: "merged" });
+  it("hides the diff of a merged PR, whose merge icon stands beside any badge", () => {
+    expect(sessionBadge({ ...base, merged: true })).toBeNull();
+    expect(sessionBadge({ ...base, merged: true, creating: true })).toEqual({ text: "creating", tone: "muted" });
+  });
+
+  it("shows nothing without changes", () => {
     expect(sessionBadge({ ...base, git: { additions: 0, deletions: 0 } })).toBeNull();
   });
 });

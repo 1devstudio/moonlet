@@ -376,11 +376,12 @@ export function sessionBadge(o: {
   merged: boolean;
   git?: { additions: number; deletions: number };
   agents: number;
-}): { text: string; tone: "muted" | "blocked" | "agents" | "merged" | "diff" } | null {
+}): { text: string; tone: "muted" | "blocked" | "agents" | "diff" } | null {
   if (o.creating) return { text: "creating", tone: "muted" };
   if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
   if (o.agents) return { text: agentCount(o.agents), tone: "agents" };
-  if (o.merged) return { text: "merged", tone: "merged" };
+  // A merged PR's row ends in its merge icon, beside any badge above, instead of the diff.
+  if (o.merged) return null;
   if (o.git && (o.git.additions || o.git.deletions)) {
     return { text: `+${compact(o.git.additions)}${o.git.deletions ? ` -${compact(o.git.deletions)}` : ""}`, tone: "diff" };
   }
