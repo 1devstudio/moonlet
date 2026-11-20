@@ -12,6 +12,8 @@ import { afterCheck, afterDownloadEvent, checkError, scheduleUpdateChecks, type 
 import { afterCloneDone, rememberCloneParent, runsAfterProgress, type CloneRuns } from "./addProject";
 import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeClaudeBanner, recheckClaudeOnReconnect, type ClaudeUpdateState, type ClaudeVersions, type ClaudeUpdateRun } from "./claudeUpdate";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
+import { claudeHosts } from "./hostClaude";
+import { checkHostClaude, hostClaudeEvent, useHostClaude } from "./hostClaudeStore";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
   type AccountInfo,
@@ -571,6 +573,11 @@ async function finishClaudeUpdate(run: ClaudeUpdateRun) {
   if (dismiss) updateSettings({ claudeUpdateDismissed: dismiss });
   const now = await claudeVersion().catch(() => null);
   if (now?.version) set((s) => ({ claudeVersions: { ...s.claudeVersions, installed: now.version, unasked: false } }));
+}
+
+/** Asks every connected remote host which Claude Code it runs (X109). */
+export function checkRemoteClaude() {
+  for (const h of claudeHosts(Object.values(get().hosts))) void checkHostClaude(h.id, get().claudeVersions.latest);
 }
 
 /** Later hides the announced release until a newer one is out; the close
@@ -1460,6 +1467,7 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.claudeUpdateOutput:
       if (host === LOCAL) set((s) => ({ claudeUpdate: afterClaudeUpdateLine(s.claudeUpdate, (data as { line: string }).line) }));
+      else hostClaudeEvent(host, name, data);
       break;
     case EV.repoCloneProgress:
       set((s) => ({ clones: runsAfterProgress(s.clones, host, data as CloneProgress) }));
@@ -1476,6 +1484,7 @@ function handleEvent(e: DaemonEvent) {
     }
     case EV.claudeUpdateDone:
       if (host === LOCAL) void finishClaudeUpdate(data as { ok: boolean; output: string });
+      else hostClaudeEvent(host, name, data);
       break;
     case EV.profilesChanged:
       // The full list, as profile.list returns it (X33).
@@ -1546,6 +1555,8 @@ export async function startStore() {
     set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));
     if (h.status === "connected" && prev?.status !== "connected") void loadHost(h.id);
     if (recheckClaudeOnReconnect(h.id, prev?.status, h.status)) void checkClaudeVersion();
+    // A remote host Settings has asked before: it may have restarted on another PATH (X109).
+    if (h.remote && h.status === "connected" && prev?.status !== "connected" && useHostClaude.getState().hosts[h.id]) void checkHostClaude(h.id, get().claudeVersions.latest);
   });
   const hosts = await hostsApi.list();
   set({ hosts: Object.fromEntries(hosts.map((h) => [h.id, h])) });
@@ -1556,6 +1567,7 @@ export async function startStore() {
     () => {
       void checkForUpdates();
       void checkClaudeVersion();
+      checkRemoteClaude();
     },
     () => get().settings.autoUpdateCheck,
   );

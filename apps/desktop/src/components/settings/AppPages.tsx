@@ -5,7 +5,9 @@ import { useEffect, useId, useState } from "react";
 import { Play } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, rpc } from "../../lib/daemon";
-import { checkClaudeVersion, checkForUpdates, errorToast, toast, updateActions, updateClaude, updateSettings, useStore } from "../../lib/store";
+import { checkClaudeVersion, checkForUpdates, checkRemoteClaude, errorToast, toast, updateActions, updateClaude, updateSettings, useStore } from "../../lib/store";
+import { claudeHosts, hostClaudeLine, hostClaudeOffer, NOT_ASKED } from "../../lib/hostClaude";
+import { updateHostClaude, useHostClaude } from "../../lib/hostClaudeStore";
 import { updateButton } from "../../lib/updater";
 import { claudeOffer } from "../../lib/claudeUpdate";
 import { CLAUDE_MODES, PLAN_APPROVE_MODES, resolveMode, resolvePlanMode } from "../../lib/agents";
@@ -15,7 +17,7 @@ import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
 import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
-import { M, type ClaudeSettings, type DaemonService, type PowerSettings } from "../../lib/protocol";
+import { M, type ClaudeSettings, type DaemonService, type HostInfo, type PowerSettings } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -38,9 +40,12 @@ function Updates() {
   const b = updateButton(update);
   const cStatus = claudeUpdateLine(claude, versions, claudeChecking);
   const offer = claudeOffer(claude, versions);
+  const hosts = useStore((s) => s.hosts);
+  const remotes = claudeHosts(Object.values(hosts));
   // Before the first automatic check, ten seconds after launch.
   useEffect(() => {
     if (!versions.installed && !versions.latest) void checkClaudeVersion();
+    checkRemoteClaude();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Section title="Updates">
@@ -66,6 +71,7 @@ function Updates() {
               onClick={() => {
                 void checkForUpdates({ manual: true });
                 void checkClaudeVersion();
+                checkRemoteClaude();
               }}
             >
               Check now
@@ -87,6 +93,9 @@ function Updates() {
             </Button>
           )}
         </Row>
+        {remotes.map((h) => (
+          <HostClaudeRow key={h.id} host={h} />
+        ))}
         <SwitchRow
           setting="auto-update"
           label="Check for updates automatically"
@@ -96,6 +105,35 @@ function Updates() {
         />
       </Card>
     </Section>
+  );
+}
+
+/** Claude Code on a connected remote host, updated from here (X109). */
+function HostClaudeRow({ host }: { host: HostInfo }) {
+  const c = useHostClaude((s) => s.hosts[host.id]) ?? NOT_ASKED;
+  const latest = useStore((s) => s.claudeVersions.latest);
+  const line = hostClaudeLine(host, c, latest);
+  const offer = hostClaudeOffer(c, latest);
+  return (
+    <Row
+      setting={`claude-update-${host.id}`}
+      label={
+        <>
+          Claude Code on {host.label} <span className="font-mono ui-text-12.5">{c.installed ?? "…"}</span>
+        </>
+      }
+      hint={
+        line &&
+        // What `claude update` said can run to several lines.
+        (line.tone === "error" ? <span className="whitespace-pre-wrap ui-text-12 text-error">{line.text}</span> : <Status line={line} />)
+      }
+    >
+      {offer && (
+        <Button size="sm" variant="primary" onClick={() => void updateHostClaude(host.id, offer)}>
+          Update to {offer}
+        </Button>
+      )}
+    </Row>
   );
 }
 
