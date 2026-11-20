@@ -1064,9 +1064,11 @@ function ChatEditor({
     set(r.text, r.caret);
   };
 
+  // Something to send: the send key lifts, and send goes ahead.
+  const canSend = text.trim() !== "" || images.length > 0;
   const send = () => {
+    if (!canSend) return;
     const t = text.trim();
-    if (!t && !images.length) return;
     if (refuse) {
       toast(refuse);
       return;
@@ -1213,10 +1215,10 @@ function ChatEditor({
             />
           </div>
           {/* One text line tall at the bottom, so the hint and the send key sit
-              centred on the last line (design chat-input, B2). */}
-          <div className="flex h-[1.5em] shrink-0 items-center gap-2.5 self-end ui-text-14">
+              centred on the last line (design chat-input, B2; its px, as the app's rem is 13.5 px). */}
+          <div className="flex h-[1.5em] shrink-0 items-center gap-[10px] self-end ui-text-14">
             {onAside && layout.asideHint && (
-              <span className="flex items-center gap-1.5 whitespace-nowrap ui-text-13 text-faint">
+              <span title="Ask aside (⌥↵): answered on the side, the turn keeps running" className="flex items-center gap-[6px] whitespace-nowrap ui-text-13 text-faint">
                 <span className="text-muted">⌥↵</span> aside
               </span>
             )}
@@ -1224,8 +1226,8 @@ function ChatEditor({
             <button
               title="Send (↵)"
               className={cx(
-                "flex size-6 items-center justify-center rounded-md border transition-colors hover:border-[#3a3a3a] hover:bg-hover hover:text-fg",
-                text.trim() || images.length ? "border-[#3a3a3a] bg-raised text-fg" : "border-border-strong text-faint",
+                "flex size-[24px] items-center justify-center rounded-[6px] border transition-colors hover:border-[#3a3a3a] hover:bg-hover hover:text-fg",
+                canSend ? "border-[#3a3a3a] bg-raised text-fg" : "border-border-strong text-faint",
               )}
               onClick={send}
             >
