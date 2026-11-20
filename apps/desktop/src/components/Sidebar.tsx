@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, Eye, FolderInput, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -80,7 +80,7 @@ export function ProjectMark({ host, projectId }: { host: string; projectId: stri
   );
 }
 
-/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead. */
+/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead (the row's end badge). */
 function BranchIcon({ state }: { state?: string }) {
   const merged = state === "merged";
   return (
@@ -335,7 +335,13 @@ function RowView({
         </span>
       )}
       {name}
-      {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      {badge?.tone === "merged" ? (
+        <span role="img" aria-label={badge.text} title="PR merged" className="shrink-0">
+          <BranchIcon state="merged" />
+        </span>
+      ) : (
+        badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>
+      )}
     </div>
   );
 }
@@ -395,7 +401,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const { lines } = useContext(TaskLines);
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
-  const notable = state && state !== "idle";
+  const glyph = sessionGlyph(state, pr?.state);
   // Where it runs, when not here (X73).
   const hostInfo = useStore((st) => st.hosts[host]);
   const central = useSync((st) => st.central);
@@ -443,7 +449,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
               useStore.setState({ pick: boxClickPick(useStore.getState().pick, { key: sesKey(host, s.id), shift }, rows) });
             }}
           />
-        ) : notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+        ) : glyph === "branch" ? <BranchIcon state={pr?.state} /> : <StateGlyph state={glyph} size={15} />}
       badge={renaming ? null : badge}
       name={
         renaming ? (
@@ -612,6 +618,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
   const tasks = style === "task" ? taskGroups(ids, lines, { sources: true, groupedByTask: false }) : null;
   const row = (id: string, nested?: boolean) => {
     const p = PREVIEW.find((x) => x.id === id)!;
+    const glyph = sessionGlyph(p.state, p.pr);
     return (
       <RowView
         key={id}
@@ -619,7 +626,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         selected={id === "1"}
         nested={nested}
         cell={cellOf(column, id)}
-        glyph={p.state !== "idle" ? <StateGlyph state={p.state} size={15} /> : <BranchIcon state={p.pr} />}
+        glyph={glyph === "branch" ? <BranchIcon state={p.pr} /> : <StateGlyph state={glyph} size={15} />}
         badge={p.badge}
         name={<span className={cx("min-w-0 flex-1 truncate ui-text-14", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
       />

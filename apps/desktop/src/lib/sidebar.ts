@@ -358,6 +358,16 @@ export function compact(n: number): string {
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }
 
+/**
+ * A session row's leading glyph: the agent's state dot, or the branch when the
+ * agent is at rest. A merged PR shows as an icon at the row's end, so its
+ * session keeps a dot (idle when no agent runs).
+ */
+export function sessionGlyph(state: AgentState | null, pr: string | undefined): AgentState | "branch" {
+  if (state && state !== "idle") return state;
+  return pr === "merged" ? "idle" : "branch";
+}
+
 /** The chip at the end of a session row, most urgent first; running
  *  subagents (X42) come after needs input. */
 export function sessionBadge(o: {
