@@ -10,7 +10,7 @@ export interface InputLayout {
   insetX: number;
   /** `· esc to stop` after Working. */
   escHint: boolean;
-  /** `⌥↵ ask aside` in the input. */
+  /** `⌥↵ aside` in the input. */
   asideHint: boolean;
   /** The context ring's percentage. */
   showPercent: boolean;
