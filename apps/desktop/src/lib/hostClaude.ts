@@ -27,6 +27,12 @@ export function claudeHosts(hosts: HostInfo[]): HostInfo[] {
   return hosts.filter((h) => h.remote && h.status === "connected").sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/** The version beside the host's name: "…" until it answers, none
+ * when it has no `claude` (the line says so). */
+export function hostClaudeVersion(c: HostClaude): string | null {
+  return c.installed ?? (c.answered ? null : "…");
+}
+
 /** The line beside a host's Claude Code version; null for none. `latest`
  * is npm's newest, null when it could not be read. */
 export function hostClaudeLine(h: HostInfo, c: HostClaude, latest: string | null): StatusLine | null {

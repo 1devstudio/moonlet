@@ -155,6 +155,16 @@ describe("scheduleUpdateChecks", () => {
     vi.advanceTimersByTime(3_600_000);
     expect(check).toHaveBeenCalledTimes(1);
   });
+
+  it("runs the hourly-only checks every hour, not at launch (X109)", () => {
+    vi.useFakeTimers();
+    const hourly = vi.fn();
+    scheduleUpdateChecks(() => {}, () => true, hourly);
+    vi.advanceTimersByTime(10_000);
+    expect(hourly).toHaveBeenCalledTimes(0);
+    vi.advanceTimersByTime(3_590_000);
+    expect(hourly).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("why a check failed (X35, X43)", () => {

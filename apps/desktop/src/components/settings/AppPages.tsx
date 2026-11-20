@@ -6,7 +6,7 @@ import { Play } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, rpc } from "../../lib/daemon";
 import { checkClaudeVersion, checkForUpdates, checkRemoteClaude, errorToast, toast, updateActions, updateClaude, updateSettings, useStore } from "../../lib/store";
-import { claudeHosts, hostClaudeLine, hostClaudeOffer, NOT_ASKED } from "../../lib/hostClaude";
+import { claudeHosts, hostClaudeLine, hostClaudeOffer, hostClaudeVersion, NOT_ASKED } from "../../lib/hostClaude";
 import { updateHostClaude, useHostClaude } from "../../lib/hostClaudeStore";
 import { updateButton } from "../../lib/updater";
 import { claudeOffer } from "../../lib/claudeUpdate";
@@ -119,7 +119,7 @@ function HostClaudeRow({ host }: { host: HostInfo }) {
       setting={`claude-update-${host.id}`}
       label={
         <>
-          Claude Code on {host.label} <span className="font-mono ui-text-12.5">{c.installed ?? "…"}</span>
+          Claude Code on {host.label} <span className="font-mono ui-text-12.5">{hostClaudeVersion(c)}</span>
         </>
       }
       hint={

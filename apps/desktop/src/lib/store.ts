@@ -1566,9 +1566,9 @@ export async function startStore() {
     () => {
       void checkForUpdates();
       void checkClaudeVersion();
-      checkRemoteClaude();
     },
     () => get().settings.autoUpdateCheck,
+    checkRemoteClaude,
   );
 
   // Tauri cannot tell a notification click from any other activation, so

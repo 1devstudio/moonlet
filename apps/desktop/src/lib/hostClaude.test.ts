@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostInfo } from "./protocol";
-import { claudeHosts, hostClaudeLine, hostClaudeOffer, NOT_ASKED, recheckHostClaudeOnReconnect, type HostClaude } from "./hostClaude";
+import { claudeHosts, hostClaudeVersion, hostClaudeLine, hostClaudeOffer, NOT_ASKED, recheckHostClaudeOnReconnect, type HostClaude } from "./hostClaude";
 
 const host = (patch: Partial<HostInfo>): HostInfo => ({
   id: "studio-mini",
@@ -78,6 +78,14 @@ describe("the Claude Code line of a host (X109)", () => {
     expect(hostClaudeOffer(asked({ run: { phase: "updating", installed: "2.1.292", latest: "2.1.296", step: "check" } }), "2.1.296")).toBeNull();
     const failed = { phase: "failed", installed: "2.1.292", latest: "2.1.296", step: "install", message: "claude update failed" } as const;
     expect(hostClaudeOffer(asked({ run: failed }), "2.1.296")).toBe("2.1.296");
+  });
+});
+
+describe("the Claude Code version beside a host's name (X109)", () => {
+  it("shows the version it runs, … until it answers, and none without claude", () => {
+    expect(hostClaudeVersion(asked({}))).toBe("2.1.292");
+    expect(hostClaudeVersion(NOT_ASKED)).toBe("…");
+    expect(hostClaudeVersion(asked({ installed: null }))).toBeNull();
   });
 });
 

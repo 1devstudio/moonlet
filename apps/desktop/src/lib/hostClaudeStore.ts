@@ -20,7 +20,15 @@ const put = (id: string, patch: (c: HostClaude) => Partial<HostClaude>) =>
 /** Counts updates started or ended per host, so a check that began before
  * one does not put back the version or the line from before it. */
 const runs = new Map<string, number>();
-const bump = (id: string) => runs.set(id, (runs.get(id) ?? 0) + 1);
+const bump = (id: string) => {
+  const n = (runs.get(id) ?? 0) + 1;
+  runs.set(id, n);
+  return n;
+};
+/** The newest check per host: an older one answering later writes nothing. */
+const checks = new Map<string, number>();
+/** Hosts whose `claude.update` this window is waiting on. */
+const own = new Set<string>();
 
 const message = (e: unknown) => (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : String(e));
 
@@ -28,6 +36,8 @@ const message = (e: unknown) => (e && typeof e === "object" && "message" in e ? 
  * shown, leaves a running update alone, and shows one started elsewhere. */
 export async function checkHostClaude(id: string): Promise<void> {
   const seen = runs.get(id);
+  const check = (checks.get(id) ?? 0) + 1;
+  checks.set(id, check);
   put(id, () => ({ checking: true }));
   let answer: { version: string | null; updating: boolean } | null;
   try {
@@ -35,13 +45,17 @@ export async function checkHostClaude(id: string): Promise<void> {
   } catch {
     answer = null;
   }
+  if (checks.get(id) !== check) return;
   if (runs.get(id) !== seen) return put(id, () => ({ checking: false }));
   put(id, (c) => {
     const idle = { phase: "idle" } as const;
     if (!answer) return { checking: false, unasked: true, run: c.run.phase === "updating" ? c.run : idle };
     const installed = answer.version;
-    // Started elsewhere: the release it goes to is npm's newest.
-    const run = c.run.phase === "updating" ? c.run : answer.updating && installed ? ({ phase: "updating", installed, latest: "", step: "check" } as const) : idle;
+    // This window's own run ends on its reply; one seen elsewhere ends when
+    // the host says none runs, in case its claude.update_done was missed.
+    // Started elsewhere, the release it goes to is npm's newest.
+    const running = c.run.phase === "updating" && (own.has(id) || answer.updating);
+    const run = running ? c.run : answer.updating && installed ? ({ phase: "updating", installed, latest: "", step: "check" } as const) : idle;
     return { checking: false, unasked: false, answered: true, installed, run };
   });
 }
@@ -50,14 +64,18 @@ export async function checkHostClaude(id: string): Promise<void> {
 export async function updateHostClaude(id: string, latest: string): Promise<void> {
   const { installed, run } = now(id);
   if (!installed || run.phase === "updating") return;
-  bump(id);
+  const mine = bump(id);
   put(id, () => ({ run: { phase: "updating", installed, latest, step: "check" } }));
+  own.add(id);
   let result: ClaudeUpdateRun;
   try {
     result = await rpc<{ ok: boolean; output: string }>(id, M.claudeUpdate);
   } catch (e) {
     result = { error: message(e) };
   }
+  // Ended already by the host's claude.update_done, maybe retried since.
+  if (runs.get(id) !== mine) return;
+  own.delete(id);
   await finish(id, result);
 }
 
@@ -66,6 +84,7 @@ export async function updateHostClaude(id: string, latest: string): Promise<void
 async function finish(id: string, result: ClaudeUpdateRun) {
   const { state } = afterClaudeUpdateExit(now(id).run, result);
   if (state === now(id).run) return;
+  own.delete(id);
   bump(id);
   put(id, () => ({ run: state }));
   const seen = runs.get(id);

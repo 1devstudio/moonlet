@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { hostClaudeLine, NOT_ASKED } from "./hostClaude";
+import { hostClaudeLine, hostClaudeVersion, NOT_ASKED } from "./hostClaude";
 import { checkHostClaude, hostClaudeEvent, updateHostClaude, useHostClaude } from "./hostClaudeStore";
 import type { HostInfo } from "./protocol";
 
@@ -14,7 +14,8 @@ const info = (id: string): HostInfo => ({ id, label: id, remote: true, kind: "ta
 const LATEST = "2.1.296";
 /** The line Settings shows for `id` now. */
 const line = (id: string) => hostClaudeLine(info(id), useHostClaude.getState().hosts[id] ?? NOT_ASKED, LATEST)?.text ?? null;
-const version = (id: string) => useHostClaude.getState().hosts[id]?.installed ?? null;
+/** The version Settings shows beside `id`'s name now. */
+const version = (id: string) => hostClaudeVersion(useHostClaude.getState().hosts[id] ?? NOT_ASKED);
 
 /** A reply the test sends when it chooses. */
 function later<T>() {
@@ -84,7 +85,7 @@ describe("Claude Code on a remote host (X109)", () => {
     hostClaudeEvent("attic", "claude.update_output", { line: "Updating to 2.1.296..." });
     hostClaudeEvent("attic", "claude.update_done", { ok: true, output: UPDATED });
     expect(line("attic")).toBeNull();
-    expect(version("attic")).toBeNull();
+    expect(version("attic")).toBe("…");
   });
 
   it("replaces a result with Could not ask when the next check gets no answer", async () => {
@@ -154,6 +155,47 @@ describe("Claude Code on a remote host (X109)", () => {
     expect(line("studio-mini")).toBe("Installing 2.1.296…");
     run.send({ ok: false, output: "" });
     await updating;
+  });
+
+  it("keeps the newest check's answer when an older one fails after it", async () => {
+    const older = later<unknown>();
+    hosts.answers["studio-mini"] = { "claude.version": () => older.p };
+    const first = checkHostClaude("studio-mini");
+    hosts.answers["studio-mini"]["claude.version"] = async () => ({ version: "2.1.292", updating: false });
+    await checkHostClaude("studio-mini");
+    older.send(Promise.reject({ code: "failed", message: "disconnected" }));
+    await first.catch(() => {});
+    expect(line("studio-mini")).toBe("2.1.296 is available");
+  });
+
+  it("drops an update seen elsewhere once the host says none runs, as after a missed end", async () => {
+    hosts.answers["studio-mini"] = { "claude.version": async () => ({ version: "2.1.292", updating: true }) };
+    await checkHostClaude("studio-mini");
+    expect(line("studio-mini")).toBe("Updating to 2.1.296…");
+    // Its claude.update_done came while this Mac was away.
+    hosts.answers["studio-mini"]["claude.version"] = async () => ({ version: "2.1.296", updating: false });
+    await checkHostClaude("studio-mini");
+    expect(line("studio-mini")).toBe("Up to date");
+  });
+
+  it("leaves a retry running when the first run's reply comes after its end", async () => {
+    const firstReply = later<unknown>();
+    const retryReply = later<unknown>();
+    let reply = () => firstReply.p;
+    hosts.answers["studio-mini"] = { "claude.version": async () => ({ version: "2.1.292", updating: false }), "claude.update": () => reply() };
+    await checkHostClaude("studio-mini");
+    const first = updateHostClaude("studio-mini", LATEST);
+    // The host's claude.update_done for it comes before its reply.
+    hostClaudeEvent("studio-mini", "claude.update_done", { ok: false, output: "Checking for updates to latest version...\nclaude update failed badly\n" });
+    await vi.waitFor(() => expect(line("studio-mini")).toBe("claude update failed badly"));
+    reply = () => retryReply.p;
+    const retry = updateHostClaude("studio-mini", LATEST);
+    firstReply.send({ ok: false, output: "Checking for updates to latest version...\nclaude update failed badly\n" });
+    await first;
+    expect(line("studio-mini")).toBe("Updating to 2.1.296…");
+    retryReply.send({ ok: true, output: UPDATED });
+    await retry;
+    expect(line("studio-mini")).toBe("Updated to 2.1.296. New agents on studio-mini start on it.");
   });
 
   it("ignores a second click while the host updates", async () => {
