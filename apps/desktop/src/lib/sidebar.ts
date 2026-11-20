@@ -358,6 +358,16 @@ export function compact(n: number): string {
   return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }
 
+/**
+ * A session row's leading glyph: the agent's state dot, or the branch when the
+ * agent is at rest. A merged PR shows as an icon at the row's end, so its
+ * session keeps a dot (idle when no agent runs).
+ */
+export function sessionGlyph(state: AgentState | null, pr: string | undefined): AgentState | "branch" {
+  if (state && state !== "idle") return state;
+  return pr === "merged" ? "idle" : "branch";
+}
+
 /** The chip at the end of a session row, most urgent first; running
  *  subagents (X42) come after needs input. */
 export function sessionBadge(o: {
@@ -366,11 +376,12 @@ export function sessionBadge(o: {
   merged: boolean;
   git?: { additions: number; deletions: number };
   agents: number;
-}): { text: string; tone: "muted" | "blocked" | "agents" | "merged" | "diff" } | null {
+}): { text: string; tone: "muted" | "blocked" | "agents" | "diff" } | null {
   if (o.creating) return { text: "creating", tone: "muted" };
   if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
   if (o.agents) return { text: agentCount(o.agents), tone: "agents" };
-  if (o.merged) return { text: "merged", tone: "merged" };
+  // A merged PR's row ends in its merge icon, beside any badge above, instead of the diff.
+  if (o.merged) return null;
   if (o.git && (o.git.additions || o.git.deletions)) {
     return { text: `+${compact(o.git.additions)}${o.git.deletions ? ` -${compact(o.git.deletions)}` : ""}`, tone: "diff" };
   }

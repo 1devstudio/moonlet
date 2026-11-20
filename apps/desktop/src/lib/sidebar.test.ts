@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -345,9 +345,31 @@ describe("sessionBadge", () => {
     expect(sessionBadge({ ...base, agents: 5, creating: true })).toEqual({ text: "creating", tone: "muted" });
   });
 
-  it("shows merged, and nothing without changes", () => {
-    expect(sessionBadge({ ...base, merged: true })).toEqual({ text: "merged", tone: "merged" });
+  it("hides the diff of a merged PR, whose merge icon stands beside any badge", () => {
+    expect(sessionBadge({ ...base, merged: true })).toBeNull();
+    expect(sessionBadge({ ...base, merged: true, creating: true })).toEqual({ text: "creating", tone: "muted" });
+  });
+
+  it("shows nothing without changes", () => {
     expect(sessionBadge({ ...base, git: { additions: 0, deletions: 0 } })).toBeNull();
+  });
+});
+
+describe("sessionGlyph", () => {
+  it("shows the branch for a session at rest without a merged PR", () => {
+    expect(sessionGlyph(null, undefined)).toBe("branch");
+    expect(sessionGlyph("idle", "open")).toBe("branch");
+  });
+
+  it("shows the agent's state over the branch", () => {
+    expect(sessionGlyph("done", "open")).toBe("done");
+    expect(sessionGlyph("working", undefined)).toBe("working");
+  });
+
+  it("gives a merged PR's session its state dot, idle when no agent runs", () => {
+    expect(sessionGlyph("done", "merged")).toBe("done");
+    expect(sessionGlyph("idle", "merged")).toBe("idle");
+    expect(sessionGlyph(null, "merged")).toBe("idle");
   });
 });
 

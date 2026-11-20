@@ -79,7 +79,7 @@ Taken from the design:
   - Start with: "An empty workspace", or "Move sections from <current>" with a checklist of its sections and their project counts.
   - Cancel and **Create workspace**. Create is disabled while the name is empty.
 - **Section header:** 30 px, with the name in muted 13 px medium on a slightly raised background, and `⋯` on the right.
-- Session rows keep their current look (X5): PR state, agent dot, diffstat, `merged`.
+- Session rows keep their current look (X5): PR state, agent dot, diffstat, merge glyph.
 
 ## Protocol and RPCs
 

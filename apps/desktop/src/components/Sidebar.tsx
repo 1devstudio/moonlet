@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, Eye, FolderInput, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -80,7 +80,7 @@ export function ProjectMark({ host, projectId }: { host: string; projectId: stri
   );
 }
 
-/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead. */
+/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead (the row's end badge). */
 function BranchIcon({ state }: { state?: string }) {
   const merged = state === "merged";
   return (
@@ -100,6 +100,11 @@ function BranchIcon({ state }: { state?: string }) {
       )}
     </svg>
   );
+}
+
+/** A session row's leading glyph (see `sessionGlyph`). */
+function RowGlyph({ glyph, pr }: { glyph: ReturnType<typeof sessionGlyph>; pr?: string }) {
+  return glyph === "branch" ? <BranchIcon state={pr} /> : <StateGlyph state={glyph} size={15} />;
 }
 
 function InlineInput({ initial, placeholder, onDone }: { initial: string; placeholder?: string; onDone: (value: string | null) => void }) {
@@ -292,7 +297,7 @@ interface RowMenuState {
   projectId?: string;
 }
 
-const BADGE_TONE = { muted: "text-muted", blocked: "text-blocked", agents: "text-faint", merged: "text-merged", diff: "text-muted" };
+const BADGE_TONE = { muted: "text-muted", blocked: "text-blocked", agents: "text-faint", diff: "text-muted" };
 
 /**
  * One session row's look (X48), shared by the sidebar and the Settings
@@ -304,6 +309,7 @@ function RowView({
   cell,
   name,
   badge,
+  merged,
   selected,
   picked,
   nested,
@@ -313,6 +319,8 @@ function RowView({
   cell?: { text: string; outOfSync: boolean; width: number };
   name: ReactNode;
   badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
+  /** The session's PR is merged: a merge icon ends the row. */
+  merged?: boolean;
   selected: boolean;
   /** Picked with ⌘- or ⇧-click (X106): tinted. */
   picked?: boolean;
@@ -336,6 +344,11 @@ function RowView({
       )}
       {name}
       {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      {merged && (
+        <span role="img" aria-label="merged" title="PR merged" className="shrink-0">
+          <BranchIcon state="merged" />
+        </span>
+      )}
     </div>
   );
 }
@@ -395,7 +408,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const { lines } = useContext(TaskLines);
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
-  const notable = state && state !== "idle";
+  const glyph = sessionGlyph(state, pr?.state);
   // Where it runs, when not here (X73).
   const hostInfo = useStore((st) => st.hosts[host]);
   const central = useSync((st) => st.central);
@@ -443,8 +456,11 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
               useStore.setState({ pick: boxClickPick(useStore.getState().pick, { key: sesKey(host, s.id), shift }, rows) });
             }}
           />
-        ) : notable ? <StateGlyph state={state} size={15} /> : <BranchIcon state={pr?.state} />}
+        ) : (
+          <RowGlyph glyph={glyph} pr={pr?.state} />
+        )}
       badge={renaming ? null : badge}
+      merged={!renaming && pr?.state === "merged"}
       name={
         renaming ? (
           <InlineInput
@@ -597,10 +613,10 @@ function PickBar() {
 }
 
 /** Sample sessions for the Settings preview of each row style (X48). */
-const PREVIEW: { id: string; name: string; state: "working" | "blocked" | "idle"; pr?: "merged"; badge: { text: string; tone: keyof typeof BADGE_TONE }; task?: Omit<SessionTaskLine, "text"> }[] = [
+const PREVIEW: { id: string; name: string; state: "working" | "blocked" | "idle"; pr?: "merged"; badge?: { text: string; tone: keyof typeof BADGE_TONE }; task?: Omit<SessionTaskLine, "text"> }[] = [
   { id: "1", name: "Remote hosts sidebar", state: "working", badge: { text: "+412 -38", tone: "diff" }, task: { key: "MOON-142", title: "Remote hosts sidebar", column: "in_progress", outOfSync: false } },
   { id: "2", name: "Hosts section spike", state: "idle", badge: { text: "+46 -3", tone: "diff" }, task: { key: "MOON-142", title: "Remote hosts sidebar", column: "in_progress", outOfSync: false } },
-  { id: "3", name: "File tabs", state: "idle", pr: "merged", badge: { text: "merged", tone: "merged" }, task: { key: "MOON-144", title: "File tabs", column: "in_review", outOfSync: true } },
+  { id: "3", name: "File tabs", state: "idle", pr: "merged", task: { key: "MOON-144", title: "File tabs", column: "in_review", outOfSync: true } },
   { id: "4", name: "Zsh startup profiling", state: "idle", badge: { text: "+22 -9", tone: "diff" } },
 ];
 
@@ -612,6 +628,7 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
   const tasks = style === "task" ? taskGroups(ids, lines, { sources: true, groupedByTask: false }) : null;
   const row = (id: string, nested?: boolean) => {
     const p = PREVIEW.find((x) => x.id === id)!;
+    const glyph = sessionGlyph(p.state, p.pr);
     return (
       <RowView
         key={id}
@@ -619,8 +636,9 @@ export function SessionRowsPreview({ style }: { style: RowStyle }) {
         selected={id === "1"}
         nested={nested}
         cell={cellOf(column, id)}
-        glyph={p.state !== "idle" ? <StateGlyph state={p.state} size={15} /> : <BranchIcon state={p.pr} />}
+        glyph={<RowGlyph glyph={glyph} pr={p.pr} />}
         badge={p.badge}
+        merged={p.pr === "merged"}
         name={<span className={cx("min-w-0 flex-1 truncate ui-text-14", id === "1" ? "text-fg" : "text-[#cfcfcf]")}>{p.name}</span>}
       />
     );
