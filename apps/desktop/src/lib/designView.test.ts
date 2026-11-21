@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl, frameKey, designPagePath } from "./designView";
+import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl, frameKey, frameFit, designPagePath } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -236,6 +236,16 @@ describe("a card (X64, X65)", () => {
     expect(fitScale([320, 140], [1200, 800])).toBe(2);
     expect(fitScale([900, 700], [450, 700])).toBe(0.5);
     expect(fitScale([1440, 900], [720, 900])).toBe(0.5);
+  });
+
+  it("frames a page at 100% or less by scaling the frame (X110)", () => {
+    expect(frameFit([390, 844], 0.5)).toEqual({ frame: [390, 844], scale: 0.5, zoom: 1 });
+    expect(frameFit([1440, 900], 1)).toEqual({ frame: [1440, 900], scale: 1, zoom: 1 });
+  });
+
+  it("frames a page above 100% at the zoomed size, and the page zooms itself (X110)", () => {
+    expect(frameFit([390, 844], 2)).toEqual({ frame: [780, 1688], scale: 1, zoom: 2 });
+    expect(frameFit([1440, 900], 1.5)).toEqual({ frame: [2160, 1350], scale: 1, zoom: 1.5 });
   });
 
   it("zooms by steps from 25% to 400%", () => {

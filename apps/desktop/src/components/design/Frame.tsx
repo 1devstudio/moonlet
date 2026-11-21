@@ -2,8 +2,9 @@
 // sandboxed frame they render in, and the zoom of the canvas around it.
 
 import { Loader2, Minus, Plus } from "lucide-react";
-import type { Ref } from "react";
-import { frameKey, zoomStep } from "../../lib/designView";
+import { useCallback, useEffect, useRef, type Ref } from "react";
+import { frameFit, frameKey, zoomStep } from "../../lib/designView";
+import { asksZoom, zoomMessage } from "../../lib/designZoom";
 import { useFrameTurn } from "../../lib/useFrameTurn";
 import { cx } from "../../lib/cx";
 import { IconButton } from "../ui";
@@ -16,7 +17,8 @@ import { IconButton } from "../ui";
  *  in its place until then. `maxHeight`: the box is cut there, the spinner
  *  centred in what shows. `frameRef`: the frame, for a page's bridge
  *  (X65); `onLoad`: its load, which tells whether the page loaded (X65
- *  entry 13). */
+ *  entry 13). Above 100% the frame is the zoomed size and its page draws
+ *  itself at the zoom, which keeps it sharp (X110, `frameFit`). */
 export function CardFrame({
   url,
   title,
@@ -43,12 +45,36 @@ export function CardFrame({
   const [w, h] = viewport;
   const turn = useFrameTurn(url, live);
   const hidden = loader && turn.step !== "shown";
+  const fit = frameFit(viewport, scale);
+  // The page's zoom: told on every change and every load, and when its
+  // zoom script asks, as it starts before the frame's load.
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  const told = zoomMessage(fit.zoom, viewport);
+  const message = useRef(told);
+  message.current = told;
+  const tellZoom = useCallback(() => frame.current?.contentWindow?.postMessage(message.current, "*"), []);
+  useEffect(tellZoom, [told, tellZoom]);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.source && e.source === frame.current?.contentWindow && asksZoom(e.data)) tellZoom();
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [tellZoom]);
+  const setFrame = useCallback(
+    (el: HTMLIFrameElement | null) => {
+      frame.current = el;
+      if (typeof frameRef === "function") frameRef(el);
+      else if (frameRef) (frameRef as { current: HTMLIFrameElement | null }).current = el;
+    },
+    [frameRef],
+  );
   return (
     <div className="relative overflow-hidden" style={{ width: w * scale, height: Math.min(h * scale, maxHeight) }}>
       {live && turn.src !== null && (
         <iframe
           key={frameKey(turn.src, loader)}
-          ref={frameRef}
+          ref={setFrame}
           // A design frame, held until its page cleared when removed.
           data-moonlet-frame=""
           title={title}
@@ -56,10 +82,11 @@ export function CardFrame({
           sandbox="allow-scripts"
           onLoad={() => {
             turn.loaded();
+            tellZoom();
             onLoad?.();
           }}
           className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none", hidden && "invisible")}
-          style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: "0 0" }}
+          style={{ width: fit.frame[0], height: fit.frame[1], transform: `scale(${fit.scale})`, transformOrigin: "0 0" }}
         />
       )}
       {live && hidden && (

@@ -169,6 +169,15 @@ export function fitScale(viewport: [number, number], box: [number, number]): num
   return Math.min(box[0] / viewport[0], box[1] / viewport[1], 2);
 }
 
+/** How a frame shows its viewport at `scale` (X110): at 100% or less, the
+ *  frame is the viewport, scaled by `scale`; above it, the frame is the
+ *  zoomed size and its page draws itself at `zoom`, as WebKit stretches a
+ *  scaled frame's picture, which blurs it. */
+export function frameFit([w, h]: [number, number], scale: number): { frame: [number, number]; scale: number; zoom: number } {
+  if (scale <= 1) return { frame: [w, h], scale, zoom: 1 };
+  return { frame: [w * scale, h * scale], scale: 1, zoom: scale };
+}
+
 /** What **Ask the sync agent to fix** sends. */
 export function fixMessage(card: DesignCard): string {
   // A problem in the card's own .css or .prompt.md names its file.

@@ -44,10 +44,15 @@
     const el = marked(e.target);
     return el && e.altKey ? marked(el.parentElement) || el : el;
   };
+  // Above 100% the page draws itself at the zoom (X110, design_zoom.js), and
+  // WebKit gives boxes and the pointer in the frame's px: the bridge takes
+  // and reports them in the page's, as at 100%.
+  let zoom = 1;
   const box = (el) => {
     const r = el.getBoundingClientRect();
-    return { x: r.left, y: r.top, w: r.width, h: r.height };
+    return { x: r.left / zoom, y: r.top / zoom, w: r.width / zoom, h: r.height / zoom };
   };
+  const pointer = (e) => ({ x: e.clientX / zoom, y: e.clientY / zoom });
   const text = (el) => [...(el.textContent || "").replace(/\s+/g, " ").trim()].slice(0, TEXT_MAX).join("");
 
   // What the bridge draws over the page: fixed, above it, never taking the
@@ -295,6 +300,13 @@
   addEventListener("message", (e) => {
     if (e.source !== app) return;
     const d = e.data;
+    // The zoom the page draws itself at, as design_zoom.js takes it.
+    const z = typeof d === "string" ? /^moonlet:zoom=(\d+(?:\.\d+)?),[1-9]\d{0,4}x[1-9]\d{0,4}$/.exec(d) : null;
+    if (z && Number(z[1]) >= 1 && Number(z[1]) <= 4) {
+      zoom = Number(z[1]);
+      moved();
+      return;
+    }
     if (!d || typeof d !== "object") return;
     if (d.type === "bridge.hello") {
       // Before the page has loaded, its load's report answers.
@@ -363,7 +375,7 @@
     return inRow(el.parentElement) ? Math.min(x - r.x, r.x + r.w - x) < EDGE : Math.min(y - r.y, r.y + r.h - y) < EDGE;
   };
   const placeAt = (x, y, dragged) => {
-    const t = marked(document.elementFromPoint ? document.elementFromPoint(x, y) : null);
+    const t = marked(document.elementFromPoint ? document.elementFromPoint(x * zoom, y * zoom) : null);
     if (!t || (dragged && dragged.contains(t))) return null;
     const body = t === document.body;
     if (holds(t) && (body || !nearEdge(t, x, y))) {
@@ -451,12 +463,12 @@
         if (!abs && /[nw]/.test(edge)) return;
         const r = box(selected);
         const s = selected.style;
-        sizing = { el: selected, edge, x: e.clientX, y: e.clientY, w: r.w, h: r.h, abs, style: { width: s.width, height: s.height, left: s.left, top: s.top }, size: null };
+        sizing = { el: selected, edge, ...pointer(e), w: r.w, h: r.h, abs, style: { width: s.width, height: s.height, left: s.left, top: s.top }, size: null };
         return;
       }
       if (editing || !(e.target instanceof Node) || !selected.contains(e.target)) return;
       const abs = placed(selected);
-      drag = { el: selected, x: e.clientX, y: e.clientY, on: false, abs, style: { left: selected.style.left, top: selected.style.top }, place: null };
+      drag = { el: selected, ...pointer(e), on: false, abs, style: { left: selected.style.left, top: selected.style.top }, place: null };
     },
     true,
   );
@@ -465,8 +477,8 @@
     (e) => {
       if (sizing) {
         const s = sizing;
-        const dx = e.clientX - s.x;
-        const dy = e.clientY - s.y;
+        const dx = pointer(e).x - s.x;
+        const dy = pointer(e).y - s.y;
         const across = /[ew]/.test(s.edge);
         const down = /[ns]/.test(s.edge);
         let w = s.w + (s.edge.includes("e") ? dx : s.edge.includes("w") ? -dx : 0);
@@ -484,8 +496,8 @@
         return;
       }
       if (!drag) return;
-      const dx = e.clientX - drag.x;
-      const dy = e.clientY - drag.y;
+      const dx = pointer(e).x - drag.x;
+      const dy = pointer(e).y - drag.y;
       if (!drag.on && Math.hypot(dx, dy) < 4) return;
       drag.on = true;
       if (drag.abs) {
@@ -493,7 +505,7 @@
         drawSelection();
         return;
       }
-      const p = placeAt(e.clientX, e.clientY, drag.el);
+      const p = placeAt(pointer(e).x, pointer(e).y, drag.el);
       drag.place = p && !already(drag.el, p) ? p : null;
       dropShown(midOf(drag.el), drag.place);
     },
@@ -524,7 +536,7 @@
   addEventListener("dragover", (e) => {
     if (!palette || mode !== "edit") return;
     e.preventDefault();
-    dropShown(null, placeAt(e.clientX, e.clientY, null));
+    dropShown(null, placeAt(pointer(e).x, pointer(e).y, null));
   });
   addEventListener("dragleave", (e) => {
     if (palette && !e.relatedTarget) dropShown(null, null);
@@ -532,7 +544,7 @@
   addEventListener("drop", (e) => {
     if (!palette || mode !== "edit") return;
     e.preventDefault();
-    const p = placeAt(e.clientX, e.clientY, null);
+    const p = placeAt(pointer(e).x, pointer(e).y, null);
     dropShown(null, null);
     post({ type: "bridge.drop", place: p });
   });
