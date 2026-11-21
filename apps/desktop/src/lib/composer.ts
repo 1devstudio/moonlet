@@ -259,7 +259,7 @@ export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[]
   return sections.length ? sections : [{ label: "No tasks match", tasks: [] }];
 }
 
-/** The prompt's `/` menu (X110): Claude's slash commands for the `/` word
+/** The prompt's `/` menu (X111): Claude's slash commands for the `/` word
  *  at the caret, as the chat's `/` menu offers them (`commandOptions`);
  *  none for another agent, or once Escape dismissed the word at
  *  `dismissed`. */
@@ -270,7 +270,7 @@ export function composerSlash(f: { agent: string; commands: readonly string[]; t
 }
 
 /** What a key does in the prompt while the `/` menu shows `rows` with
- *  `sel` highlighted (X110), as in the chat's `/` menu: the arrows move
+ *  `sel` highlighted (X111), as in the chat's `/` menu: the arrows move
  *  round the ends, Tab or Enter puts the command in, Escape closes the
  *  menu; null leaves the key to the prompt. */
 export function slashKey(e: { key: string; shiftKey: boolean }, rows: readonly string[], sel: number): { move: number } | { accept: string } | { dismiss: true } | null {

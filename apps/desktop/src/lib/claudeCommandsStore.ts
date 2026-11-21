@@ -1,5 +1,5 @@
 // The slash commands Claude Code offers in a project's folder on each host
-// (X110), for the new-session Composer, which has no chat to read them from.
+// (X111), for the new-session Composer, which has no chat to read them from.
 
 import { useEffect } from "react";
 import { create } from "zustand";
@@ -17,7 +17,7 @@ let asks = 0;
 /** Claude's slash commands in `project` on `host`, in `workspace`'s Claude
  * profile: the last answer at once, asked again on each mount (the daemon
  * keeps it for minutes). Nothing is asked without a host, as while another
- * agent is picked; a failed ask, as from a daemon before X110, keeps the list. */
+ * agent is picked; a failed ask, as from a daemon before X111, keeps the list. */
 export function useClaudeCommands(host: string | undefined, project: string | undefined, workspace: string | null | undefined): string[] {
   const key = host && project ? keyOf(host, project, workspace) : "";
   const commands = useCommands((s) => s.known[key]);

@@ -909,7 +909,7 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 
 /** The rows of a `/` or `@` menu by an input: the highlighted one is
  *  `sel`, and a row is picked on mouse down so the input keeps its focus
- *  (the chat's input, and the new-session composer's prompt, X110). */
+ *  (the chat's input, and the new-session composer's prompt, X111). */
 export function CompletionRows({ rows, sel, onPick }: { rows: SlashRow[]; sel: number; onPick: (value: string) => void }) {
   return rows.map((o, i) => (
     <button

@@ -53,7 +53,7 @@ describe("+ menu: entries (X29)", () => {
     expect(plusEntries({ variant: "composer", agents: 3 })).toEqual([["attach", "add-dir"]]);
   });
 
-  it("offers slash commands in the composer only for Claude (X110)", () => {
+  it("offers slash commands in the composer only for Claude (X111)", () => {
     expect(plusEntries({ variant: "composer", agents: 0, commands: true })).toEqual([["attach", "add-dir"], ["commands"]]);
     expect(plusEntries({ variant: "composer", agents: 0, commands: false })).toEqual([["attach", "add-dir"]]);
   });

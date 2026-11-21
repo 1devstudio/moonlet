@@ -300,7 +300,7 @@ describe("Link a task (X54)", () => {
   });
 });
 
-describe("composerSlash (X110)", () => {
+describe("composerSlash (X111)", () => {
   const commands = ["review", "security-review", "release-notes", "compact"];
 
   it("offers Claude's slash commands while a / word is typed", () => {
@@ -322,7 +322,7 @@ describe("composerSlash (X110)", () => {
   });
 });
 
-describe("slashKey (X110)", () => {
+describe("slashKey (X111)", () => {
   const rows = ["/review", "/release-notes", "/security-review"];
   const key = (k: string, shift = false) => ({ key: k, shiftKey: shift });
 

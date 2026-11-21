@@ -549,7 +549,7 @@ export function Composer({
   // The models Claude Code offers in the target workspace's profile (X105).
   const currentWorkspace = current ? workspaceFor(current.host) : undefined;
   const claudeModels = useClaudeModels(current?.host, currentWorkspace);
-  // Claude's slash commands for the project, for the prompt's `/` menu and `+` (X110).
+  // Claude's slash commands for the project, for the prompt's `/` menu and `+` (X111).
   const claudeCommands = useClaudeCommands(choice.agent === "claude" ? current?.host : undefined, current?.project.id, currentWorkspace);
   const [caret, setCaret] = useState(0);
   const [slashSel, setSlashSel] = useState(0);
@@ -968,7 +968,7 @@ export function Composer({
               }}
             />
           ))}
-          {/* Claude's slash commands under the first line, as the chat's `/` menu (X110). */}
+          {/* Claude's slash commands under the first line, as the chat's `/` menu (X111). */}
           <div className="relative flex min-h-[52px] flex-1 flex-col">
             {slash.rows.length > 0 && (
               <div className="absolute left-0 top-[30px] z-30 w-full max-w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">

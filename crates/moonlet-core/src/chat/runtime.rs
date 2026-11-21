@@ -167,7 +167,7 @@ pub struct ChatManager {
     /// so a host that cannot answer is not asked on every open (X105).
     models_failed: Mutex<HashMap<Option<String>, Instant>>,
     /// The slash commands Claude Code offers outside any project, by Claude
-    /// profile folder, with when it said so (X110).
+    /// profile folder, with when it said so (X111).
     commands: Mutex<HashMap<Option<String>, HeldCommands>>,
     /// One Claude at a time is started to ask for models or commands (X105).
     probing: tokio::sync::Mutex<()>,
@@ -240,17 +240,17 @@ const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 /// How long an aside may take before moonlet gives up on it (X49).
 const ASIDE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// A profile's slash commands and when Claude gave them (X110).
+/// A profile's slash commands and when Claude gave them (X111).
 type HeldCommands = (Instant, Vec<String>);
 
-/// How long Claude may take to answer `initialize` (X105, X110).
+/// How long Claude may take to answer `initialize` (X105, X111).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long after Claude gave no models, or no commands, it is not asked
-/// again (X105, X110).
+/// again (X105, X111).
 const PROBE_RETRY: Duration = Duration::from_secs(60);
 /// How long a profile's slash commands are kept before Claude is asked
-/// again, so a command or skill added since shows within minutes (X110).
+/// again, so a command or skill added since shows within minutes (X111).
 const COMMANDS_FRESH: Duration = Duration::from_secs(5 * 60);
 
 /// The tool call an ask is about: the same tool with the same input.
@@ -1353,7 +1353,7 @@ impl ChatManager {
 
     /// Starts a Claude in the profile's home folder only to answer
     /// `initialize`, and keeps both its models (X105) and its slash
-    /// commands (X110) for the profile.
+    /// commands (X111) for the profile.
     async fn ask_profile(&self, env: &BTreeMap<String, String>, profile: Option<String>) {
         let home = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
         let reply = probe(env, &home).await.ok();
@@ -1391,7 +1391,7 @@ impl ChatManager {
     }
 
     /// The slash commands Claude Code would offer in the project folder
-    /// `root`, in `workspace`'s Claude profile (X110): the profile's, from
+    /// `root`, in `workspace`'s Claude profile (X111): the profile's, from
     /// a Claude started outside the project only to answer `initialize`,
     /// then the project's own, read from its folder, so nothing of the
     /// project (its hooks, its MCP servers) runs before a session does.
@@ -1746,7 +1746,7 @@ fn require_folder(cwd: &str) -> Result<()> {
 }
 
 /// Starts `claude` in `cwd` only to ask it `initialize`, and gives its
-/// answer (X105, X110). No message is sent, so no conversation is made.
+/// answer (X105, X111). No message is sent, so no conversation is made.
 async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json::Value> {
     let exe = crate::paths::find_program("claude", env).context("claude not found on PATH")?;
     let mut child = tokio::process::Command::new(&exe)

@@ -297,12 +297,12 @@ pub fn aside_args(cfg: &ChatConfig, session: &str, question: &str, running: Opti
 }
 
 /// The slash command names of Claude Code's `initialize` reply, each
-/// without its `/` (X29, X110); none when the reply has no `commands`.
+/// without its `/` (X29, X111); none when the reply has no `commands`.
 pub fn commands(reply: &Value) -> Vec<String> {
     reply["commands"].as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(String::from)).collect()
 }
 
-/// The slash commands a project folder adds of its own (X110), named as
+/// The slash commands a project folder adds of its own (X111), named as
 /// Claude Code names them, read from disk so nothing of the project runs:
 /// each skill in `.claude/skills/<folder>/SKILL.md` by its front matter's
 /// `name`, else its folder, then each `.claude/commands/**/*.md` by its
@@ -912,7 +912,7 @@ mod tests {
     use super::*;
     use moonlet_proto::types::{AsideAnswer, ContextCategory, ContextUsage, McpServer, QueuedMessage};
 
-    /// X110: the names Claude Code 2.1.330 gave a project with this layout
+    /// X111: the names Claude Code 2.1.330 gave a project with this layout
     /// in its `initialize` reply: skills by their front matter's `name`,
     /// else their folder; commands by their path, folders joined by `:`.
     #[test]
@@ -934,7 +934,7 @@ mod tests {
         assert!(project_commands(&dir.path().join("nowhere")).is_empty());
     }
 
-    /// X110: a project is untrusted: a SKILL.md that is not a regular file,
+    /// X111: a project is untrusted: a SKILL.md that is not a regular file,
     /// such as a FIFO no one writes to, is skipped, not waited on.
     #[test]
     fn a_skill_file_that_is_not_a_regular_file_is_skipped() {

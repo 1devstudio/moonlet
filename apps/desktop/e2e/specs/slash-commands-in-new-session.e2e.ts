@@ -1,4 +1,4 @@
-// Slash commands in the new-session composer (X110): the prompt's `/` menu
+// Slash commands in the new-session composer (X111): the prompt's `/` menu
 // and `+` › Slash commands list Claude's commands and the project's own,
 // read from its folder, and Create sends the chosen command as the first
 // message.
@@ -43,7 +43,7 @@ async function openComposer() {
   await expect($(`${HEADER}//button[starts-with(normalize-space(), "${NAME}")]`)).toBeDisplayed();
 }
 
-describe("slash commands in the new-session composer (X110)", () => {
+describe("slash commands in the new-session composer (X111)", () => {
   let blocked = "";
   let projectId = "";
 

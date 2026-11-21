@@ -1,4 +1,4 @@
-# X110 — Slash commands in the new-session composer
+# X111 — Slash commands in the new-session composer
 
 - **Status:** implemented
 - **Priority / phase:** P1 · phase 3
@@ -7,7 +7,7 @@
 
 ## Summary
 
-A session's chat offers the agent's slash commands: typing `/` opens a menu of them, and the `+` menu has **Slash commands ›** (X29). The new-session composer offered neither, because no agent runs there yet to ask. X110 gives the composer the same two ways in for Claude. The list is what a Claude started in the project would offer, put together without starting one there: the user's, the plugins' and the built-in commands come from a Claude started in the profile's home folder only to answer `initialize`, as X105 does for the models; the project's own `.claude/commands` and `.claude/skills` are read from its folder. A Claude started in the project folder would run the project's hooks and could start its MCP servers, so opening the composer on a cloned repo would run that repo's code before the user starts anything.
+A session's chat offers the agent's slash commands: typing `/` opens a menu of them, and the `+` menu has **Slash commands ›** (X29). The new-session composer offered neither, because no agent runs there yet to ask. X111 gives the composer the same two ways in for Claude. The list is what a Claude started in the project would offer, put together without starting one there: the user's, the plugins' and the built-in commands come from a Claude started in the profile's home folder only to answer `initialize`, as X105 does for the models; the project's own `.claude/commands` and `.claude/skills` are read from its folder. A Claude started in the project folder would run the project's hooks and could start its MCP servers, so opening the composer on a cloned repo would run that repo's code before the user starts anything.
 
 ## User journey
 
@@ -26,7 +26,7 @@ A session's chat offers the agent's slash commands: typing `/` opens a menu of t
 - [x] Typing `/` at the start of a word in the composer's prompt, with Claude picked, lists the commands that match, as the chat's `/` menu does. With another agent picked, no menu. (`composer.test.ts` "offers Claude's slash commands while a / word is typed", "offers nothing for another agent, outside a / word, or once dismissed")
 - [x] ↑/↓ move the highlight round the ends, ↵ or Tab puts in the highlighted command, Escape closes the menu; Shift+↵ and other keys are the prompt's. (`composer.test.ts` "moves the highlight with the arrows, round the ends", "puts in the highlighted command on Tab or Enter, and closes on Escape", "leaves other keys, Shift+Enter and a closed menu to the prompt")
 - [x] Escape closes the menu but not the composer, and an edit opens the menu again. (`slash-commands-in-new-session.e2e.ts` "lists the project's own command for a typed / and sends it as the first message")
-- [x] The composer's `+` menu has **Slash commands ›** after the file items while Claude is picked; picking one puts `/<name> ` at the start of the prompt. (`plusMenu.test.ts` "offers slash commands in the composer only for Claude (X110)"; `slash-commands-in-new-session.e2e.ts` "puts a command from + › Slash commands at the start of the prompt")
+- [x] The composer's `+` menu has **Slash commands ›** after the file items while Claude is picked; picking one puts `/<name> ` at the start of the prompt. (`plusMenu.test.ts` "offers slash commands in the composer only for Claude (X111)"; `slash-commands-in-new-session.e2e.ts` "puts a command from + › Slash commands at the start of the prompt")
 - [x] Attachments (a task, a PR, a design) keep coming first in the first message; a command typed in the prompt then follows them. (unchanged; `composer.test.ts` "sends the attachments, then what the user typed, a blank line apart; nothing when there is neither")
 - [x] Create sends the chosen command as the session's first message. (`slash-commands-in-new-session.e2e.ts` "lists the project's own command for a typed / and sends it as the first message")
 

@@ -1320,7 +1320,7 @@ async fn claude_models_are_empty_when_claude_does_not_answer() {
     assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
 }
 
-/// X110: a fake `claude` that answers `initialize` with the user's
+/// X111: a fake `claude` that answers `initialize` with the user's
 /// `review` and one model, and leaves `ran-here` in the folder it starts in.
 const COMMANDS_CLAUDE: &str = r#"#!/bin/sh
 echo started >> "$HOME/claude-starts"
@@ -1331,7 +1331,7 @@ printf '{"type":"control_response","response":{"subtype":"success","request_id":
 sleep 20
 "#;
 
-/// X110: the composer's slash commands are the profile's, from a Claude
+/// X111: the composer's slash commands are the profile's, from a Claude
 /// started outside the project, and the project's own, read from its
 /// folder: nothing of the project runs. That one start answers the models
 /// too, and a second ask soon after does not start Claude again.
@@ -1356,7 +1356,7 @@ async fn claude_commands_list_the_projects_own_without_starting_claude_in_it() {
     assert!(!repo.join("ran-here").exists(), "a Claude started in the project");
 }
 
-/// X110: an unknown project is refused; a Claude that does not answer
+/// X111: an unknown project is refused; a Claude that does not answer
 /// gives no commands, not an error.
 #[tokio::test]
 async fn claude_commands_are_empty_when_claude_does_not_answer() {
