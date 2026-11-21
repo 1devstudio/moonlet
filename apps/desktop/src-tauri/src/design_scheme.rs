@@ -183,8 +183,12 @@ pub fn bridging(url: &str) -> bool {
 /// 0013), served first in every page.
 const RELEASE: &str = include_str!("design_release.js");
 
+/// The script that draws a page at the zoom of its frame above 100%
+/// (X110), served after the release script in every page.
+const ZOOM: &str = include_str!("design_zoom.js");
+
 /// The scripts served first, in this order, in an HTML page asked for at
-/// `url` on `place`: the release script, then the render page's measuring
+/// `url` on `place`: the release script, the zoom script (X110), then the render page's measuring
 /// script or the canvas's bridge; never the bridge for a project design,
 /// which is only ever shown, read only (X65).
 pub fn scripts_for(place: &Place, url: &str) -> Vec<&'static str> {
@@ -194,7 +198,7 @@ pub fn scripts_for(place: &Place, url: &str) -> Vec<&'static str> {
         _ if bridging(url) => Some(BRIDGE),
         _ => None,
     };
-    std::iter::once(RELEASE).chain(other).collect()
+    [RELEASE, ZOOM].into_iter().chain(other).collect()
 }
 
 /// Whether `url`'s query has the parameter `name`.
@@ -243,14 +247,21 @@ pub fn with_script(html: &[u8], script: &[u8]) -> Vec<u8> {
 }
 
 /// The headers of a file served on `host`.
-pub fn headers(content_type: &str, host: &str) -> [(&'static str, String); 4] {
-    [
+pub fn headers(content_type: &str, host: &str) -> Vec<(&'static str, String)> {
+    let mut h = vec![
         ("Content-Type", content_type.to_string()),
         ("Content-Security-Policy", csp(host)),
         ("X-Content-Type-Options", "nosniff".to_string()),
         // The canvas reloads on every change.
         ("Cache-Control", "no-store".to_string()),
-    ]
+    ];
+    // A sandboxed page's origin is not the host's: it reads the rules of its
+    // own linked stylesheets through CORS, to zoom (X110). Its CSP still
+    // keeps it to its host, and from fetching anything.
+    if content_type.starts_with("text/css") {
+        h.push(("Access-Control-Allow-Origin", "*".to_string()));
+    }
+    h
 }
 
 /// A request for `url` refused with `status` because of `why`: for the
@@ -544,6 +555,22 @@ mod tests {
     }
 
     #[test]
+    fn a_page_may_read_its_own_linked_stylesheets() {
+        // A sandboxed page's origin is not its host's, so reading its own
+        // stylesheets' rules needs CORS (X110).
+        let cors = |content_type: &str| {
+            headers(content_type, "5a1c3e0f9b2d4c67.w-1devstudio")
+                .into_iter()
+                .find(|(n, _)| *n == "Access-Control-Allow-Origin")
+                .map(|(_, v)| v)
+        };
+        assert_eq!(cors("text/css; charset=utf-8").as_deref(), Some("*"));
+        // Nothing else of the host is read across origins.
+        assert_eq!(cors("text/html; charset=utf-8"), None);
+        assert_eq!(cors("image/png"), None);
+    }
+
+    #[test]
     fn a_card_on_its_own_host_may_load_only_that_hosts_files() {
         let h = headers("text/html; charset=utf-8", "5a1c3e0f9b2d4c67.w-1devstudio");
         let get = |name: &str| h.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_str());
@@ -742,7 +769,7 @@ mod tests {
         // A key that names no folder serves nothing.
         assert!(!serves_at("19a1c555a197e847.p-p1a2b3c4d5e6", "settings-page/pages/index.html"));
         let url = "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1";
-        assert_eq!(scripts_for(&target(url).unwrap().place, url), vec![RELEASE]);
+        assert_eq!(scripts_for(&target(url).unwrap().place, url), vec![RELEASE, ZOOM]);
     }
 
     #[test]
@@ -903,19 +930,19 @@ mod tests {
         // page and a project design's page, which gets no bridge.
         assert_eq!(
             scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/systems/s/components/buttons/button/button.html?v=2"),
-            vec![RELEASE]
+            vec![RELEASE, ZOOM]
         );
         assert_eq!(
             scripts("moonlet-design://w1/systems/s/components/buttons/button/button.html?moonlet-render=3"),
-            vec![RELEASE, MEASURE]
+            vec![RELEASE, ZOOM, MEASURE]
         );
         assert_eq!(
             scripts("moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1"),
-            vec![RELEASE, BRIDGE]
+            vec![RELEASE, ZOOM, BRIDGE]
         );
         assert_eq!(
             scripts("moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1"),
-            vec![RELEASE]
+            vec![RELEASE, ZOOM]
         );
         // The page clears itself when its window asks, and says so.
         assert!(RELEASE.contains("`moonlet:release`"));
@@ -924,6 +951,10 @@ mod tests {
         // closed still swallows the scripts after it, as it would without it
         // (X65 entry 13).
         assert!(!RELEASE.contains(['"', '\'']));
+        // Then the zoom script (X110): it asks the app for the zoom, and
+        // has no quote either.
+        assert!(ZOOM.contains("`moonlet:zoom?`"));
+        assert!(!ZOOM.contains(['"', '\'']));
     }
 
     #[test]

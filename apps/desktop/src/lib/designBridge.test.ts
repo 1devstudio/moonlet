@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import zoom from "../../src-tauri/src/design_zoom.js?raw";
 import refusedPage from "../../src-tauri/src/design_refused.html?raw";
 import { HOLDS_NO_ELEMENTS } from "./designEdits";
 import { BORDER_STYLES } from "./designStyle";
@@ -151,7 +152,8 @@ describe("the bridge's messages (X65)", () => {
 
 /** A page as the scheme serves it to the canvas: the bridge first in its
  *  <head>, parsed as a browser parses it, in a frame whose parent is the
- *  app's window. What it posts to the app is copied as postMessage copies,
+ *  app's window, after the zoom script (X110), as the scheme serves it. What
+ *  it posts to the app is copied as postMessage copies,
  *  and read as the app reads it, with bridgeMessage: one it would drop
  *  stays as `{ dropped }`. The app talks to it with modeMessage and
  *  pinsMessage. */
@@ -159,10 +161,12 @@ function framed(body: string) {
   const posted: unknown[] = [];
   const app = new JSDOM("").window;
   app.postMessage = ((m: unknown) => {
+    // The zoom script's ask is the frame's (designZoom.test.ts).
+    if (m === "moonlet:zoom?") return;
     const copy: unknown = JSON.parse(JSON.stringify(m));
     posted.push(bridgeMessage(copy) ?? { dropped: copy });
   }) as typeof app.postMessage;
-  const dom = new JSDOM(`<!doctype html><html><head><script>${bridge}</script></head><body data-mid="m1">${body}</body></html>`, {
+  const dom = new JSDOM(`<!doctype html><html><head><script>${zoom}</script><script>${bridge}</script></head><body data-mid="m1">${body}</body></html>`, {
     runScripts: "dangerously",
     pretendToBeVisual: true,
     beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
@@ -600,6 +604,33 @@ describe("the bridge script in a page (X65)", () => {
     ]);
     expect([el("m25").style.width, el("m25").style.height]).toEqual(["195px", "20px"]);
     expect(of("pick")).toEqual([]);
+  });
+
+  it("in a page zoomed to 200%, reports boxes and takes the pointer in the page's px (X110)", () => {
+    const { win, doc, el, tell, of, posted } = framed('<h2 data-mid="m25">Git</h2><p data-mid="m26">Branch</p>');
+    // Boxes and the pointer as WebKit gives them in a zoomed page: in the frame's px, twice the page's.
+    hits(doc, { m1: [0, 0, 780, 800], m25: [0, 80, 780, 80], m26: [0, 200, 780, 40] });
+    tell("moonlet:zoom=2,390x400");
+    tell(modeMessage("edit"));
+    tell(selectMessage("m25"));
+    expect(of("selected").at(-1)).toEqual({ type: "selected", mid: "m25", rect: { x: 0, y: 40, w: 390, h: 40 } });
+    const selection = doc.querySelector('[data-moonlet-bridge="selection"]') as HTMLElement;
+    expect([selection.style.left, selection.style.top, selection.style.width, selection.style.height]).toEqual(["0px", "40px", "390px", "40px"]);
+    tell(pinsMessage(["m26"]));
+    expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m26", x: 0, y: 100, w: 390, h: 20 }] });
+    // A click at the page's (100, 110) picks m26.
+    mouse(win, "click", el("m26"), { clientX: 200, clientY: 220 });
+    expect(of("pick").at(-1)).toEqual({ type: "pick", element: { mid: "m26", tag: "p", text: "Branch", rect: { x: 0, y: 100, w: 390, h: 20 } } });
+    tell(selectMessage("m25"));
+    const handle = doc.querySelector('[data-moonlet-handle="se"]')!;
+    mouse(win, "mousedown", handle, { clientX: 780, clientY: 160 });
+    mouse(win, "mousemove", handle, { clientX: 600, clientY: 200 });
+    mouse(win, "mouseup", handle, { clientX: 600, clientY: 200 });
+    expect(of("style")).toEqual([{ type: "style", mid: "m25", set: { width: "300px", height: "60px" } }]);
+    // Back at 100%, boxes are the frame's again.
+    tell("moonlet:zoom=1,390x400");
+    tell(pinsMessage(["m26"]));
+    expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m26", x: 0, y: 200, w: 780, h: 40 }] });
   });
 
   it("reports the selection's computed style, and labels it off-system when the app says so", () => {
