@@ -139,7 +139,7 @@ export function PlusMenu({
     }
   };
 
-  const sections = plusEntries({ variant, agents: agents.length });
+  const sections = plusEntries({ variant, agents: agents.length, commands: !!onCommand });
   const needsAuth = mcp?.servers ? mcpSummary(mcp.servers).needsAuth : 0;
 
   return (

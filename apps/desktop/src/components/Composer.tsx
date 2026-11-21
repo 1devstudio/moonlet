@@ -6,7 +6,7 @@ import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { pasteLookup, typedTask } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
-import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
+import { afterCreate, attachments, branchRow, composerSlash, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type ClaudeModel, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, hostWorkspaces, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { syncOffered } from "../lib/sync";
@@ -18,10 +18,12 @@ import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
 import { EFFORTS, type ModelChoice, agentEfforts, claudeModelLabel, effortAfter, modelMenu, resolveMode } from "../lib/agents";
 import { useClaudeModels } from "../lib/claudeModelsStore";
+import { useClaudeCommands } from "../lib/claudeCommandsStore";
+import { withCompletion } from "../lib/chat";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { Markdown } from "./AgentView";
-import { fileMention } from "../lib/plusMenu";
+import { CompletionRows, Markdown } from "./AgentView";
+import { fileMention, withSlashCommand } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
 import { branchPrefix, buildNames, buildPick, createFailure, createReady, designAttachments, designDir, promptAfterDrop, type BuildDesign } from "../lib/buildIt";
@@ -546,6 +548,20 @@ export function Composer({
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   // The models Claude Code offers in the target workspace's profile (X105).
   const claudeModels = useClaudeModels(current?.host, current ? workspaceFor(current.host) : undefined);
+  // Claude's slash commands in the project's folder, for the prompt's `/` menu and `+` (X110).
+  const claudeCommands = useClaudeCommands(choice.agent === "claude" ? current?.host : undefined, current?.project.id, current ? workspaceFor(current.host) : undefined);
+  const [caret, setCaret] = useState(0);
+  const [slashSel, setSlashSel] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState<number | null>(null);
+  const slash = composerSlash({ agent: choice.agent, commands: claudeCommands, text: prompt, caret, dismissed: slashDismissed });
+  useEffect(() => setSlashSel(0), [slash.rows.length, slash.token?.query]);
+  /** The prompt as `r` has it, with the caret where it says, focused. */
+  const putPrompt = (r: { text: string; caret: number }) => {
+    setPrompt(r.text);
+    setCaret(r.caret);
+    ta.current?.focus();
+    requestAnimationFrame(() => ta.current?.setSelectionRange(r.caret, r.caret));
+  };
   // A saved effort the model turns out not to support, once its list arrives (X105).
   useEffect(() => {
     if (!claudeModels.length || choice.agent !== "claude" || !choice.model) return;
@@ -951,25 +967,53 @@ export function Composer({
               }}
             />
           ))}
-          <textarea
-            ref={ta}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                void create();
-              }
-            }}
-            placeholder={placeholder(sent.map((a) => a.id))}
-            className={cx("block min-h-[52px] w-full flex-1 resize-none bg-transparent ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint", sent.length > 0 && "pt-1")}
-          />
+          {/* Claude's slash commands under the first line, as the chat's `/` menu (X110). */}
+          <div className="relative flex min-h-[52px] flex-1 flex-col">
+            {slash.rows.length > 0 && (
+              <div className="absolute left-0 top-[30px] z-30 w-full max-w-[420px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+                <CompletionRows rows={slash.rows.map((value) => ({ value, hint: null }))} sel={slashSel} onPick={(v) => slash.token && putPrompt(withCompletion(prompt, caret, slash.token, v))} />
+              </div>
+            )}
+            <textarea
+              ref={ta}
+              value={prompt}
+              onChange={(e) => (setPrompt(e.target.value), setCaret(e.target.selectionStart))}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                const rows = slash.rows;
+                if (rows.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                  e.preventDefault();
+                  setSlashSel((i) => (i + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
+                } else if (rows.length && slash.token && ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey))) {
+                  e.preventDefault();
+                  putPrompt(withCompletion(prompt, caret, slash.token, rows[slashSel] ?? rows[0]));
+                } else if (rows.length && slash.token && e.key === "Escape") {
+                  // Closes the menu, not the composer.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSlashDismissed(slash.token.start);
+                } else if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void create();
+                }
+              }}
+              placeholder={placeholder(sent.map((a) => a.id))}
+              className={cx("block min-h-[52px] w-full flex-1 resize-none bg-transparent ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint", sent.length > 0 && "pt-1")}
+            />
+          </div>
         </div>
         <div className="flex items-center gap-2.5 px-5 pb-4">
           <ModelPicker agents={agents} choice={choice} onChange={setAndSave} label={modelLabel} effortLabel={effortLabel} models={claudeModels} />
           {choice.agent === "claude" && <ModeMenu menu={modeMenu} className="px-2 py-1.5 ui-text-14" iconSize={14} align="left" />}
           <span className="ml-auto" />
-          <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />
+          <PlusMenu
+            variant="composer"
+            onAttach={() => void attach()}
+            onAddDir={() => void addDir()}
+            commands={claudeCommands}
+            onCommand={choice.agent === "claude" ? (name) => putPrompt(withSlashCommand(prompt, name)) : undefined}
+          />
           <button
             disabled={!createReady({ busy, project: !!current, building: !!design, configRead })}
             title={current ? undefined : "Choose a project first"}

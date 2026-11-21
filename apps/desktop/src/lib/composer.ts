@@ -1,6 +1,7 @@
 // The new-session composer's decisions (X54): what its branch row says, and
 // the attachments it sends before the user's text.
 
+import { activeToken, commandOptions } from "./chat";
 import { withoutComments } from "./markdown";
 import { composerSync } from "./sync";
 import type { IssueRef } from "./protocol";
@@ -256,4 +257,17 @@ export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[]
     return [{ label: "Pasted", tasks: [{ task: found, hint: null }] }, ...rest];
   }
   return sections.length ? sections : [{ label: "No tasks match", tasks: [] }];
+}
+
+/** The prompt's `/` menu (X110): Claude's slash commands for the `/` word
+ *  at the caret, as the chat's `/` menu offers them (`commandOptions`);
+ *  none for another agent, or once Escape dismissed the word at
+ *  `dismissed`. */
+export function composerSlash(f: { agent: string; commands: readonly string[]; text: string; caret: number; dismissed: number | null }): {
+  token: { kind: "@" | "/"; start: number; query: string } | null;
+  rows: string[];
+} {
+  const token = activeToken(f.text, f.caret);
+  if (f.agent !== "claude" || token?.kind !== "/" || token.start === f.dismissed) return { token, rows: [] };
+  return { token, rows: commandOptions(f.commands, f.text, token) };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterCreate, attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { afterCreate, attachments, branchRow, composerSlash, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -297,5 +297,27 @@ describe("Link a task (X54)", () => {
     expect(linkMenu({ pr: null }, "", [web, other], "WEB-279", web)).toEqual([{ label: "Pasted", tasks: [{ task: web, hint: null }] }]);
     // Nothing found and nothing loaded matches: still "No tasks match".
     expect(linkMenu({ pr: null }, "", [web, other], "WEB-501", null)).toEqual([{ label: "No tasks match", tasks: [] }]);
+  });
+});
+
+describe("composerSlash (X110)", () => {
+  const commands = ["review", "security-review", "release-notes", "compact"];
+
+  it("offers Claude's slash commands while a / word is typed", () => {
+    expect(composerSlash({ agent: "claude", commands, text: "/rev", caret: 4, dismissed: null })).toEqual({
+      token: { kind: "/", start: 0, query: "rev" },
+      rows: ["/review", "/security-review"],
+    });
+  });
+
+  it("offers nothing for another agent, outside a / word, or once dismissed", () => {
+    expect(composerSlash({ agent: "codex", commands, text: "/rev", caret: 4, dismissed: null }).rows).toEqual([]);
+    expect(composerSlash({ agent: "none", commands, text: "/rev", caret: 4, dismissed: null }).rows).toEqual([]);
+    expect(composerSlash({ agent: "claude", commands, text: "fix the cart", caret: 12, dismissed: null }).rows).toEqual([]);
+    expect(composerSlash({ agent: "claude", commands, text: "/rev", caret: 4, dismissed: 0 }).rows).toEqual([]);
+  });
+
+  it("leaves a path mid-message alone", () => {
+    expect(composerSlash({ agent: "claude", commands, text: "look in /tmp", caret: 12, dismissed: null }).rows).toEqual([]);
   });
 });
