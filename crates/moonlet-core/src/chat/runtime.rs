@@ -1413,7 +1413,9 @@ impl ChatManager {
                 known().unwrap_or_default()
             }
         };
-        let own = super::claude::project_commands(root);
+        // The project's files are read off the async threads.
+        let folder = root.to_path_buf();
+        let own = tokio::task::spawn_blocking(move || super::claude::project_commands(&folder)).await.unwrap_or_default();
         let mut all = mine;
         all.extend(own.into_iter().filter(|c| !all.contains(c)).collect::<Vec<_>>());
         all

@@ -306,27 +306,40 @@ pub fn commands(reply: &Value) -> Vec<String> {
 /// Claude Code names them, read from disk so nothing of the project runs:
 /// each skill in `.claude/skills/<folder>/SKILL.md` by its front matter's
 /// `name`, else its folder, then each `.claude/commands/**/*.md` by its
-/// path without `.md`, folders joined by `:`; each group sorted.
+/// path without `.md`, folders joined by `:`; each group sorted. The
+/// project is untrusted: only regular files are read, at most 8 KiB of
+/// each, and the scan stops at 8 folders deep and 1,000 entries.
 pub fn project_commands(root: &std::path::Path) -> Vec<String> {
+    const MAX_ENTRIES: usize = 1000;
+    const MAX_DEPTH: usize = 8;
     let claude = root.join(".claude");
+    let mut seen = 0;
     let mut skills: Vec<String> = std::fs::read_dir(claude.join("skills"))
         .into_iter()
         .flatten()
         .flatten()
+        .take(MAX_ENTRIES)
         .filter_map(|e| {
-            let text = std::fs::read_to_string(e.path().join("SKILL.md")).ok()?;
+            let text = read_head(&e.path().join("SKILL.md"))?;
             Some(front_matter_name(&text).unwrap_or_else(|| e.file_name().to_string_lossy().into_owned()))
         })
         .collect();
     skills.sort();
     let mut commands = Vec::new();
-    let mut dirs = vec![(claude.join("commands"), String::new())];
-    while let Some((dir, prefix)) = dirs.pop() {
+    let mut dirs = vec![(claude.join("commands"), String::new(), 0)];
+    while let Some((dir, prefix, depth)) = dirs.pop() {
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            seen += 1;
+            if seen > MAX_ENTRIES {
+                break;
+            }
             let name = e.file_name().to_string_lossy().into_owned();
+            // The entry's own type: a link to a folder is not followed.
             let Ok(kind) = e.file_type() else { continue };
             if kind.is_dir() {
-                dirs.push((e.path(), format!("{prefix}{name}:")));
+                if depth < MAX_DEPTH {
+                    dirs.push((e.path(), format!("{prefix}{name}:"), depth + 1));
+                }
             } else if let Some(stem) = name.strip_suffix(".md") {
                 commands.push(format!("{prefix}{stem}"));
             }
@@ -334,6 +347,18 @@ pub fn project_commands(root: &std::path::Path) -> Vec<String> {
     }
     commands.sort();
     skills.into_iter().chain(commands).collect()
+}
+
+/// The first 8 KiB of `path` when it is a regular file (a link to one
+/// included); None for a FIFO, a device or a folder, which are not opened.
+fn read_head(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut head = Vec::new();
+    std::fs::File::open(path).ok()?.take(8 * 1024).read_to_end(&mut head).ok()?;
+    Some(String::from_utf8_lossy(&head).into_owned())
 }
 
 /// A `name:` in the `---` front matter at the top of `text`.
@@ -907,6 +932,22 @@ mod tests {
         put(".claude/skills/not-a-skill/README.md", "x\n");
         assert_eq!(project_commands(dir.path()), ["front-name", "no-front", "sub:deeper:deep-cmd", "sub:nested-cmd", "top-cmd"]);
         assert!(project_commands(&dir.path().join("nowhere")).is_empty());
+    }
+
+    /// X110: a project is untrusted: a SKILL.md that is not a regular file,
+    /// such as a FIFO no one writes to, is skipped, not waited on.
+    #[test]
+    fn a_skill_file_that_is_not_a_regular_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills/pipe")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills/real")).unwrap();
+        std::fs::write(dir.path().join(".claude/skills/real/SKILL.md"), "---\nname: real\n---\n").unwrap();
+        let fifo = std::ffi::CString::new(dir.path().join(".claude/skills/pipe/SKILL.md").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let root = dir.path().to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(project_commands(&root)).unwrap());
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).expect("waited on the FIFO"), ["real"]);
     }
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
