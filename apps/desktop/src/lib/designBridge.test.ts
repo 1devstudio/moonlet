@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import zoom from "../../src-tauri/src/design_zoom.js?raw";
 import refusedPage from "../../src-tauri/src/design_refused.html?raw";
 import { HOLDS_NO_ELEMENTS } from "./designEdits";
 import { BORDER_STYLES } from "./designStyle";
@@ -151,7 +152,8 @@ describe("the bridge's messages (X65)", () => {
 
 /** A page as the scheme serves it to the canvas: the bridge first in its
  *  <head>, parsed as a browser parses it, in a frame whose parent is the
- *  app's window. What it posts to the app is copied as postMessage copies,
+ *  app's window, after the zoom script (X110), as the scheme serves it. What
+ *  it posts to the app is copied as postMessage copies,
  *  and read as the app reads it, with bridgeMessage: one it would drop
  *  stays as `{ dropped }`. The app talks to it with modeMessage and
  *  pinsMessage. */
@@ -159,10 +161,12 @@ function framed(body: string) {
   const posted: unknown[] = [];
   const app = new JSDOM("").window;
   app.postMessage = ((m: unknown) => {
+    // The zoom script's ask is the frame's (designZoom.test.ts).
+    if (m === "moonlet:zoom?") return;
     const copy: unknown = JSON.parse(JSON.stringify(m));
     posted.push(bridgeMessage(copy) ?? { dropped: copy });
   }) as typeof app.postMessage;
-  const dom = new JSDOM(`<!doctype html><html><head><script>${bridge}</script></head><body data-mid="m1">${body}</body></html>`, {
+  const dom = new JSDOM(`<!doctype html><html><head><script>${zoom}</script><script>${bridge}</script></head><body data-mid="m1">${body}</body></html>`, {
     runScripts: "dangerously",
     pretendToBeVisual: true,
     beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),

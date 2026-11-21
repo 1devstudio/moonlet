@@ -247,18 +247,21 @@ pub fn with_script(html: &[u8], script: &[u8]) -> Vec<u8> {
 }
 
 /// The headers of a file served on `host`.
-pub fn headers(content_type: &str, host: &str) -> [(&'static str, String); 5] {
-    [
-        // A sandboxed page's origin is not the host's: it reads the rules of
-        // its own linked stylesheets through CORS, to zoom (X110). Its CSP
-        // still keeps it to its host, and from fetching anything.
-        ("Access-Control-Allow-Origin", "*".to_string()),
+pub fn headers(content_type: &str, host: &str) -> Vec<(&'static str, String)> {
+    let mut h = vec![
         ("Content-Type", content_type.to_string()),
         ("Content-Security-Policy", csp(host)),
         ("X-Content-Type-Options", "nosniff".to_string()),
         // The canvas reloads on every change.
         ("Cache-Control", "no-store".to_string()),
-    ]
+    ];
+    // A sandboxed page's origin is not the host's: it reads the rules of its
+    // own linked stylesheets through CORS, to zoom (X110). Its CSP still
+    // keeps it to its host, and from fetching anything.
+    if content_type.starts_with("text/css") {
+        h.push(("Access-Control-Allow-Origin", "*".to_string()));
+    }
+    h
 }
 
 /// A request for `url` refused with `status` because of `why`: for the
@@ -555,8 +558,16 @@ mod tests {
     fn a_page_may_read_its_own_linked_stylesheets() {
         // A sandboxed page's origin is not its host's, so reading its own
         // stylesheets' rules needs CORS (X110).
-        let h = headers("text/css; charset=utf-8", "5a1c3e0f9b2d4c67.w-1devstudio");
-        assert!(h.iter().any(|(n, v)| *n == "Access-Control-Allow-Origin" && v == "*"), "{h:?}");
+        let cors = |content_type: &str| {
+            headers(content_type, "5a1c3e0f9b2d4c67.w-1devstudio")
+                .into_iter()
+                .find(|(n, _)| *n == "Access-Control-Allow-Origin")
+                .map(|(_, v)| v)
+        };
+        assert_eq!(cors("text/css; charset=utf-8").as_deref(), Some("*"));
+        // Nothing else of the host is read across origins.
+        assert_eq!(cors("text/html; charset=utf-8"), None);
+        assert_eq!(cors("image/png"), None);
     }
 
     #[test]

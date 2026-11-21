@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
-import { ZOOM_ASK, asksZoom, zoomMessage } from "./designZoom";
+import { asksZoom, zoomMessage } from "./designZoom";
 import zoom from "../../src-tauri/src/design_zoom.js?raw";
 
 /** A page as the scheme serves it: the zoom script first in its <head>, in
@@ -31,8 +31,6 @@ describe("the zoom script in a page (X110)", () => {
   it("asks the app for the zoom when it starts", () => {
     const { posted } = framed("<body></body>");
     expect(posted).toEqual(["moonlet:zoom?"]);
-    expect(asksZoom(posted[0])).toBe(true);
-    expect(asksZoom("moonlet:released")).toBe(false);
   });
 
   it("takes the zoom only from the app's window, and only a number from 1 to 4", () => {
@@ -40,7 +38,7 @@ describe("the zoom script in a page (X110)", () => {
     const { win, tell } = framed("<body></body>");
     tell(zoomMessage(2, [390, 844]), new JSDOM("").window);
     expect(win.innerWidth).toBe(780);
-    for (const bad of ["moonlet:zoom=9,390x844", "moonlet:zoom=0.5,390x844", "moonlet:zoom=2px,390x844", "moonlet:zoom=2,0x844", "moonlet:zoom=2,390x-1", "moonlet:zoom=2", { zoom: 2 }]) tell(bad);
+    for (const bad of ["moonlet:zoom=9,390x844", "moonlet:zoom=0.5,390x844", "moonlet:zoom=2px,390x844", "moonlet:zoom=2,0x844", "moonlet:zoom=2,390x-1", "moonlet:zoom=2,390.5x844", "moonlet:zoom=2,390x100000", "moonlet:zoom=2", { zoom: 2 }]) tell(bad);
     expect(win.innerWidth).toBe(780);
     // The viewport the app gives, even before the frame has its new size.
     tell("moonlet:zoom=2,390x844");
@@ -113,9 +111,66 @@ describe("the zoom script in a page (X110)", () => {
   });
 });
 
+describe("the zoom script, as the page changes (X110)", () => {
+  it("corrects the media of a stylesheet whose rules it cannot read", () => {
+    const { doc, win, tell } = framed(`<style media="(min-width: 600px)">.a { color: red; }</style></head><body></body>`);
+    // As a linked stylesheet of the host reads to a sandboxed page.
+    Object.defineProperty(doc.styleSheets[0], "cssRules", { get: () => { throw new win.DOMException("cross-origin", "SecurityError"); } });
+    tell(zoomMessage(2, [390, 844]));
+    expect(doc.styleSheets[0].media.mediaText).toBe("(min-width: 1200px)");
+    tell(zoomMessage(1, [390, 844]));
+    expect(doc.styleSheets[0].media.mediaText).toBe("(min-width: 600px)");
+  });
+
+  it("takes a rule or a media query the page changed through the CSSOM as the page wrote it", () => {
+    const { doc, tell } = framed(`<style>.a { width: 10vw; } @media (min-width: 600px) { .b { color: red; } }</style></head><body></body>`);
+    const [a, b] = [...doc.styleSheets[0].cssRules] as [CSSStyleRule, CSSMediaRule];
+    tell(zoomMessage(2, [390, 844]));
+    tell(zoomMessage(1, [390, 844]));
+    a.style.setProperty("width", "20vw");
+    b.media.mediaText = "(min-width: 500px)";
+    tell(zoomMessage(2, [390, 844]));
+    expect([a.style.getPropertyValue("width"), b.media.mediaText]).toEqual(["78px", "(min-width: 1000px)"]);
+    tell(zoomMessage(1, [390, 844]));
+    expect([a.style.getPropertyValue("width"), b.media.mediaText]).toEqual(["20vw", "(min-width: 500px)"]);
+  });
+
+  it("sizes viewport units on the page's root element too", () => {
+    const { doc, tell } = framed(`<script>document.documentElement.style.setProperty("width", "100vw")</script></head><body></body>`);
+    tell(zoomMessage(2, [390, 844]));
+    expect(doc.documentElement.style.getPropertyValue("width")).toBe("390px");
+    tell(zoomMessage(1, [390, 844]));
+    expect(doc.documentElement.style.getPropertyValue("width")).toBe("100vw");
+  });
+
+  it("answers a matchMedia list made at one zoom as at the viewport after the zoom changes", () => {
+    const { win, tell } = framed("</head><body></body>");
+    tell(zoomMessage(2, [390, 844]));
+    const wide = win.matchMedia("(min-width: 600px)");
+    expect(wide.matches).toBe(false);
+    // Back at 100%, the 780 px frame is the viewport.
+    tell(zoomMessage(1, [780, 1688]));
+    expect(wide.matches).toBe(true);
+  });
+
+  it("tells the page's resize listeners once the zoom changes the viewport it reads", () => {
+    const { win, tell } = framed(`<script>window.seen = []; addEventListener("resize", () => window.seen.push(innerWidth));</script></head><body></body>`);
+    tell(zoomMessage(2, [390, 844]));
+    tell(zoomMessage(1, [780, 1688]));
+    expect((win as unknown as { seen: number[] }).seen).toEqual([390, 780]);
+  });
+});
+
 describe("the zoom's messages (X110)", () => {
+  it("takes the zoom script's ask only from the frame's own window", () => {
+    const frame = new JSDOM("").window as unknown as Window;
+    expect(asksZoom({ source: frame, data: "moonlet:zoom?" }, frame)).toBe(true);
+    expect(asksZoom({ source: new JSDOM("").window as unknown as Window, data: "moonlet:zoom?" }, frame)).toBe(false);
+    expect(asksZoom({ source: frame, data: "moonlet:released" }, frame)).toBe(false);
+    expect(asksZoom({ source: null, data: "moonlet:zoom?" }, null)).toBe(false);
+  });
+
   it("tells the page its zoom and its viewport", () => {
-    expect(ZOOM_ASK).toBe("moonlet:zoom?");
     expect(zoomMessage(1.5, [1440, 900])).toBe("moonlet:zoom=1.5,1440x900");
     expect(zoomMessage(1, [390, 844])).toBe("moonlet:zoom=1,390x844");
     // A viewport in whole px, as the page takes it.

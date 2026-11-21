@@ -44,10 +44,15 @@
     const el = marked(e.target);
     return el && e.altKey ? marked(el.parentElement) || el : el;
   };
-  // Above 100% the page draws itself at the zoom (X110, design_zoom.js), and
+  // Above 100% the page draws itself at the zoom (X110), which the zoom
+  // script, served before this one, says with its moonlet:zoomed event; and
   // WebKit gives boxes and the pointer in the frame's px: the bridge takes
   // and reports them in the page's, as at 100%.
   let zoom = 1;
+  addEventListener("moonlet:zoomed", (e) => {
+    if (typeof e.detail === "number" && e.detail >= 1 && e.detail <= 4) zoom = e.detail;
+    moved();
+  });
   const box = (el) => {
     const r = el.getBoundingClientRect();
     return { x: r.left / zoom, y: r.top / zoom, w: r.width / zoom, h: r.height / zoom };
@@ -300,13 +305,6 @@
   addEventListener("message", (e) => {
     if (e.source !== app) return;
     const d = e.data;
-    // The zoom the page draws itself at, as design_zoom.js takes it.
-    const z = typeof d === "string" ? /^moonlet:zoom=(\d+(?:\.\d+)?),[1-9]\d{0,4}x[1-9]\d{0,4}$/.exec(d) : null;
-    if (z && Number(z[1]) >= 1 && Number(z[1]) <= 4) {
-      zoom = Number(z[1]);
-      moved();
-      return;
-    }
     if (!d || typeof d !== "object") return;
     if (d.type === "bridge.hello") {
       // Before the page has loaded, its load's report answers.
@@ -477,8 +475,9 @@
     (e) => {
       if (sizing) {
         const s = sizing;
-        const dx = pointer(e).x - s.x;
-        const dy = pointer(e).y - s.y;
+        const at = pointer(e);
+        const dx = at.x - s.x;
+        const dy = at.y - s.y;
         const across = /[ew]/.test(s.edge);
         const down = /[ns]/.test(s.edge);
         let w = s.w + (s.edge.includes("e") ? dx : s.edge.includes("w") ? -dx : 0);
@@ -496,8 +495,9 @@
         return;
       }
       if (!drag) return;
-      const dx = pointer(e).x - drag.x;
-      const dy = pointer(e).y - drag.y;
+      const at = pointer(e);
+      const dx = at.x - drag.x;
+      const dy = at.y - drag.y;
       if (!drag.on && Math.hypot(dx, dy) < 4) return;
       drag.on = true;
       if (drag.abs) {
@@ -505,7 +505,7 @@
         drawSelection();
         return;
       }
-      const p = placeAt(pointer(e).x, pointer(e).y, drag.el);
+      const p = placeAt(at.x, at.y, drag.el);
       drag.place = p && !already(drag.el, p) ? p : null;
       dropShown(midOf(drag.el), drag.place);
     },
@@ -536,7 +536,8 @@
   addEventListener("dragover", (e) => {
     if (!palette || mode !== "edit") return;
     e.preventDefault();
-    dropShown(null, placeAt(pointer(e).x, pointer(e).y, null));
+    const at = pointer(e);
+    dropShown(null, placeAt(at.x, at.y, null));
   });
   addEventListener("dragleave", (e) => {
     if (palette && !e.relatedTarget) dropShown(null, null);
@@ -544,7 +545,8 @@
   addEventListener("drop", (e) => {
     if (!palette || mode !== "edit") return;
     e.preventDefault();
-    const p = placeAt(pointer(e).x, pointer(e).y, null);
+    const at = pointer(e);
+    const p = placeAt(at.x, at.y, null);
     dropShown(null, null);
     post({ type: "bridge.drop", place: p });
   });

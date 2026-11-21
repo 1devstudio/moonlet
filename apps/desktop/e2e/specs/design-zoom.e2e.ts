@@ -24,15 +24,17 @@ body { margin: 0; }
 @media (min-width: 600px) { .inline { color: rgb(255, 0, 0); } }
 .half { width: 50vw; height: 2px; }
 </style></head>
-<body data-mid="m1"><div class="box inline" data-mid="m2">Box</div><p class="linked" data-mid="m3">Linked</p><div class="half" data-mid="m4"></div>
+<body data-mid="m1"><div class="box inline" data-mid="m2">Box</div><p class="linked" data-mid="m3">Linked</p><div class="half" data-mid="m4"></div><p class="added" data-mid="m5">Added</p>
 <script>
 addEventListener("message", (e) => {
+  if (e.data === "e2e-link") document.head.append(Object.assign(document.createElement("link"), { rel: "stylesheet", href: "../../../systems/${SYSTEM}/more.css" }));
   if (e.data !== "e2e-measure") return;
   const box = document.querySelector(".box").getBoundingClientRect();
   parent.postMessage({ e2eZoom: {
     innerWidth, wide: matchMedia("(min-width: 600px)").matches,
     inline: getComputedStyle(document.querySelector(".inline")).color,
     linked: getComputedStyle(document.querySelector(".linked")).color,
+    added: getComputedStyle(document.querySelector(".added")).color,
     half: document.querySelector(".half").offsetWidth,
     boxInFrame: [box.left, box.top, box.width, box.height],
   } }, "*");
@@ -40,6 +42,8 @@ addEventListener("message", (e) => {
 </script></body></html>
 `;
 const STYLES = ".linked { color: rgb(0, 128, 0); }\n@media (min-width: 600px) { .linked { color: rgb(255, 0, 0); } }\n";
+// A stylesheet the page links while zoomed.
+const MORE = ".added { color: rgb(128, 0, 128); }\n@media (min-width: 600px) { .added { color: rgb(255, 0, 0); } }\n";
 
 const frame = () => $('//iframe[@title="index.html"]');
 /** What the page reports it sees, asked again on every call: WebKit may
@@ -77,6 +81,7 @@ describe("Sharp zoom", () => {
     const ws = workspaceId();
     rpc(w, "design.system.create", { workspace: ws, name: "Zoom kit", sources: [], agent: false });
     writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "styles.css"), STYLES);
+    writeFileSync(join(w.home, "design", "library", "systems", SYSTEM, "more.css"), MORE);
     rpc(w, "design.create", { workspace: ws, name: "Zoom page", system: SYSTEM, brief: "One page" });
     mkdirSync(join(dir(), "pages"), { recursive: true });
     writeFileSync(join(dir(), "pages", "index.html"), PAGE);
@@ -102,18 +107,27 @@ describe("Sharp zoom", () => {
   it("keeps a Phone page's layout at 200%, in a frame of the zoomed size where the page draws itself at 200%", async () => {
     await zoomTo("100%");
     expect(await frameBox()).toEqual([390, 844]);
-    const at100 = { innerWidth: 390, wide: false, inline: "rgb(0, 0, 255)", linked: "rgb(0, 128, 0)", half: 195, boxInFrame: [10, 200, 100, 50] };
+    const at100 = { innerWidth: 390, wide: false, inline: "rgb(0, 0, 255)", linked: "rgb(0, 128, 0)", added: "rgb(0, 0, 0)", half: 195, boxInFrame: [10, 200, 100, 50] };
     await sees(at100, "at 100%");
     await zoomTo("200%");
     expect(await frameBox()).toEqual([780, 1688]);
     // The page's layout is the viewport's, and it is drawn twice as big in the frame.
     const at200 = { ...at100, boxInFrame: [20, 400, 200, 100] };
     await sees(at200, "at 200%");
+    // A stylesheet linked while zoomed is corrected too, once it loads.
+    await browser.execute(() => document.querySelector<HTMLIFrameElement>('iframe[title="index.html"]')!.contentWindow!.postMessage("e2e-link", "*"));
+    const purple = { added: "rgb(128, 0, 128)" };
+    await sees({ ...at200, ...purple }, "with a stylesheet linked at 200%");
+    // Back at 100%, the page as it was written.
+    await zoomTo("100%");
+    expect(await frameBox()).toEqual([390, 844]);
+    await sees({ ...at100, ...purple }, "back at 100%");
     // The page's file is as it was written.
     expect(readFileSync(join(dir(), "pages", "index.html"), "utf8")).toBe(PAGE);
   });
 
   it("puts a pin on its element at 200%", async () => {
+    await zoomTo("200%");
     rpc(w, "design.comment.put", { workspace: workspaceId(), slug: "zoom-page", new: { page: "index", mid: "m2", tag: "div", text: "Box", comment: "Bigger" } });
     const pin = $('//button[@aria-label="Comment 1"]');
     await expect(pin).toBeDisplayed();

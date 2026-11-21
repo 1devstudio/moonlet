@@ -56,7 +56,7 @@ export function CardFrame({
   useEffect(tellZoom, [told, tellZoom]);
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.source && e.source === frame.current?.contentWindow && asksZoom(e.data)) tellZoom();
+      if (asksZoom(e, frame.current?.contentWindow)) tellZoom();
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
