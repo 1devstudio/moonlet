@@ -298,6 +298,12 @@ pub fn aside_args(cfg: &ChatConfig, session: &str, question: &str, running: Opti
 
 /// The models Claude Code offers, from its answer to `initialize` (X105).
 /// An answer without `models`, from an older Claude Code, gives none.
+/// The slash command names of Claude Code's `initialize` reply, each
+/// without its `/` (X29, X110); none when the reply has no `commands`.
+pub fn commands(reply: &Value) -> Vec<String> {
+    reply["commands"].as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(String::from)).collect()
+}
+
 pub fn models(reply: &Value) -> Vec<ClaudeModel> {
     let text = |m: &Value, k: &str| m[k].as_str().unwrap_or_default().to_string();
     let Some(list) = reply["models"].as_array() else { return vec![] };
@@ -618,8 +624,8 @@ impl Adapter for Claude {
                     out.push(self.control("mcp-status", json!({"subtype": "mcp_status"})));
                 } else if rid.starts_with("init-") && resp["subtype"] == "success" {
                     let r = &resp["response"];
-                    if let Some(cmds) = r["commands"].as_array() {
-                        st.slash_commands = cmds.iter().filter_map(|c| c["name"].as_str().map(String::from)).collect();
+                    if r["commands"].is_array() {
+                        st.slash_commands = commands(r);
                     }
                     if let Some(agents) = r["agents"].as_array() {
                         st.agents = agents

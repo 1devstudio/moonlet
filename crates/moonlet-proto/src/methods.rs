@@ -222,6 +222,9 @@ pub const POWER_SET_SETTINGS: &str = "power.set_settings";
 /// The models Claude Code offers in a workspace's Claude profile (X105):
 /// [`ClaudeModels`] → `Vec<ClaudeModel>`, empty when Claude cannot say.
 pub const CLAUDE_MODELS: &str = "claude.models";
+/// [`ClaudeCommands`] → `Vec<String>`: the slash commands Claude Code offers
+/// in a project's folder (X110), empty when Claude cannot say.
+pub const CLAUDE_COMMANDS: &str = "claude.commands";
 /// `GitUnpushed` → `UnpushedWork`: what in a session is only on its host (X55).
 pub const GIT_UNPUSHED: &str = "git.unpushed";
 /// `GitUnpushed`: `git push -u origin <branch>`, else HEAD (X55 "Push, then archive").
@@ -2992,6 +2995,15 @@ pub struct ChatAside {
 /// in; none for the default profile.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeModels {
+    #[serde(default)]
+    pub workspace: Option<String>,
+}
+
+/// `claude.commands` params (X110): the project whose folder Claude starts
+/// in, and the workspace whose Claude profile it uses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCommands {
+    pub project_id: String,
     #[serde(default)]
     pub workspace: Option<String>,
 }

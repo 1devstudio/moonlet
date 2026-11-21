@@ -166,7 +166,10 @@ pub struct ChatManager {
     /// When asking each profile's Claude for its models last gave nothing,
     /// so a host that cannot answer is not asked on every open (X105).
     models_failed: Mutex<HashMap<Option<String>, Instant>>,
-    /// One Claude at a time is started to ask for models (X105).
+    /// The slash commands Claude Code offers, by Claude profile folder and
+    /// project folder, with when it said so (X110).
+    commands: Mutex<HashMap<(Option<String>, PathBuf), (Instant, Vec<String>)>>,
+    /// One Claude at a time is started to ask for models or commands (X105).
     probing: tokio::sync::Mutex<()>,
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
@@ -242,6 +245,9 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long after Claude gave no models it is not asked again (X105).
 const MODELS_RETRY: Duration = Duration::from_secs(60);
+/// How long a project's slash commands are kept before Claude is asked
+/// again, so a command or skill added since shows within minutes (X110).
+const COMMANDS_FRESH: Duration = Duration::from_secs(5 * 60);
 
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
@@ -269,7 +275,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -1354,13 +1360,44 @@ impl ChatManager {
         if let Some(m) = known() {
             return m;
         }
-        let models = probe_models(&env).await.unwrap_or_default();
+        let cwd = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
+        let models = probe(&env, &cwd).await.map(|r| super::claude::models(&r)).unwrap_or_default();
         if models.is_empty() {
             self.models_failed.lock().unwrap().insert(profile, Instant::now());
         } else {
             self.models.lock().unwrap().insert(profile, models.clone());
         }
         models
+    }
+
+    /// The slash commands Claude Code offers in the project folder `cwd`,
+    /// in `workspace`'s Claude profile (X110), from a Claude started there
+    /// only to answer `initialize`, so the project's own commands and
+    /// skills are among them. Empty when it cannot say.
+    pub async fn claude_commands(&self, workspace: Option<&str>, cwd: &Path) -> Vec<String> {
+        let launch = match (workspace, self.session_env.get()) {
+            (Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
+            _ => SessionLaunch::default(),
+        };
+        let mut env = self.terms.base_env().clone();
+        env.extend(launch.env);
+        let key = (env.get(crate::profiles::CONFIG_DIR_VAR).cloned(), cwd.to_path_buf());
+        // An empty answer is asked again sooner, as for the models.
+        let known = || {
+            let held = self.commands.lock().unwrap();
+            let (at, c) = held.get(&key)?;
+            (at.elapsed() < if c.is_empty() { MODELS_RETRY } else { COMMANDS_FRESH }).then(|| c.clone())
+        };
+        if let Some(c) = known() {
+            return c;
+        }
+        let _one = self.probing.lock().await;
+        if let Some(c) = known() {
+            return c;
+        }
+        let commands = if cwd.is_dir() { probe(&env, cwd).await.map(|r| super::claude::commands(&r)).unwrap_or_default() } else { vec![] };
+        self.commands.lock().unwrap().insert(key, (Instant::now(), commands.clone()));
+        commands
     }
 
     /// Answers a side question from the chat's conversation in a separate,
@@ -1687,14 +1724,13 @@ fn require_folder(cwd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Starts `claude` only to ask it `initialize`, and gives the models of its
-/// answer (X105). No message is sent, so no conversation is made.
-async fn probe_models(env: &BTreeMap<String, String>) -> Result<Vec<ClaudeModel>> {
+/// Starts `claude` in `cwd` only to ask it `initialize`, and gives its
+/// answer (X105, X110). No message is sent, so no conversation is made.
+async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json::Value> {
     let exe = crate::paths::find_program("claude", env).context("claude not found on PATH")?;
-    let cwd = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
     let mut child = tokio::process::Command::new(&exe)
         .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
-        .current_dir(&cwd)
+        .current_dir(cwd)
         .env_clear()
         .envs(env)
         .stdin(Stdio::piped())
@@ -1724,17 +1760,17 @@ async fn probe_models(env: &BTreeMap<String, String>) -> Result<Vec<ClaudeModel>
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
             let r = &v["response"];
             if v["type"] == "control_response" && r["request_id"] == "models-1" {
-                return Ok(super::claude::models(&r["response"]));
+                return Ok(r["response"].clone());
             }
         }
-        anyhow::Ok(vec![])
+        bail!("claude ended without answering")
     };
-    let models = tokio::time::timeout(MODELS_TIMEOUT, answer).await.unwrap_or(Ok(vec![]));
+    let reply = tokio::time::timeout(MODELS_TIMEOUT, answer).await.unwrap_or_else(|_| Err(anyhow::anyhow!("claude did not answer in time")));
     drop(stdin);
     // The group goes before Claude is reaped, while its id is still the group's.
     drop(group);
     let _ = child.kill().await;
-    models
+    reply
 }
 
 #[cfg(test)]
