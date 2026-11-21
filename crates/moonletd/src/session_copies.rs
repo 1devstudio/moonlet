@@ -3079,6 +3079,7 @@ mod tests {
             "claude.settings",
             "claude.set_settings",
             "claude.models",
+            "claude.commands",
             "chat.mcp",
         ] {
             assert_eq!(

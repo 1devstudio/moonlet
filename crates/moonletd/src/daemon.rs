@@ -7731,6 +7731,11 @@ impl Daemon {
                 let r: m::ClaudeModels = params(p)?;
                 ok(self.chats.claude_models(r.workspace.as_deref()).await)
             }
+            m::CLAUDE_COMMANDS => {
+                let r: m::ClaudeCommands = params(p)?;
+                let project = w.project(&r.project_id).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                ok(self.chats.claude_commands(r.workspace.as_deref(), Path::new(&project.path)).await)
+            }
             m::POWER_SETTINGS => ok(moonlet_core::power_settings::load(&moonlet_core::power_settings::path())),
             m::POWER_SET_SETTINGS => {
                 // Saved and applied under one lock, so two quick changes

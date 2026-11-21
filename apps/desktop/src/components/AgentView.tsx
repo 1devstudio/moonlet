@@ -907,6 +907,26 @@ function AsideCard({ aside, onRequeue, onClose }: { aside: Aside; onRequeue: () 
 
 // ------------------------------------------------------------ editor
 
+/** The rows of a `/` or `@` menu by an input: the highlighted one is
+ *  `sel`, and a row is picked on mouse down so the input keeps its focus
+ *  (the chat's input, and the new-session composer's prompt, X111). */
+export function CompletionRows({ rows, sel, onPick }: { rows: SlashRow[]; sel: number; onPick: (value: string) => void }) {
+  return rows.map((o, i) => (
+    <button
+      key={o.value}
+      className={cx("flex w-full items-center gap-2 truncate rounded-md px-2.5 py-1.5 text-left font-mono ui-text-12.5", i === sel ? "bg-hover text-fg" : "text-muted")}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onPick(o.value);
+      }}
+    >
+      {o.value.startsWith("@") ? <FileText size={13} className="shrink-0 text-faint" /> : <SquareTerminal size={13} className="shrink-0 text-faint" />}
+      <span className={cx("truncate", o.hint && "w-[170px] shrink-0")}>{o.value}</span>
+      {o.hint && <span className="min-w-0 truncate font-sans text-muted">{o.hint}</span>}
+    </button>
+  ));
+}
+
 function ChatEditor({
   host,
   id,
@@ -1154,20 +1174,7 @@ function ChatEditor({
     <div className="relative">
       {options.length > 0 && (
         <div className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-[520px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
-          {options.map((o, i) => (
-            <button
-              key={o.value}
-              className={cx("flex w-full items-center gap-2 truncate rounded-md px-2.5 py-1.5 text-left font-mono ui-text-12.5", i === sel ? "bg-hover text-fg" : "text-muted")}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                accept(o.value);
-              }}
-            >
-              {o.value.startsWith("@") ? <FileText size={13} className="shrink-0 text-faint" /> : <SquareTerminal size={13} className="shrink-0 text-faint" />}
-              <span className={cx("truncate", o.hint && "w-[170px] shrink-0")}>{o.value}</span>
-              {o.hint && <span className="min-w-0 truncate font-sans text-muted">{o.hint}</span>}
-            </button>
-          ))}
+          <CompletionRows rows={options} sel={sel} onPick={accept} />
           {menu.footer && (
             <p className="mt-1 flex items-center gap-2 border-t border-border px-2.5 pb-1 pt-2 ui-text-12 text-faint">
               <SwatchBook size={12} className="shrink-0" /> {menu.footer}

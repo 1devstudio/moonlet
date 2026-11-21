@@ -1320,6 +1320,60 @@ async fn claude_models_are_empty_when_claude_does_not_answer() {
     assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
 }
 
+/// X111: a fake `claude` that answers `initialize` with the user's
+/// `review` and one model, and leaves `ran-here` in the folder it starts in.
+const COMMANDS_CLAUDE: &str = r#"#!/bin/sh
+echo started >> "$HOME/claude-starts"
+touch ran-here
+read line
+id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[{"name":"review","description":"Review a pull request","argumentHint":""}],"models":[{"value":"opus","displayName":"Opus 5.5","resolvedModel":"claude-opus-5-5"}]}}}\n' "$id"
+sleep 20
+"#;
+
+/// X111: the composer's slash commands are the profile's, from a Claude
+/// started outside the project, and the project's own, read from its
+/// folder: nothing of the project runs. That one start answers the models
+/// too, and a second ask soon after does not start Claude again.
+#[tokio::test]
+async fn claude_commands_list_the_projects_own_without_starting_claude_in_it() {
+    let d = fake_claude_daemon(COMMANDS_CLAUDE).await;
+    let repo = d.home.path().join("shop");
+    std::fs::create_dir_all(repo.join(".claude/commands")).unwrap();
+    std::fs::write(repo.join(".claude/commands/release-notes.md"), "Write the release notes\n").unwrap();
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+    let mut c = d.client().await;
+    let p: moonlet_proto::types::Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    for _ in 0..2 {
+        let commands: Vec<String> = c.request(methods::CLAUDE_COMMANDS, serde_json::json!({"project_id": p.id})).await.unwrap();
+        assert_eq!(commands, ["review", "release-notes"]);
+    }
+    let models: Vec<moonlet_proto::types::ClaudeModel> = c.request(methods::CLAUDE_MODELS, serde_json::json!({})).await.unwrap();
+    assert_eq!(models.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(), ["Opus 5.5"]);
+    assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
+    assert!(!repo.join("ran-here").exists(), "a Claude started in the project");
+}
+
+/// X111: an unknown project is refused; a Claude that does not answer
+/// gives no commands, not an error.
+#[tokio::test]
+async fn claude_commands_are_empty_when_claude_does_not_answer() {
+    let d = fake_claude_daemon("#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n").await;
+    let repo = d.home.path().join("shop");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+    let mut c = d.client().await;
+    let p: moonlet_proto::types::Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let commands: Vec<String> = c.request(methods::CLAUDE_COMMANDS, serde_json::json!({"project_id": p.id})).await.unwrap();
+    assert!(commands.is_empty());
+    let unknown = c.request::<_, Vec<String>>(methods::CLAUDE_COMMANDS, serde_json::json!({"project_id": "nope"})).await;
+    assert!(unknown.is_err(), "{unknown:?}");
+}
+
 const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
 
 /// X33: a profile gets moonlet's hooks in its own folder; it can be renamed;
