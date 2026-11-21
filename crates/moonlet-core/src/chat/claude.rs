@@ -296,14 +296,57 @@ pub fn aside_args(cfg: &ChatConfig, session: &str, question: &str, running: Opti
     args
 }
 
-/// The models Claude Code offers, from its answer to `initialize` (X105).
-/// An answer without `models`, from an older Claude Code, gives none.
 /// The slash command names of Claude Code's `initialize` reply, each
 /// without its `/` (X29, X110); none when the reply has no `commands`.
 pub fn commands(reply: &Value) -> Vec<String> {
     reply["commands"].as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(String::from)).collect()
 }
 
+/// The slash commands a project folder adds of its own (X110), named as
+/// Claude Code names them, read from disk so nothing of the project runs:
+/// each skill in `.claude/skills/<folder>/SKILL.md` by its front matter's
+/// `name`, else its folder, then each `.claude/commands/**/*.md` by its
+/// path without `.md`, folders joined by `:`; each group sorted.
+pub fn project_commands(root: &std::path::Path) -> Vec<String> {
+    let claude = root.join(".claude");
+    let mut skills: Vec<String> = std::fs::read_dir(claude.join("skills"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let text = std::fs::read_to_string(e.path().join("SKILL.md")).ok()?;
+            Some(front_matter_name(&text).unwrap_or_else(|| e.file_name().to_string_lossy().into_owned()))
+        })
+        .collect();
+    skills.sort();
+    let mut commands = Vec::new();
+    let mut dirs = vec![(claude.join("commands"), String::new())];
+    while let Some((dir, prefix)) = dirs.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() {
+                dirs.push((e.path(), format!("{prefix}{name}:")));
+            } else if let Some(stem) = name.strip_suffix(".md") {
+                commands.push(format!("{prefix}{stem}"));
+            }
+        }
+    }
+    commands.sort();
+    skills.into_iter().chain(commands).collect()
+}
+
+/// A `name:` in the `---` front matter at the top of `text`.
+fn front_matter_name(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    lines.take_while(|l| l.trim() != "---").find_map(|l| l.strip_prefix("name:")).map(|v| v.trim().trim_matches(['"', '\'']).to_string()).filter(|v| !v.is_empty())
+}
+
+/// The models Claude Code offers, from its answer to `initialize` (X105).
+/// An answer without `models`, from an older Claude Code, gives none.
 pub fn models(reply: &Value) -> Vec<ClaudeModel> {
     let text = |m: &Value, k: &str| m[k].as_str().unwrap_or_default().to_string();
     let Some(list) = reply["models"].as_array() else { return vec![] };
@@ -843,6 +886,28 @@ impl Adapter for Claude {
 mod tests {
     use super::*;
     use moonlet_proto::types::{AsideAnswer, ContextCategory, ContextUsage, McpServer, QueuedMessage};
+
+    /// X110: the names Claude Code 2.1.330 gave a project with this layout
+    /// in its `initialize` reply: skills by their front matter's `name`,
+    /// else their folder; commands by their path, folders joined by `:`.
+    #[test]
+    fn a_projects_own_commands_are_named_as_claude_code_names_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let put = |rel: &str, text: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        put(".claude/commands/top-cmd.md", "Say hi\n");
+        put(".claude/commands/sub/nested-cmd.md", "---\ndescription: n\n---\nx\n");
+        put(".claude/commands/sub/deeper/deep-cmd.md", "x\n");
+        put(".claude/commands/notes.txt", "x\n");
+        put(".claude/skills/dir-name/SKILL.md", "---\nname: front-name\ndescription: d\n---\nb\n");
+        put(".claude/skills/no-front/SKILL.md", "---\ndescription: d\n---\nb\n");
+        put(".claude/skills/not-a-skill/README.md", "x\n");
+        assert_eq!(project_commands(dir.path()), ["front-name", "no-front", "sub:deeper:deep-cmd", "sub:nested-cmd", "top-cmd"]);
+        assert!(project_commands(&dir.path().join("nowhere")).is_empty());
+    }
 
     fn replay(fixture: &str, a: &mut Claude, st: &mut ChatState) -> Vec<Out> {
         fixture.lines().flat_map(|l| a.on_line(l, st)).collect()

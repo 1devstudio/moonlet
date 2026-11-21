@@ -166,9 +166,9 @@ pub struct ChatManager {
     /// When asking each profile's Claude for its models last gave nothing,
     /// so a host that cannot answer is not asked on every open (X105).
     models_failed: Mutex<HashMap<Option<String>, Instant>>,
-    /// The slash commands Claude Code offers, by Claude profile folder and
-    /// project folder, with when it said so (X110).
-    commands: Mutex<HashMap<(Option<String>, PathBuf), (Instant, Vec<String>)>>,
+    /// The slash commands Claude Code offers outside any project, by Claude
+    /// profile folder, with when it said so (X110).
+    commands: Mutex<HashMap<Option<String>, HeldCommands>>,
     /// One Claude at a time is started to ask for models or commands (X105).
     probing: tokio::sync::Mutex<()>,
     /// Where to keep what agents and terminals run, for the next daemon to
@@ -240,12 +240,16 @@ const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 /// How long an aside may take before moonlet gives up on it (X49).
 const ASIDE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long Claude may take to answer `initialize` with its models (X105).
-const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+/// A profile's slash commands and when Claude gave them (X110).
+type HeldCommands = (Instant, Vec<String>);
 
-/// How long after Claude gave no models it is not asked again (X105).
-const MODELS_RETRY: Duration = Duration::from_secs(60);
-/// How long a project's slash commands are kept before Claude is asked
+/// How long Claude may take to answer `initialize` (X105, X110).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long after Claude gave no models, or no commands, it is not asked
+/// again (X105, X110).
+const PROBE_RETRY: Duration = Duration::from_secs(60);
+/// How long a profile's slash commands are kept before Claude is asked
 /// again, so a command or skill added since shows within minutes (X110).
 const COMMANDS_FRESH: Duration = Duration::from_secs(5 * 60);
 
@@ -1334,10 +1338,9 @@ impl ChatManager {
         env
     }
 
-    /// The models Claude Code offers in `workspace`'s Claude profile (X105),
-    /// as a chat in that profile last reported them, else from a Claude
-    /// started only to answer `initialize`. Empty when it cannot say.
-    pub async fn claude_models(&self, workspace: Option<&str>) -> Vec<ClaudeModel> {
+    /// The environment a chat in `workspace` gets, with its Claude
+    /// profile folder (`None` for the default one).
+    fn profile_env(&self, workspace: Option<&str>) -> (BTreeMap<String, String>, Option<String>) {
         let launch = match (workspace, self.session_env.get()) {
             (Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
             _ => SessionLaunch::default(),
@@ -1345,11 +1348,35 @@ impl ChatManager {
         let mut env = self.terms.base_env().clone();
         env.extend(launch.env);
         let profile = env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+        (env, profile)
+    }
+
+    /// Starts a Claude in the profile's home folder only to answer
+    /// `initialize`, and keeps both its models (X105) and its slash
+    /// commands (X110) for the profile.
+    async fn ask_profile(&self, env: &BTreeMap<String, String>, profile: Option<String>) {
+        let home = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
+        let reply = probe(env, &home).await.ok();
+        let models = reply.as_ref().map(super::claude::models).unwrap_or_default();
+        let commands = reply.as_ref().map(super::claude::commands).unwrap_or_default();
+        if models.is_empty() {
+            self.models_failed.lock().unwrap().insert(profile.clone(), Instant::now());
+        } else {
+            self.models.lock().unwrap().insert(profile.clone(), models);
+        }
+        self.commands.lock().unwrap().insert(profile, (Instant::now(), commands));
+    }
+
+    /// The models Claude Code offers in `workspace`'s Claude profile (X105),
+    /// as a chat in that profile last reported them, else from a Claude
+    /// started only to answer `initialize`. Empty when it cannot say.
+    pub async fn claude_models(&self, workspace: Option<&str>) -> Vec<ClaudeModel> {
+        let (env, profile) = self.profile_env(workspace);
         let known = || -> Option<Vec<ClaudeModel>> {
             if let Some(m) = self.models.lock().unwrap().get(&profile) {
                 return Some(m.clone());
             }
-            let failed = self.models_failed.lock().unwrap().get(&profile).is_some_and(|at| at.elapsed() < MODELS_RETRY);
+            let failed = self.models_failed.lock().unwrap().get(&profile).is_some_and(|at| at.elapsed() < PROBE_RETRY);
             failed.then(Vec::new)
         };
         if let Some(m) = known() {
@@ -1357,47 +1384,39 @@ impl ChatManager {
         }
         // An ask made while another Claude answers gets that answer.
         let _one = self.probing.lock().await;
-        if let Some(m) = known() {
-            return m;
+        if known().is_none() {
+            self.ask_profile(&env, profile.clone()).await;
         }
-        let cwd = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
-        let models = probe(&env, &cwd).await.map(|r| super::claude::models(&r)).unwrap_or_default();
-        if models.is_empty() {
-            self.models_failed.lock().unwrap().insert(profile, Instant::now());
-        } else {
-            self.models.lock().unwrap().insert(profile, models.clone());
-        }
-        models
+        known().unwrap_or_default()
     }
 
-    /// The slash commands Claude Code offers in the project folder `cwd`,
-    /// in `workspace`'s Claude profile (X110), from a Claude started there
-    /// only to answer `initialize`, so the project's own commands and
-    /// skills are among them. Empty when it cannot say.
-    pub async fn claude_commands(&self, workspace: Option<&str>, cwd: &Path) -> Vec<String> {
-        let launch = match (workspace, self.session_env.get()) {
-            (Some(w), Some(f)) => f(&format!("{WORKSPACE_KEY}{w}")),
-            _ => SessionLaunch::default(),
-        };
-        let mut env = self.terms.base_env().clone();
-        env.extend(launch.env);
-        let key = (env.get(crate::profiles::CONFIG_DIR_VAR).cloned(), cwd.to_path_buf());
+    /// The slash commands Claude Code would offer in the project folder
+    /// `root`, in `workspace`'s Claude profile (X110): the profile's, from
+    /// a Claude started outside the project only to answer `initialize`,
+    /// then the project's own, read from its folder, so nothing of the
+    /// project (its hooks, its MCP servers) runs before a session does.
+    pub async fn claude_commands(&self, workspace: Option<&str>, root: &Path) -> Vec<String> {
+        let (env, profile) = self.profile_env(workspace);
         // An empty answer is asked again sooner, as for the models.
         let known = || {
             let held = self.commands.lock().unwrap();
-            let (at, c) = held.get(&key)?;
-            (at.elapsed() < if c.is_empty() { MODELS_RETRY } else { COMMANDS_FRESH }).then(|| c.clone())
+            let (at, c) = held.get(&profile)?;
+            (at.elapsed() < if c.is_empty() { PROBE_RETRY } else { COMMANDS_FRESH }).then(|| c.clone())
         };
-        if let Some(c) = known() {
-            return c;
-        }
-        let _one = self.probing.lock().await;
-        if let Some(c) = known() {
-            return c;
-        }
-        let commands = if cwd.is_dir() { probe(&env, cwd).await.map(|r| super::claude::commands(&r)).unwrap_or_default() } else { vec![] };
-        self.commands.lock().unwrap().insert(key, (Instant::now(), commands.clone()));
-        commands
+        let mine = match known() {
+            Some(c) => c,
+            None => {
+                let _one = self.probing.lock().await;
+                if known().is_none() {
+                    self.ask_profile(&env, profile.clone()).await;
+                }
+                known().unwrap_or_default()
+            }
+        };
+        let own = super::claude::project_commands(root);
+        let mut all = mine;
+        all.extend(own.into_iter().filter(|c| !all.contains(c)).collect::<Vec<_>>());
+        all
     }
 
     /// Answers a side question from the chat's conversation in a separate,
@@ -1750,7 +1769,7 @@ async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json:
         }
     }
     let group = Group(child.id().and_then(|p| i32::try_from(p).ok()));
-    let ask = serde_json::json!({"type": "control_request", "request_id": "models-1", "request": {"subtype": "initialize"}});
+    let ask = serde_json::json!({"type": "control_request", "request_id": "probe-1", "request": {"subtype": "initialize"}});
     let mut stdin = child.stdin.take().context("no stdin")?;
     stdin.write_all(format!("{ask}\n").as_bytes()).await?;
     stdin.flush().await?;
@@ -1759,13 +1778,13 @@ async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json:
         while let Some(line) = lines.next_line().await? {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
             let r = &v["response"];
-            if v["type"] == "control_response" && r["request_id"] == "models-1" {
+            if v["type"] == "control_response" && r["request_id"] == "probe-1" {
                 return Ok(r["response"].clone());
             }
         }
         bail!("claude ended without answering")
     };
-    let reply = tokio::time::timeout(MODELS_TIMEOUT, answer).await.unwrap_or_else(|_| Err(anyhow::anyhow!("claude did not answer in time")));
+    let reply = tokio::time::timeout(PROBE_TIMEOUT, answer).await.unwrap_or_else(|_| Err(anyhow::anyhow!("claude did not answer in time")));
     drop(stdin);
     // The group goes before Claude is reaped, while its id is still the group's.
     drop(group);
