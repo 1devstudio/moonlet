@@ -1593,6 +1593,7 @@ export const M = {
   powerSetSettings: "power.set_settings",
   /** The models Claude Code offers in a workspace's Claude profile (X105): `{workspace?}` → `ClaudeModel[]`. */
   claudeModels: "claude.models",
+  /** Claude's slash commands for a project (X110): `{project_id, workspace?}` → names without `/`. */
   claudeCommands: "claude.commands",
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",

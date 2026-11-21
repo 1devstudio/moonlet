@@ -1,7 +1,7 @@
 // Slash commands in the new-session composer (X110): the prompt's `/` menu
-// and `+` › Slash commands list what a Claude started in the project's
-// folder answers `initialize` with, the project's own commands included,
-// and Create sends the chosen command as the first message.
+// and `+` › Slash commands list Claude's commands and the project's own,
+// read from its folder, and Create sends the chosen command as the first
+// message.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,23 +12,20 @@ import { fill, hover, rpc, sel, world } from "../fixtures";
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
 const SENT = join(w.root, "claude-user");
-// A project of its own: the daemon keeps each folder's answer for a while,
-// so a folder an earlier spec's composer asked about could answer stale.
+// A project of its own, with its own command: every spec of a run shares
+// one daemon, and the composer may open on a project another spec added.
 const NAME = "release-app";
 const REPO = join(w.root, NAME);
 const PROMPT = '//textarea[@placeholder="What do you want to work on?"]';
 const HEADER = '//div[@role="dialog"][@aria-label="New session"]//div[@role="group"][@aria-label="Project and task"]';
 
-/** Answers `initialize` with `review`, and `release-notes` when started in a
- *  folder that has it as a project command; keeps each user message. */
+/** Answers `initialize` with the user's `review`; keeps each user message. */
 const FAKE_CLAUDE = String.raw`#!/bin/sh
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*)
       id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
-      c='{"name":"review","description":"Review changes","argumentHint":""}'
-      [ -f .claude/commands/release-notes.md ] && c="$c"',{"name":"release-notes","description":"(project)","argumentHint":""}'
-      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[%s],"models":[]}}}\n' "$id" "$c" ;;
+      printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[{"name":"review","description":"Review changes","argumentHint":""}],"models":[]}}}\n' "$id" ;;
     *'"type":"user"'*) printf '%s\n' "$line" >> "${SENT}" ;;
   esac
 done
@@ -74,10 +71,10 @@ describe("slash commands in the new-session composer (X110)", () => {
     await fill(PROMPT, "the cart changes");
     await $('button[title="Add files, commands and more"]').click();
     await hover($(sel.button("Slash commands")));
-    await $(sel.button("/review")).waitForDisplayed({ timeout: 30_000 });
-    await $(sel.button("/review")).click();
+    await $(sel.button("/release-notes")).waitForDisplayed({ timeout: 30_000 });
+    await $(sel.button("/release-notes")).click();
     // getValue, because toHaveValue trims.
-    expect(await $(PROMPT).getValue()).toBe("/review the cart changes");
+    expect(await $(PROMPT).getValue()).toBe("/release-notes the cart changes");
     await browser.keys("Escape");
     await expect($(PROMPT)).not.toBeExisting();
   });
@@ -86,6 +83,12 @@ describe("slash commands in the new-session composer (X110)", () => {
     await openComposer();
     await fill(PROMPT, "/rel");
     await expect($(sel.button("/release-notes"))).toBeDisplayed({ wait: 30_000 });
+    // Escape closes the menu, not the composer; an edit opens it again.
+    await browser.keys("Escape");
+    await expect($(sel.button("/release-notes"))).not.toBeExisting();
+    await expect($(PROMPT)).toBeDisplayed();
+    await fill(PROMPT, "/rele");
+    await expect($(sel.button("/release-notes"))).toBeDisplayed();
     await browser.keys("Enter");
     expect(await $(PROMPT).getValue()).toBe("/release-notes ");
     // The menu closed: Enter now creates the session.

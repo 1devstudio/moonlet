@@ -384,7 +384,10 @@ export function diffStat(diff: string): { add: number; del: number } {
 
 /** The `@token` or `/token` being typed at the caret, if any. Either may
  *  start a word anywhere in the message, so `/` lists commands mid-prompt too. */
-export function activeToken(text: string, caret: number): { kind: "@" | "/"; start: number; query: string } | null {
+/** The `@` or `/` word being typed, from `activeToken`. */
+export type Token = { kind: "@" | "/"; start: number; query: string };
+
+export function activeToken(text: string, caret: number): Token | null {
   const m = /(^|\s)([@/])([^\s@]*)$/.exec(text.slice(0, caret));
   if (!m) return null;
   return { kind: m[2] as "@" | "/", start: caret - m[3].length - 1, query: m[3] };

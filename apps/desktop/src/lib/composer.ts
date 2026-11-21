@@ -1,7 +1,7 @@
 // The new-session composer's decisions (X54): what its branch row says, and
 // the attachments it sends before the user's text.
 
-import { activeToken, commandOptions } from "./chat";
+import { activeToken, commandOptions, type Token } from "./chat";
 import { withoutComments } from "./markdown";
 import { composerSync } from "./sync";
 import type { IssueRef } from "./protocol";
@@ -263,11 +263,20 @@ export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[]
  *  at the caret, as the chat's `/` menu offers them (`commandOptions`);
  *  none for another agent, or once Escape dismissed the word at
  *  `dismissed`. */
-export function composerSlash(f: { agent: string; commands: readonly string[]; text: string; caret: number; dismissed: number | null }): {
-  token: { kind: "@" | "/"; start: number; query: string } | null;
-  rows: string[];
-} {
+export function composerSlash(f: { agent: string; commands: readonly string[]; text: string; caret: number; dismissed: number | null }): { token: Token | null; rows: string[] } {
   const token = activeToken(f.text, f.caret);
   if (f.agent !== "claude" || token?.kind !== "/" || token.start === f.dismissed) return { token, rows: [] };
   return { token, rows: commandOptions(f.commands, f.text, token) };
+}
+
+/** What a key does in the prompt while the `/` menu shows `rows` with
+ *  `sel` highlighted (X110), as in the chat's `/` menu: the arrows move
+ *  round the ends, Tab or Enter puts the command in, Escape closes the
+ *  menu; null leaves the key to the prompt. */
+export function slashKey(e: { key: string; shiftKey: boolean }, rows: readonly string[], sel: number): { move: number } | { accept: string } | { dismiss: true } | null {
+  if (!rows.length) return null;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") return { move: (sel + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length };
+  if ((e.key === "Tab" || e.key === "Enter") && !e.shiftKey) return { accept: rows[sel] ?? rows[0] };
+  if (e.key === "Escape") return { dismiss: true };
+  return null;
 }

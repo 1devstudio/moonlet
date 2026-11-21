@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { afterCreate, attachments, branchRow, composerSlash, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { afterCreate, attachments, branchRow, composerSlash, firstMessage, slashKey, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -319,5 +319,28 @@ describe("composerSlash (X110)", () => {
 
   it("leaves a path mid-message alone", () => {
     expect(composerSlash({ agent: "claude", commands, text: "look in /tmp", caret: 12, dismissed: null }).rows).toEqual([]);
+  });
+});
+
+describe("slashKey (X110)", () => {
+  const rows = ["/review", "/release-notes", "/security-review"];
+  const key = (k: string, shift = false) => ({ key: k, shiftKey: shift });
+
+  it("moves the highlight with the arrows, round the ends", () => {
+    expect(slashKey(key("ArrowDown"), rows, 2)).toEqual({ move: 0 });
+    expect(slashKey(key("ArrowUp"), rows, 0)).toEqual({ move: 2 });
+  });
+
+  it("puts in the highlighted command on Tab or Enter, and closes on Escape", () => {
+    expect(slashKey(key("Tab"), rows, 1)).toEqual({ accept: "/release-notes" });
+    expect(slashKey(key("Enter"), rows, 2)).toEqual({ accept: "/security-review" });
+    expect(slashKey(key("Escape"), rows, 0)).toEqual({ dismiss: true });
+  });
+
+  it("leaves other keys, Shift+Enter and a closed menu to the prompt", () => {
+    expect(slashKey(key("Enter", true), rows, 0)).toBeNull();
+    expect(slashKey(key("a"), rows, 0)).toBeNull();
+    expect(slashKey(key("Enter"), [], 0)).toBeNull();
+    expect(slashKey(key("Escape"), [], 0)).toBeNull();
   });
 });

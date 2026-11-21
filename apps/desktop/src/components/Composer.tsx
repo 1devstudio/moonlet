@@ -6,7 +6,7 @@ import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { pasteLookup, typedTask } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
-import { afterCreate, attachments, branchRow, composerSlash, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
+import { afterCreate, attachments, branchRow, composerSlash, firstMessage, slashKey, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type ClaudeModel, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, hostWorkspaces, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { syncOffered } from "../lib/sync";
@@ -547,9 +547,10 @@ export function Composer({
 
   const agents = ["claude", "codex", ...Object.keys(config?.agents ?? {}).filter((a) => a !== "claude" && a !== "codex")];
   // The models Claude Code offers in the target workspace's profile (X105).
-  const claudeModels = useClaudeModels(current?.host, current ? workspaceFor(current.host) : undefined);
-  // Claude's slash commands in the project's folder, for the prompt's `/` menu and `+` (X110).
-  const claudeCommands = useClaudeCommands(choice.agent === "claude" ? current?.host : undefined, current?.project.id, current ? workspaceFor(current.host) : undefined);
+  const currentWorkspace = current ? workspaceFor(current.host) : undefined;
+  const claudeModels = useClaudeModels(current?.host, currentWorkspace);
+  // Claude's slash commands for the project, for the prompt's `/` menu and `+` (X110).
+  const claudeCommands = useClaudeCommands(choice.agent === "claude" ? current?.host : undefined, current?.project.id, currentWorkspace);
   const [caret, setCaret] = useState(0);
   const [slashSel, setSlashSel] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<number | null>(null);
@@ -977,22 +978,23 @@ export function Composer({
             <textarea
               ref={ta}
               value={prompt}
-              onChange={(e) => (setPrompt(e.target.value), setCaret(e.target.selectionStart))}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                setCaret(e.target.selectionStart);
+                // An edit opens the menu again after Escape, as in the chat.
+                setSlashDismissed(null);
+              }}
               onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
               onKeyDown={(e) => {
                 if (e.nativeEvent.isComposing) return;
-                const rows = slash.rows;
-                if (rows.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                const act = slash.token ? slashKey(e, slash.rows, slashSel) : null;
+                if (act && slash.token) {
                   e.preventDefault();
-                  setSlashSel((i) => (i + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
-                } else if (rows.length && slash.token && ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey))) {
-                  e.preventDefault();
-                  putPrompt(withCompletion(prompt, caret, slash.token, rows[slashSel] ?? rows[0]));
-                } else if (rows.length && slash.token && e.key === "Escape") {
-                  // Closes the menu, not the composer.
-                  e.preventDefault();
+                  // Escape closes the menu, not the composer.
                   e.stopPropagation();
-                  setSlashDismissed(slash.token.start);
+                  if ("move" in act) setSlashSel(act.move);
+                  else if ("accept" in act) putPrompt(withCompletion(prompt, caret, slash.token, act.accept));
+                  else setSlashDismissed(slash.token.start);
                 } else if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void create();
