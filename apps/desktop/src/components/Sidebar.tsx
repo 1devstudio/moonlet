@@ -575,7 +575,7 @@ function bulkItems(picked: PickedSession[]): MenuItem[] {
     markReadItem(picked),
     { kind: "submenu", label: "Move to workspace", icon: <FolderInput size={14} className="text-muted" />, items: move.items, disabled: move.disabled ?? undefined },
     { kind: "divider" },
-    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} className="text-muted" />, onSelect: () => void archiveSessions(picked) },
+    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} />, danger: true, onSelect: () => void archiveSessions(picked) },
   ];
 }
 
@@ -1154,7 +1154,8 @@ function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { o
           { kind: "divider" },
           {
             label: "Archive",
-            icon: icon(Archive),
+            icon: <Archive size={14} />,
+            danger: true,
             onSelect: () => {
               void archiveSession({ host, ws: s });
             },
