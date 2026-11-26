@@ -41,7 +41,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
 - [x] `moonletd daemon --boot` serves like any daemon, and `daemon.info` says `started_at_boot: true` (`false` otherwise). Test: `a_boot_daemon_says_so`.
 - [x] A boot daemon that upgrades (S3) starts the new daemon with `--boot`: it runs outside a login session too. The new daemon keeps the terminals it takes even if the user has turned the switch off since. Test: `an_upgraded_boot_daemon_still_says_so`.
 - [ ] Before login it serves sessions, terminals, restored workspaces, the tailnet listener and heavy commands as usual. It reads no Keychain item, as no daemon does today.
-- [x] A Claude chat in a boot daemon starts no `claude`: a new chat starts none, and a message sent to it is held, as a moved chat holds its messages (X73), saved with the chat. Its state says `waiting_for_login` and lists the message as queued. A message with images is refused ("Claude starts once you log in on this Mac: send the images once it does"). Tests: `a_chat_waiting_for_login_holds_its_message_and_starts_no_agent`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
+- [x] A Claude chat in a boot daemon starts no `claude`: a new chat starts none, and a message sent to it is held, as a moved chat holds its messages (X73), saved with the chat. Its state says `waiting_for_login` and lists the message as queued. A message with images is refused ("Claude starts once you log in on this Mac: send the images once it does"), and so are Send now and answers to asks, before anything changes ("Claude starts once you log in on this Mac"), so nothing the user did is lost to a start that cannot work. A chat with kept asks stays blocked; a move's note (X73) is kept with the chat and goes first after login. Tests also: `send_now_before_login_is_refused_and_the_message_stays_held`, `a_moves_note_before_login_is_sent_after_login`. Tests: `a_chat_waiting_for_login_holds_its_message_and_starts_no_agent`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
 - [ ] The app and the phone show "Claude starts once you log in on <host>" for a chat in `waiting_for_login`. Vitest: "says a chat waits for login on its host".
 
 ### Login takes over
@@ -107,6 +107,11 @@ wait for login, because the Keychain unlocks only then.
 ## Out of scope
 
 - After a logout without a restart, nothing runs until the next login or restart: the boot daemon already handed over.
+- A forced restart (X97 `--force`), or `moonletd start` with no daemon running, starts an ordinary daemon wherever it is run: from the app it is in the login session, as it should be; from a terminal opened before login it is not, and its chats fail to sign in until the next login.
+- A daemon that listens but no longer answers keeps its terminals: the daemon a login starts gives up after 10 s and exits 0.
+- Another process of the user's that connects to the handoff socket first ends that takeover (it gets no terminal); the login item's daemon tries again at the next login.
+- After a takeover, the new daemon binds the socket with the S3 retry (10 s); a bind that still fails ends the terminals, as in S3.
+- The login item switched off in System Settings › Login Items while this is on: nothing takes over at login, so the daemon started at boot keeps serving and its chats wait. Settings shows this switch disabled with "Needs Start the moonlet daemon at login"; turning the login item back on fixes it at the next login.
 - gh and git credentials in the Keychain: commands that need them fail before login, as they would over SSH.
 - Linux hosts, which start at boot already (X58).
 - Unlocking FileVault after a restart (macOS can do it over SSH with Remote Login on, or `fdesetup authrestart` before a planned restart).

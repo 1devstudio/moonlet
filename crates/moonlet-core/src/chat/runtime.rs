@@ -454,6 +454,16 @@ impl ChatManager {
         self.until_login.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Refuses what would start the agent before login (X113), before
+    /// anything changes, so an answer or a Send now is never lost to a
+    /// start that cannot work.
+    fn refuse_before_login(&self) -> Result<()> {
+        if self.waiting_for_login() {
+            bail!("{WAITS_FOR_LOGIN}");
+        }
+        Ok(())
+    }
+
     /// Keeps `text` as a queued message the chat holds, saved with it, as a
     /// moved chat holds its messages (X73), until the daemon a login starts
     /// sends it (X113).
@@ -464,7 +474,11 @@ impl ChatManager {
         let id = uuid::Uuid::new_v4().to_string();
         inner.state.queued.push(moonlet_proto::types::QueuedMessage { id: id.clone(), text: text.to_string(), sending: false });
         inner.held.push(id);
-        inner.state.status = WAITING_FOR_LOGIN.into();
+        // A chat whose kept asks wait for their answer stays blocked: the
+        // answer, after login, sends what it holds (X73).
+        if inner.kept.is_empty() {
+            inner.state.status = WAITING_FOR_LOGIN.into();
+        }
         self.apply(chat, inner, vec![Out::State]);
         Ok(())
     }
@@ -481,7 +495,12 @@ impl ChatManager {
             .map(|(id, _)| *id)
             .collect();
         for id in waiting {
-            if let Err(e) = self.go_on(id, None) {
+            let gone_on = self.get(id).and_then(|chat| {
+                let mut inner = chat.inner.lock().unwrap();
+                // The note of a move that came before login goes first.
+                if inner.kept.is_empty() { self.go_on_held(&chat, &mut inner) } else { Ok(()) }
+            });
+            if let Err(e) = gone_on {
                 tracing::warn!(chat = %id, "a chat that waited for login cannot go on: {e:#}");
             }
         }
@@ -556,6 +575,18 @@ impl ChatManager {
     pub fn go_on(&self, id: TerminalId, note: Option<&str>) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
+        if self.waiting_for_login() {
+            // No agent before login (X113): the note waits with the
+            // messages the chat holds, for the daemon a login starts.
+            if let Some(n) = note {
+                inner.preface = Some(n.to_string());
+            }
+            if inner.kept.is_empty() {
+                inner.state.status = WAITING_FOR_LOGIN.into();
+            }
+            self.apply(&chat, &mut inner, vec![Out::State]);
+            return Ok(());
+        }
         if !inner.kept.is_empty() {
             if let Some(n) = note {
                 inner.preface = Some(n.to_string());
@@ -637,6 +668,7 @@ impl ChatManager {
     /// `mode` switches the agent's permission mode with an approval; only a
     /// plan approved into `auto` or `acceptEdits` uses it (X20, X24).
     pub fn permission(&self, id: TerminalId, ask: &str, decision: &str, message: Option<&str>, answers: Option<&BTreeMap<String, String>>, mode: Option<&str>) -> Result<()> {
+        self.refuse_before_login()?;
         if let Some(m) = mode {
             if decision != "allow" {
                 bail!("a mode needs decision allow");
@@ -670,6 +702,7 @@ impl ChatManager {
     /// another ask comes first or the turn ends; an error when no turn
     /// runs.
     pub fn answer_when_asked(&self, id: TerminalId, asked: &PermissionAsk, decision: &str, message: Option<&str>) -> Result<()> {
+        self.refuse_before_login()?;
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
         if !(inner.state.status == "working" || inner.state.pending.iter().any(|p| same_ask(p, asked))) {
@@ -731,6 +764,7 @@ impl ChatManager {
     /// Asks the agent to read a queued message now, or every queued one
     /// without `message` (X49).
     pub fn send_now(&self, id: TerminalId, message: Option<&str>) -> Result<()> {
+        self.refuse_before_login()?;
         {
             // Messages a moved chat holds go to its agent here now, in
             // place of a kept ask's answer (X73): all of them, as the ones
@@ -3312,6 +3346,44 @@ done
         assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["hi"]);
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!dir.path().join("claude-args").exists(), "no agent started");
+    }
+
+    /// X113: before login nothing may start Claude, and what the user did
+    /// is never lost to a refused start: Send now is refused, the message
+    /// stays held.
+    #[tokio::test]
+    async fn send_now_before_login_is_refused_and_the_message_stays_held() {
+        let (dir, _terms, chats) = setup().await;
+        chats.wait_for_login();
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        chats.send(id, "hi", &[]).unwrap();
+        let held = chats.state(id).unwrap().queued[0].id.clone();
+        let refused = chats.send_now(id, Some(&held)).unwrap_err().to_string();
+        assert_eq!(refused, "Claude starts once you log in on this Mac");
+        let st = chats.state(id).unwrap();
+        assert_eq!(st.status, "waiting_for_login");
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["hi"]);
+        assert!(!dir.path().join("claude-args").exists(), "no agent started");
+    }
+
+    /// X113: a chat moved here before login keeps the move's note, which the
+    /// daemon a login starts sends first.
+    #[tokio::test]
+    async fn a_moves_note_before_login_is_sent_after_login() {
+        let (dir, _terms, chats) = setup().await;
+        chats.wait_for_login();
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        chats.go_on(id, Some("You moved to studio-mini")).unwrap();
+        assert_eq!(chats.state(id).unwrap().status, "waiting_for_login");
+        chats.shutdown().await;
+
+        let terms = TerminalManager::new(dir.path().join("sock-at-login"), fake_claude_env(dir.path()));
+        let at_login = ChatManager::new(terms, dir.path().join("chats"));
+        at_login.restore();
+        at_login.start_waiting();
+        let st = wait_for(&at_login, id, |s| s.status == "done").await;
+        let users: Vec<_> = st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
+        assert_eq!(users, ["You moved to studio-mini"]);
     }
 
     /// X113: the daemon a login starts takes the chats over from disk, and

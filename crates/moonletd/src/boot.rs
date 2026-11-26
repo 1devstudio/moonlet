@@ -76,14 +76,18 @@ pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Opt
     if started_at_boot() {
         return Ok(None);
     }
-    let mut c = moonlet_core::client::Client::connect(socket, "moonletd-login").await?;
-    let info: moonlet_proto::types::DaemonInfo = c.request(methods::DAEMON_INFO, ()).await?;
+    // A daemon that listens but no longer answers (X97) must not hold up
+    // the login: this one exits, and the stuck one keeps what it has.
+    let limit = std::time::Duration::from_secs(10);
+    let mut c = tokio::time::timeout(limit, moonlet_core::client::Client::connect(socket, "moonletd-login")).await??;
+    let info: moonlet_proto::types::DaemonInfo = tokio::time::timeout(limit, c.request(methods::DAEMON_INFO, ())).await??;
     if !info.started_at_boot {
         return Ok(None);
     }
     let token = moonlet_core::app_token::read(&moonlet_core::app_token::file())
         .ok_or_else(|| anyhow::anyhow!("no app credential to show"))?;
-    let given: methods::HandOver = c.request(methods::DAEMON_HAND_OVER, methods::HandOverRequest { token }).await?;
+    let given: methods::HandOver =
+        tokio::time::timeout(limit, c.request(methods::DAEMON_HAND_OVER, methods::HandOverRequest { token })).await??;
     Ok(Some(given))
 }
 
