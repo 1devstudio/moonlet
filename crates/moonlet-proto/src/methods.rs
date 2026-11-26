@@ -2478,6 +2478,10 @@ pub struct FsRead {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactWorkspace {
     pub workspace: String,
+    /// The workspace's designs too, as the CLI lists them; the app lists
+    /// designs itself.
+    #[serde(default)]
+    pub designs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2504,6 +2508,9 @@ pub struct ArtifactTo {
 pub struct ArtifactAttach {
     pub session: String,
     pub id: String,
+    /// The agent's CLI: its terminal, which must be the session's.
+    #[serde(default)]
+    pub terminal: Option<crate::TerminalId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

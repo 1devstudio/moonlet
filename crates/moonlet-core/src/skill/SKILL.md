@@ -1,6 +1,6 @@
 ---
 name: moonlet
-description: "Read the output of the user's terminal tabs in this moonlet session (a failed command, a test run, a server log), and hand off work in another project to a new moonlet session. Use when the user mentions a terminal, a command that failed, or output you cannot see; when the task needs changes in a repository other than the current one; or to follow a session you opened. Requires MOONLET_SOCK."
+description: "Read the output of the user's terminal tabs in this moonlet session (a failed command, a test run, a server log), hand off work in another project to a new moonlet session, and use a plan or design made in another session (an artifact). Use when the user mentions a terminal, a command that failed, or output you cannot see; when the task needs changes in a repository other than the current one; to follow a session you opened; or when the user points you at a plan or design from another session. Requires MOONLET_SOCK."
 ---
 
 <!-- Installed by moonlet (`moonlet hooks install`); reinstalling overwrites this file. -->
@@ -73,3 +73,16 @@ Keep your edits inside your own worktree. When the task needs a change in anothe
 ```
 
 `blocked` means the agent waits for the user to approve something: tell the user, and leave the decision to them. A timeout does not mean the message was lost; read the session before sending anything again.
+
+## Use a plan or design from another session
+
+The plans agents propose and the designs made in moonlet are **artifacts**, listed for the whole workspace. Each one changes only in its home (the session that made it, or Design mode); you read it.
+
+```bash
+"$MOONLET_BIN" artifact ls                           # the workspace's plans and designs, as JSON
+"$MOONLET_BIN" artifact ls --search "<words>"        # by name, or by a plan's text
+"$MOONLET_BIN" artifact show <id>                    # a plan's latest text
+"$MOONLET_BIN" artifact attach <id>                  # refer this session to it
+```
+
+`attach` prints the folder of a read-only copy and a line naming it. The copy always holds the artifact's latest version; read the plan or the design's pages there, and never edit it there: moonlet writes it over from its home. When it changes, your next message starts by saying so.

@@ -77,8 +77,8 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### The CLI (entry 7)
 
-- [ ] `moonlet artifact ls [--kind plan|design] [--search <text>]` lists the workspace's artifacts as JSON; `moonlet artifact show <id>` prints one (a plan's latest text); `moonlet artifact attach <id>` refers the agent's own session to it and prints its folder. An agent's CLI may run these; it may not rename, edit, copy or move.
-- [ ] The moonlet skill tells the agent how to find and attach artifacts.
+- [ ] `moonlet artifact ls [--kind plan|design] [--search <text>] [--workspace <id>]` lists the workspace's artifacts as JSON, designs too (`artifact.list` with `designs`); `moonlet artifact show <id>` prints one (a plan's latest text; a design's record); `moonlet artifact attach <id>` refers the agent's own session to it and prints its folder and line. An agent's CLI may run these, attach only for the session its terminal is in; it may not rename, edit, copy or move. (`moonlet-cli` `artifact.rs` ls_shows_the_kind_asked_for_and_what_a_search_finds; `moonlet-cli/tests/design_e2e.rs` a_sessions_agent_finds_and_attaches_artifacts_with_moonlet_artifact; `moonletd/tests/daemon.rs` an_agents_cli_finds_artifacts_and_refers_its_own_session_to_one, a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does)
+- [ ] The moonlet skill tells the agent how to find and attach artifacts, and never to edit a copy. (`hooks.rs` the_moonlet_skill_tells_how_to_find_and_attach_artifacts)
 
 ## UI
 
@@ -102,7 +102,7 @@ The design's pages are the reference.
 - `artifact.copy {id, workspace}`, `artifact.move {id, workspace}` → the copy's id, or its id there. App only.
 - `artifact.used {}` → `{id: [session]}`: every artifact this host's sessions refer to.
 - Event `artifact.changed {id}` after a plan's new version, a rename, or a design's change.
-- Allowed to an agent's CLI (`LOCAL_METHODS`): `artifact.list`, `artifact.search`, `artifact.read`, `artifact.attach` (its own session only).
+- Allowed to an agent's CLI (`LOCAL_METHODS`): `artifact.list`, `artifact.search`, `artifact.read`, `artifact.attach` (its own session only: `terminal` names the caller's terminal, which must be in `session`).
 
 ## Data and config
 
