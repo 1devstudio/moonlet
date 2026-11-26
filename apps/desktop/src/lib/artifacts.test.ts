@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactRows, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
+import { artifactRows, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
 import type { ArtifactInfo, Design } from "./protocol";
 
 const MIN = 60_000;
@@ -214,5 +214,31 @@ describe("withArtifactLines", () => {
     expect(withArtifactLines("Implement it.", [plan, design])).toBe(`${plan}\n${design}\n\nImplement it.`);
     expect(withArtifactLines("  ", [plan])).toBe(plan);
     expect(withArtifactLines("Hi", [])).toBe("Hi");
+  });
+});
+
+describe("sentArtifacts", () => {
+  it("reads the artifacts a message refers to and the notes before it, then what the user typed", () => {
+    const text = [
+      "Settings page changed since you last read it: /refs/s1/design-settings-page",
+      'Artifact "Add search" (plan, live, read only): /refs/s1/plan-search. It always holds the latest version; it changes only in its home.',
+      'Artifact "Settings page" (design, live, read only): /refs/s1/design-settings-page. It always holds the latest version; it changes only in its home.',
+      "",
+      "Build the results page.",
+    ].join("\n");
+    expect(sentArtifacts(text)).toEqual({
+      refs: [
+        { name: "Add search", kind: "plan", folder: "/refs/s1/plan-search" },
+        { name: "Settings page", kind: "design", folder: "/refs/s1/design-settings-page" },
+      ],
+      notes: [{ kind: "changed", text: "Settings page changed since you last read it" }],
+      rest: "Build the results page.",
+    });
+  });
+
+  it("reads a plan edited by hand, and leaves a message with no artifact lines alone", () => {
+    expect(sentArtifacts("The plan was edited by hand: /plans/s1/k/v2.md\n\ngo on")).toEqual({ refs: [], notes: [{ kind: "edited", text: "The plan was edited by hand" }], rest: "go on" });
+    expect(sentArtifacts("Artifact lines are explained in the README")).toBeNull();
+    expect(sentArtifacts("Fix the bug")).toBeNull();
   });
 });

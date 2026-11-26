@@ -193,3 +193,38 @@ export function withArtifactLines(text: string, lines: string[]): string {
   if (!lines.length) return text;
   return text.trim() ? `${lines.join("\n")}\n\n${text}` : lines.join("\n");
 }
+
+/** What leads a message sent with artifacts (X114): the artifacts referred
+ *  to, and the notes of what changed, before what the user typed. */
+export interface SentArtifacts {
+  refs: { name: string; kind: "plan" | "design"; folder: string }[];
+  notes: { text: string; kind: "changed" | "edited" }[];
+  rest: string;
+}
+
+/** The artifact lines a message starts with, from `withArtifactLines` and
+ *  the daemon's notes, and what follows them; null for a message with none. */
+const REF_LINE = /^Artifact "(.+)" \((plan|design), live, read only\): (.+)\. It always holds the latest version; it changes only in its home\.$/;
+const CHANGED_LINE = /^(.+ changed since you last read it): .+$/;
+const EDITED_LINE = /^(The plan was edited by hand): .+$/;
+
+export function sentArtifacts(text: string): SentArtifacts | null {
+  const lines = text.split("\n");
+  const out: SentArtifacts = { refs: [], notes: [], rest: "" };
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const l = lines[i];
+    const ref = REF_LINE.exec(l);
+    const changed = CHANGED_LINE.exec(l);
+    const edited = EDITED_LINE.exec(l);
+    if (ref) out.refs.push({ name: ref[1], kind: ref[2] as "plan" | "design", folder: ref[3] });
+    else if (edited) out.notes.push({ kind: "edited", text: edited[1] });
+    else if (changed) out.notes.push({ kind: "changed", text: changed[1] });
+    else break;
+  }
+  if (i === 0) return null;
+  // The lines end with a blank line before what the user typed.
+  if (i < lines.length && lines[i] !== "") return null;
+  out.rest = lines.slice(i + 1).join("\n");
+  return out;
+}
