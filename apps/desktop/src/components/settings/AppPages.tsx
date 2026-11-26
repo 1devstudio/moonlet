@@ -247,31 +247,37 @@ function Boot({ service }: { service: DaemonService | null }) {
         disabled={busy || !boot || !!offer.disabledBecause}
         onChange={(on) => void act(on ? "install" : "uninstall")}
       />
-      {line && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-          <Status line={line.line} />
-          {line.action === "open_login_items" && (
-            <Button size="sm" onClick={() => void hostsApi.openLoginItems().catch(errorToast)}>
-              Open Login Items
-            </Button>
+      {(line || warnings.length > 0) && (
+        <div className="flex flex-col gap-1.5 px-4 py-2.5">
+          {line && (
+            <div className="flex items-center justify-between gap-3">
+              <Status line={line.line} />
+              {line.action === "open_login_items" && (
+                <Button size="sm" onClick={() => void hostsApi.openLoginItems().catch(errorToast)}>
+                  Open Login Items
+                </Button>
+              )}
+              {line.action === "repair" && (
+                <Button size="sm" disabled={busy} onClick={() => void act("repair")}>
+                  Repair
+                </Button>
+              )}
+              {line.action === "remove" && (
+                <Button size="sm" disabled={busy} onClick={() => void act("uninstall")}>
+                  Remove
+                </Button>
+              )}
+            </div>
           )}
-          {line.action === "repair" && (
-            <Button size="sm" disabled={busy} onClick={() => void act("repair")}>
-              Repair
-            </Button>
-          )}
-          {line.action === "remove" && (
-            <Button size="sm" disabled={busy} onClick={() => void act("uninstall")}>
-              Remove
-            </Button>
-          )}
+          {/* What still stops the Mac being useful before login: whole sentences, wrapped. */}
+          {warnings.map((w) => (
+            <div key={w} className="flex items-start gap-1.5 ui-text-12 text-blocked">
+              <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blocked" />
+              <span>{w}</span>
+            </div>
+          ))}
         </div>
       )}
-      {warnings.map((w) => (
-        <div key={w} className="px-4 pb-2.5">
-          <Status line={{ tone: "blocked", text: w }} />
-        </div>
-      ))}
     </>
   );
 }

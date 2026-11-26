@@ -30,7 +30,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
   - `Program` the running app's own `moonletd` (`…/moonlet.app/Contents/MacOS/moonletd`), `ProgramArguments` `moonletd daemon --boot`;
   - `UserName` and `GroupName` the user's, `InitGroups` true, `WorkingDirectory` their home;
   - `EnvironmentVariables` `HOME`, `USER`, `LOGNAME`, `SHELL` from the account and a system `PATH`: launchd sets none of them for a daemon (Findings);
-  - `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`, `ProcessType Interactive`;
+  - `RunAtLoad`, `KeepAlive {SuccessfulExit: false}` with `ThrottleInterval` 60, so a daemon that keeps failing is not started every 10 s, and `ProcessType Interactive`;
   - `AssociatedBundleIdentifiers` `dev.onedevstudio.moonlet`, so Login Items shows moonlet's name.
 - [x] The privileged step is one `do shell script … with administrator privileges`. It writes the plist from base64 inside the command (`/usr/bin/base64 -D`), with `umask 022`, to the fixed path, then `chown root:wheel`. It never copies a file the user can write, and the command holds only base64 and fixed paths. Test: `the_privileged_command_writes_only_the_plist`.
 
@@ -56,7 +56,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
 ### The Settings switch
 
 - [x] Settings › App › General › Background daemon gets "Start moonletd at system start" under the X56 switch. It is shown only for the login-item mechanism (release and `pnpm bundle` builds) and is disabled, with "Needs Start the moonlet daemon at login", while that switch is off: without the login item nothing takes over at login. An app outside `/Applications` says "Move moonlet to Applications first", as X56 does. Turning the login item off saves `start_daemon_at_boot = false` too, so a daemon started at boot exits without serving (the plist then shows **Remove**). Vitest: "offers start at system start only with the login item on"; the login item: M13.
-- [x] Turning it on saves `start_daemon_at_boot = true` in `~/.moonlet/app.toml`, then asks for the password and writes the plist. A cancelled password puts the choice back to off. Tests: `the_boot_choice_is_kept_in_app_toml`; the password: M13.
+- [x] Turning it on saves `start_daemon_at_boot = true` in `~/.moonlet/app.toml`, then asks for the password and writes the plist. A cancelled password, or a write that fails, puts the choice back to off. Tests: `the_boot_choice_is_kept_in_app_toml`; the password: M13.
 - [x] Turning it off saves `start_daemon_at_boot = false` at once, so a boot daemon started from the plist exits without serving. Then the app asks for the password to delete the plist; it never boots the job out, so no running daemon stops. Cancelled, the plist stays, harmless, and the line offers **Remove**. M13.
 - [x] Its line follows the plist and Login Items (Vitest: "says what starts moonletd at system start"; Rust: `the_boot_state_follows_the_plist`):
   - the plist is the one the app would write and Login Items allows it: "Starts at system start · moonlet in System Settings › Login Items";

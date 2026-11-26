@@ -37,7 +37,9 @@ pub struct Account {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// The plist that runs `program` (the app's own `moonletd`) as `a` at
@@ -92,6 +94,8 @@ pub fn plist(a: &Account, program: &Path) -> String {
     <key>SuccessfulExit</key>
     <false/>
   </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>AssociatedBundleIdentifiers</key>
@@ -114,7 +118,10 @@ fn base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
@@ -151,7 +158,9 @@ pub fn with_administrator(command: &str) -> Result<String> {
     if command.contains(['"', '\\', '\'', '\n', '$', '`']) {
         bail!("refusing to run a command that needs quoting as root");
     }
-    Ok(format!("do shell script \"{command}\" with administrator privileges"))
+    Ok(format!(
+        "do shell script \"{command}\" with administrator privileges"
+    ))
 }
 
 /// What Settings says about the launch daemon.
@@ -220,22 +229,39 @@ pub struct Status {
 #[cfg(unix)]
 pub fn this_account() -> Result<Account> {
     use std::ffi::CStr;
-    // SAFETY: getuid cannot fail; getpwuid and getgrgid return entries
-    // copied before the next call, under the lock that serialises them.
+    let text = |p: *const libc::c_char| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+    let mut buf = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: the reentrant lookups write only into `pw`, `gr` and `buf`,
+    // which outlive every read of them.
     unsafe {
         let uid = libc::getuid();
-        let pw = libc::getpwuid(uid);
-        if pw.is_null() {
+        let mut pw: libc::passwd = std::mem::zeroed();
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        if libc::getpwuid_r(uid, &mut pw, buf.as_mut_ptr(), buf.len(), &mut found) != 0
+            || found.is_null()
+        {
             bail!("cannot read this user's account");
         }
-        let pw = &*pw;
-        let text = |p: *const libc::c_char| CStr::from_ptr(p).to_string_lossy().into_owned();
-        let (name, home, shell, gid) = (text(pw.pw_name), text(pw.pw_dir), text(pw.pw_shell), pw.pw_gid);
-        let gr = libc::getgrgid(gid);
-        if gr.is_null() {
+        let (name, home, shell, gid) = (
+            text(pw.pw_name),
+            text(pw.pw_dir),
+            text(pw.pw_shell),
+            pw.pw_gid,
+        );
+        let mut gr: libc::group = std::mem::zeroed();
+        let mut found: *mut libc::group = std::ptr::null_mut();
+        if libc::getgrgid_r(gid, &mut gr, buf.as_mut_ptr(), buf.len(), &mut found) != 0
+            || found.is_null()
+        {
             bail!("cannot read this user's group");
         }
-        Ok(Account { name, uid, group: text((*gr).gr_name), home: home.into(), shell: shell.into() })
+        Ok(Account {
+            name,
+            uid,
+            group: text(gr.gr_name),
+            home: home.into(),
+            shell: shell.into(),
+        })
     }
 }
 
@@ -244,7 +270,10 @@ pub fn this_account() -> Result<Account> {
 fn wanted() -> Result<(Account, String)> {
     let account = this_account()?;
     let exe = std::env::current_exe()?;
-    let program = exe.parent().context("the app has no folder")?.join("moonletd");
+    let program = exe
+        .parent()
+        .context("the app has no folder")?
+        .join("moonletd");
     let xml = plist(&account, &program);
     Ok((account, xml))
 }
@@ -252,7 +281,11 @@ fn wanted() -> Result<(Account, String)> {
 fn facts() -> Facts {
     let exists = |p: &str| Path::new(p).exists();
     let auto_login = std::process::Command::new("/usr/bin/defaults")
-        .args(["read", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser"])
+        .args([
+            "read",
+            "/Library/Preferences/com.apple.loginwindow",
+            "autoLoginUser",
+        ])
         .output()
         .is_ok_and(|o| o.status.success());
     let filevault = std::process::Command::new("/usr/bin/fdesetup")
@@ -272,16 +305,22 @@ pub fn status() -> Result<Status> {
     let (account, xml) = wanted()?;
     let path = plist_path(account.uid);
     let installed = std::fs::read_to_string(&path).ok();
-    let choice = crate::login_item::saved_flag(&crate::login_item::app_toml(), CHOICE).unwrap_or(false);
+    let choice =
+        crate::login_item::saved_flag(&crate::login_item::app_toml(), CHOICE).unwrap_or(false);
     let allowed = sm::allowed(&path);
-    Ok(Status { state: state(choice, installed.as_deref(), &xml, allowed), warnings: warnings(facts()) })
+    Ok(Status {
+        state: state(choice, installed.as_deref(), &xml, allowed),
+        warnings: warnings(facts()),
+    })
 }
 
 /// Runs `command` as root, once an administrator gave their password.
 /// `Ok(false)` when they cancelled.
 fn as_administrator(command: &str) -> Result<bool> {
     let script = with_administrator(command)?;
-    let out = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).output()?;
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()?;
     if out.status.success() {
         return Ok(true);
     }
@@ -304,20 +343,35 @@ pub fn set(action: &str) -> Result<Status> {
     match action {
         "install" | "repair" => {
             if !crate::login_item::installed(&std::env::current_exe()?) {
-                bail!("Move moonlet to Applications first: macOS would start the daemon from where moonlet runs now.");
+                bail!(
+                    "Move moonlet to Applications first: macOS would start the daemon from where moonlet runs now."
+                );
             }
             if !crate::login_item::starts_at_login() {
-                bail!("Turn on Start the moonlet daemon at login first: it takes over from the daemon started at system start once you log in.");
+                bail!(
+                    "Turn on Start the moonlet daemon at login first: it takes over from the daemon started at system start once you log in."
+                );
             }
             crate::login_item::save_flag(&file, CHOICE, true)?;
-            if !as_administrator(&install_command(account.uid, &xml))? {
-                crate::login_item::save_flag(&file, CHOICE, false)?;
-                bail!("Not turned on: macOS needs an administrator's password to start moonletd at system start.");
+            match as_administrator(&install_command(account.uid, &xml)) {
+                Ok(true) => {}
+                // Cancelled or failed: the choice goes back to off.
+                Ok(false) => {
+                    crate::login_item::save_flag(&file, CHOICE, false)?;
+                    bail!(
+                        "Not turned on: macOS needs an administrator's password to start moonletd at system start."
+                    );
+                }
+                Err(e) => {
+                    crate::login_item::save_flag(&file, CHOICE, false)?;
+                    return Err(e);
+                }
             }
         }
         "uninstall" => {
             crate::login_item::save_flag(&file, CHOICE, false)?;
-            if plist_path(account.uid).exists() && !as_administrator(&remove_command(account.uid))? {
+            if plist_path(account.uid).exists() && !as_administrator(&remove_command(account.uid))?
+            {
                 tracing::info!("the launch daemon plist stays: the password was cancelled");
             }
         }
@@ -416,6 +470,8 @@ mod tests {
     <key>SuccessfulExit</key>
     <false/>
   </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>AssociatedBundleIdentifiers</key>
@@ -431,8 +487,16 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let file = dir.path().join("boot.plist");
             std::fs::write(&file, &xml).unwrap();
-            let lint = std::process::Command::new("plutil").arg("-lint").arg(&file).output().unwrap();
-            assert!(lint.status.success(), "{}", String::from_utf8_lossy(&lint.stdout));
+            let lint = std::process::Command::new("plutil")
+                .arg("-lint")
+                .arg(&file)
+                .output()
+                .unwrap();
+            assert!(
+                lint.status.success(),
+                "{}",
+                String::from_utf8_lossy(&lint.stdout)
+            );
         }
     }
 
@@ -441,7 +505,10 @@ mod tests {
         let mut a = alex();
         a.home = "/Users/a&b <c>".into();
         let xml = plist(&a, Path::new(PROGRAM));
-        assert!(xml.contains("<string>/Users/a&amp;b &lt;c&gt;</string>"), "{xml}");
+        assert!(
+            xml.contains("<string>/Users/a&amp;b &lt;c&gt;</string>"),
+            "{xml}"
+        );
     }
 
     #[test]
@@ -450,7 +517,10 @@ mod tests {
             install_command(501, "<plist/>\n"),
             "umask 022 && /bin/echo PHBsaXN0Lz4K | /usr/bin/base64 -D -o /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist && /usr/sbin/chown root:wheel /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist && /bin/chmod 644 /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist"
         );
-        assert_eq!(remove_command(501), "/bin/rm -f /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist");
+        assert_eq!(
+            remove_command(501),
+            "/bin/rm -f /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist"
+        );
         assert_eq!(
             with_administrator(&remove_command(501)).unwrap(),
             "do shell script \"/bin/rm -f /Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.501.plist\" with administrator privileges"
@@ -479,9 +549,18 @@ mod tests {
     fn the_boot_state_follows_the_plist() {
         let wanted = "<plist>now</plist>";
         assert_eq!(state(true, Some(wanted), wanted, true), BootState::On);
-        assert_eq!(state(true, Some(wanted), wanted, false), BootState::RequiresApproval);
-        assert_eq!(state(true, Some("<plist>moved</plist>"), wanted, true), BootState::Stale);
-        assert_eq!(state(false, Some(wanted), wanted, true), BootState::LeftBehind);
+        assert_eq!(
+            state(true, Some(wanted), wanted, false),
+            BootState::RequiresApproval
+        );
+        assert_eq!(
+            state(true, Some("<plist>moved</plist>"), wanted, true),
+            BootState::Stale
+        );
+        assert_eq!(
+            state(false, Some(wanted), wanted, true),
+            BootState::LeftBehind
+        );
         assert_eq!(state(false, None, wanted, true), BootState::Off);
         // Turned on, but the password was never given.
         assert_eq!(state(true, None, wanted, true), BootState::Off);
@@ -493,16 +572,65 @@ mod tests {
         let file = dir.path().join("app.toml");
         std::fs::write(&file, "start_daemon_at_login = true\n").unwrap();
         crate::login_item::save_flag(&file, CHOICE, true).unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "start_daemon_at_boot = true\nstart_daemon_at_login = true\n");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "start_daemon_at_boot = true\nstart_daemon_at_login = true\n"
+        );
         assert_eq!(crate::login_item::saved_flag(&file, CHOICE), Some(true));
     }
 
     #[test]
+    fn the_account_is_the_one_id_prints() {
+        let id = |flag: &str| {
+            String::from_utf8(
+                std::process::Command::new("id")
+                    .arg(flag)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+            .trim()
+            .to_string()
+        };
+        let a = this_account().unwrap();
+        assert_eq!(
+            (a.uid.to_string(), a.name.clone(), a.group.clone()),
+            (id("-u"), id("-un"), id("-gn"))
+        );
+    }
+
+    #[test]
     fn warns_only_about_what_applies() {
-        let ready = Facts { tailscale_app: true, tailscaled: true, filevault: false, auto_login: true };
+        let ready = Facts {
+            tailscale_app: true,
+            tailscaled: true,
+            filevault: false,
+            auto_login: true,
+        };
         assert!(warnings(ready).is_empty());
-        assert_eq!(warnings(Facts { tailscaled: false, ..ready }), ["tailscale"]);
-        assert_eq!(warnings(Facts { tailscale_app: false, tailscaled: false, ..ready }), Vec::<&str>::new());
-        assert_eq!(warnings(Facts { filevault: true, auto_login: false, ..ready }), ["filevault", "auto_login"]);
+        assert_eq!(
+            warnings(Facts {
+                tailscaled: false,
+                ..ready
+            }),
+            ["tailscale"]
+        );
+        assert_eq!(
+            warnings(Facts {
+                tailscale_app: false,
+                tailscaled: false,
+                ..ready
+            }),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            warnings(Facts {
+                filevault: true,
+                auto_login: false,
+                ..ready
+            }),
+            ["filevault", "auto_login"]
+        );
     }
 }
