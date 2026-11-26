@@ -113,7 +113,7 @@ The design's pages are the reference.
 ## Security considerations
 
 - The reference folder is read only to the agent: `--settings` denies `Edit` and `Write` in it by its real path (as X64's sync agent), and moonlet rewrites it from the home on every change, so an edit there never reaches the home.
-- An agent may attach artifacts to its own session only: `artifact.attach` from a CLI checks the caller's `MOONLET_SESSION` against `session`.
+- An agent may attach artifacts to its own session only: `artifact.attach` from a CLI checks that the terminal it names is in `session`. The terminal is the caller's word, not proven: it keeps an agent from referring another session by mistake, not a process set on it. That is the trust A6 gives local callers already (they may `chat.send` to any session and `artifact.read` any plan); proving the terminal would take a per-terminal credential for the whole local-caller model (open).
 - Plan text and design pages are data: the line sent to the agent names a folder, never pastes their text.
 - Copies and moves are the user's: the app alone may call them.
 
