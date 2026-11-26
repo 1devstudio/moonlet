@@ -7138,3 +7138,28 @@ async fn a_plan_a_sessions_agent_proposes_is_an_artifact_the_app_renames_and_edi
         assert!(refused.as_ref().is_err_and(|e| e.to_string() == "invalid_params: an archived session's plan is read only"), "{method}: {refused:?}");
     }
 }
+
+/// X114: a workspace's plans are found by their name or their latest
+/// text, a match in the text with the line it is on.
+#[tokio::test]
+async fn plans_are_found_by_their_name_or_their_text() {
+    use moonlet_proto::types::{ArtifactMatch, Session};
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Add search to the product list", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": session.terminals[0], "text": "propose a plan"})).await.unwrap();
+    let id = format!("plan:{}:search-plan", session.id);
+    artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id)).await;
+
+    let search = |q: &str| serde_json::json!({"workspace": ws, "query": q});
+    let by_text: Vec<ArtifactMatch> = c.request(methods::ARTIFACT_SEARCH, search("SEARCH BOX")).await.unwrap();
+    assert_eq!(by_text, [ArtifactMatch { id: id.clone(), field: "text".into(), snippet: Some("Add a search box.".into()) }]);
+    let by_name: Vec<ArtifactMatch> = c.request(methods::ARTIFACT_SEARCH, search("product")).await.unwrap();
+    assert_eq!(by_name, [ArtifactMatch { id: id.clone(), field: "name".into(), snippet: None }]);
+    let none: Vec<ArtifactMatch> = c.request(methods::ARTIFACT_SEARCH, search("fuzzy ranking")).await.unwrap();
+    assert!(none.is_empty());
+}

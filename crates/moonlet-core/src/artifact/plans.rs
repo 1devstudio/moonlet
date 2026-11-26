@@ -89,6 +89,44 @@ pub fn display_name(plan: &Plan, session_name: Option<&str>, several: bool) -> S
     }
 }
 
+/// Where `query` is in `text`, ignoring case: the line it is on, cut at
+/// whole words to at most 40 characters each side of it, with `…` where it
+/// was cut. `None` when it is not there.
+pub fn snippet(text: &str, query: &str) -> Option<String> {
+    const SIDE: usize = 40;
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        let lower = line.to_lowercase();
+        // Lowercasing keeps byte offsets for the ASCII queries plans are
+        // searched with; any other line is shown from its start.
+        let at = lower.find(&query).filter(|_| lower.len() == line.len())?;
+        let chars: Vec<char> = line.chars().collect();
+        let start = line[..at].chars().count();
+        let end = start + query.chars().count();
+        let mut from = start.saturating_sub(SIDE);
+        if from > 0 {
+            // Start at the next whole word.
+            while from < start && !chars[from - 1].is_whitespace() {
+                from += 1;
+            }
+        }
+        let mut to = (end + SIDE).min(chars.len());
+        if to < chars.len() {
+            // End at the last whole word.
+            while to > end && !chars[to].is_whitespace() {
+                to -= 1;
+            }
+        }
+        let cut: String = chars[from..to].iter().collect();
+        let cut = cut.trim();
+        Some(format!("{}{cut}{}", if from > 0 { "…" } else { "" }, if to < chars.len() { "…" } else { "" }))
+    })
+}
+
 /// A plan a chat proposed, or its answer, as the chat's item has it.
 pub struct Proposal<'a> {
     pub session: &'a str,
@@ -720,5 +758,17 @@ mod tests {
             plans.plan(id).unwrap().unwrap().versions[1].state,
             VersionState::Pending
         );
+    }
+
+    #[test]
+    fn a_snippet_is_the_line_the_text_was_found_on_cut_around_it() {
+        let text = "# Search for the product list\n\n1. Add `SearchBox` in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones and tablets\n2. Count";
+        assert_eq!(
+            snippet(text, "DEBOUNCE").as_deref(),
+            Some("…in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones…")
+        );
+        assert_eq!(snippet(text, "count").as_deref(), Some("2. Count"));
+        assert_eq!(snippet(text, "fuzzy"), None);
+        assert_eq!(snippet(text, "  "), None);
     }
 }

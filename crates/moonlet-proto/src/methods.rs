@@ -466,6 +466,10 @@ pub const ARTIFACT_LIST: &str = "artifact.list";
 /// One artifact with a plan's text and versions: [`ArtifactText`].
 /// Params: [`ArtifactRead`].
 pub const ARTIFACT_READ: &str = "artifact.read";
+/// The plans of a workspace whose name or latest text has the query:
+/// [`ArtifactMatch`]es. Params: [`ArtifactSearch`]. Designs are searched
+/// by the app, from the designs it lists.
+pub const ARTIFACT_SEARCH: &str = "artifact.search";
 /// Names a plan as the user does; `name: null` gives back its session's
 /// name. App only. Params: [`ArtifactRename`].
 pub const ARTIFACT_RENAME: &str = "artifact.rename";
@@ -2456,6 +2460,12 @@ pub struct FsRead {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactWorkspace {
     pub workspace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactSearch {
+    pub workspace: String,
+    pub query: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

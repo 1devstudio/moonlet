@@ -25,7 +25,7 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 ### Artifacts and their homes
 
 - [ ] An artifact is a **plan** or a **design**. Its **home** is where it was made: a design made in a session, or a plan written by a session's agent, has that session as its home; a design made in Design mode has its workspace. It changes only in its home.
-- [ ] An artifact has an id that never changes while it lives: a plan's is `plan:<session id>:<key>`, the key being its plan file's name, else its chat's Claude conversation; a design's is `design:<id>`, written as `id` in its `design.toml` the first time it is listed, and kept when it moves to the workspace (X104), when its session is archived (X101), and when it moves to another workspace. A copy gets a new id.
+- [ ] An artifact has an id that never changes while it lives: a plan's is `plan:<session id>:<key>`, the key being its plan file's name, else its chat's Claude conversation; a design's names where it is and its slug, `design:workspace:<workspace>:<slug>`, `design:library:<slug>`, `design:session:<session>:<slug>` or `design:project:<project>:<slug>`. When a design moves (to the workspace, X104; on archive, X101; to another workspace), moonlet records its old id as an alias of its new one, so a reference keeps finding it. A copy gets a new id. (`lib/artifacts.test.ts` gives each design an id from where it lives)
 
 ### Plan artifacts (entry 1)
 
@@ -38,12 +38,12 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### The Artifacts list and view (entry 2)
 
-- [ ] The Sessions sidebar has an **Artifacts** row between **Run action** and **History**. It swaps the sidebar's list for the workspace's artifacts, as History does: a search field, **All · Plans · Designs**, and one row per artifact, sorted by its last change, newest first. A row shows its kind's icon, its name, its home (`<project>`, `<project> · archived`, `<project> · merged`, or `Workspace`), its age, and `used by <n>` when other sessions refer to it.
-- [ ] The search matches names, plan text (the latest version), and design names, labels and briefs, ignoring case; a row found by its text shows the matching snippet with the match marked. Page HTML is not searched.
+- [ ] The Sessions sidebar has an **Artifacts** row between **Run action** and **History**. It swaps the sidebar's list for the workspace's artifacts, as History does: a search field, **All · Plans · Designs**, and one row per artifact, sorted by its last change, newest first. A row shows its kind's icon, its name, its home (`<project>`, `<project> · archived`, `<project> · merged`, or `Workspace`), its age, and `used by <n>` when other sessions refer to it. (`lib/artifacts.test.ts` lists plans and designs together, newest change first, each with its home and age, shows only the kind picked, says how many other sessions use an artifact; `e2e/specs/artifacts.e2e.ts` lists the plan under Artifacts, named after its session)
+- [ ] The search matches names, plan text (the latest version), and design names, labels and briefs, ignoring case; a row found by its text shows the matching snippet with the match marked. Page HTML is not searched. Plan text is searched by each host (`artifact.search`), designs by the app from the designs it lists. (`artifact/plans.rs` a_snippet_is_the_line_the_text_was_found_on_cut_around_it; `moonletd/tests/daemon.rs` plans_are_found_by_their_name_or_their_text; `lib/artifacts.test.ts` while searching, keeps the plans each host found and the designs found by name, brief or page label, finds a design by its name, then its brief, then a page's label, marks every place the query is; `e2e/specs/artifacts.e2e.ts` finds the plan by its text and marks where)
 - [ ] Clicking a row opens the **artifact view** in the main area:
   - a plan: its latest version as markdown; a side panel with its **Versions** (state and age, each opening read only), **Used by** (each opening its session), and a note on live references;
   - a design: its pages as thumbnails with their labels and paths; **Pages**, **Used by**, and where it is edited.
-  - Its header has **Edit**, **Attach to session…** and **Start session**, and `⋯` with **Copy to workspace…**, **Move to workspace…** (workspace artifacts only) and, for a plan, **Rename…**.
+  - Its header has **Edit**, **Attach to session…** (entry 3) and **Start session** (entry 5), and `⋯` with **Copy to workspace…**, **Move to workspace…** (workspace artifacts only, entry 6) and, for a plan, **Rename…**. (`lib/artifacts.test.ts` names the version shown, its state and age; `e2e/specs/artifacts.e2e.ts` opens the plan with its text and versions)
 - [ ] **Edit** on a design opens its home: the design screen for a workspace design, its session's Design tab for a session design. On a plan it edits the text in place (above).
 - [ ] The list is the workspace's artifacts on every host the app is connected to, merged; one host that cannot be reached lists its own as unreachable and the rest stay.
 
@@ -107,7 +107,7 @@ The design's pages are the reference.
 
 - `~/.moonlet/artifacts/plans/<session id>/<key>/plan.toml`: `{session, key, chat title, renamed?, created_at}`, and `v<n>.md` with `versions` in `plan.toml`: `{n, state, at}`.
 - `~/.moonlet/artifacts/refs/<session id>.toml`: the session's references, `{id, attached_at, told_version}`; its copies in `~/.moonlet/artifacts/refs/<session id>/<slug>/`.
-- A design's `design.toml` gains `id`.
+- `~/.moonlet/artifacts/moved.toml`: the old ids of designs that moved, each with its new id (entry 6).
 
 ## Security considerations
 

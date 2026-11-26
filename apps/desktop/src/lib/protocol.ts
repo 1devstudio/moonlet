@@ -1791,6 +1791,7 @@ export const M = {
   // Artifacts (X114)
   artifactList: "artifact.list",
   artifactRead: "artifact.read",
+  artifactSearch: "artifact.search",
   artifactRename: "artifact.rename",
   artifactEdit: "artifact.edit",
 } as const;
@@ -1882,6 +1883,8 @@ export interface ArtifactHome {
   project?: string;
   /** Its session is archived: it is read only. */
   archived?: boolean;
+  /** A design merged into its project (a project design), read only. Set by the app. */
+  merged?: boolean;
 }
 
 /** One version of a plan artifact (X114). */
@@ -1910,4 +1913,12 @@ export interface ArtifactText {
   text?: string;
   version?: number;
   versions: ArtifactVersion[];
+}
+
+/** An artifact a search found, and where (X114). */
+export interface ArtifactMatch {
+  id: string;
+  field: "name" | "text" | "brief" | "label";
+  /** The line the text was found on, cut around it. */
+  snippet?: string;
 }

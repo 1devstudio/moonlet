@@ -1835,3 +1835,14 @@ pub struct ArtifactText {
     #[serde(default)]
     pub versions: Vec<ArtifactVersion>,
 }
+
+/// An artifact a search found, and where (X114).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactMatch {
+    pub id: String,
+    /// `name` or `text`.
+    pub field: String,
+    /// The line the text was found on, cut around it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+}

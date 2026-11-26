@@ -635,7 +635,7 @@ const RUN: Record<string, () => void> = {
   "next-cmd": () => focusedEntry()?.jumpBlock(1),
   "copy-out": copyOutput,
   rerun: () => focusedEntry()?.rerunLast(),
-  history: () => useStore.setState({ showHistory: true }),
+  history: () => useStore.setState({ showHistory: true, showArtifacts: false }),
   tasks: () => toggleMode("tasks"),
   design: () => toggleMode("design"),
   settings: () => void goSettings({ page: "general" }),
