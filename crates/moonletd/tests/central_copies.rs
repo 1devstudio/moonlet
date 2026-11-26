@@ -2304,6 +2304,36 @@ async fn a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_cop
     .await;
 }
 
+/// The central host had no project of its own for the session: the clone it
+/// made for the copy becomes one, named after its origin, not its folder.
+#[tokio::test]
+async fn a_session_continued_from_a_clone_lists_its_project_by_the_origins_name() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    let projects: Vec<Value> = mini.call("project.list", json!({})).await;
+    let names: Vec<&str> = projects.iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["shop"]);
+}
+
 #[tokio::test]
 async fn a_turn_cut_off_on_the_member_goes_on_with_a_note_to_the_agent() {
     let origin = Origin::new();

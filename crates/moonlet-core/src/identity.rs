@@ -43,6 +43,12 @@ pub async fn root(path: &Path) -> Option<String> {
     }
 }
 
+/// A project's name from its normalized origin: its last part, `shop` for
+/// `github.com/acme/shop`.
+pub fn origin_name(origin: &str) -> Option<&str> {
+    origin.rsplit('/').next().filter(|n| !n.is_empty())
+}
+
 /// Whether two identities are the same project: equal roots that are known,
 /// and equal origins (two missing origins are equal).
 pub fn same_project(a: &ProjectIdentity, b: &ProjectIdentity) -> bool {

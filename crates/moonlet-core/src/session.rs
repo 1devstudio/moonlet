@@ -986,6 +986,45 @@ impl SessionManager {
         }
     }
 
+    /// Names each project kept in a folder under `clones`, one made to copy
+    /// another member's session, after the last part of its origin while it
+    /// still has its folder's name: a clone of `github.com/acme/shop` at
+    /// `clones/github.com/5ee6855d9f89b624` is `shop`.
+    pub fn name_clone_projects(&self, clones: &Path) -> Result<()> {
+        // A project's path is git's top level, with links resolved.
+        let clones = clones.canonicalize().unwrap_or_else(|_| clones.to_path_buf());
+        let changed = self.mutate(|st| {
+            let mut changed = false;
+            for p in &mut st.projects {
+                let path = Path::new(&p.path);
+                let folder = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                if !path.starts_with(&clones) || folder.as_deref() != Some(p.name.as_str()) {
+                    continue;
+                }
+                if let Some(name) = p.identity.origin.as_deref().and_then(crate::identity::origin_name) {
+                    p.name = name.to_string();
+                    changed = true;
+                }
+            }
+            Ok(changed)
+        })?;
+        if changed {
+            self.emit_projects();
+        }
+        Ok(())
+    }
+
+    /// Renames project `id`.
+    pub fn rename_project(&self, id: &str, name: &str) -> Result<Project> {
+        let project = self.mutate(|st| {
+            let p = st.projects.iter_mut().find(|p| p.id == id).context("no such project")?;
+            p.name = name.to_string();
+            Ok(p.clone())
+        })?;
+        self.emit_projects();
+        Ok(project)
+    }
+
     pub async fn add_project(&self, path: &str) -> Result<Project> {
         self.add_project_to(path, None, None).await
     }
@@ -2545,6 +2584,30 @@ mod tests {
             assert!(id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{id}");
             assert!(!id.starts_with("s-"), "{id}");
         }
+    }
+
+    /// Clones made for copies before X73's fix were listed by their
+    /// folder's hash; the daemon names them by their origin at start.
+    #[tokio::test]
+    async fn a_clone_made_for_a_copy_is_named_after_its_origin_and_any_other_project_keeps_its_name() {
+        let home = tempfile::tempdir().unwrap();
+        let source = crate::git::tests::repo().await;
+        let clone = home.path().join("clones/github.com/5ee6855d9f89b624");
+        let own = home.path().join("src/storefront");
+        for dir in [&clone, &own] {
+            std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+            crate::git::git(source.path(), &["clone", "-q", ".", dir.to_str().unwrap()]).await.unwrap();
+            crate::git::git(dir, &["remote", "set-url", "origin", "https://github.com/acme/shop.git"]).await.unwrap();
+        }
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let terminals = TerminalManager::new(home.path().join("s.sock"), env);
+        let mgr = SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), terminals);
+        mgr.add_project(&clone.display().to_string()).await.unwrap();
+        mgr.add_project(&own.display().to_string()).await.unwrap();
+
+        mgr.name_clone_projects(&home.path().join("clones")).unwrap();
+        let names: Vec<String> = mgr.list_projects().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["shop", "storefront"]);
     }
 
     async fn setup() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>) {

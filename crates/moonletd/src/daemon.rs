@@ -4512,6 +4512,20 @@ impl Daemon {
         Ok(s)
     }
 
+    /// Adds `repo`, the repository of a copy of the session `record`
+    /// describes, as a project. A clone made for it is named after the
+    /// origin it was cloned from, not its folder.
+    async fn add_copy_project(&self, repo: &Path, record: &moonlet_core::account::Record) -> Result<moonlet_proto::types::Project, RpcError> {
+        let project = self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?;
+        let clones = moonlet_core::paths::home().join("clones");
+        let clones = clones.canonicalize().unwrap_or(clones);
+        let origin = record.get("project").and_then(|p| p.get("origin")).and_then(Value::as_str);
+        match origin.and_then(moonlet_core::identity::origin_name) {
+            Some(name) if Path::new(&project.path).starts_with(&clones) && name != project.name => self.sessions.rename_project(&project.id, name).map_err(internal),
+            _ => Ok(project),
+        }
+    }
+
     /// Makes the copy [`Self::take_in`] took session `session` of this
     /// host, owned by `me`, as `record` describes it (X73). The session is
     /// in this host's state before its record names this host, so no
@@ -4533,7 +4547,7 @@ impl Daemon {
         let projects = self.sessions.list_projects();
         let project = match projects.iter().find(|p| Path::new(&p.path) == taken.repo) {
             Some(p) => p.clone(),
-            None => self.sessions.add_project(&taken.repo.display().to_string()).await.map_err(internal)?,
+            None => self.add_copy_project(&taken.repo, record).await?,
         };
         // The member came back, or the session moved, meanwhile.
         let now = self.sessions.session_records().remove(session);
@@ -4897,7 +4911,7 @@ impl Daemon {
         let projects = self.sessions.list_projects();
         let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
             Some(p) => p.clone(),
-            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+            None => self.add_copy_project(repo, record).await?,
         };
         self.sessions
             .adopt_session(moonlet_proto::types::Session {
