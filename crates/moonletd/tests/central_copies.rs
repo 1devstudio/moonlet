@@ -196,6 +196,35 @@ async fn a_session_made_on_a_member_is_listed_on_the_central_host_with_its_owner
     assert!(own.iter().all(|s| s["id"] != made["id"]));
 }
 
+/// X112: a session pinned to the top and nested under another on a member
+/// shows so on the central host, which the phone lists.
+#[tokio::test]
+async fn a_members_pin_to_the_top_and_parent_show_on_the_central_host() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    let project = shop(&book).await;
+    let spike = new_session(&book, &project, "cart-spike").await;
+    let fix = new_session(&book, &project, "fix-cart").await;
+
+    let _: Value = book
+        .call("session.update", json!({ "id": fix["id"], "pinned_top": true, "parent": spike["id"] }))
+        .await;
+
+    let listed = within_value(
+        Duration::from_secs(5),
+        "fix-cart pinned and nested on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .into_iter()
+                .find(|s| s["id"] == fix["id"] && s["pinned_top"] == json!(true))
+        },
+    )
+    .await;
+    assert_eq!(listed["parent"], spike["id"]);
+}
+
 #[tokio::test]
 async fn an_archived_session_leaves_the_central_hosts_list() {
     let (mini, addr) = central().await;

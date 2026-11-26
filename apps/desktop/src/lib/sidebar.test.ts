@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, openShortcut, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, openShortcut, moveUnderTargets, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -72,6 +72,12 @@ describe("sidebar arrange", () => {
     expect(g[0].sessions[0].id).toBe("s1");
   });
 
+  it("puts sessions pinned to the top first in their group, each part in the group's order (X112)", () => {
+    const list = [s("s1", "a", { pinned_top: true }), s("s2", "a"), s("s3", "a", { pinned_top: true }), s("s4", "a")];
+    const g = arrange("personal", sec(), projects, list, () => null, () => 0);
+    expect(g[0].sessions.map((x) => x.id)).toEqual(["s3", "s1", "s4", "s2"]);
+  });
+
   it("formats compact counts", () => {
     expect(compact(41)).toBe("41");
     expect(compact(5512)).toBe("5.5k");
@@ -102,6 +108,12 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
       // for Get docs on This Mac (X70).
       ["docs", "local", null, { missing: { origin: "github.com/acme/docs", root: "docs-root" } }, []],
     ]);
+  });
+
+  it("shows a nested session right after its parent, and as a top row when its parent is not in the group (X112)", () => {
+    const local = { ...here, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a", { parent: "s1" }), s("s6", "a", { parent: "gone" }), s("s7", "a", { parent: "s6" })] };
+    const g = arrangeShared("personal", [local, mini], none);
+    expect(g[0].sessions.map((e) => e.session.id)).toEqual(["s6", "s7", "s4", "s3", "s1", "s5"]);
   });
 
   it("merges status groups across members in their usual order", () => {
@@ -404,8 +416,8 @@ describe("sessionMenu (X112 actions in a session's menu)", () => {
   it("lists a session's actions in groups", () => {
     expect(sessionMenu({ linked: false, sources: true, sync: true, pr: true, unread: false, agent: true })).toEqual([
       "open", "open-pr", "open-in", "-",
-      "mark-unread", "rename", "-",
-      "move-workspace", "-",
+      "pin-top", "mark-unread", "rename", "-",
+      "move-workspace", "move-under", "-",
       "link-task", "keep-sync",
       "archive",
     ]);
@@ -421,6 +433,48 @@ describe("sessionMenu (X112 actions in a session's menu)", () => {
     expect(marks({ unread: false, agent: true })).toEqual(["mark-unread"]);
     expect(marks({ unread: true, agent: true })).toEqual(["mark-read"]);
     expect(marks({ unread: false, agent: false })).toEqual([]);
+  });
+});
+
+describe("session menu: Pin to top and Move under (X112)", () => {
+  const plain = { linked: true, sources: false, pr: false, unread: false, agent: true };
+  it("offers Pin to top, or Unpin from top on a pinned session, and Move under", () => {
+    expect(sessionMenu(plain)).toEqual(["open", "open-in", "-", "pin-top", "mark-unread", "rename", "-", "move-workspace", "move-under", "archive"]);
+    expect(sessionMenu({ ...plain, pinnedTop: true })).toContain("unpin-top");
+    expect(sessionMenu({ ...plain, pinnedTop: true })).not.toContain("pin-top");
+  });
+});
+
+describe("moveUnderTargets (X112)", () => {
+  const list = [
+    s("s1", "a"),
+    s("s2", "a", { parent: "s1" }),
+    s("s3", "a"),
+    s("s4", "a", { archived: true }),
+    s("s5", "b"),
+    s("s6", "a", { workspace_id: "acme" }),
+    s("s7", "a"),
+  ];
+  const ids = (t: ReturnType<typeof moveUnderTargets>) => t.targets.map((x) => [x.id, x.current]);
+
+  it("lists the other top-level sessions of its project and workspace, newest first", () => {
+    const t = moveUnderTargets(list[2], list);
+    expect(ids(t)).toEqual([["s7", false], ["s1", false]]);
+    expect([t.top, t.disabled]).toEqual([false, null]);
+  });
+
+  it("ticks the parent of a nested session and offers Move to top level", () => {
+    const t = moveUnderTargets(list[1], list);
+    expect(ids(t)).toEqual([["s7", false], ["s3", false], ["s1", true]]);
+    expect(t.top).toBe(true);
+  });
+
+  it("is disabled for a session with sessions under it", () => {
+    expect(moveUnderTargets(list[0], list).disabled).toBe("Sessions are under it");
+  });
+
+  it("is disabled when no other session of its project is there to go under", () => {
+    expect(moveUnderTargets(list[4], list).disabled).toBe("No other session of this project here");
   });
 });
 

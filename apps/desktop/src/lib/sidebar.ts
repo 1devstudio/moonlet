@@ -41,10 +41,13 @@ const live = (state: AgentState | null) => state === "working" || state === "blo
 
 /** How a section orders its sessions, newest or most active first, or by
  * name; `of` finds the session in an item, `activeAt` its last activity and
- * `stateOf` its agent's state, so live agents lead the most active. */
+ * `stateOf` its agent's state, so live agents lead the most active.
+ * Sessions pinned to the top come first, in the same order (X112). */
 export function bySort<T>(sortBy: Section["view"]["sort_by"], of: (x: T) => Session, activeAt: (x: T) => number, stateOf: (x: T) => AgentState | null): (a: T, b: T) => number {
   return (a, b) => {
     const [x, y] = [of(a), of(b)];
+    const pinned = Number(!!y.pinned_top) - Number(!!x.pinned_top);
+    if (pinned) return pinned;
     if (sortBy === "name") return x.name.localeCompare(y.name);
     if (sortBy === "created") return y.created_at - x.created_at;
     return Number(live(stateOf(b))) - Number(live(stateOf(a))) || activeAt(b) - activeAt(a) || y.created_at - x.created_at;
@@ -209,7 +212,7 @@ export function arrangeShared(
     // A session two parts bring, as while it moves between two members
     // (X73), is the first one's: one row, with one key.
     g.sessions = firstListings([g.sessions], (e) => e.session.id)[0];
-    g.sessions.sort(compare);
+    g.sessions = nestUnderParents(g.sessions.sort(compare), (e) => e.session);
   }
   if (view.group_by === "status") {
     const order = STATUS_ORDER.map((x) => x.label);
@@ -408,22 +411,22 @@ export function lastActive(own: readonly { last_output_at: number }[], s: Sessio
   return own.reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
 }
 
-export type SessionMenuItem = "open" | "open-pr" | "open-in" | "mark-read" | "mark-unread" | "rename" | "move-workspace" | "link-task" | "keep-sync" | "archive" | "-";
+export type SessionMenuItem = "open" | "open-pr" | "open-in" | "pin-top" | "unpin-top" | "mark-read" | "mark-unread" | "rename" | "move-workspace" | "move-under" | "link-task" | "keep-sync" | "archive" | "-";
 
 /**
  * A session row's right-click menu (X112), its groups split by "-". Open PR
- * shows with a PR; Mark as read on an unread session, Mark as unread on a
+ * shows with a PR; Pin to top or Unpin from top (X112); Mark as read on an unread session, Mark as unread on a
  * read one with an agent tab. Link to task… is there for a session without a
  * task in a workspace with a task source (X46). A copy of a session another
  * member runs (X88) has only what the central host can ask that member for:
  * Open, and Archive while the member is reachable.
  */
-export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean }; pr?: boolean; unread?: boolean; agent?: boolean }): SessionMenuItem[] {
+export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean }; pr?: boolean; unread?: boolean; agent?: boolean; pinnedTop?: boolean }): SessionMenuItem[] {
   if (s.copy) return s.copy.reachable ? ["open", "archive"] : ["open"];
   const groups: SessionMenuItem[][] = [
     ["open", ...(s.pr ? (["open-pr"] as const) : []), "open-in"],
-    [...(s.unread ? (["mark-read"] as const) : s.agent ? (["mark-unread"] as const) : []), "rename"],
-    ["move-workspace"],
+    [s.pinnedTop ? "unpin-top" : "pin-top", ...(s.unread ? (["mark-read"] as const) : s.agent ? (["mark-unread"] as const) : []), "rename"],
+    ["move-workspace", "move-under"],
     [...(!s.linked && s.sources ? (["link-task"] as const) : []), ...(s.sync ? (["keep-sync"] as const) : [])],
   ];
   // Archive brings its own divider, after the Run only on… items (X73).
@@ -434,3 +437,38 @@ export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boole
  * first nine sessions in sidebar order (`selectSessionByIndex`). */
 export const openShortcut = (index: number): string | undefined => (index >= 0 && index < 9 ? `⌘${index + 1}` : undefined);
 
+/** Whether a session of `group` is drawn nested (X112): its parent is a
+ * top-level session of the same group. Nesting is one level deep. */
+export function nestedIn<T>(group: readonly T[], of: (x: T) => Session): (s: Session) => boolean {
+  const ids = new Set(group.map((x) => of(x).id));
+  // A session whose parent is not in the group is a top row itself.
+  const top = new Set(group.map(of).filter((s) => !s.parent || !ids.has(s.parent)).map((s) => s.id));
+  return (s) => !!s.parent && top.has(s.parent);
+}
+
+/** `list` in its order, each nested session moved right after its parent,
+ * keeping the order among siblings (X112). */
+export function nestUnderParents<T>(list: T[], of: (x: T) => Session): T[] {
+  const nested = nestedIn(list, of);
+  const out: T[] = [];
+  for (const x of list) {
+    if (nested(of(x))) continue;
+    out.push(x, ...list.filter((y) => of(y).parent === of(x).id && nested(of(y))));
+  }
+  return out;
+}
+
+/** Move under's sessions for `s` (X112): the other top-level, unarchived
+ * sessions of its project and workspace, newest first, its parent ticked;
+ * Move to top level (`top`) while it has a parent. A session with sessions
+ * under it cannot be nested: nesting is one level deep. */
+export function moveUnderTargets(s: Session, sessions: readonly Session[]): { disabled: string | null; top: boolean; targets: { id: string; name: string; current: boolean }[] } {
+  const live = sessions.filter((x) => !x.archived);
+  if (live.some((x) => x.parent === s.id)) return { disabled: "Sessions are under it", top: false, targets: [] };
+  const targets = live
+    .filter((x) => x.id !== s.id && !x.parent && x.project_id === s.project_id && x.workspace_id === s.workspace_id)
+    .sort((a, b) => b.created_at - a.created_at)
+    .map((x) => ({ id: x.id, name: x.name, current: x.id === s.parent }));
+  if (!targets.length && !s.parent) return { disabled: "No other session of this project here", top: false, targets };
+  return { disabled: null, top: !!s.parent, targets };
+}

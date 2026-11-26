@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { hostsApi, rpc } from "../lib/daemon";
@@ -7,7 +7,7 @@ import { workspaceOpenIn, type OpenTarget } from "../lib/openIn";
 import { menuTop } from "../lib/menuPlace";
 import { copyOffers } from "../lib/centralCopies";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, moveUnderTargets, nestedIn, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, markUnread, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -710,6 +710,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
   const ids = g.sessions.map((e) => e.session.id);
   const column = style === "number" && sources ? numberColumn(ids, lines, { heading: heading === "project" }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
+  const nested = nestedIn(g.sessions, (e) => e.session);
   const row = ({ host: h, session: s }: HostSession, nested?: boolean) => (
     <SessionRow key={`${h}/${s.id}`} host={h} s={s} nested={nested} on={h !== primary ? labelOf(h) : undefined} cell={cellOf(column, s.id)} onMenu={(e) => onRowMenu({ host: h, session: s }, e)} />
   );
@@ -758,7 +759,8 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
           )}
         </div>
       )}
-      {!collapsed && !tasks && g.sessions.map((e) => row(e))}
+      {/* A session moved under another shows indented below it (X112). */}
+      {!collapsed && !tasks && g.sessions.map((e) => row(e, nested(e.session)))}
       {!collapsed && tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.sessions.find((e) => e.session.id === id)!, true)} />}
     </div>
   );
@@ -1105,7 +1107,7 @@ interface SessionMenuContext {
 function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
   const copy = s.owner ? { reachable: s.owner.reachable } : undefined;
   const icon = (I: typeof Archive) => <I size={14} className="text-muted" />;
-  const ids = sessionMenu({ linked: c.linked, sources: c.sources, sync: sync.offered, copy, pr: !!c.pr, unread: c.unread, agent: c.agent });
+  const ids = sessionMenu({ linked: c.linked, sources: c.sources, sync: sync.offered, copy, pr: !!c.pr, unread: c.unread, agent: c.agent, pinnedTop: !!s.pinned_top });
   return ids.flatMap((id): MenuItem[] => {
     switch (id) {
       case "-":
@@ -1130,6 +1132,10 @@ function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { o
           },
         ];
       }
+      case "pin-top":
+        return [{ label: "Pin to top", icon: icon(Pin), onSelect: () => void rpc(host, M.sessionUpdate, { id: s.id, pinned_top: true }).catch(errorToast) }];
+      case "unpin-top":
+        return [{ label: "Unpin from top", icon: icon(PinOff), onSelect: () => void rpc(host, M.sessionUpdate, { id: s.id, pinned_top: false }).catch(errorToast) }];
       case "mark-read":
         return [{ label: "Mark as read", icon: icon(Eye), onSelect: () => markRead([{ host, id: s.id }]) }];
       case "mark-unread":
@@ -1139,6 +1145,15 @@ function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { o
       case "move-workspace": {
         const move = moveItems([{ host, ws: s }]);
         return [{ kind: "submenu", label: "Move to workspace", icon: icon(FolderInput), items: move.items, disabled: move.disabled ?? undefined }];
+      }
+      case "move-under": {
+        const t = moveUnderTargets(s, useStore.getState().sessions[host] ?? []);
+        const under = (parent: string | null) => () => void rpc(host, M.sessionUpdate, { id: s.id, parent }).catch(errorToast);
+        const items: MenuItem[] = [
+          ...(t.top ? [{ label: "Move to top level", icon: icon(ArrowUpToLine), onSelect: under(null) }, ...(t.targets.length ? [{ kind: "divider" as const }] : [])] : []),
+          ...t.targets.map((x): MenuItem => ({ label: x.name, checked: x.current, onSelect: under(x.id) })),
+        ];
+        return [{ kind: "submenu", label: "Move under", icon: icon(CornerDownRight), items, disabled: t.disabled ?? undefined }];
       }
       case "link-task":
         return [{ label: "Link to task…", icon: icon(Link2), onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
