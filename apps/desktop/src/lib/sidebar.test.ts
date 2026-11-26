@@ -473,6 +473,11 @@ describe("moveUnderTargets (X112)", () => {
     expect(moveUnderTargets(list[0], list).disabled).toBe("Sessions are under it");
   });
 
+  it("leaves out another member's session, listed here through its copy (X88)", () => {
+    const theirs = s("s8", "a", { owner: { worker: "mini", name: "studio-mini", reachable: true } });
+    expect(ids(moveUnderTargets(list[2], [...list, theirs]))).toEqual([["s7", false], ["s1", false]]);
+  });
+
   it("is disabled when no other session of its project is there to go under", () => {
     expect(moveUnderTargets(list[4], list).disabled).toBe("No other session of this project here");
   });

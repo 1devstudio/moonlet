@@ -2138,6 +2138,9 @@ impl SessionManager {
                 if p.project_id != me.project_id {
                     bail!("the parent session is in another project");
                 }
+                if p.workspace_id != me.workspace_id {
+                    bail!("the parent session is in another workspace");
+                }
                 if p.archived {
                     bail!("the parent session is archived");
                 }
@@ -4593,6 +4596,14 @@ mod tests {
         assert_eq!(err(&docs.id, &retries.id), "the parent session is under another session");
         assert_eq!(err(&spike.id, &docs.id), "sessions are under this session");
         assert_eq!(mgr.session(&docs.id).unwrap().parent, None);
+
+        // Its project in another workspace too: that workspace's session is
+        // not one this session shows under.
+        let acme = workspace(&mgr, "Acme", vec![]);
+        let shop = mgr.create_section(&acme.id, "Shop").unwrap();
+        mgr.section_add_project(&shop.id, &repo.path().display().to_string()).await.unwrap();
+        let there = mgr.create_session(new_session(&r.id, Some(&acme.id))).await.unwrap();
+        assert_eq!(err(&docs.id, &there.id), "the parent session is in another workspace");
     }
 
     /// X106: Move to workspace puts the session in a workspace that has a

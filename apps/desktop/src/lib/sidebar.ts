@@ -466,7 +466,8 @@ export function moveUnderTargets(s: Session, sessions: readonly Session[]): { di
   const live = sessions.filter((x) => !x.archived);
   if (live.some((x) => x.parent === s.id)) return { disabled: "Sessions are under it", top: false, targets: [] };
   const targets = live
-    .filter((x) => x.id !== s.id && !x.parent && x.project_id === s.project_id && x.workspace_id === s.workspace_id)
+    // Another member's session, here through its copy (X88), is not this host's to nest under.
+    .filter((x) => x.id !== s.id && !x.parent && !x.owner && x.project_id === s.project_id && x.workspace_id === s.workspace_id)
     .sort((a, b) => b.created_at - a.created_at)
     .map((x) => ({ id: x.id, name: x.name, current: x.id === s.parent }));
   if (!targets.length && !s.parent) return { disabled: "No other session of this project here", top: false, targets };
