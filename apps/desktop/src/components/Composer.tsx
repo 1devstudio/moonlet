@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { artifactSessionName, startMessage, startPlaceholder } from "../lib/artifacts";
+import { startWithArtifact, type ArtifactChip } from "../lib/artifactStore";
+import { KindTile } from "./ArtifactChips";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, Radio, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
@@ -342,6 +345,7 @@ export function Composer({
   task: presetTask,
   worktree,
   design: presetDesign,
+  artifact: presetArtifact,
 }: {
   host?: string;
   project?: string;
@@ -352,7 +356,10 @@ export function Composer({
   worktree?: { path: string; branch: string };
   /** Building a workspace design (X65 Build it): its chip, attachments, branch and prompt. */
   design?: BuildDesign;
+  /** Starting from an artifact (X114): its chip, and its live reference sent first. */
+  artifact?: ArtifactChip;
 }) {
+  const [artifact, setArtifact] = useState<ArtifactChip | null>(presetArtifact ?? null);
   const hosts = useStore((s) => s.hosts);
   const allProjects = useStore((s) => s.projects);
   const allWorkspaces = useStore((s) => s.workspaces);
@@ -632,8 +639,9 @@ export function Composer({
       const named = newBranch({ taskBranch: task && !worktree ? await taskBranchLoad.current : null, build: built });
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
-        prompt: firstMessage(sent, prompt),
-        name: sessionName({ task, pr, build: built }),
+        // From an artifact, the first message goes once it is referred to (X114).
+        prompt: artifact ? null : firstMessage(sent, prompt),
+        name: artifact ? artifactSessionName(artifact) : sessionName({ task, pr, build: built }),
         task: task?.ref ?? null,
         worktree: worktree?.path ?? null,
         agent: choice.agent,
@@ -653,6 +661,7 @@ export function Composer({
         rows: 32,
       });
       close();
+      if (artifact) void startWithArtifact(current.host, s.id, artifact, firstMessage(sent, startMessage(artifact.kind, prompt)) ?? startMessage(artifact.kind, prompt)).catch(errorToast);
       // The checkbox decides for this session, Build it's too (afterCreate).
       const next = afterCreate({ building: !!design, box: { shown: syncShown, value: keepSync, touched: syncTouched } });
       if (next.sync === "keep") void keepInSync(current.host, s.id);
@@ -753,7 +762,18 @@ export function Composer({
             )}
           />
           <span className="text-border-strong">|</span>
-          {design && built ? (
+          {artifact ? (
+            // The artifact is the composer's source (X114).
+            <span role="group" aria-label={`${artifact.kind === "plan" ? "Plan" : "Design"} ${artifact.name}`} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={artifact.name}>
+              <KindTile kind={artifact.kind} size={18} />
+              <span className="shrink-0 font-mono ui-text-12 text-muted">{artifact.kind === "plan" ? "Plan" : "Design"}</span>
+              <span className="min-w-0 truncate">{artifact.name}</span>
+              <span className="flex-1" />
+              <IconButton title={`Start without the ${artifact.kind}`} className="shrink-0" onClick={() => setArtifact(null)}>
+                <X size={12} />
+              </IconButton>
+            </span>
+          ) : design && built ? (
             // The design is the composer's source (X65 Build it).
             <span role="group" aria-label={built.chip} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={design.name}>
               <PenTool size={13} className="shrink-0 text-accent" />
@@ -955,6 +975,14 @@ export function Composer({
         </div>
         {/* The attachments above the prompt (X54); the prompt fills what is left. */}
         <div className="flex min-h-[168px] flex-col gap-2 px-6 pb-2 pt-4">
+          {artifact && (
+            <div role="group" aria-label={`${artifact.kind === "plan" ? "Plan" : "Design"}, live and read only · ${artifact.name}`} className="flex items-center gap-2 rounded-[10px] border border-border bg-panel-2 px-3 py-[9px] ui-text-12.5 text-muted">
+              <Radio size={13} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                {artifact.kind === "plan" ? "Plan" : "Design"}, live and read only · <span className="text-fg">{artifact.name}</span>
+              </span>
+            </div>
+          )}
           {sent.map((a) => (
             <AttachmentRow
               key={a.id}
@@ -1000,7 +1028,7 @@ export function Composer({
                   void create();
                 }
               }}
-              placeholder={placeholder(sent.map((a) => a.id))}
+              placeholder={artifact ? startPlaceholder(artifact.kind) : placeholder(sent.map((a) => a.id))}
               className={cx("block min-h-[52px] w-full flex-1 resize-none bg-transparent ui-text-14 leading-[1.6] text-fg outline-none placeholder:text-faint", sent.length > 0 && "pt-1")}
             />
           </div>

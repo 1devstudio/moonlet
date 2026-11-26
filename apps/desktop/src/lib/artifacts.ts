@@ -236,3 +236,19 @@ export function sentArtifacts(text: string): SentArtifacts | null {
   out.rest = lines.slice(i + 1).join("\n");
   return out;
 }
+
+/** A session started from an artifact (X114): named for what it does with it. */
+export function artifactSessionName(a: { kind: "plan" | "design"; name: string }): string {
+  return `${a.kind === "plan" ? "Implement" : "Build"} ${a.name}`;
+}
+
+/** What a session started from an artifact is first asked: what was typed,
+ *  else to implement the plan or build the design. */
+export function startMessage(kind: "plan" | "design", typed: string): string {
+  return typed.trim() || (kind === "plan" ? "Implement the plan." : "Build the design.");
+}
+
+/** The composer's prompt placeholder while it starts from an artifact. */
+export function startPlaceholder(kind: "plan" | "design"): string {
+  return `Anything to add? Leave empty to ${kind === "plan" ? "implement the plan" : "build the design"}.`;
+}

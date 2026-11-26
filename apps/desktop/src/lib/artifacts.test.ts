@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactRows, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
+import { artifactRows, artifactSessionName, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, startMessage, startPlaceholder, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
 import type { ArtifactInfo, Design } from "./protocol";
 
 const MIN = 60_000;
@@ -263,5 +263,23 @@ describe("sentArtifacts", () => {
 
   it("takes a note only when it names a folder", () => {
     expect(sentArtifacts("The tests changed since you last read it: see above\n\nok")).toBeNull();
+  });
+});
+
+describe("starting a session from an artifact", () => {
+  it("names the session for what it does with it", () => {
+    expect(artifactSessionName({ kind: "plan", name: "Add search to the product list" })).toBe("Implement Add search to the product list");
+    expect(artifactSessionName({ kind: "design", name: "Settings page" })).toBe("Build Settings page");
+  });
+
+  it("asks what was typed, else to implement the plan or build the design", () => {
+    expect(startMessage("plan", "  Keep the sort order.  ")).toBe("Keep the sort order.");
+    expect(startMessage("plan", " ")).toBe("Implement the plan.");
+    expect(startMessage("design", "")).toBe("Build the design.");
+  });
+
+  it("says in the prompt what an empty one does", () => {
+    expect(startPlaceholder("plan")).toBe("Anything to add? Leave empty to implement the plan.");
+    expect(startPlaceholder("design")).toBe("Anything to add? Leave empty to build the design.");
   });
 });

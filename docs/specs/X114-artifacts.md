@@ -65,8 +65,8 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### Start a session from an artifact (entry 5)
 
-- [ ] **Start session** on any artifact opens the New session composer in its project (a plan's session's project; a design's as Build it chooses, X65) with the artifact as the composer's chip, its live reference as an attachment, and the prompt placeholder "Anything to add? Leave empty to implement the plan." (or "…to build the design."). A plan that names a design artifact attaches that design too.
-- [ ] Create makes the session and refers it to the attached artifacts before its agent starts. **Build it** on a workspace design keeps copying the design into the session (X65); Start session refers to it instead.
+- [ ] **Start session** on any artifact but a merged design opens the New session composer in its project (its home's project; a workspace design's, the composer's own pick) with the artifact as the composer's chip, its live reference as an attachment, and the prompt placeholder "Anything to add? Leave empty to implement the plan." (or "…to build the design."). The session is named "Implement <plan>" or "Build <design>". (Not yet: a plan that names a design artifact attaching that design too.) (`lib/artifacts.test.ts` names the session for what it does with it, says in the prompt what an empty one does; `e2e/specs/artifacts.e2e.ts` starts a session from the plan, which refers to it from its first message)
+- [ ] Create makes the session with no first message, refers it to the artifact, then sends its first message: the artifact's line, then what was typed, else "Implement the plan." or "Build the design.". The agent gets the reference folder from that message. **Build it** on a workspace design keeps copying the design into the session (X65); Start session refers to it instead. (`lib/artifacts.test.ts` asks what was typed, else to implement the plan or build the design; `e2e/specs/artifacts.e2e.ts` starts a session from the plan, which refers to it from its first message)
 
 ### Copy and move between workspaces (entry 6)
 

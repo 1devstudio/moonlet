@@ -270,6 +270,8 @@ interface State extends UiPersist {
         worktree?: { path: string; branch: string };
         /** Building a workspace design (X65 Build it). */
         design?: BuildDesign;
+        /** Starting from an artifact (X114). */
+        artifact?: import("./artifactStore").ArtifactChip;
       }
     /** `clone`: the `<host>/<id>` of the clone the dialog shows (X59). */
     | { kind: "add-project"; host?: string; section?: string; clone?: string }

@@ -172,4 +172,28 @@ describe("artifacts", () => {
     await $(`${chip}//button[@title="Remove"]`).click();
     await expect($(chip)).not.toBeExisting();
   });
+
+  it("starts a session from the plan, which refers to it from its first message", async () => {
+    await $(artifactsRow).click();
+    await fill('//input[@aria-label="Search artifacts"]', "");
+    await $(planRow).click();
+    await $(sel.button("Start session")).click();
+    const dialog = '//div[@role="dialog"][@aria-label="New session"]';
+    await expect($(`${dialog}//*[@role="group"][@aria-label=${JSON.stringify(`Plan ${SESSION}`)}]`)).toBeDisplayed();
+    await expect($(`${dialog}//*[@role="group"][@aria-label=${JSON.stringify(`Plan, live and read only · ${SESSION}`)}]`)).toBeDisplayed();
+    await expect($(`${dialog}//textarea[@placeholder="Anything to add? Leave empty to implement the plan."]`)).toBeDisplayed();
+    await $(`${dialog}${sel.button("Create")}`).click();
+    const name = `Implement ${SESSION}`;
+    await expect($(sel.sessionRow(name))).toBeDisplayed();
+    const id = `plan:${sessionId}:search-products`;
+    let started = "";
+    await browser.waitUntil(
+      () => {
+        started = rpc<{ id: string; name: string }[]>(w, "session.list", {}).find((x) => x.name === name)?.id ?? "";
+        return !!started && (rpc<{ id: string; used_by: string[] }[]>(w, "artifact.list", { workspace }).find((a) => a.id === id)?.used_by.includes(started) ?? false);
+      },
+      { timeout: 20_000, timeoutMsg: "the new session never referred to the plan" },
+    );
+    rpc(w, "session.archive", { id: started });
+  });
 });

@@ -2,7 +2,7 @@
 // and the artifact view in the main area.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, Layers, MoreHorizontal, Paperclip, Pencil, Search, X } from "lucide-react";
+import { Check, Layers, MoreHorizontal, Paperclip, Pencil, Plus, Search, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ArtifactInfo, type ArtifactText } from "../lib/protocol";
 import { designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
@@ -129,7 +129,7 @@ export function ArtifactView() {
   return row.info.kind === "plan" ? <PlanView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} /> : <DesignView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} />;
 }
 
-function Header({ info, children, menu }: { info: ArtifactInfo; children?: React.ReactNode; menu?: { label: string; onSelect: () => void }[] }) {
+function Header({ info, children, menu }: { info: ArtifactInfo; children?: ReactNode; menu?: { label: string; onSelect: () => void }[] }) {
   return (
     <div className="flex h-ui-52 shrink-0 items-center gap-3 border-b border-border px-5">
       <span className="flex min-w-0 items-center gap-2 ui-text-14 font-semibold">
@@ -151,6 +151,25 @@ function Header({ info, children, menu }: { info: ArtifactInfo; children?: React
         />
       )}
     </div>
+  );
+}
+
+/** Start session: the New session composer, the artifact its source, in
+ *  its project (X114). */
+function StartSession({ host, info }: { host: string; info: ArtifactInfo }) {
+  const workspace = useStore((s) => shownWorkspace(s)?.id);
+  return (
+    <Button
+      variant="primary"
+      onClick={() =>
+        useStore.setState({
+          showArtifacts: false,
+          dialog: { kind: "new-session", host, project: info.home.project, workspace, artifact: { host, id: info.id, name: info.name, kind: info.kind } },
+        })
+      }
+    >
+      <Plus size={13} /> Start session
+    </Button>
   );
 }
 
@@ -254,6 +273,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
       <div className="flex min-w-0 flex-1 flex-col">
         <Header info={info} menu={info.home.archived ? [] : [{ label: "Rename…", onSelect: () => setRenaming(true) }]}>
           {editing === null && <AttachToSession host={host} info={info} />}
+          {editing === null && <StartSession host={host} info={info} />}
           {editing === null ? (
             <Button disabled={readOnly || !read?.text} onClick={() => setEditing(read?.text ?? "")}>
               <Pencil size={13} /> Edit
@@ -360,6 +380,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
       <div className="flex min-w-0 flex-1 flex-col">
         <Header info={info}>
           {design?.kind !== "project" && <AttachToSession host={host} info={info} />}
+          {design?.kind !== "project" && <StartSession host={host} info={info} />}
           <Button disabled={!design || design.kind === "project"} onClick={edit}>
             <Pencil size={13} /> Edit
           </Button>
