@@ -1375,6 +1375,8 @@ impl SessionManager {
     /// separately.
     fn continue_chat_as(&self, ws: &Session, mut history: moonlet_proto::types::ChatState, fork: bool) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
+        // A fork's chat that moved here before its first message still forks.
+        let fork = fork || (history.fork_of.is_some() && history.fork_of == history.agent_session);
         // Another member's word: a conversation id that is not one starts
         // a new conversation, and a mode that turns every check off, or
         // that this host does not know, is never taken from it; it is set
@@ -4842,6 +4844,29 @@ mod tests {
         assert_eq!(sh_git(&repo_dir, &["branch", "--list"]), branches);
         assert_eq!(sh_git(&repo_dir, &["worktree", "list"]), worktrees);
         assert_eq!(mgr.list_sessions().len(), 1);
+    }
+
+    /// X112: a fork's chat that moves to another member before its first
+    /// message (X73), which continues it from its state, still makes a new
+    /// conversation: the two sessions never write to one.
+    #[tokio::test]
+    async fn a_forks_chat_moved_before_its_first_message_still_forks() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let id = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+        let history = moonlet_proto::types::ChatState { status: "done".into(), agent_session: Some(id.into()), ..Default::default() };
+        mgr.continue_chat(&src, history).unwrap();
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+        // What the member it moves to gets: the chat's state.
+        let moved = chats.state(fork.terminals[0]).unwrap();
+        let there = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+
+        let chat = mgr.continue_chat(&there, moved).unwrap();
+
+        chats.send(chat.id, "go on", &[]).unwrap();
+        let args = nth_line(&Path::new(&there.path).join("claude-args"), 1).await;
+        assert!(args.contains(&format!("--resume {id} --fork-session")), "{args}");
     }
 
     /// X112: only a Claude chat goes on from its conversation; a chat of

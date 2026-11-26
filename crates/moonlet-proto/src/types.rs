@@ -1520,6 +1520,11 @@ pub struct ChatState {
     /// The agent's own conversation id (Claude session id, Codex thread id).
     #[serde(default)]
     pub agent_session: Option<String>,
+    /// A forked session's chat (X112): the conversation it came from, which
+    /// its agent's first start makes a new one from. Carried with the state
+    /// so a chat that moves to another member (X73) before then still forks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_of: Option<String>,
     #[serde(default)]
     pub slash_commands: Vec<String>,
     /// The agent's subagents, for the `+` menu (X29).

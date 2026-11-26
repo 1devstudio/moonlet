@@ -351,7 +351,7 @@ impl ChatManager {
         command.extend(args);
         let now = now_ms();
         let (state, kept, held) = match history {
-            Some(h) => continued_state(ChatState { add_dirs, ..h }),
+            Some(h) => continued_state(ChatState { add_dirs, fork_of: if fork { h.agent_session.clone() } else { h.fork_of.clone() }, ..h }),
             None => (ChatState { status: "idle".into(), add_dirs, ..Default::default() }, Vec::new(), Vec::new()),
         };
         let info = self.terms.register_chat(TerminalInfo {
