@@ -116,6 +116,11 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
     expect(g[0].sessions.map((e) => e.session.id)).toEqual(["s6", "s7", "s4", "s3", "s1", "s5"]);
   });
 
+  it("keeps a pinned nested session right after its unpinned parent (X112)", () => {
+    const local = { ...here, sessions: [s("s1", "a"), s("s4", "a"), s("s5", "a", { parent: "s1", pinned_top: true })] };
+    expect(arrangeShared("personal", [local, mini], none)[0].sessions.map((e) => e.session.id)).toEqual(["s4", "s3", "s1", "s5"]);
+  });
+
   it("merges status groups across members in their usual order", () => {
     const state = (host: string, x: Session) => (host === "studio-mini" && x.id === "s3" ? "blocked" : "idle");
     const g = arrangeShared("personal", [{ ...here, sec: { ...here.sec, view: { ...here.sec.view, group_by: "status" } } }, mini], { ...none, stateOf: state });
