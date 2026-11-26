@@ -36,7 +36,10 @@ export const useArtifacts = create<ArtifactState>(() => ({ chips: {}, plans: {},
 const chipKey = (host: string, session: string) => `${host}/${session}`;
 
 /** The artifacts session `session` on `host` will refer to with its next message. */
-export const chipsOf = (s: ArtifactState, host: string, session: string): ArtifactChip[] => s.chips[chipKey(host, session)] ?? [];
+/** One empty list, so a selector of a session with none returns the same one each time. */
+const NO_CHIPS: ArtifactChip[] = [];
+
+export const chipsOf = (s: ArtifactState, host: string, session: string): ArtifactChip[] => s.chips[chipKey(host, session)] ?? NO_CHIPS;
 
 /** Picks an artifact for a session's next message; once is enough. */
 export function addChip(host: string, session: string, chip: ArtifactChip) {
