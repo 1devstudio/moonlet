@@ -41,14 +41,15 @@ A daemon started at boot can never read the user's login Keychain, before login 
 - [x] `moonletd daemon --boot` serves like any daemon, and `daemon.info` says `started_at_boot: true` (`false` otherwise). Test: `a_boot_daemon_says_so`.
 - [x] A boot daemon that upgrades (S3) starts the new daemon with `--boot`: it runs outside a login session too. The new daemon keeps the terminals it takes even if the user has turned the switch off since. Test: `an_upgraded_boot_daemon_still_says_so`.
 - [ ] Before login it serves sessions, terminals, restored workspaces, the tailnet listener and heavy commands as usual. It reads no Keychain item, as no daemon does today.
-- [ ] A Claude chat that starts or resumes in a boot daemon waits instead of running `claude`. Its state says `waiting_for_login`, and the app and the phone show "Claude starts once you log in on <host>". A message sent to it is queued as usual. Test: `a_chat_in_a_boot_daemon_waits_for_login`; Vitest: "says a chat waits for login on its host".
+- [x] A Claude chat in a boot daemon starts no `claude`: a new chat starts none, and a message sent to it is held, as a moved chat holds its messages (X73), saved with the chat. Its state says `waiting_for_login` and lists the message as queued. A message with images is refused ("Claude starts once you log in on this Mac: send the images once it does"). Tests: `a_chat_waiting_for_login_holds_its_message_and_starts_no_agent`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
+- [ ] The app and the phone show "Claude starts once you log in on <host>" for a chat in `waiting_for_login`. Vitest: "says a chat waits for login on its host".
 
 ### Login takes over
 
 - [x] At login the X56 login item starts moonletd. Today it exits 0 when a daemon is already listening. When that daemon says `started_at_boot`, the new daemon instead asks it to hand over: the boot daemon hands every terminal to the asking daemon over the S3 handoff, then exits 0. Unlike S3, the boot daemon starts no process: the daemon that asked receives the terminals itself, so it stays in the login session, where the Keychain is. Test: `a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon` (a terminal's process keeps its pid and its output after the takeover). A daemon that finds a daemon not started at boot listening exits 0 as before: `a_daemon_that_was_not_started_at_boot_is_left_serving`.
 - [x] The boot daemon hands over only to the daemon a login starts. `daemon.hand_over` must come from a local process running the boot daemon's own `moonletd` (as the kernel reports its executable) that sends this Mac's app credential (X75): an agent's CLI or another program of the user's is refused with `forbidden`. Tests: `a_hand_over_is_refused_to_anything_but_this_moonletd_with_the_credential`, `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
 - [x] The terminals go only to the process that asked: the handoff socket accepts that process only (same uid as S3, same pid, still running the boot daemon's executable), and it must first send the one-time secret that only its `daemon.hand_over` reply carried. No automated test of a second process racing to connect: the checks sit before any terminal is sent.
-- [ ] The taking daemon resumes chats from disk, as after S3, so a chat that waited for login starts. Test: `a_waiting_chat_starts_after_the_takeover`.
+- [x] The taking daemon resumes chats from disk, as after S3, and a chat that waited for login sends its held messages to a new agent, in the login session. Tests: `a_chat_that_waited_for_login_is_answered_by_the_daemon_a_login_starts`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
 - [x] A takeover that fails leaves the boot daemon serving its terminals, and the login-session daemon exits 0, so launchd does not keep restarting it. The failure is logged on both sides. Test: `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
 - [ ] Terminals opened before login keep running in the boot daemon's context after the takeover: a command in them still cannot read the Keychain. New terminals can.
 
@@ -67,7 +68,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
   - Tailscale without `tailscaled` (`/Library/LaunchDaemons/com.tailscale.tailscaled.plist` missing): "Tailscale joins the tailnet only after login. To reach this Mac before then, use tailscaled.";
   - FileVault on (`fdesetup isactive`): "FileVault is on: after a restart nothing starts until someone unlocks the disk.";
   - automatic login off (no `autoLoginUser` in `/Library/Preferences/com.apple.loginwindow.plist`): "Claude chats wait until someone logs in. Automatic login in System Settings › Users & Groups logs in right after a restart (needs FileVault off)."
-- [ ] Search settings finds the switch under "boot", "system start", "restart", "before login" and "launch daemon". Vitest: "finds start at system start (X113)".
+- [ ] Search settings finds the switch under "boot", "system start", "startup", "before login" and "launch daemon" (not "restart", which finds X97's Restart the daemon alone). Vitest: "finds start at system start (X113)".
 
 ## UI
 

@@ -331,3 +331,118 @@ async fn a_hand_over_is_refused_to_anything_but_this_moonletd_with_the_credentia
     let after = info(&socket, home.path()).await;
     assert_eq!(after.pid, before.pid, "the boot daemon still serves");
 }
+
+/// A `claude` that records each start (`claude-starts`) and each message it
+/// reads (`claude-user`) in `$HOME`, and answers at once.
+const RECORDING_CLAUDE: &str = r#"#!/bin/sh
+echo started >> "$HOME/claude-starts"
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> "$HOME/claude-user"
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+  esac
+done
+"#;
+
+/// A daemon on `home` as its user's HOME, whose agents find the recording
+/// `claude` first on the login shell's PATH.
+fn home_daemon(home: &Path, args: &[&str]) -> Command {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("claude"), RECORDING_CLAUDE).unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.join(rc), &first).unwrap();
+    }
+    let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+    c.args(args)
+        .env("HOME", home)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
+        .env_remove("MOONLET_SOCK")
+        .env_remove("MOONLET_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .keep_logs(&home.join(".moonlet"));
+    c
+}
+
+/// Waits up to 15 s for `file` to hold `text`.
+fn file_holds(file: &Path, text: &str) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(file).is_ok_and(|t| t.contains(text)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// Before login Claude cannot read its sign-in: a session's first message
+/// waits, and the daemon a login starts sends it.
+#[tokio::test]
+async fn a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message() {
+    use moonlet_proto::types::{ChatState, Project, Session};
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join(".moonlet");
+    std::fs::create_dir_all(&data).unwrap();
+    turn_boot(&data, true);
+    let mut boot = Kill(home_daemon(home.path(), &["daemon", "--boot"]).spawn().unwrap());
+    // The daemon's own socket in its data folder.
+    let socket = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(s) = std::fs::read_dir(data.join("run")).ok().and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "sock") && !p.to_string_lossy().contains("handoff"))) {
+                break s;
+            }
+            assert!(std::time::Instant::now() < deadline, "no socket");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    assert!(info(&socket, &data).await.started_at_boot);
+
+    let repo = home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [&["init", "-q", "-b", "main"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        assert!(Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+    }
+    let mut c = Client::connect_app(&socket, &data).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let _: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Fix login", "agent": "claude", "prompt": "hello before login"}))
+        .await
+        .unwrap();
+    let chat = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+            if let Some(t) = list.into_iter().find(|t| t.agent.as_deref() == Some("claude")) {
+                break t.id;
+            }
+            assert!(std::time::Instant::now() < deadline, "no chat");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let state: ChatState = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat})).await.unwrap();
+    assert_eq!(state.status, "waiting_for_login");
+    assert_eq!(state.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["hello before login"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!home.path().join("claude-starts").exists(), "no Claude before login");
+    drop(c);
+
+    // The login item starts its daemon.
+    let _login = Kill(home_daemon(home.path(), &["daemon"]).spawn().unwrap());
+    assert_eq!(exit_code(&mut boot.0), Some(0));
+    assert!(file_holds(&home.path().join("claude-user"), "hello before login"), "the message reached Claude");
+    let mut c = Client::connect_app(&socket, &data).await.unwrap();
+    let state: ChatState = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat})).await.unwrap();
+    assert!(state.queued.is_empty(), "{state:?}");
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+}

@@ -343,6 +343,11 @@ fn run_daemon(
         stop_with_owner(&daemon);
         upgrade::write_pid(&socket);
         update::clean_leftovers();
+        // Outside a login session Claude cannot read its sign-in: chats
+        // hold their messages for the daemon a login starts (X113).
+        if boot::started_at_boot() {
+            daemon.chats.wait_for_login();
+        }
         let chats = daemon.chats.restore();
         if chats > 0 {
             tracing::info!(chats, "restored structured agent conversations");
@@ -419,6 +424,11 @@ fn run_daemon(
         // A daemon that took over already told systemd (X58).
         if fresh {
             notify::ready();
+        }
+        // What chats held while the daemon started at system start ran
+        // goes to their agents now (X113).
+        if !boot::started_at_boot() {
+            daemon.chats.start_waiting();
         }
         server::serve(daemon, listener, socket).await
     })?;

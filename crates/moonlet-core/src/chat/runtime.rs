@@ -143,6 +143,11 @@ fn rest_after() -> u64 {
     static MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *MS.get_or_init(|| std::env::var("MOONLET_TEST_AGENT_REST_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(REST_AFTER.as_millis() as u64))
 }
+
+/// A chat's status while it waits for its user's login (X113).
+pub const WAITING_FOR_LOGIN: &str = "waiting_for_login";
+const WAITS_FOR_LOGIN: &str = "Claude starts once you log in on this Mac";
+
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
@@ -158,6 +163,10 @@ pub struct ChatManager {
     ending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Set once `shutdown` starts: no agent starts after it (X79).
     stopping: std::sync::atomic::AtomicBool,
+    /// A daemon started at system start, outside any login session (X113):
+    /// no agent starts, and chats hold their messages for the daemon a login
+    /// starts.
+    until_login: std::sync::atomic::AtomicBool,
     /// How long, in milliseconds, an agent stays idle before it rests (X84).
     rest_after: std::sync::atomic::AtomicU64,
     /// The models Claude Code offers, by Claude profile folder (`None` for
@@ -279,7 +288,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), until_login: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -389,6 +398,8 @@ impl ChatManager {
                 // not anew, as after a daemon start. Until then no agent
                 // runs, so many sessions moving at once start none.
                 inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+            } else if self.waiting_for_login() {
+                // No agent before login (X113): its first message waits.
             } else if let Err(e) = self.spawn(&chat, &mut inner) {
                 // A new chat starts right away, so the agent is warm when
                 // the first message comes.
@@ -427,7 +438,53 @@ impl ChatManager {
     pub fn send(&self, id: TerminalId, text: &str, images: &[ChatImage]) -> Result<()> {
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
+        if self.waiting_for_login() {
+            return self.hold_until_login(&chat, &mut inner, text, images);
+        }
         self.deliver(&chat, &mut inner, text, images)
+    }
+
+    /// For a daemon started at system start (X113): no agent starts, and
+    /// every chat's messages wait for the daemon a login starts.
+    pub fn wait_for_login(&self) {
+        self.until_login.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn waiting_for_login(&self) -> bool {
+        self.until_login.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Keeps `text` as a queued message the chat holds, saved with it, as a
+    /// moved chat holds its messages (X73), until the daemon a login starts
+    /// sends it (X113).
+    fn hold_until_login(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
+        if !images.is_empty() {
+            bail!("{WAITS_FOR_LOGIN}: send the images once it does");
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        inner.state.queued.push(moonlet_proto::types::QueuedMessage { id: id.clone(), text: text.to_string(), sending: false });
+        inner.held.push(id);
+        inner.state.status = WAITING_FOR_LOGIN.into();
+        self.apply(chat, inner, vec![Out::State]);
+        Ok(())
+    }
+
+    /// In the daemon a login started, after [`Self::restore`]: the chats
+    /// that waited for login send what they held (X113).
+    pub fn start_waiting(&self) {
+        let waiting: Vec<TerminalId> = self
+            .chats
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, c)| c.inner.lock().unwrap().state.status == WAITING_FOR_LOGIN)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in waiting {
+            if let Err(e) = self.go_on(id, None) {
+                tracing::warn!(chat = %id, "a chat that waited for login cannot go on: {e:#}");
+            }
+        }
     }
 
     /// Sends a user message, starting or restarting the agent first when
@@ -1452,6 +1509,9 @@ impl ChatManager {
     fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             bail!("the daemon is stopping");
+        }
+        if self.waiting_for_login() {
+            bail!("{WAITS_FOR_LOGIN}");
         }
         let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
         let launch = self.launch(inner);
@@ -3237,6 +3297,43 @@ done
     /// Each start of the fake `claude` in `dir`, as its arguments.
     fn starts(dir: &Path) -> Vec<String> {
         std::fs::read_to_string(dir.join("claude-args")).unwrap().lines().map(String::from).collect()
+    }
+
+    /// X113: a daemon started at system start runs outside any login
+    /// session, where Claude cannot read its sign-in from the Keychain.
+    #[tokio::test]
+    async fn a_chat_waiting_for_login_holds_its_message_and_starts_no_agent() {
+        let (dir, _terms, chats) = setup().await;
+        chats.wait_for_login();
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        chats.send(id, "hi", &[]).unwrap();
+        let st = chats.state(id).unwrap();
+        assert_eq!(st.status, "waiting_for_login");
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["hi"]);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!dir.path().join("claude-args").exists(), "no agent started");
+    }
+
+    /// X113: the daemon a login starts takes the chats over from disk, and
+    /// a message that waited for login gets its answer.
+    #[tokio::test]
+    async fn a_chat_that_waited_for_login_is_answered_by_the_daemon_a_login_starts() {
+        let (dir, _terms, chats) = setup().await;
+        chats.wait_for_login();
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        chats.send(id, "hi", &[]).unwrap();
+        chats.shutdown().await;
+
+        let terms = TerminalManager::new(dir.path().join("sock-at-login"), fake_claude_env(dir.path()));
+        let at_login = ChatManager::new(terms, dir.path().join("chats"));
+        assert_eq!(at_login.restore(), 1);
+        at_login.start_waiting();
+        let st = wait_for(&at_login, id, |s| s.status == "done").await;
+        let users: Vec<_> = st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
+        assert_eq!(users, ["hi"]);
+        assert!(st.items.iter().any(|i| i.kind == "assistant" && i.text == "hello"), "{:?}", st.items);
+        assert!(st.queued.is_empty());
+        assert_eq!(starts(dir.path()).len(), 1);
     }
 
     #[tokio::test]
