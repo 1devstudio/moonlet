@@ -11,7 +11,7 @@ pub mod refs;
 
 pub use design_id::{DesignHome, design_id, parse_design_id};
 
-pub use plans::{Plan, Plans, Proposal, Version, VersionState, display_name, parse_id, plan_key, snippet};
+pub use plans::{Plan, Plans, Proposal, Version, VersionState, display_name, parse_id, plan_key, snippet, workspace_home, workspace_of_home};
 
 /// A name safe as one path component of the artifacts folder: letters,
 /// digits, `.`, `_` and `-`, not starting with a dot, at most 160 bytes.

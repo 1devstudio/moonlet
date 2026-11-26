@@ -62,6 +62,8 @@ export interface ListInput {
   /** A project's name on a host: project ids are unique per host only. */
   projectName: (host: string, id: string) => string | undefined;
   now: number;
+  /** Each host's artifacts referred to, with the sessions referring to each (`artifact.used`). */
+  used?: Record<string, Record<string, string[]> | undefined>;
 }
 
 /**
@@ -99,7 +101,10 @@ export function artifactRows(input: ListInput, kind: ArtifactKind, query: string
     if (kind === "plan") continue;
     for (const d of designs ?? []) {
       if (d.owner && owned.has(designArtifactId(d, input.workspace))) continue;
-      const info = designArtifact(d, input.workspace);
+      const plain = designArtifact(d, input.workspace);
+      // The sessions referring to it, its own left out.
+      const used = (input.used?.[host]?.[plain.id] ?? []).filter((s) => s !== plain.home.session);
+      const info = used.length ? { ...plain, used_by: used } : plain;
       if (!searching) add(host, info, null);
       else {
         const m = designMatch(d, query);

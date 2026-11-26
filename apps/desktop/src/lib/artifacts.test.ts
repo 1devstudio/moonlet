@@ -302,3 +302,15 @@ describe("KIND_WORDS", () => {
     expect(KIND_WORDS).toEqual({ plan: "Plan", design: "Design" });
   });
 });
+
+describe("used by", () => {
+  it("counts the sessions that refer to a design, its own session left out", () => {
+    const used = { mac: { "design:workspace:w1:settings-page": ["s2", "s3"], "design:session:a1b2c3d4e5f6:checkout-flow": ["a1b2c3d4e5f6", "s4"] } };
+    const rows = artifactRows(input({ plans: {}, used }), "design", "", {});
+    expect(rows.map((r) => [r.info.name, r.info.used_by, r.usedBy])).toEqual([
+      ["Settings page", ["s2", "s3"], "used by 2"],
+      ["Checkout flow", ["s4"], "used by 1"],
+      ["Account pages, dark", [], null],
+    ]);
+  });
+});

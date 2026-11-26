@@ -175,6 +175,12 @@ impl Store {
         self.move_design(LIBRARY, into, slug)
     }
 
+    /// Moves workspace design `slug` from workspace `from` into workspace
+    /// `into`, under the next free slug there (X114). Gives its slug there.
+    pub fn move_design_between(&self, from: &str, into: &str, slug: &str) -> Result<String> {
+        self.move_design(from, into, slug)
+    }
+
     fn move_design(&self, from: &str, into: &str, slug: &str) -> Result<String> {
         if from == into {
             anyhow::bail!("the design is there already");

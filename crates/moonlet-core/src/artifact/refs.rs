@@ -95,24 +95,9 @@ impl Refs {
 
     /// Every artifact some session refers to, each once.
     pub fn ids(&self) -> Vec<String> {
-        let Ok(rd) = std::fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut ids: Vec<String> = rd
-            .flatten()
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()
-                    .and_then(|n| n.strip_suffix(".toml"))
-                    .map(String::from)
-            })
-            .filter(|s| super::safe_name(s))
-            .flat_map(|s| self.of(&s).into_iter().map(|r| r.id))
-            .collect();
-        ids.sort();
-        ids.dedup();
-        ids
+        self.all().into_keys().collect()
     }
+
 
     /// Notes that session `session`'s agent was given or told of version
     /// `version` of artifact `id`. Returns whether that version is new to it.
@@ -143,6 +128,56 @@ impl Refs {
         if let Some(r) = refs.refs.iter_mut().find(|r| r.id == id) {
             r.seen = before.map(String::from);
             self.write(session, &refs)?;
+        }
+        Ok(())
+    }
+
+    /// Every artifact referred to, each with the sessions referring to it.
+    pub fn all(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut all: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for session in self.sessions() {
+            for r in self.of(&session) {
+                all.entry(r.id).or_default().push(session.clone());
+            }
+        }
+        for sessions in all.values_mut() {
+            sessions.sort();
+        }
+        all
+    }
+
+    /// The sessions that refer to anything.
+    fn sessions(&self) -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        rd.flatten()
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_suffix(".toml"))
+                    .map(String::from)
+            })
+            .filter(|s| super::safe_name(s))
+            .collect()
+    }
+
+    /// Artifact `from` is now `to` (it moved): every reference to it follows.
+    pub fn rename_id(&self, from: &str, to: &str) -> Result<()> {
+        let _held = self.lock.lock().unwrap();
+        for session in self.sessions() {
+            let mut refs = self.read(&session)?;
+            let mut changed = false;
+            for r in refs.refs.iter_mut().filter(|r| r.id == from) {
+                r.id = to.to_string();
+                changed = true;
+            }
+            if changed {
+                // One referring to both keeps one.
+                let mut seen = std::collections::HashSet::new();
+                refs.refs.retain(|r| seen.insert(r.id.clone()));
+                self.write(&session, &refs)?;
+            }
         }
         Ok(())
     }
@@ -601,6 +636,51 @@ mod tests {
             stage_design(&design, &folder).unwrap().version,
             staged.version,
             "the same files, the same version"
+        );
+    }
+
+    #[test]
+    fn references_follow_an_artifact_that_moved_and_all_are_listed_with_their_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let refs = Refs::new(home.path());
+        refs.add(
+            "s-api",
+            "design:session:s1:checkout-flow",
+            "design-checkout-flow",
+            1_000,
+        )
+        .unwrap();
+        refs.add(
+            "s-copy",
+            "design:session:s1:checkout-flow",
+            "design-checkout-flow",
+            2_000,
+        )
+        .unwrap();
+        refs.add("s-copy", "plan:s1:search", "plan-search", 3_000)
+            .unwrap();
+
+        refs.rename_id(
+            "design:session:s1:checkout-flow",
+            "design:workspace:w1:checkout-flow",
+        )
+        .unwrap();
+
+        assert_eq!(
+            refs.referrers("design:session:s1:checkout-flow"),
+            Vec::<String>::new()
+        );
+        let all = refs.all();
+        assert_eq!(
+            all.get("design:workspace:w1:checkout-flow"),
+            Some(&vec!["s-api".to_string(), "s-copy".to_string()])
+        );
+        assert_eq!(all.get("plan:s1:search"), Some(&vec!["s-copy".to_string()]));
+        assert_eq!(all.len(), 2);
+        assert_eq!(
+            refs.of("s-api")[0].name,
+            "design-checkout-flow",
+            "its copy stays where it is"
         );
     }
 }

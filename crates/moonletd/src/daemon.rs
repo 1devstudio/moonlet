@@ -1492,8 +1492,7 @@ impl Daemon {
             let name = self.plan_info(&plan).name;
             return Ok(ArtifactSource { name, kind: "plan", folder: format!("plan-{key}"), from: ArtifactFrom::Plan(text), version: format!("v{n}") });
         }
-        let r = design_ref_of(id)?;
-        let at = self.locate(&r).await?;
+        let at = self.locate(&design_ref_of(id)?).await?;
         let store = self.design.clone();
         let info = blocking(move || store.design(&at)).await?;
         Ok(ArtifactSource {
@@ -1515,6 +1514,47 @@ impl Daemon {
         let Ok(r) = design_ref_of(id) else { return false };
         // The design store's word for a design it does not have.
         self.locate(&r).await.is_err_and(|e| e.message.contains("no design \""))
+    }
+
+    /// Copies artifact `id` into workspace `workspace` as its own (X114).
+    async fn copy_artifact_to(&self, id: &str, workspace: &str) -> Result<String, RpcError> {
+        self.workspace_exists(workspace)?;
+        if moonlet_core::artifact::parse_id(id).is_some() {
+            let plan = self.plans.plan(id).map_err(internal)?.ok_or_else(|| RpcError::new("invalid_params", format!("no artifact {id}")))?;
+            let name = self.plan_info(&plan).name;
+            let copy = self.plans.copy_to_workspace(id, workspace, &name, now_ms()).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+            self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": copy })));
+            return Ok(copy);
+        }
+        let at = self.locate(&design_ref_of(id)?).await?;
+        let (store, ws) = (self.design.clone(), workspace.to_string());
+        let slug = blocking(move || store.copy_design_to(&at, &ws, now_ms())).await?;
+        Ok(format!("design:workspace:{workspace}:{slug}"))
+    }
+
+    /// Moves workspace artifact `id` into workspace `workspace`; the
+    /// sessions that refer to it follow it (X114).
+    async fn move_artifact_to(&self, id: &str, workspace: &str) -> Result<String, RpcError> {
+        self.workspace_exists(workspace)?;
+        let session_owned = || RpcError::new("invalid_params", "a session's artifact can only be copied");
+        let to = if let Some((home, _)) = moonlet_core::artifact::parse_id(id) {
+            if moonlet_core::artifact::workspace_of_home(home).is_none() {
+                return Err(session_owned());
+            }
+            self.plans.move_to_workspace(id, workspace).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?
+        } else {
+            match design_ref_of(id)? {
+                m::DesignRef::Workspace { workspace: from, slug } if from != LIBRARY => {
+                    let slug = self.move_design_to(&from, &slug, workspace).await?;
+                    format!("design:workspace:{workspace}:{slug}")
+                }
+                m::DesignRef::Workspace { .. } => return Err(RpcError::new("invalid_params", "a shared design moves with Stop sharing")),
+                m::DesignRef::Session { .. } => return Err(session_owned()),
+            }
+        };
+        self.refs.rename_id(id, &to).map_err(internal)?;
+        self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": to })));
+        Ok(to)
     }
 
     /// Refers session `session` to artifact `id`, live and read only
@@ -1740,7 +1780,9 @@ impl Daemon {
     /// The artifacts of `workspace` on this host, newest change first (X114).
     fn artifacts_of(&self, workspace: &str) -> Vec<moonlet_proto::types::ArtifactInfo> {
         let sessions: Vec<_> = self.sessions.list_sessions().into_iter().filter(|s| s.workspace_id.as_deref() == Some(workspace)).collect();
-        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        // The workspace's own plans too, copied from another (X114).
+        let own = moonlet_core::artifact::workspace_home(workspace);
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).chain([own.as_str()]).collect();
         // Each session's plans counted once, so a plan is named after its chat
         // only when its session has several.
         let plans = self.plans.list(Some(&ids));
@@ -1762,6 +1804,18 @@ impl Daemon {
     /// Plan `plan` as listed, `several` saying its session has plans from
     /// several chats.
     fn plan_info_of(&self, plan: &moonlet_core::artifact::Plan, several: bool) -> moonlet_proto::types::ArtifactInfo {
+        // A workspace's own plan has no session.
+        if let Some(workspace) = moonlet_core::artifact::workspace_of_home(&plan.session) {
+            return moonlet_proto::types::ArtifactInfo {
+                id: plan.id(),
+                kind: "plan".into(),
+                name: moonlet_core::artifact::display_name(plan, None, false),
+                home: moonlet_proto::types::ArtifactHome { workspace: Some(workspace.to_string()), ..Default::default() },
+                updated_at: plan.updated_at(),
+                version: plan.latest().map(|v| v.n),
+                used_by: self.refs.referrers(&plan.id()),
+            };
+        }
         let session = self.sessions.session(&plan.session).ok();
         moonlet_proto::types::ArtifactInfo {
             id: plan.id(),
@@ -1821,6 +1875,17 @@ impl Daemon {
                 let r: m::ArtifactAttach = params(p)?;
                 ok(self.attach_artifact(&r.session, &r.id).await?)
             }
+            m::ARTIFACT_COPY => {
+                app_only(conn, "copying an artifact")?;
+                let r: m::ArtifactTo = params(p)?;
+                ok(self.copy_artifact_to(&r.id, &r.workspace).await?)
+            }
+            m::ARTIFACT_MOVE => {
+                app_only(conn, "moving an artifact")?;
+                let r: m::ArtifactTo = params(p)?;
+                ok(self.move_artifact_to(&r.id, &r.workspace).await?)
+            }
+            m::ARTIFACT_USED => ok(self.refs.all()),
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
                 // Only the host itself: a paired device would end every
@@ -3798,6 +3863,12 @@ impl Daemon {
                 };
                 let (moved, ws, from) = (store.clone(), workspace.clone(), at.clone());
                 let slug = blocking(move || moved.adopt_session_design(&from, &ws, now_ms())).await?;
+                // The sessions that refer to it follow it (X114).
+                if let m::DesignRef::Session { session, slug: old } = &r {
+                    if let Err(e) = self.refs.rename_id(&format!("design:session:{session}:{old}"), &format!("design:workspace:{workspace}:{slug}")) {
+                        tracing::warn!("references to design {old} did not follow it to the workspace: {e:#}");
+                    }
+                }
                 // Its edits by hand not kept yet go with it only once it moved:
                 // a refused move leaves them, and their wait, as they were.
                 self.take_hand_edits(&at);
@@ -4195,7 +4266,7 @@ impl Daemon {
         }
         self.take_hand_edits(&at);
         let (store, f, s, i) = (self.design.clone(), from.to_string(), slug.to_string(), into.to_string());
-        let to = blocking(move || if i == LIBRARY { store.share_design(&f, &s) } else { store.unshare_design(&s, &i) }).await?;
+        let to = blocking(move || store.move_design_between(&f, &i, &s)).await?;
         if let Err(e) = self.copies.moved(&Item::design(from, slug), &Item::design(into, &to)).await {
             tracing::warn!("cannot note where design {slug} moved: {e:#}");
         }
@@ -8325,3 +8396,4 @@ enum ArtifactFrom {
     Plan(String),
     Design(PathBuf),
 }
+
