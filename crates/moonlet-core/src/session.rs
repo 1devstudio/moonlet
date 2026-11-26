@@ -4824,6 +4824,26 @@ mod tests {
         assert_eq!(mgr.fork_session(&src.id).await.unwrap_err().to_string(), "the session is archived");
     }
 
+    /// X112: a fork whose changes cannot be copied is not made: its
+    /// worktree and branch go again, and the error says why. Here a link
+    /// named `.gitmodules`, which git refuses to add to the snapshot.
+    #[tokio::test]
+    async fn a_fork_whose_changes_cannot_be_copied_leaves_no_worktree_or_branch() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(spawn_req(&r.id, "Fix cart", None, None)).await.unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", Path::new(&src.path).join(".gitmodules")).unwrap();
+        let repo_dir = repo.path().display().to_string();
+        let (branches, worktrees) = (sh_git(&repo_dir, &["branch", "--list"]), sh_git(&repo_dir, &["worktree", "list"]));
+
+        let err = mgr.fork_session(&src.id).await.unwrap_err().to_string();
+
+        assert!(err.contains(".gitmodules"), "{err}");
+        assert_eq!(sh_git(&repo_dir, &["branch", "--list"]), branches);
+        assert_eq!(sh_git(&repo_dir, &["worktree", "list"]), worktrees);
+        assert_eq!(mgr.list_sessions().len(), 1);
+    }
+
     /// X112: only a Claude chat goes on from its conversation; a chat of
     /// another agent, Codex, starts afresh in the fork as that agent's chat.
     #[tokio::test]
