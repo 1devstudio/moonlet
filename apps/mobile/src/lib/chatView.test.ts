@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatBlocks } from "@desktop/lib/chat";
 import type { ChatItem } from "@desktop/lib/protocol";
-import { agentStrip, asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals } from "./chatView";
+import { agentStrip, asideStep, blockKey, chatFooter, queuedActions, sessionChat, sessionLine, shellTerminals, waitingForLogin } from "./chatView";
 import { NOW, chat, data, project, session, terminal } from "./fixtures";
 
 describe("sessionChat", () => {
@@ -111,5 +111,12 @@ describe("agentStrip (X76)", () => {
     expect(agentStrip({ subagents: [], pending: [] }, NOW)).toBeNull();
     // Ended without all done: says which did not finish.
     expect(agentStrip({ subagents: [agent("a1", "done"), agent("a2", "failed"), agent("a3", "stopped")], pending: [] }, NOW)?.word).toBe("1 failed · 1 stopped");
+  });
+});
+
+describe("waitingForLogin (X113)", () => {
+  it("says a chat waits for login on its host", () => {
+    expect(waitingForLogin({ ...chat([]), status: "waiting_for_login" }, "studio-mini")).toBe("Claude starts once you log in on studio-mini");
+    expect(waitingForLogin({ ...chat([]), status: "idle" }, "studio-mini")).toBeNull();
   });
 });

@@ -130,6 +130,7 @@ function index(c: SearchContext): Entry[] {
     app("general", "App › General › Updates", "claude-update", "Claude Code version", c.claudeInstalled ?? ""),
     app("general", "App › General › Updates", "auto-update", "Check for updates automatically", onOff(s.autoUpdateCheck)),
     app("general", "App › General › Background daemon", "daemon", "Start the moonlet daemon at login", "", "launchd login items background items SMAppService"),
+    app("general", "App › General › Background daemon", "daemon-boot", "Start moonletd at system start", "", "boot startup before login launch daemon headless power cut"),
     app("general", "App › General › Background daemon", "daemon-restart", "Restart the daemon", "", "moonletd stuck not answering force restart kill"),
     app("general", "App › General › Sleep", "keep-awake", "Keep this Mac awake while agents work", "", "sleep idle power assertion caffeinate"),
     app("appearance", "App › Appearance", "font-size", "Font size", `${t.fontSize}px`, "text zoom scale"),

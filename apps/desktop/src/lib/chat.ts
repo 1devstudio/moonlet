@@ -366,6 +366,13 @@ export function rememberPrompt(text: string) {
 // ------------------------------------------------------------ display helpers
 
 /** `+a −d` from a unified diff. */
+/** The line of a chat in a daemon started at system start (X113): Claude
+ * cannot read its sign-in there until the user logs in on `host` (its
+ * name; null for this Mac). Null for any other chat. */
+export function waitingForLogin(status: ChatState["status"] | undefined, host: string | null): string | null {
+  return status === "waiting_for_login" ? `Claude starts once you log in on ${host ?? "this Mac"}` : null;
+}
+
 /** Whether the agent is in a turn: working, or waiting on a permission. */
 export function turnRunning(status: ChatState["status"] | undefined): boolean {
   return status === "working" || status === "blocked";

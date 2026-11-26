@@ -19,6 +19,7 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
+  KeyRound,
   ListTodo,
   Loader2,
   MessageCircleQuestionMark,
@@ -74,6 +75,7 @@ import {
   transcript,
   turnFooter,
   turnRunning,
+  waitingForLogin,
   useChat,
   itemShown,
 } from "../lib/chat";
@@ -1258,14 +1260,16 @@ const CARD_PAD: Record<number, string> = { 16: "py-3.5 pl-4", 12: "py-[11px] pl-
  * The turn's status on its own line above the input (X51), lined up with the
  * input's text, with Stop at its end while the turn runs or waits.
  */
-function StatusLine({ inset, className, onStop, children }: { inset: number; className: string; onStop: () => void; children: React.ReactNode }) {
+function StatusLine({ inset, className, onStop, children }: { inset: number; className: string; onStop?: () => void; children: React.ReactNode }) {
   return (
     <div role="status" className={cx("mb-1.5 flex h-7 items-center gap-2 overflow-hidden whitespace-nowrap ui-text-12.5", INSET_X[inset], className)}>
       {children}
       <span className="flex-1" />
-      <Button size="sm" variant="ghost" className="shrink-0" onClick={onStop} title="Stop (⌘.)">
-        <Square size={10} fill="currentColor" /> Stop
-      </Button>
+      {onStop && (
+        <Button size="sm" variant="ghost" className="shrink-0" onClick={onStop} title="Stop (⌘.)">
+          <Square size={10} fill="currentColor" /> Stop
+        </Button>
+      )}
     </div>
   );
 }
@@ -1881,6 +1885,12 @@ export function AgentView({
           <StatusLine inset={layout.insetX} className="text-fg" onStop={stop}>
             <ShieldAlert size={12} className="shrink-0 text-blocked" />
             <span className="truncate">{st.pending.length > 0 && st.pending.every(isQuestion) ? "Waiting for your answer" : "Waiting for your approval"}</span>
+          </StatusLine>
+        ) : waitingForLogin(st?.status, host === "local" ? null : host) ? (
+          <StatusLine inset={layout.insetX} className="text-muted">
+            <KeyRound size={12} className="shrink-0 text-faint" />
+            <span className="truncate">{waitingForLogin(st?.status, host === "local" ? null : host)}</span>
+            {queuedCount(queued) && <span className="text-faint">{queuedCount(queued)}</span>}
           </StatusLine>
         ) : null}
         <ChatEditor

@@ -16,8 +16,8 @@ import { DEFAULT_SOUNDS, SOUND_EVENTS, SYSTEM_SOUNDS, soundFor } from "../../lib
 import { bannerOn } from "../../lib/alerts";
 import { EDITOR_THEMES, resolveEditorTheme } from "../../lib/editorThemes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, stepFontSize } from "../../lib/uiScale";
-import { appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
-import { M, type ClaudeSettings, type DaemonService, type HostInfo, type PowerSettings } from "../../lib/protocol";
+import { appUpdateLine, BOOT_HINT, bootLine, bootOn, bootSwitch, bootWarnings, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, restartDaemon } from "../../lib/settingsPage";
+import { M, type ClaudeSettings, type DaemonBoot, type DaemonService, type HostInfo, type PowerSettings } from "../../lib/protocol";
 import { Button, IconButton, StateGlyph, cx } from "../ui";
 import { Card, PageHeading, RadioList, Row, Section, Segmented, Status, SwitchRow, fieldCls, radioProps } from "./controls";
 import { ThemeSample } from "./ThemeSample";
@@ -198,6 +198,7 @@ function Daemon() {
             )}
           </div>
         )}
+        <Boot service={status} />
         <Row setting="daemon-restart" label="Restart the daemon" hint="Hands terminals to a fresh moonletd. If it's stuck, you can force it.">
           <Button size="sm" disabled={restarting} onClick={() => void restart()}>
             {restarting ? "Restarting…" : "Restart"}
@@ -205,6 +206,73 @@ function Daemon() {
         </Row>
       </Card>
     </Section>
+  );
+}
+
+/** Start moonletd at system start, before login (X113): a launch daemon
+ * plist the app writes with an administrator's password. Needs the login
+ * item, which takes over once the user logs in. */
+function Boot({ service }: { service: DaemonService | null }) {
+  const [boot, setBoot] = useState<DaemonBoot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const offer = bootSwitch(service);
+  const loginItemOn = offer.shown && !offer.disabledBecause;
+  useEffect(() => {
+    if (!offer.shown) return;
+    void hostsApi.boot("status").then(setBoot).catch(() => setBoot(null));
+    // Again when the login item changes: turning it off turns this off.
+  }, [offer.shown, loginItemOn]);
+  if (!offer.shown) return null;
+  const act = async (action: "install" | "repair" | "uninstall") => {
+    setBusy(true);
+    try {
+      const next = await hostsApi.boot(action);
+      setBoot(next);
+      if (action !== "uninstall" && next.state === "on") toast("moonletd now starts at system start");
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const line = boot && bootLine(boot);
+  const warnings = boot ? bootWarnings(boot) : [];
+  return (
+    <>
+      <SwitchRow
+        setting="daemon-boot"
+        label="Start moonletd at system start"
+        hint={offer.disabledBecause ?? BOOT_HINT}
+        on={!!boot && bootOn(boot)}
+        disabled={busy || !boot || !!offer.disabledBecause}
+        onChange={(on) => void act(on ? "install" : "uninstall")}
+      />
+      {line && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <Status line={line.line} />
+          {line.action === "open_login_items" && (
+            <Button size="sm" onClick={() => void hostsApi.openLoginItems().catch(errorToast)}>
+              Open Login Items
+            </Button>
+          )}
+          {line.action === "repair" && (
+            <Button size="sm" disabled={busy} onClick={() => void act("repair")}>
+              Repair
+            </Button>
+          )}
+          {line.action === "remove" && (
+            <Button size="sm" disabled={busy} onClick={() => void act("uninstall")}>
+              Remove
+            </Button>
+          )}
+        </div>
+      )}
+      {warnings.map((w) => (
+        <div key={w} className="px-4 pb-2.5">
+          <Status line={{ tone: "blocked", text: w }} />
+        </div>
+      ))}
+    </>
   );
 }
 

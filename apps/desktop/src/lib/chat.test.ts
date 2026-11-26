@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  waitingForLogin,
   activeToken,
   BLOCKS_SHOWN,
   limitShowing,
@@ -425,5 +426,14 @@ describe("a long transcript (X81)", () => {
     // The loaded transcript is left as it was.
     expect(loaded.map((i) => i.text)).toEqual(["fix it", "Look"]);
     expect(mergeItems(loaded, [])).toBe(loaded);
+  });
+});
+
+describe("waitingForLogin (X113)", () => {
+  it("says a chat waits for login on its host", () => {
+    expect(waitingForLogin("waiting_for_login", "studio-mini")).toBe("Claude starts once you log in on studio-mini");
+    expect(waitingForLogin("waiting_for_login", null)).toBe("Claude starts once you log in on this Mac");
+    expect(waitingForLogin("idle", "studio-mini")).toBeNull();
+    expect(waitingForLogin(undefined, "studio-mini")).toBeNull();
   });
 });

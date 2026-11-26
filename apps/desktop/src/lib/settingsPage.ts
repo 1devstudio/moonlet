@@ -3,7 +3,7 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace, WorkspaceColor } from "./protocol";
+import type { AccountInfo, DaemonBoot, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace, WorkspaceColor } from "./protocol";
 import { identityKey } from "./sidebar";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
@@ -271,6 +271,51 @@ export interface ForceAsk {
   title: string;
   message: string;
   action: string;
+}
+
+/** Whether Settings offers "Start moonletd at system start" (X113): only
+ * builds with the login item, which takes over at login; disabled while it
+ * is off, since nothing would take over. */
+export function bootSwitch(st: DaemonService | null): { shown: boolean; disabledBecause: string | null } {
+  if (st?.mechanism !== "login_item") return { shown: false, disabledBecause: null };
+  return { shown: true, disabledBecause: st.state === "enabled" ? null : "Needs Start the moonlet daemon at login" };
+}
+
+export const BOOT_HINT =
+  "Runs moonletd after a restart, before anyone logs in. Claude chats wait for login, because the Keychain unlocks only then. Turning it on or off asks for an administrator's password.";
+
+/** Whether "Start moonletd at system start" shows as on (X113). */
+export function bootOn(b: DaemonBoot): boolean {
+  return b.state === "on" || b.state === "requires_approval" || b.state === "stale";
+}
+
+/** The line under "Start moonletd at system start" (X113), and what its
+ * button does; none when nothing starts at system start. */
+export function bootLine(b: DaemonBoot): { line: StatusLine; action: "open_login_items" | "repair" | "remove" | null } | null {
+  switch (b.state) {
+    case "on":
+      return { line: { tone: "done", text: "Starts at system start · moonlet in System Settings › Login Items" }, action: null };
+    case "requires_approval":
+      return { line: { tone: "blocked", text: "Turned off in System Settings › Login Items" }, action: "open_login_items" };
+    case "stale":
+      return { line: { tone: "error", text: "Points at another copy of moonlet" }, action: "repair" };
+    case "left_behind":
+      return { line: { tone: "muted", text: "Not starting at system start" }, action: "remove" };
+    case "off":
+      return null;
+  }
+}
+
+const BOOT_WARNINGS: Record<DaemonBoot["warnings"][number], string> = {
+  tailscale: "Tailscale joins the tailnet only after login. To reach this Mac before then, use tailscaled.",
+  filevault: "FileVault is on: after a restart nothing starts until someone unlocks the disk.",
+  auto_login: "Claude chats wait until someone logs in. Automatic login in System Settings › Users & Groups logs in right after a restart (needs FileVault off).",
+};
+
+/** What still stops the Mac being useful before login (X113), while
+ * something starts at system start. */
+export function bootWarnings(b: DaemonBoot): string[] {
+  return bootOn(b) ? b.warnings.map((w) => BOOT_WARNINGS[w]) : [];
 }
 
 /** Restart this Mac's daemon (X97): a handoff that keeps terminals first,
