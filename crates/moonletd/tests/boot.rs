@@ -306,3 +306,28 @@ async fn a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_se
         .unwrap();
     output_until(&mut c, "after-3").await;
 }
+
+/// Only a daemon of this executable that shows the app credential may ask:
+/// a hand-over gives it every terminal.
+#[tokio::test]
+async fn a_hand_over_is_refused_to_anything_but_this_moonletd_with_the_credential() {
+    let home = tempfile::tempdir().unwrap();
+    turn_boot(home.path(), true);
+    let socket = home.path().join("run/d.sock");
+    let _boot = Kill(moonletd(home.path(), &socket, &["daemon", "--boot"]).spawn().unwrap());
+    let before = info(&socket, home.path()).await;
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file_in(home.path())).unwrap();
+
+    // An agent's CLI, with no credential.
+    let mut cli = Client::connect(&socket, "moonlet-cli").await.unwrap();
+    let refused: Result<String, _> = cli.request(methods::DAEMON_HAND_OVER, serde_json::json!({})).await;
+    assert!(refused.is_err(), "{refused:?}");
+    // Another program of the user's that read the credential.
+    let refused: Result<String, _> =
+        cli.request(methods::DAEMON_HAND_OVER, serde_json::json!({ "token": token })).await;
+    let err = format!("{:?}", refused.unwrap_err());
+    assert!(err.contains("forbidden"), "{err}");
+
+    let after = info(&socket, home.path()).await;
+    assert_eq!(after.pid, before.pid, "the boot daemon still serves");
+}

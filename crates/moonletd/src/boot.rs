@@ -5,6 +5,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use moonlet_proto::methods;
+
 static STARTED_AT_BOOT: AtomicBool = AtomicBool::new(false);
 
 /// Whether this daemon was started at system start, outside a login session.
@@ -68,9 +70,9 @@ fn user_temp_dir() -> Option<std::ffi::OsString> {
 
 /// For a daemon that finds one already listening on `socket`: when that
 /// one was started at system start and this one was not, it hands its
-/// terminals over, and this returns the socket to take them from.
-pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Option<std::path::PathBuf>> {
-    use moonlet_proto::methods;
+/// terminals over, and this returns the socket to take them from and the
+/// secret to send there.
+pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Option<methods::HandOver>> {
     if started_at_boot() {
         return Ok(None);
     }
@@ -79,8 +81,10 @@ pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Opt
     if !info.started_at_boot {
         return Ok(None);
     }
-    let path: String = c.request(methods::DAEMON_HAND_OVER, ()).await?;
-    Ok(Some(path.into()))
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file())
+        .ok_or_else(|| anyhow::anyhow!("no app credential to show"))?;
+    let given: methods::HandOver = c.request(methods::DAEMON_HAND_OVER, methods::HandOverRequest { token }).await?;
+    Ok(Some(given))
 }
 
 #[cfg(test)]

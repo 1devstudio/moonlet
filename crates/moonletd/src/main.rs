@@ -252,7 +252,7 @@ fn run_daemon(
     rt.block_on(async move {
         let mut handoff = handoff;
         let mut bound = None;
-        let mut from_boot = false;
+        let mut from_boot = None;
         if handoff.is_none() {
             // The app credential exists before anyone can connect, so the
             // app never reads a missing one (X75).
@@ -268,10 +268,10 @@ fn run_daemon(
                     // to the one a login starts, which can read the
                     // Keychain (X113).
                     match boot::take_over_from_boot(&socket).await {
-                        Ok(Some(path)) => {
+                        Ok(Some(given)) => {
                             tracing::info!("taking over from the daemon started at system start");
-                            handoff = Some(path);
-                            from_boot = true;
+                            handoff = Some(PathBuf::from(given.path));
+                            from_boot = Some(given.secret);
                         }
                         result => {
                             if let Err(e) = result {
@@ -301,11 +301,12 @@ fn run_daemon(
             (None, Some(path)) => {
                 // Upgrade: take the PTYs first, then the socket once the old
                 // daemon lets go of it.
-                let incoming = match tokio::task::spawn_blocking(move || upgrade::receive(&path)).await? {
+                let taking_over = from_boot.is_some();
+                let incoming = match tokio::task::spawn_blocking(move || upgrade::receive(&path, from_boot.as_deref())).await? {
                     Ok(incoming) => incoming,
                     // The daemon started at system start keeps serving;
                     // launchd must not keep restarting us (X113).
-                    Err(e) if from_boot => {
+                    Err(e) if taking_over => {
                         tracing::warn!("the daemon started at system start did not hand over, and keeps serving: {e:#}; exiting");
                         std::process::exit(0);
                     }
