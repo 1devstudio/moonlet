@@ -3,7 +3,8 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
+import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace, WorkspaceColor } from "./protocol";
+import { identityKey } from "./sidebar";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
@@ -123,6 +124,24 @@ export function settingsWorkspaces<W extends { id: string }>(hosts: SettingsHost
   return ownWorkspaces(ordered).flatMap(({ h, list }) =>
     list.map((ws) => ({ host: h.host, id: ws.id, account: accountOf(h), ws, remote: h.remote && accountOf(h) !== here ? h.label : null })),
   );
+}
+
+/** The projects the nav lists: each project of an account once (X68),
+ * matched by identity, this Mac's copy while it lists it and is connected,
+ * else a connected member's. A project with no root commit is never matched.
+ * `remote` names the host of a project not on this Mac. */
+export function settingsProjects(s: { hosts: Record<string, Pick<HostInfo, "label" | "remote" | "status">>; projects: Record<string, Project[]>; accounts: Record<string, Pick<AccountInfo, "account">> }): NavItem[] {
+  const ids = hostOrder(Object.keys(s.projects)).sort((a, b) => Number(s.hosts[b]?.status === "connected") - Number(s.hosts[a]?.status === "connected"));
+  const seen = new Set<string>();
+  return ids.flatMap((h) => {
+    const account = accountOf({ host: h, account: s.accounts[h]?.account });
+    return (s.projects[h] ?? []).flatMap((p) => {
+      const key = identityKey(p.identity);
+      if (key && seen.has(`${account}|${key}`)) return [];
+      if (key) seen.add(`${account}|${key}`);
+      return [{ host: h, id: p.id, name: p.name, remote: s.hosts[h]?.remote ? (s.hosts[h]?.label ?? h) : null }];
+    });
+  });
 }
 
 /** The key of the nav entry open for `route`: a workspace page opened on
