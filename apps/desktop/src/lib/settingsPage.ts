@@ -3,7 +3,8 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
+import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace, WorkspaceColor } from "./protocol";
+import { identityKey } from "./sidebar";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
@@ -123,6 +124,51 @@ export function settingsWorkspaces<W extends { id: string }>(hosts: SettingsHost
   return ownWorkspaces(ordered).flatMap(({ h, list }) =>
     list.map((ws) => ({ host: h.host, id: ws.id, account: accountOf(h), ws, remote: h.remote && accountOf(h) !== here ? h.label : null })),
   );
+}
+
+/** Every host's projects, as the settings lists of projects need them. */
+export interface SettingsProjects {
+  hosts: Record<string, Pick<HostInfo, "label" | "remote" | "status">>;
+  projects: Record<string, Project[]>;
+  accounts: Record<string, Pick<AccountInfo, "account">>;
+}
+
+/** A project of `host` as one key, its account and identity; null without a root. */
+function accountProjectKey(s: SettingsProjects, host: string, p: Project): string | null {
+  const identity = identityKey(p.identity);
+  return identity && `${accountOf({ host, account: s.accounts[host]?.account })}|${identity}`;
+}
+
+/** The projects the nav lists: each project of an account once (X68),
+ * matched by identity, this Mac's copies while it lists them and is
+ * connected, else a connected member's. Checkouts of one repository on one
+ * host each keep their entry, and a project with no root commit is never
+ * matched. `remote` names the host of a project not on this Mac; the base
+ * branch is the listed copy's, for the search. */
+export function settingsProjects(s: SettingsProjects): (NavItem & { base_branch: string })[] {
+  const ids = hostOrder(Object.keys(s.projects)).sort((a, b) => Number(s.hosts[b]?.status === "connected") - Number(s.hosts[a]?.status === "connected"));
+  // Which host's copies of a project the nav lists, by account and identity.
+  const listedOn = new Map<string, string>();
+  return ids.flatMap((h) =>
+    (s.projects[h] ?? []).flatMap((p) => {
+      const key = accountProjectKey(s, h, p);
+      if (key && (listedOn.get(key) ?? h) !== h) return [];
+      if (key) listedOn.set(key, h);
+      return [{ host: h, id: p.id, name: p.name, base_branch: p.base_branch, remote: s.hosts[h]?.remote ? (s.hosts[h]?.label ?? h) : null }];
+    }),
+  );
+}
+
+/** The key of the nav entry for a project page: a page opened on a copy the
+ * nav does not list is the entry of the account's copy it lists (X68). */
+export function projectNavKey(route: Extract<SettingsRoute, { page: "project" }>, s: SettingsProjects): string {
+  const own = routeKey(route);
+  const listed = settingsProjects(s);
+  if (listed.some((e) => e.host === route.host && e.id === route.id)) return own;
+  const open = s.projects[route.host]?.find((p) => p.id === route.id);
+  const key = open && accountProjectKey(s, route.host, open);
+  const entry = key && listed.find((e) => accountProjectKey(s, e.host, s.projects[e.host].find((p) => p.id === e.id)!) === key);
+  return entry ? routeKey({ page: "project", host: entry.host, id: entry.id }) : own;
 }
 
 /** The key of the nav entry open for `route`: a workspace page opened on

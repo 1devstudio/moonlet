@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Cloud, Cpu, Folder, GitBranch, KeyRound, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
-import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsHosts, settingsNav, settingsWorkspaces, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
+import { escapeAction, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, projectNavKey, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
@@ -84,7 +84,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
   const cloudRemovalFailed = useCloud((s) => !!s.machines?.machines.some((m) => removalError(m, m.provider)));
   // Each workspace of an account once (X68).
   const listedWorkspaces = useMemo(() => settingsWorkspaces(settingsHosts({ hosts, workspaces: allWorkspaces, accounts })), [hosts, allWorkspaces, accounts]);
-  const activeKey = activeNavKey(route, listedWorkspaces, route.page === "workspace" ? (accounts[route.host]?.account ?? route.host) : "");
+  const activeKey = route.page === "project" ? projectNavKey(route, { hosts, projects: allProjects, accounts }) : activeNavKey(route, listedWorkspaces, route.page === "workspace" ? (accounts[route.host]?.account ?? route.host) : "");
   const groups = useMemo(
     () =>
       settingsNav({
@@ -93,11 +93,12 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
         profilesNeedSignIn: profilesNeedSignIn(workspaces ?? [], profiles ?? [], defaultAccount ?? null),
         trackersNeedAttention: attention,
         workspaces: listedWorkspaces.map(({ host, id, ws, remote }) => ({ host, id, name: ws.name, color: ws.color, remote })),
-        projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null }))),
+        // Each project of an account once (X68).
+        projects: settingsProjects({ hosts, projects: allProjects, accounts }),
         central,
         cloudRemovalFailed,
       }),
-    [hosts, phones, workspaces, profiles, defaultAccount, listedWorkspaces, allProjects, attention, central, cloudRemovalFailed],
+    [hosts, phones, workspaces, profiles, defaultAccount, listedWorkspaces, allProjects, accounts, attention, central, cloudRemovalFailed],
   );
   return (
     <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col bg-window">

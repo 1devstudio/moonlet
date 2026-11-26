@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey, restartDaemon } from "./settingsPage";
-import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, activeNavKey, projectNavKey, restartDaemon } from "./settingsPage";
+import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
   const app = (page: string, label: string, extra = {}) => ({ key: page, route: { page }, label, ...extra });
@@ -123,6 +123,72 @@ describe("the workspaces settings lists (X68)", () => {
     expect(activeNavKey({ page: "workspace", host: "studio-mini", id: "c05254bf1786" }, listed, "8605e2c4")).toBe("ws:local:c05254bf1786");
     expect(activeNavKey({ page: "workspace", host: "devbox", id: "c05254bf1786" }, listed, "devbox")).toBe("ws:devbox:c05254bf1786");
     expect(activeNavKey({ page: "hooks" }, listed, "local")).toBe("hooks");
+  });
+});
+
+describe("the projects settings list (X68)", () => {
+  const shop = { origin: "github.com/acme/shop", root: "4171b03ff0d2bd434751f17bc9d34da784f97e72" };
+  const api = { origin: "github.com/acme/payments-api", root: "871956765f81bd0fbd87f75d717abf6b49949673" };
+  const project = (id: string, name: string, identity?: Project["identity"]): Project => ({ id, name, path: `/Users/me/${name}`, base_branch: "main", ...(identity ? { identity } : {}) });
+  const hosts = { local: { label: "This Mac", remote: false, status: "connected" as const }, "studio-mini": { label: "studio-mini", remote: true, status: "connected" as const }, devbox: { label: "devbox", remote: true, status: "connected" as const } };
+  const accounts = { local: { account: "8605e2c4" }, "studio-mini": { account: "8605e2c4" } };
+
+  it("lists each project of an account once, this Mac's copy first, and a member's own or another account's project under its host", () => {
+    expect(
+      settingsProjects({
+        hosts,
+        accounts,
+        projects: {
+          "studio-mini": [project("d137b8456a98", "moonlet", shop), project("8569e084402b", "5ee6855d9f89b624", api), project("04e103fc04a7", "cloud-test", { origin: null, root: null })],
+          devbox: [project("aa1ecc8cf334", "shop", shop)],
+          local: [project("7e887a1546bc", "storefront", shop), project("39592fe51de9", "payments-api", api)],
+        },
+      }),
+    ).toEqual([
+      { host: "local", id: "7e887a1546bc", name: "storefront", base_branch: "main", remote: null },
+      { host: "local", id: "39592fe51de9", name: "payments-api", base_branch: "main", remote: null },
+      { host: "devbox", id: "aa1ecc8cf334", name: "shop", base_branch: "main", remote: "devbox" },
+      { host: "studio-mini", id: "04e103fc04a7", name: "cloud-test", base_branch: "main", remote: "studio-mini" },
+    ]);
+  });
+
+  it("keeps two checkouts of one repository on one host, each with its own entry", () => {
+    expect(
+      settingsProjects({
+        hosts,
+        accounts,
+        projects: { local: [project("7e887a1546bc", "storefront", shop), project("c3d4e5f6a7b8", "storefront-review", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop)] },
+      }),
+    ).toEqual([
+      { host: "local", id: "7e887a1546bc", name: "storefront", base_branch: "main", remote: null },
+      { host: "local", id: "c3d4e5f6a7b8", name: "storefront-review", base_branch: "main", remote: null },
+    ]);
+  });
+
+  it("gives the search the listed copy's base branch", () => {
+    const member = { ...project("d137b8456a98", "moonlet", shop), base_branch: "develop" };
+    const listed = settingsProjects({ hosts, accounts, projects: { "studio-mini": [member, { ...project("04e103fc04a7", "cloud-test"), base_branch: "trunk" }], local: [project("7e887a1546bc", "storefront", shop)] } });
+    expect(listed.map((p) => [p.id, p.base_branch])).toEqual([
+      ["7e887a1546bc", "main"],
+      ["04e103fc04a7", "trunk"],
+    ]);
+  });
+
+  it("highlights a project's entry when its page is open on another member's copy", () => {
+    const s = { hosts, accounts, projects: { local: [project("7e887a1546bc", "storefront", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop), project("04e103fc04a7", "cloud-test", { origin: null, root: null })] } };
+    expect(projectNavKey({ page: "project", host: "studio-mini", id: "d137b8456a98" }, s)).toBe("project:local:7e887a1546bc");
+    expect(projectNavKey({ page: "project", host: "studio-mini", id: "04e103fc04a7" }, s)).toBe("project:studio-mini:04e103fc04a7");
+    expect(projectNavKey({ page: "project", host: "local", id: "7e887a1546bc", focus: "run" }, s)).toBe("project:local:7e887a1546bc");
+  });
+
+  it("lists a connected member's copy while this Mac's daemon is disconnected", () => {
+    expect(
+      settingsProjects({
+        hosts: { ...hosts, local: { ...hosts.local, status: "reconnecting" } },
+        accounts,
+        projects: { local: [project("7e887a1546bc", "storefront", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop)] },
+      }),
+    ).toEqual([{ host: "studio-mini", id: "d137b8456a98", name: "moonlet", base_branch: "main", remote: "studio-mini" }]);
   });
 });
 

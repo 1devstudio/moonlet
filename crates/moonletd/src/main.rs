@@ -315,6 +315,10 @@ fn run_daemon(
         // Before anything can ask, phones and the socket alike, so
         // `project.list` never lacks one (X41).
         daemon.sessions.fill_identities().await;
+        // Clones made for copies before they were named by their origin.
+        if let Err(e) = daemon.sessions.name_clone_projects(&moonlet_core::paths::home().join("clones")) {
+            tracing::warn!("cannot name the projects of clones: {e:#}");
+        }
         // Workspaces shared with the account's other members (X68), once
         // projects have the identities its sections name them by.
         link::attach_account(&daemon);
