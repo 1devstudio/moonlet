@@ -9,7 +9,8 @@
     },
     "macOS": {
       "files": {
-        "Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist": "launchd/dev.onedevstudio.moonlet.moonletd.plist"
+        "Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist": "launchd/dev.onedevstudio.moonlet.moonletd.plist",
+        "Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.plist": "launchd/dev.onedevstudio.moonlet.boot.plist"
       }
     }
   }

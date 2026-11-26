@@ -594,8 +594,13 @@ mod tests {
     /// A key of the bundled agent plist, as `plutil` reads it.
     #[cfg(target_os = "macos")]
     fn key(path: &str) -> String {
-        let plist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("launchd/dev.onedevstudio.moonlet.moonletd.plist");
+        key_of("dev.onedevstudio.moonlet.moonletd.plist", path)
+    }
+
+    /// A key of a plist in `launchd/`, as `plutil` reads it.
+    #[cfg(target_os = "macos")]
+    fn key_of(file: &str, path: &str) -> String {
+        let plist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("launchd").join(file);
         let out = Command::new("plutil")
             .args(["-extract", path, "raw", "-o", "-"])
             .arg(&plist)
@@ -623,5 +628,27 @@ mod tests {
             key("AssociatedBundleIdentifiers.0"),
             "dev.onedevstudio.moonlet"
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_bundled_boot_daemon_runs_the_launcher_as_moonlet() {
+        let key = |path: &str| key_of("dev.onedevstudio.moonlet.boot.plist", path);
+        assert_eq!(key("Label"), "dev.onedevstudio.moonlet.boot");
+        assert_eq!(key("BundleProgram"), "Contents/MacOS/moonletd");
+        assert_eq!(key("ProgramArguments.0"), "moonletd");
+        assert_eq!(key("ProgramArguments.1"), "boot");
+        assert_eq!(key("RunAtLoad"), "true");
+        assert_eq!(key("KeepAlive.SuccessfulExit"), "false");
+        assert_eq!(
+            key("AssociatedBundleIdentifiers.0"),
+            "dev.onedevstudio.moonlet"
+        );
+        // Sealed in the bundle, it cannot name the user: the launcher
+        // starts as root and drops to each user.
+        let plist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("launchd/dev.onedevstudio.moonlet.boot.plist");
+        let out = Command::new("plutil").args(["-extract", "UserName", "raw"]).arg(&plist).output().unwrap();
+        assert!(!out.status.success(), "the plist has no UserName");
     }
 }

@@ -130,9 +130,12 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
 
     let mut cmd = Command::new(&binary);
-    cmd.args(["daemon", "--handoff"])
-        .arg(&path)
-        .stdin(Stdio::null())
+    cmd.args(["daemon", "--handoff"]).arg(&path);
+    // It runs where this one runs: outside a login session (X113).
+    if crate::boot::started_at_boot() {
+        cmd.arg("--boot");
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // SAFETY: setsid is async-signal-safe.

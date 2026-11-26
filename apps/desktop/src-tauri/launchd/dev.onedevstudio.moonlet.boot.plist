@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- moonletd at system start (X113). The app registers this launch daemon
+     with SMAppService once the user turns the switch on and an administrator
+     allows it in Login Items. It runs `moonletd boot` as root, which starts
+     each local user's daemon as that user: a plist sealed in the bundle
+     cannot name the user with UserName. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.onedevstudio.moonlet.boot</string>
+  <key>BundleProgram</key>
+  <string>Contents/MacOS/moonletd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>moonletd</string>
+    <string>boot</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>dev.onedevstudio.moonlet</string>
+  </array>
+</dict>
+</plist>

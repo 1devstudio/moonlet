@@ -25,7 +25,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
 
 ### The bundled launch daemon
 
-- [ ] `moonlet.app/Contents/Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.plist` is in the release bundle and sealed with the app. Its keys:
+- [x] `moonlet.app/Contents/Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.plist` is in the release bundle and sealed with the app. Its keys:
   - `Label` `dev.onedevstudio.moonlet.boot`;
   - `BundleProgram` `Contents/MacOS/moonletd`, `ProgramArguments` `moonletd boot`;
   - `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`;
@@ -35,15 +35,17 @@ A daemon started at boot can never read the user's login Keychain, before login 
 
 ### The launcher
 
-- [ ] `moonletd boot` runs as root and refuses to run as anyone else ("moonletd boot runs from launchd at system start"). Test: `the_launcher_refuses_to_run_as_a_user`.
-- [ ] It goes through the local users: accounts with a uid of 501 or more, a home folder under `/Users`, and a login shell that is not `/usr/bin/false`. For each, it forks, drops to that user (`initgroups`, `setgid`, `setuid`, then checks that root cannot be regained), sets `HOME`, `USER`, `LOGNAME` and `SHELL` from the account and `TMPDIR` from `confstr(_CS_DARWIN_USER_TEMP_DIR)` (launchd sets none of them for a daemon), clears every other variable, and changes to the home folder. Only then does it read `~/.moonlet/app.toml`. Root never reads a user's files. Tests: `the_launcher_tries_only_real_local_users`, `a_dropped_child_cannot_become_root_again`.
-- [ ] A user whose `app.toml` says `start_daemon_at_boot = true` gets `moonletd daemon --boot`. Anyone else's child exits 0, and so does a child that finds a `MOONLET_HOME` it cannot use, since the launcher only knows `~/.moonlet`. Test: `only_users_who_turned_it_on_get_a_daemon`.
-- [ ] The launcher waits for its daemons. One that exits 0 (it handed over at login, or found a daemon already listening) is done. One that exits otherwise is started again after 10 s, as launchd's throttle would. When every daemon is done, the launcher exits 0, so launchd does not restart it. Test: `a_crashed_boot_daemon_is_started_again_and_a_finished_one_is_not`.
-- [ ] The launcher runs no async runtime and starts no thread before it forks. It never opens a socket, and it logs to `/Library/Logs/moonlet/boot.log` (root-owned, mode 0644), naming users by uid only.
+- [x] `moonletd boot` runs as root and refuses to run as anyone else ("moonletd boot runs from launchd at system start"). Test: `the_launcher_refuses_to_run_as_a_user`.
+- [x] It goes through the local users once each: accounts with a uid of 501 or more, a home folder under `/Users`, and a login shell other than `/usr/bin/false` or `nologin` (`nobody`'s uid -2 reads as 4294967294 and is left out by its home). For each, it starts `moonletd daemon --boot` in the home folder with only `HOME`, `USER`, `LOGNAME`, `SHELL` and a system `PATH` set, launchd having set none of them. Between fork and exec the child drops to the user (`initgroups`, `setgid`, `setuid`) and fails to start unless `setuid(0)` then fails and its real and effective ids are the user's. Root never reads a user's files. Test: `the_launcher_tries_only_real_local_users`; the drop needs root, so M13 checks it (the probe in Findings did).
+- [x] The daemon, already its user, reads `~/.moonlet/app.toml`: only `start_daemon_at_boot = true` lets it serve, and anyone else's daemon exits 0 without listening. Tests: `only_users_who_turned_it_on_get_a_daemon`, `the_boot_choice_is_read_from_app_toml`.
+- [x] Without a `TMPDIR`, the daemon sets the user's own temporary folder (`confstr(_CS_DARWIN_USER_TEMP_DIR)`, as `getconf DARWIN_USER_TEMP_DIR` prints it), so its terminals and agents get the one a login gives. Test: `a_boot_daemon_gives_its_terminals_the_users_temporary_folder`.
+- [x] The launcher waits for its daemons. One that exits 0 (it handed over at login, or found a daemon already listening) is done. One that exits otherwise is started again after 10 s, as launchd's throttle would. When every daemon is done, the launcher exits 0, so launchd does not restart it. Test: `a_crashed_boot_daemon_is_started_again_and_a_finished_one_is_not`.
+- [x] The launcher runs no async runtime and starts no thread, so its children may drop privileges between fork and exec. It never opens a socket, and it logs to `/Library/Logs/moonlet/boot.log`, naming users by uid only. No automated test: M13.
 
 ### The daemon started at boot
 
-- [ ] `moonletd daemon --boot` serves like any daemon, and `daemon.info` says `started_at_boot: true` (`false` otherwise). Test: `a_boot_daemon_says_so`.
+- [x] `moonletd daemon --boot` serves like any daemon, and `daemon.info` says `started_at_boot: true` (`false` otherwise). Test: `a_boot_daemon_says_so`.
+- [x] A boot daemon that upgrades (S3) starts the new daemon with `--boot`: it runs outside a login session too. The new daemon keeps the terminals it takes even if the user has turned the switch off since. Test: `an_upgraded_boot_daemon_still_says_so`.
 - [ ] Before login it serves sessions, terminals, restored workspaces, the tailnet listener and heavy commands as usual. It reads no Keychain item, as no daemon does today.
 - [ ] A Claude chat that starts or resumes in a boot daemon waits instead of running `claude`. Its state says `waiting_for_login`, and the app and the phone show "Claude starts once you log in on <host>". A message sent to it is queued as usual. Test: `a_chat_in_a_boot_daemon_waits_for_login`; Vitest: "says a chat waits for login on its host".
 
@@ -108,11 +110,12 @@ wait for login, because the Keychain unlocks only then.
 - Linux hosts, which start at boot already (X58).
 - Unlocking FileVault after a restart (macOS can do it over SSH with Remote Login on, or `fdesetup authrestart` before a planned restart).
 - Dev and e2e builds: they have no bundle, so no switch.
+- Supervising a boot daemon after a live upgrade (S3): the old daemon exits 0 once it hands over, so the launcher is done, and the new one runs detached, as under X56.
 
 ## Test plan
 
-- **Rust (moonletd unit):** which accounts the launcher tries, from captured `getpwent` entries; restart or done from an exit status; reading `start_daemon_at_boot`.
-- **Rust (moonletd e2e, `crates/moonletd/tests/boot.rs`):** a `--boot` daemon says so; a daemon started after it takes every terminal (same pid, same output) and the boot daemon exits 0; a takeover from another executable is refused; a failed takeover leaves the boot daemon serving; a chat waits in a boot daemon and starts after the takeover (with the test's fake `claude`).
+- **Rust (moonletd unit):** which accounts the launcher tries, from captured `dscl` entries; restart or done from an exit status; reading `start_daemon_at_boot`.
+- **Rust (moonletd e2e, `crates/moonletd/tests/boot.rs`):** a `--boot` daemon says so, serves only when its user turned it on, sets `TMPDIR` and keeps `--boot` through an upgrade; `moonletd boot` refuses a user; a daemon started after it takes every terminal (same pid, same output) and the boot daemon exits 0; a takeover from another executable is refused; a failed takeover leaves the boot daemon serving; a chat waits in a boot daemon and starts after the takeover (with the test's fake `claude`).
 - **Rust (desktop):** the bundled plist's keys; the boot choice in `app.toml`.
 - **Vitest:** the switch's lines for each state, the disabled state, the Tailscale, FileVault and automatic-login lines, the chat's waiting line, search terms.
 - **e2e:** none, as for X56: e2e builds have no bundle, and registering a launch daemon needs an administrator. The card in each state is checked with `e2e/snap.ts`.

@@ -1413,6 +1413,7 @@ impl Daemon {
             data_dir: moonlet_core::paths::home().display().to_string(),
             started_at: self.started_at,
             terminals: self.terminals.len(),
+            started_at_boot: crate::boot::started_at_boot(),
         }
     }
 

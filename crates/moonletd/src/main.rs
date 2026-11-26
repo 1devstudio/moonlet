@@ -7,6 +7,7 @@
 //! * `moonletd restart [--force]` replaces the running daemon (X97).
 //! * `moonletd stop` / `moonletd status`.
 
+mod boot;
 mod clones;
 mod copied_files;
 mod copies;
@@ -80,6 +81,9 @@ enum Cmd {
         /// Take over sessions from a running daemon (used by `upgrade`).
         #[arg(long, hide = true)]
         handoff: Option<PathBuf>,
+        /// Started at system start by `moonletd boot` (X113).
+        #[arg(long, hide = true)]
+        boot: bool,
     },
     /// Replace the running daemon with this binary, keeping every session.
     Upgrade,
@@ -95,6 +99,10 @@ enum Cmd {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Start every local user's daemon at system start, as that user; run
+    /// as root by moonlet's launch daemon (X113).
+    #[command(hide = true)]
+    Boot,
     /// Start the daemon in the background if needed.
     Start,
     /// Bridge stdin/stdout to the daemon socket.
@@ -141,13 +149,25 @@ fn main() -> Result<()> {
     if let Some(Cmd::VerifyRelease { archive }) = &cli.cmd {
         return update::verify_file(archive);
     }
+    // Root, with no home: before anything reads one, and with no thread
+    // before it forks (X113).
+    if let Some(Cmd::Boot) = &cli.cmd {
+        return boot::run();
+    }
+    if let Some(Cmd::Daemon { boot: true, handoff }) = &cli.cmd {
+        // Before the runtime's threads exist: it sets the environment. A
+        // handoff keeps serving the terminals it takes, whatever the choice.
+        if !boot::start_daemon(handoff.is_none()) {
+            return Ok(());
+        }
+    }
     moonlet_core::paths::migrate_legacy_home();
     let socket = cli.socket.unwrap_or_else(moonlet_core::paths::socket_path);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
-        Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
+    match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None, boot: false }) {
+        Cmd::Daemon { handoff, .. } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
         Cmd::Restart { force } => match rt.block_on(restart::restart(&socket, std::env::current_exe()?, force))? {
             restart::Outcome::Restarted => Ok(()),
@@ -156,7 +176,7 @@ fn main() -> Result<()> {
                 std::process::exit(restart::STUCK)
             }
         },
-        Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
+        Cmd::VerifyRelease { .. } | Cmd::Boot => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
                 ServiceAction::Install => service::install()?,
