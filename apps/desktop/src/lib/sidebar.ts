@@ -433,3 +433,8 @@ export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boole
 /** The key shown beside Open in a session's menu (X112): ⌘1 to ⌘9 open the
  * first nine sessions in sidebar order (`selectSessionByIndex`). */
 export const openShortcut = (index: number): string | undefined => (index >= 0 && index < 9 ? `⌘${index + 1}` : undefined);
+
+/** Where a right-click menu `height` tall opens for a pointer at `y` in a
+ * window `viewport` tall (X112): at the pointer, moved up to fit with an 8px
+ * margin, never above the top margin. */
+export const menuTop = (y: number, height: number, viewport: number): number => Math.max(8, Math.min(y, viewport - height - 8));

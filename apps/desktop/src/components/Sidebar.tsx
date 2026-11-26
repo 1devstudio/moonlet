@@ -6,7 +6,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import { workspaceOpenIn, type OpenTarget } from "../lib/openIn";
 import { copyOffers } from "../lib/centralCopies";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, menuTop, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, markUnread, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -949,7 +949,7 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const [top, setTop] = useState(m.y);
   useLayoutEffect(() => {
     const h = box.current?.offsetHeight ?? 0;
-    setTop(Math.max(8, Math.min(m.y, window.innerHeight - h - 8)));
+    setTop(menuTop(m.y, h, window.innerHeight));
   }, [m.y, items.length]);
   return (
     <div
