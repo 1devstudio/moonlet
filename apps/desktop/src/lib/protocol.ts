@@ -1564,6 +1564,7 @@ export const M = {
   /** An archived session's kept chats, with their transcripts (X86). */
   sessionHistory: "session.history",
   sessionUpdate: "session.update",
+  sessionFork: "session.fork",
   sessionRun: "session.run",
   /** X83: what a session's terminals and agents run, and what was left in its worktree. */
   sessionProcesses: "session.processes",

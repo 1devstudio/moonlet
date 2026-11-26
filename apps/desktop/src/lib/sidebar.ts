@@ -411,7 +411,7 @@ export function lastActive(own: readonly { last_output_at: number }[], s: Sessio
   return own.reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
 }
 
-export type SessionMenuItem = "open" | "open-pr" | "open-in" | "pin-top" | "unpin-top" | "mark-read" | "mark-unread" | "rename" | "move-workspace" | "move-under" | "link-task" | "keep-sync" | "archive" | "-";
+export type SessionMenuItem = "open" | "open-pr" | "open-in" | "pin-top" | "unpin-top" | "mark-read" | "mark-unread" | "rename" | "fork" | "move-workspace" | "move-under" | "link-task" | "keep-sync" | "archive" | "-";
 
 /**
  * A session row's right-click menu (X112), its groups split by "-". Open PR
@@ -425,7 +425,7 @@ export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boole
   if (s.copy) return s.copy.reachable ? ["open", "archive"] : ["open"];
   const groups: SessionMenuItem[][] = [
     ["open", ...(s.pr ? (["open-pr"] as const) : []), "open-in"],
-    [s.pinnedTop ? "unpin-top" : "pin-top", ...(s.unread ? (["mark-read"] as const) : s.agent ? (["mark-unread"] as const) : []), "rename"],
+    [s.pinnedTop ? "unpin-top" : "pin-top", ...(s.unread ? (["mark-read"] as const) : s.agent ? (["mark-unread"] as const) : []), "rename", "fork"],
     ["move-workspace", "move-under"],
     [...(!s.linked && s.sources ? (["link-task"] as const) : []), ...(s.sync ? (["keep-sync"] as const) : [])],
   ];

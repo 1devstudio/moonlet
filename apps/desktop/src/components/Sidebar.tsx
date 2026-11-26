@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, GitFork, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { hostsApi, rpc } from "../lib/daemon";
@@ -1142,6 +1142,18 @@ function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { o
         return [{ label: "Mark as unread", icon: icon(EyeOff), onSelect: () => markUnread(host, s.id) }];
       case "rename":
         return [{ label: "Rename", icon: icon(Pencil), onSelect: () => useRenameRequest.setState({ key: sesKey(host, s.id) }) }];
+      case "fork":
+        return [
+          {
+            label: "Fork",
+            icon: icon(GitFork),
+            onSelect: () =>
+              void rpc<Session>(host, M.sessionFork, { id: s.id }).then((fork) => {
+                toast(`Forked ${s.name} as ${fork.name}`);
+                selectSession(host, fork.id);
+              }, errorToast),
+          },
+        ];
       case "move-workspace": {
         const move = moveItems([{ host, ws: s }]);
         return [{ kind: "submenu", label: "Move to workspace", icon: icon(FolderInput), items: move.items, disabled: move.disabled ?? undefined }];

@@ -416,7 +416,7 @@ describe("sessionMenu (X112 actions in a session's menu)", () => {
   it("lists a session's actions in groups", () => {
     expect(sessionMenu({ linked: false, sources: true, sync: true, pr: true, unread: false, agent: true })).toEqual([
       "open", "open-pr", "open-in", "-",
-      "pin-top", "mark-unread", "rename", "-",
+      "pin-top", "mark-unread", "rename", "fork", "-",
       "move-workspace", "move-under", "-",
       "link-task", "keep-sync",
       "archive",
@@ -439,7 +439,7 @@ describe("sessionMenu (X112 actions in a session's menu)", () => {
 describe("session menu: Pin to top and Move under (X112)", () => {
   const plain = { linked: true, sources: false, pr: false, unread: false, agent: true };
   it("offers Pin to top, or Unpin from top on a pinned session, and Move under", () => {
-    expect(sessionMenu(plain)).toEqual(["open", "open-in", "-", "pin-top", "mark-unread", "rename", "-", "move-workspace", "move-under", "archive"]);
+    expect(sessionMenu(plain)).toEqual(["open", "open-in", "-", "pin-top", "mark-unread", "rename", "fork", "-", "move-workspace", "move-under", "archive"]);
     expect(sessionMenu({ ...plain, pinnedTop: true })).toContain("unpin-top");
     expect(sessionMenu({ ...plain, pinnedTop: true })).not.toContain("pin-top");
   });

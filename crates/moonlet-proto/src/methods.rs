@@ -127,6 +127,8 @@ pub const SESSION_UNARCHIVE: &str = "session.unarchive";
 /// An archived session's kept chats, with their transcripts (X86).
 pub const SESSION_HISTORY: &str = "session.history";
 pub const SESSION_UPDATE: &str = "session.update";
+/// Fork a session (X112): params [`SessionFork`], result the new [`crate::types::Session`].
+pub const SESSION_FORK: &str = "session.fork";
 pub const SESSION_RUN: &str = "session.run";
 /// The processes a session's terminals and agents run, and those left in its
 /// worktree (X83).
@@ -2019,6 +2021,12 @@ pub struct SessionUpdate {
         skip_serializing_if = "Option::is_none"
     )]
     pub parent: Option<Option<String>>,
+}
+
+/// A new session that starts where session `id` is (X112).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionFork {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

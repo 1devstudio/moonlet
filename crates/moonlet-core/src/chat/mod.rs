@@ -97,6 +97,10 @@ pub struct ChatConfig {
     /// Claude's `--chrome`, for the Claude in Chrome extension: the host's
     /// switch at the last start (X103).
     pub chrome: bool,
+    /// The conversation a forked session's chat came from (X112): while the
+    /// chat still resumes that one, its agent starts with `--fork-session`,
+    /// and once the agent names its new conversation, it resumes that.
+    pub fork_of: Option<String>,
 }
 
 /// What an adapter asks the runtime to do.

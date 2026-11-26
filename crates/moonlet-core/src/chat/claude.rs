@@ -430,7 +430,13 @@ impl Adapter for Claude {
             args.extend(["--permission-mode".into(), m.clone()]);
         }
         match &cfg.resume {
-            Some(id) => args.extend(["--resume".into(), id.clone()]),
+            Some(id) => {
+                args.extend(["--resume".into(), id.clone()]);
+                // A forked session's chat, on the conversation it came from (X112).
+                if cfg.fork_of.as_ref() == Some(id) {
+                    args.push("--fork-session".into());
+                }
+            }
             None => args.extend(["--session-id".into(), uuid::Uuid::new_v4().to_string()]),
         }
         if !cfg.name.is_empty() {
