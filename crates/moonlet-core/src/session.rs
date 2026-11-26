@@ -1869,9 +1869,20 @@ impl SessionManager {
                     Err(e) => tracing::warn!(session = %ws.id, "cannot fork a chat: {e:#}"),
                 }
             }
+            for agent in &fork.fresh_chats {
+                let chat = TerminalCreate { kind: TerminalKind::Agent, title: Some(agent.clone()), agent: Some(agent.clone()), chat: true, cols: req.cols, rows: req.rows, ..Default::default() };
+                match self.spawn_in(&ws, chat) {
+                    Ok(_) => opened += 1,
+                    Err(e) => tracing::warn!(session = %ws.id, "cannot open a {agent} chat in the fork: {e:#}"),
+                }
+            }
+            // The fork is saved by now: a tab that cannot open is left out,
+            // as a chat is, rather than failing a session that exists.
             for agent in &fork.agents {
-                self.spawn_in(&ws, self.agent_session(&ws, &repo, agent, None, false, req.cols, req.rows))?;
-                opened += 1;
+                match self.spawn_in(&ws, self.agent_session(&ws, &repo, agent, None, false, req.cols, req.rows)) {
+                    Ok(_) => opened += 1,
+                    Err(e) => tracing::warn!(session = %ws.id, "cannot start {agent} in the fork: {e:#}"),
+                }
             }
             if opened == 0 {
                 self.spawn_in(
@@ -1980,11 +1991,16 @@ impl SessionManager {
         let head = String::from_utf8_lossy(&git::git(Path::new(&src.path), &["rev-parse", "HEAD"]).await?).trim().to_string();
         let taken: Vec<String> = self.list_sessions().into_iter().filter(|s| s.project_id == src.project_id).map(|s| s.name).collect();
         let infos: Vec<TerminalInfo> = self.terminals.list().into_iter().filter(|t| src.terminals.contains(&t.id)).collect();
+        // Only a Claude chat's conversation can go on as a new one; a chat of
+        // another agent starts afresh as that agent's.
+        let claude = |t: &&TerminalInfo| t.agent.as_deref() == Some("claude");
         let chats: Vec<moonlet_proto::types::ChatState> = infos
             .iter()
             .filter(|t| t.chat)
+            .filter(claude)
             .filter_map(|t| self.chats.get().and_then(|c| c.state(t.id).ok()))
             .collect();
+        let fresh_chats: Vec<String> = infos.iter().filter(|t| t.chat && !claude(t)).filter_map(|t| t.agent.clone()).collect();
         let agents: Vec<String> = infos.iter().filter(|t| !t.chat && t.kind == TerminalKind::Agent).filter_map(|t| t.agent.clone()).collect();
         let req = SessionCreate {
             name: Some(fork_name(&src.name, &taken)),
@@ -2017,7 +2033,7 @@ impl SessionManager {
             }
             Ok(())
         };
-        let fork = ForkTabs { base: src.base.clone(), chats, agents };
+        let fork = ForkTabs { base: src.base.clone(), chats, fresh_chats, agents };
         self.create_session_with(req, prepare, |_| async {}, Some(fork)).await
     }
 
@@ -2570,16 +2586,21 @@ async fn track_removed_sessions(mgr: std::sync::Weak<SessionManager>) {
 /// session's base, its chats to go on from, and the agents its terminals ran.
 struct ForkTabs {
     base: String,
+    /// Claude chats, to go on from their conversations as new ones.
     chats: Vec<moonlet_proto::types::ChatState>,
+    /// The agents of its other chats, started afresh.
+    fresh_chats: Vec<String>,
+    /// The agents its terminals ran, started afresh.
     agents: Vec<String>,
 }
 
-/// A fork's name (X112): `name` with the next number not in `taken`,
-/// counting on from a number it already ends in ("Fix cart 2" gives
-/// "Fix cart 3").
+/// A fork's name (X112): `name` with the next number not in `taken`. A
+/// fork of a fork counts on ("Fix cart 2" gives "Fix cart 3" while "Fix
+/// cart" is taken); a number that is part of the name stays ("Bump to Node
+/// 18" gives "Bump to Node 18 2").
 fn fork_name(name: &str, taken: &[String]) -> String {
     let (stem, from) = match name.rsplit_once(' ') {
-        Some((stem, n)) if !stem.is_empty() && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => (stem, n.parse::<u64>().unwrap_or(1) + 1),
+        Some((stem, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && taken.iter().any(|t| t == stem) => (stem, n.parse::<u64>().unwrap_or(1) + 1),
         _ => (name, 2),
     };
     (from..).map(|n| format!("{stem} {n}")).find(|c| !taken.contains(c)).unwrap()
@@ -4730,14 +4751,15 @@ mod tests {
         mgr.update(SessionUpdate { id: id.into(), pinned_top, parent: parent.map(|p| p.map(Into::into)), ..Default::default() })
     }
 
-    /// X112: a fork is named after its session with the next free number,
-    /// counting on from a number the name already ends in.
+    /// X112: a fork is named after its session with the next free number.
+    /// A fork of a fork counts on ("Fix cart 2" gives "Fix cart 3"); a
+    /// number that is part of the name stays ("Bump to Node 18 2").
     #[test]
     fn a_fork_takes_the_next_free_number() {
-        let taken = ["Fix cart", "Fix cart 2", "Docs 7"].map(String::from);
+        let taken = ["Fix cart", "Fix cart 2", "Bump to Node 18"].map(String::from);
         assert_eq!(fork_name("Fix cart", &taken), "Fix cart 3");
         assert_eq!(fork_name("Fix cart 2", &taken), "Fix cart 3");
-        assert_eq!(fork_name("Docs 7", &taken), "Docs 8");
+        assert_eq!(fork_name("Bump to Node 18", &taken), "Bump to Node 18 2");
         assert_eq!(fork_name("Spike", &taken), "Spike 2");
     }
 
@@ -4800,6 +4822,22 @@ mod tests {
 
         mgr.archive(SessionArchive { id: src.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
         assert_eq!(mgr.fork_session(&src.id).await.unwrap_err().to_string(), "the session is archived");
+    }
+
+    /// X112: only a Claude chat goes on from its conversation; a chat of
+    /// another agent, Codex, starts afresh in the fork as that agent's chat.
+    #[tokio::test]
+    async fn a_forks_codex_chat_starts_afresh_as_a_codex_chat() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        mgr.spawn_in(&src, TerminalCreate { kind: TerminalKind::Agent, title: Some("codex".into()), agent: Some("codex".into()), chat: true, cols: 80, rows: 24, ..Default::default() }).unwrap();
+
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+
+        let tabs: Vec<(Option<String>, bool)> = mgr.terminals.list().into_iter().filter(|t| fork.terminals.contains(&t.id)).map(|t| (t.agent, t.chat)).collect();
+        assert_eq!(tabs, vec![(Some("codex".to_string()), true)]);
+        assert_eq!(chats.state(fork.terminals[0]).unwrap().agent_session, None, "a fresh chat, on no conversation");
     }
 
     /// X112: a fork's chat shows its session's conversation, and its agent's
