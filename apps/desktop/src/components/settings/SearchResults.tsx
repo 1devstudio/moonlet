@@ -48,7 +48,7 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       phones,
       workspaces: settingsWorkspaces(settingsHosts({ hosts, workspaces, accounts })).map(({ host, id, ws, remote }) => ({ host, id, name: ws.name, color: ws.color, profile: profileName(ws, profiles[host] ?? []), remote })),
       // The projects the nav lists: each of an account once (X68).
-      projects: settingsProjects({ hosts, projects, accounts }).map(({ host, id, name }) => ({ host, id, name, base_branch: projects[host]?.find((p) => p.id === id)?.base_branch ?? "", config: configs[`${host}/${id}`] })),
+      projects: settingsProjects({ hosts, projects, accounts }).map(({ host, id, name, base_branch }) => ({ host, id, name, base_branch, config: configs[`${host}/${id}`] })),
       git,
       trackers,
     }),

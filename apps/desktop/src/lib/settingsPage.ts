@@ -143,8 +143,9 @@ function accountProjectKey(s: SettingsProjects, host: string, p: Project): strin
  * matched by identity, this Mac's copies while it lists them and is
  * connected, else a connected member's. Checkouts of one repository on one
  * host each keep their entry, and a project with no root commit is never
- * matched. `remote` names the host of a project not on this Mac. */
-export function settingsProjects(s: SettingsProjects): NavItem[] {
+ * matched. `remote` names the host of a project not on this Mac; the base
+ * branch is the listed copy's, for the search. */
+export function settingsProjects(s: SettingsProjects): (NavItem & { base_branch: string })[] {
   const ids = hostOrder(Object.keys(s.projects)).sort((a, b) => Number(s.hosts[b]?.status === "connected") - Number(s.hosts[a]?.status === "connected"));
   // Which host's copies of a project the nav lists, by account and identity.
   const listedOn = new Map<string, string>();
@@ -153,7 +154,7 @@ export function settingsProjects(s: SettingsProjects): NavItem[] {
       const key = accountProjectKey(s, h, p);
       if (key && (listedOn.get(key) ?? h) !== h) return [];
       if (key) listedOn.set(key, h);
-      return [{ host: h, id: p.id, name: p.name, remote: s.hosts[h]?.remote ? (s.hosts[h]?.label ?? h) : null }];
+      return [{ host: h, id: p.id, name: p.name, base_branch: p.base_branch, remote: s.hosts[h]?.remote ? (s.hosts[h]?.label ?? h) : null }];
     }),
   );
 }

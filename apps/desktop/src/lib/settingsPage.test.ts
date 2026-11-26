@@ -145,10 +145,10 @@ describe("the projects settings list (X68)", () => {
         },
       }),
     ).toEqual([
-      { host: "local", id: "7e887a1546bc", name: "storefront", remote: null },
-      { host: "local", id: "39592fe51de9", name: "payments-api", remote: null },
-      { host: "devbox", id: "aa1ecc8cf334", name: "shop", remote: "devbox" },
-      { host: "studio-mini", id: "04e103fc04a7", name: "cloud-test", remote: "studio-mini" },
+      { host: "local", id: "7e887a1546bc", name: "storefront", base_branch: "main", remote: null },
+      { host: "local", id: "39592fe51de9", name: "payments-api", base_branch: "main", remote: null },
+      { host: "devbox", id: "aa1ecc8cf334", name: "shop", base_branch: "main", remote: "devbox" },
+      { host: "studio-mini", id: "04e103fc04a7", name: "cloud-test", base_branch: "main", remote: "studio-mini" },
     ]);
   });
 
@@ -160,8 +160,17 @@ describe("the projects settings list (X68)", () => {
         projects: { local: [project("7e887a1546bc", "storefront", shop), project("c3d4e5f6a7b8", "storefront-review", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop)] },
       }),
     ).toEqual([
-      { host: "local", id: "7e887a1546bc", name: "storefront", remote: null },
-      { host: "local", id: "c3d4e5f6a7b8", name: "storefront-review", remote: null },
+      { host: "local", id: "7e887a1546bc", name: "storefront", base_branch: "main", remote: null },
+      { host: "local", id: "c3d4e5f6a7b8", name: "storefront-review", base_branch: "main", remote: null },
+    ]);
+  });
+
+  it("gives the search the listed copy's base branch", () => {
+    const member = { ...project("d137b8456a98", "moonlet", shop), base_branch: "develop" };
+    const listed = settingsProjects({ hosts, accounts, projects: { "studio-mini": [member, { ...project("04e103fc04a7", "cloud-test"), base_branch: "trunk" }], local: [project("7e887a1546bc", "storefront", shop)] } });
+    expect(listed.map((p) => [p.id, p.base_branch])).toEqual([
+      ["7e887a1546bc", "main"],
+      ["04e103fc04a7", "trunk"],
     ]);
   });
 
@@ -179,7 +188,7 @@ describe("the projects settings list (X68)", () => {
         accounts,
         projects: { local: [project("7e887a1546bc", "storefront", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop)] },
       }),
-    ).toEqual([{ host: "studio-mini", id: "d137b8456a98", name: "moonlet", remote: "studio-mini" }]);
+    ).toEqual([{ host: "studio-mini", id: "d137b8456a98", name: "moonlet", base_branch: "main", remote: "studio-mini" }]);
   });
 });
 
