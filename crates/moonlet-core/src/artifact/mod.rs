@@ -6,5 +6,6 @@
 //! design store keeps them.
 
 pub mod plans;
+pub mod refs;
 
 pub use plans::{Plan, Plans, Proposal, Version, VersionState, display_name, parse_id, plan_key, snippet};

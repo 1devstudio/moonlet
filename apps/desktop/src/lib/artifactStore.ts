@@ -9,7 +9,18 @@ import type { Design } from "./protocol";
 import { EV, M, type ArtifactInfo, type ArtifactMatch } from "./protocol";
 import type { ArtifactKind } from "./artifacts";
 
+/** An artifact picked to go with a session's next message (X114). */
+export interface ArtifactChip {
+  /** The host the artifact is listed from. */
+  host: string;
+  id: string;
+  name: string;
+  kind: "plan" | "design";
+}
+
 interface ArtifactState {
+  /** The artifacts each session's next message refers to, by `<host>/<session>`. */
+  chips: Record<string, ArtifactChip[] | undefined>;
   /** Each host's plans of a workspace, by `<host>/<workspace>`. */
   plans: Record<string, ArtifactInfo[] | undefined>;
   /** What `artifact.search` found, by `<host>/<workspace>`, for `query`. */
@@ -20,7 +31,40 @@ interface ArtifactState {
   shown: { host: string; id: string } | null;
 }
 
-export const useArtifacts = create<ArtifactState>(() => ({ plans: {}, matches: {}, query: "", kind: "all", shown: null }));
+export const useArtifacts = create<ArtifactState>(() => ({ chips: {}, plans: {}, matches: {}, query: "", kind: "all", shown: null }));
+
+const chipKey = (host: string, session: string) => `${host}/${session}`;
+
+/** The artifacts session `session` on `host` will refer to with its next message. */
+export const chipsOf = (s: ArtifactState, host: string, session: string): ArtifactChip[] => s.chips[chipKey(host, session)] ?? [];
+
+/** Picks an artifact for a session's next message; once is enough. */
+export function addChip(host: string, session: string, chip: ArtifactChip) {
+  useArtifacts.setState((s) => {
+    const have = chipsOf(s, host, session);
+    if (have.some((c) => c.id === chip.id)) return s;
+    return { chips: { ...s.chips, [chipKey(host, session)]: [...have, chip] } };
+  });
+}
+
+/** Takes an artifact out of a session's next message: it refers to nothing. */
+export function removeChip(host: string, session: string, id: string) {
+  useArtifacts.setState((s) => ({ chips: { ...s.chips, [chipKey(host, session)]: chipsOf(s, host, session).filter((c) => c.id !== id) } }));
+}
+
+/** Refers the session to every artifact picked for its message, and gives
+ *  back each one's line for the message, in the order picked. The chips go
+ *  once the message has its lines. An artifact of another host cannot be
+ *  referred to yet: it says so and stays picked. */
+export async function attachChips(host: string, session: string): Promise<string[]> {
+  const chips = chipsOf(useArtifacts.getState(), host, session);
+  const elsewhere = chips.find((c) => c.host !== host);
+  if (elsewhere) throw new Error(`${elsewhere.name} is on another host: a session refers to the artifacts of its own host for now`);
+  const lines: string[] = [];
+  for (const c of chips) lines.push((await rpc<{ line: string }>(host, M.artifactAttach, { session, id: c.id })).line);
+  useArtifacts.setState((s) => ({ chips: { ...s.chips, [chipKey(host, session)]: [] } }));
+  return lines;
+}
 
 export const artifactKey = (host: string, workspace: string) => `${host}/${workspace}`;
 

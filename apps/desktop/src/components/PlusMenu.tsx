@@ -1,10 +1,12 @@
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronRight, FileText, FolderPlus, Plus, Server, ShieldAlert, Terminal } from "lucide-react";
+import { Bot, ChevronRight, FileText, FolderPlus, Layers, Plus, Server, ShieldAlert, Terminal } from "lucide-react";
 import type { NamedItem } from "../lib/protocol";
 import { type PlusEntry, mcpSummary, plusEntries } from "../lib/plusMenu";
 import { type McpActions, McpPanels } from "./McpPanels";
 import { cx } from "./ui";
+import { ArtifactPicker } from "./ArtifactChips";
+import type { ArtifactRow } from "../lib/artifacts";
 
 const panel = "rounded-xl border border-border-strong bg-panel-2 p-1.5 shadow-[0_12px_32px_rgba(0,0,0,.5)]";
 
@@ -54,6 +56,7 @@ export function PlusMenu({
   onAgent,
   mcp,
   onOpen,
+  artifacts,
 }: {
   variant: "chat" | "composer";
   onAttach: () => void;
@@ -66,6 +69,8 @@ export function PlusMenu({
   mcp?: McpActions;
   /** The menu opened: the time to ask the agent for fresh MCP status. */
   onOpen?: () => void;
+  /** A session's chat: the workspace's artifacts, and picking one (X114). */
+  artifacts?: { onPick: (row: ArtifactRow) => void };
 }) {
   const [open, setOpen] = useState(false);
   const [sub, setSub] = useState<PlusEntry | null>(null);
@@ -118,6 +123,8 @@ export function PlusMenu({
     switch (entry) {
       case "attach":
         return <Row key={entry} icon={<FileText size={15} />} label="Attach files or images" trailing={<Keys keys={["⌘", "U"]} />} onEnter={() => setSub(null)} onClick={choose(onAttach)} />;
+      case "artifacts":
+        return <Row key={entry} icon={<Layers size={15} />} label="Attach artifact" active={sub === entry} controls={`${ids}-${entry}`} trailing={chevron} onEnter={() => setSub(entry)} onClick={() => setSub(entry)} />;
       case "add-dir":
         return <Row key={entry} icon={<FolderPlus size={15} />} label="Add directory" onEnter={() => setSub(null)} onClick={choose(onAddDir)} />;
       case "commands":
@@ -139,7 +146,7 @@ export function PlusMenu({
     }
   };
 
-  const sections = plusEntries({ variant, agents: agents.length, commands: !!onCommand });
+  const sections = plusEntries({ variant, agents: agents.length, commands: !!onCommand, artifacts: !!artifacts });
   const needsAuth = mcp?.servers ? mcpSummary(mcp.servers).needsAuth : 0;
 
   return (
@@ -166,6 +173,11 @@ export function PlusMenu({
                 </div>
               ))}
             </div>
+            {sub === "artifacts" && artifacts && (
+              <div id={`${ids}-artifacts`} className={cx(panel, "w-[380px]")}>
+                <ArtifactPicker onPick={(r) => choose(() => artifacts.onPick(r))()} />
+              </div>
+            )}
             {sub === "commands" && (
               <div id={`${ids}-commands`} className={cx(panel, "flex max-h-[320px] w-[240px] flex-col gap-px overflow-y-auto")}>
                 {commands.length === 0 && <div className="px-2 py-1.5 ui-text-12 text-faint">No commands</div>}

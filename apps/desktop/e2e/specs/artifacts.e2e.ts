@@ -10,6 +10,7 @@ import { PROJECT, fill, rpc, sel, world } from "../fixtures";
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
 const SESSION = "Search for the product list";
+const READER = "Search results page";
 
 /** Proposes one plan for every message, as Claude's ExitPlanMode call with
  *  its plan file, and ends the turn. printf, because /bin/sh's echo expands
@@ -33,14 +34,17 @@ const planRow = `//button[.//span[normalize-space()=${JSON.stringify(SESSION)}]]
 describe("artifacts", () => {
   let blocked = "";
   let sessionId = "";
+  let readerId = "";
+  let workspace = "";
 
   before(async () => {
     blocked = readFileSync(FAKE, "utf8");
     writeFileSync(FAKE, FAKE_CLAUDE);
     chmodSync(FAKE, 0o755);
     const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
-    const workspace = rpc<{ id: string; name: string }[]>(w, "workspace.list", {})[0]?.id;
+    workspace = rpc<{ id: string; name: string }[]>(w, "workspace.list", {})[0]?.id;
     sessionId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: SESSION, agent: "claude", workspace_id: workspace }).id;
+    readerId = rpc<{ id: string }>(w, "session.create", { project_id: project.id, name: READER, agent: "claude", workspace_id: workspace }).id;
     await browser.waitUntil(() => rpc<{ chat: boolean; session_id?: string }[]>(w, "terminal.list", {}).some((t) => t.chat && t.session_id === sessionId), {
       timeoutMsg: "the session's chat never started",
     });
@@ -59,6 +63,7 @@ describe("artifacts", () => {
         if (on?.includes("bg-bg")) await $(artifactsRow).click();
       }
       rpc(w, "session.archive", { id: sessionId });
+      rpc(w, "session.archive", { id: readerId });
     } finally {
       // Later specs must never get the planning fake.
       writeFileSync(FAKE, blocked);
@@ -82,5 +87,37 @@ describe("artifacts", () => {
     await expect($('//h1[normalize-space()="Search the products"]')).toBeDisplayed();
     await expect($(sel.text("Versions"))).toBeDisplayed();
     await expect($('//button[.//span[normalize-space()="v1"]]')).toBeDisplayed();
+  });
+
+  it("attaches the plan to another session, whose next message refers to it live", async () => {
+    await $(sel.button("Attach to session…")).click();
+    await $(`//button[normalize-space()=${JSON.stringify(READER)}]`).click();
+    // The session shows, the plan as a live chip in its input. The repo's
+    // setup script opens first; the conversation is the next tab, which
+    // switches on mousedown.
+    const chip = `//section[@aria-label="Chat input"]//span[@title=${JSON.stringify(`${SESSION}: a live reference, read only`)}]`;
+    await browser.waitUntil(
+      async () => {
+        await browser.execute(() => {
+          const tab = document.evaluate('//span[normalize-space()="claude"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+          tab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        });
+        return $(chip).isDisplayed();
+      },
+      { timeout: 20_000, timeoutMsg: "the plan's chip never showed in the session's input" },
+    );
+    await expect($(`${chip}//span[normalize-space()="live"]`)).toBeDisplayed();
+    const input = '//section[@aria-label="Chat input"]//textarea';
+    await fill(input, "Build the results page from the plan");
+    await browser.execute((xp: string) => {
+      const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }, input);
+    await expect($(chip)).not.toBeExisting();
+    const id = `plan:${sessionId}:search-products`;
+    await browser.waitUntil(() => rpc<{ id: string; used_by: string[] }[]>(w, "artifact.list", { workspace }).find((a) => a.id === id)?.used_by.includes(readerId) ?? false, {
+      timeout: 15_000,
+      timeoutMsg: "the plan never listed the session using it",
+    });
   });
 });

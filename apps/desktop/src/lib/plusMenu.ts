@@ -22,13 +22,14 @@ export function withMention(text: string, caret: number, mention: string): { tex
   return { text: head + text.slice(caret), caret: head.length };
 }
 
-export type PlusEntry = "attach" | "add-dir" | "commands" | "mcp" | "agents";
+export type PlusEntry = "attach" | "artifacts" | "add-dir" | "commands" | "mcp" | "agents";
 
 /** The menu's items in sections (a divider between them). The new-session
  *  composer has no running agent: it offers the file items, and the slash
  *  commands while Claude is picked (`commands`, X111). */
-export function plusEntries({ variant, agents, commands = false }: { variant: "chat" | "composer"; agents: number; commands?: boolean }): PlusEntry[][] {
-  const files: PlusEntry[] = ["attach", "add-dir"];
+export function plusEntries({ variant, agents, commands = false, artifacts = false }: { variant: "chat" | "composer"; agents: number; commands?: boolean; artifacts?: boolean }): PlusEntry[][] {
+  // A session's artifacts go with its next message (X114).
+  const files: PlusEntry[] = artifacts ? ["attach", "artifacts", "add-dir"] : ["attach", "add-dir"];
   if (variant === "composer") return commands ? [files, ["commands"]] : [files];
   const agent: PlusEntry[] = agents > 0 ? ["commands", "mcp", "agents"] : ["commands", "mcp"];
   return [files, agent];

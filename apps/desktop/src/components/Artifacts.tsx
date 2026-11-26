@@ -1,12 +1,13 @@
 // Artifacts (X114): the sidebar's list of a workspace's plans and designs,
 // and the artifact view in the main area.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Check, Layers, ListChecks, MoreHorizontal, PenTool, Pencil, Search, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, Layers, MoreHorizontal, Paperclip, Pencil, Search, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type ArtifactInfo, type ArtifactText, type Design } from "../lib/protocol";
-import { artifactRows, designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind, type ArtifactRow } from "../lib/artifacts";
-import { artifactDesigns, artifactKey, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
+import { M, type ArtifactInfo, type ArtifactText } from "../lib/protocol";
+import { designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
+import { KindTile, useArtifactRows } from "./ArtifactChips";
+import { addChip, artifactDesigns, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
 import { openSessionDesign, showDesign, useDesign } from "../lib/designStore";
 import { LIBRARY } from "../lib/designLibrary";
 import { placeOfDesign } from "../lib/designPlace";
@@ -16,7 +17,6 @@ import { setMode } from "../lib/mode";
 import { useNear } from "../lib/useNear";
 import { useSize } from "../lib/useSize";
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
-import { connectedHosts } from "../lib/sidebar";
 import { shortAge } from "../lib/design";
 import { Segmented } from "./settings/controls";
 import { Markdown } from "./AgentView";
@@ -30,40 +30,6 @@ const KINDS = [
   { id: "plan", label: "Plans" },
   { id: "design", label: "Designs" },
 ] as const satisfies readonly { id: ArtifactKind; label: string }[];
-
-export function KindTile({ kind, size = 22 }: { kind: "plan" | "design"; size?: number }) {
-  const Icon = kind === "plan" ? ListChecks : PenTool;
-  return (
-    <span className={cx("flex shrink-0 items-center justify-center rounded-[5px] bg-panel-2", kind === "plan" ? "text-accent" : "text-merged")} style={{ width: size, height: size }}>
-      <Icon size={Math.round(size * 0.6)} />
-    </span>
-  );
-}
-
-/** The rows of the shown workspace, from every connected host. */
-function useArtifactRows(): { rows: ArtifactRow[]; workspace: string | null; hosts: string[] } {
-  const shown = useStore((s) => shownWorkspace(s));
-  const hostsMap = useStore((s) => s.hosts);
-  const projects = useStore((s) => s.projects);
-  const joined = connectedHosts(hostsMap);
-  const hosts = useMemo(() => joined.split(",").filter(Boolean), [joined]);
-  const plans = useArtifacts((s) => s.plans);
-  const matches = useArtifacts((s) => s.matches);
-  const query = useArtifacts((s) => s.query);
-  const kind = useArtifacts((s) => s.kind);
-  const design = useDesign();
-  const workspace = shown?.id ?? null;
-  const rows = useMemo(() => {
-    if (!workspace) return [];
-    const byHost = (f: (host: string) => Design[] | undefined) => Object.fromEntries(hosts.map((h) => [h, f(h)]));
-    const designs = byHost((h) => artifactDesigns(design, h, workspace));
-    const projectName = (host: string, id: string) => (projects[host] ?? []).find((p) => p.id === id)?.name;
-    const planLists = Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]]));
-    const found = Object.fromEntries(hosts.map((h) => [h, matches[artifactKey(h, workspace)]]));
-    return artifactRows({ plans: planLists, designs, workspace, projectName, now: Date.now() }, kind, query, found);
-  }, [workspace, hosts, plans, matches, query, kind, design, projects]);
-  return { rows, workspace, hosts };
-}
 
 /** The sidebar's list, in place of the sessions, while Artifacts is on. */
 export function ArtifactsList() {
@@ -188,6 +154,37 @@ function Header({ info, children, menu }: { info: ArtifactInfo; children?: React
   );
 }
 
+/** Attach to session…: the workspace's open sessions on the artifact's host,
+ *  but its home; picking one adds the artifact to that session's next
+ *  message and shows the session (X114). */
+function AttachToSession({ host, info }: { host: string; info: ArtifactInfo }) {
+  const sessions = useStore((s) => s.sessions[host]);
+  const workspace = useStore((s) => shownWorkspace(s)?.id);
+  const [query, setQuery] = useState("");
+  const items = (sessions ?? [])
+    .filter((w) => !w.archived && w.workspace_id === workspace && w.id !== info.home.session && w.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .map((w) => ({
+      label: w.name,
+      onSelect: () => {
+        addChip(host, w.id, { host, id: info.id, name: info.name, kind: info.kind });
+        useStore.setState({ showArtifacts: false });
+        selectSession(host, w.id);
+      },
+    }));
+  return (
+    <Menu
+      align="right"
+      search={{ placeholder: "Find a session", query, onQuery: setQuery }}
+      trigger={(open) => (
+        <Button onClick={open}>
+          <Paperclip size={13} /> Attach to session…
+        </Button>
+      )}
+      items={items.length ? items : [{ kind: "label", label: "No other open session" }]}
+    />
+  );
+}
+
 function SideTitle({ children }: { children: ReactNode }) {
   return <div className="mb-2 ui-text-11.5 text-faint">{children}</div>;
 }
@@ -256,6 +253,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
     <div className="flex h-full overflow-hidden rounded-lg bg-bg">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header info={info} menu={info.home.archived ? [] : [{ label: "Rename…", onSelect: () => setRenaming(true) }]}>
+          {editing === null && <AttachToSession host={host} info={info} />}
           {editing === null ? (
             <Button disabled={readOnly || !read?.text} onClick={() => setEditing(read?.text ?? "")}>
               <Pencil size={13} /> Edit
@@ -361,6 +359,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
     <div className="flex h-full overflow-hidden rounded-lg bg-bg">
       <div className="flex min-w-0 flex-1 flex-col">
         <Header info={info}>
+          {design?.kind !== "project" && <AttachToSession host={host} info={info} />}
           <Button disabled={!design || design.kind === "project"} onClick={edit}>
             <Pencil size={13} /> Edit
           </Button>

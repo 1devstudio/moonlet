@@ -57,6 +57,9 @@ struct Saved {
     held: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     preface: Option<String>,
+    /// Lines the agent is told at the start of its next message (X114).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    told: Vec<String>,
 }
 
 struct Inner {
@@ -85,6 +88,9 @@ struct Inner {
     /// The move's note to the agent, kept while an ask waits (X73): it goes
     /// before the next message, as one with the answer.
     preface: Option<String>,
+    /// Lines the agent is told at the start of its next message: an
+    /// artifact it refers to changed, or its plan was edited by hand (X114).
+    told: Vec<String>,
     /// The user's answer to an ask of the member a moved session ran on,
     /// given for when the agent here asks the same again (X73).
     answer_again: Option<AnswerAgain>,
@@ -407,6 +413,7 @@ impl ChatManager {
                 kept,
                 held,
                 preface: None,
+                told: Vec::new(),
                 answer_again: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
@@ -543,7 +550,13 @@ impl ChatManager {
     /// needed. A moved chat's note and the messages it held go first (X73).
     fn deliver(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
         self.go_on_held(chat, inner)?;
-        self.write(chat, inner, text, images)
+        // What the agent is told goes at the start of the message (X114).
+        if inner.told.is_empty() {
+            return self.write(chat, inner, text, images);
+        }
+        let told = std::mem::take(&mut inner.told);
+        inner.dirty = true;
+        self.write(chat, inner, &format!("{}\n\n{text}", told.join("\n")), images)
     }
 
     /// The agent goes on, with no answer to the asks kept: they are moot.
@@ -1082,6 +1095,7 @@ impl ChatManager {
                 kept,
                 held,
                 preface: saved.preface,
+                told: saved.told,
                 answer_again: None,
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
@@ -1203,7 +1217,7 @@ impl ChatManager {
         if let Some(t) = self.terms.get(chat.id) {
             inner.info = t.info();
         }
-        let saved = Saved { info: inner.info.clone(), cfg: inner.cfg.clone(), env: inner.env.clone(), state: inner.state.clone(), held: inner.held.clone(), preface: inner.preface.clone() };
+        let saved = Saved { info: inner.info.clone(), cfg: inner.cfg.clone(), env: inner.env.clone(), state: inner.state.clone(), held: inner.held.clone(), preface: inner.preface.clone(), told: inner.told.clone() };
         let write = || -> Result<()> {
             crate::paths::ensure_private_dir(&self.dir)?;
             let tmp = self.dir.join(format!(".{}.tmp", chat.id));
@@ -1803,6 +1817,67 @@ impl ChatManager {
         let _ = self.plans.set(plans);
     }
 
+    /// Gives chat `id`'s Claude folder `path` to read but never change
+    /// (X114): `--add-dir`, and `--settings` denying Edit and Write in it,
+    /// from its next message.
+    pub fn refer_dir(&self, id: TerminalId, path: &str) -> Result<()> {
+        // By its real path: Claude matches its rules against that (X64).
+        let real = std::fs::canonicalize(check_dir(path)?)?.display().to_string();
+        let chat = self.get(id)?;
+        let mut inner = chat.inner.lock().unwrap();
+        if inner.cfg.add_dirs.contains(&real) {
+            return Ok(());
+        }
+        inner.cfg.add_dirs.push(real.clone());
+        inner.state.add_dirs.push(real.clone());
+        let mut settings: serde_json::Value = inner.cfg.settings.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| serde_json::json!({}));
+        let deny = settings
+            .as_object_mut()
+            .context("chat settings are not an object")?
+            .entry("permissions")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .context("chat permissions are not an object")?
+            .entry("deny")
+            .or_insert_with(|| serde_json::json!([]));
+        for rule in [format!("Edit(/{real}/**)"), format!("Write(/{real}/**)")] {
+            if let Some(list) = deny.as_array_mut()
+                && !list.iter().any(|r| r.as_str() == Some(&rule))
+            {
+                list.push(rule.into());
+            }
+        }
+        inner.cfg.settings = Some(settings.to_string());
+        inner.restart = true;
+        self.apply(&chat, &mut inner, vec![Out::State]);
+        Ok(())
+    }
+
+    /// Tells every chat of `session` `line` before its next message (X114).
+    /// Returns how many chats it went to.
+    pub fn tell_session(&self, session: &str, line: &str) -> usize {
+        let chats: Vec<Arc<Chat>> = self.chats.lock().unwrap().values().cloned().collect();
+        let mut told = 0;
+        for chat in chats {
+            let mut inner = chat.inner.lock().unwrap();
+            if inner.info.session_id.as_deref() == Some(session) {
+                self.tell(&chat, &mut inner, line);
+                told += 1;
+            }
+        }
+        told
+    }
+
+    /// Adds `line` to what the chat is told before its next message, once.
+    fn tell(&self, chat: &Chat, inner: &mut Inner, line: &str) {
+        if inner.told.iter().any(|l| l == line) {
+            return;
+        }
+        inner.told.push(line.to_string());
+        inner.dirty = true;
+        self.save(chat, inner);
+    }
+
     /// Tells the chats of `session` whose plan artifact is `key` `line`,
     /// before their next message (X114). Returns how many were told.
     pub fn tell_plan(&self, session: &str, key: &str, line: &str) -> usize {
@@ -1821,12 +1896,9 @@ impl ChatManager {
                 continue;
             }
             // An older edit's line of the same plan gives way to this one.
-            let dir = line.rfind('/').map_or(line, |i| &line[..=i]);
-            let mut lines: Vec<String> = inner.preface.take().map(|p| p.lines().filter(|l| !l.starts_with(dir)).map(String::from).collect()).unwrap_or_default();
-            lines.push(line.to_string());
-            inner.preface = Some(lines.join("\n"));
-            inner.dirty = true;
-            self.save(&chat, &mut inner);
+            let dir = line.rfind('/').map_or(line, |i| &line[..=i]).to_string();
+            inner.told.retain(|l| !l.starts_with(&dir));
+            self.tell(&chat, &mut inner, line);
             told += 1;
         }
         told
@@ -2657,9 +2729,48 @@ done
         chats.send(info.id, "go on", &[]).unwrap();
         // Sent as messages to Claude: shown, or queued while it works.
         let sent = |s: &ChatState| -> Vec<String> { s.items.iter().filter(|i| i.kind == "user").map(|i| i.text.clone()).chain(s.queued.iter().map(|q| q.text.clone())).collect() };
-        let st = wait_for(&chats, info.id, |s| sent(s).iter().any(|t| t == "go on")).await;
-        let all = sent(&st);
-        assert_eq!(all[all.len() - 2..], ["The plan was edited by hand: /plans/a1b2c3d4e5f6/sess-1/v3.md".to_string(), "go on".to_string()]);
+        // One line, the latest edit's, at the start of the message (X114).
+        let st = wait_for(&chats, info.id, |s| sent(s).iter().any(|t| t.ends_with("go on"))).await;
+        assert_eq!(sent(&st).last().unwrap(), "The plan was edited by hand: /plans/a1b2c3d4e5f6/sess-1/v3.md\n\ngo on");
+        chats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_folder_referred_to_is_given_to_claude_read_only_from_the_next_message() {
+        let (dir, _terms, chats) = setup().await;
+        let refs = dir.path().join("refs/s-api");
+        std::fs::create_dir_all(&refs).unwrap();
+        let real = std::fs::canonicalize(&refs).unwrap();
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-api".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+
+        chats.refer_dir(info.id, &refs.display().to_string()).unwrap();
+        chats.refer_dir(info.id, &refs.display().to_string()).unwrap();
+        chats.send(info.id, "hi", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+
+        let start = last_start(dir.path());
+        assert!(start.contains(&format!("--add-dir {}", real.display())), "{start}");
+        let r = real.display();
+        assert!(start.contains(&format!(r#""deny":["Edit(/{r}/**)","Write(/{r}/**)"]"#)), "{start}");
+        assert_eq!(start.matches("--add-dir").count(), 1, "{start}");
+        chats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_line_told_to_a_session_comes_before_its_chats_next_message() {
+        let (dir, _terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-api".into()), ..Default::default() }).unwrap();
+        let other = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-other".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+
+        assert_eq!(chats.tell_session("s-api", "Settings page changed since you last read it: /refs/settings-page"), 1);
+        chats.tell_session("s-api", "Settings page changed since you last read it: /refs/settings-page");
+        chats.send(info.id, "go on", &[]).unwrap();
+        let st = wait_for(&chats, info.id, |s| s.items.iter().any(|i| i.kind == "user") && s.status == "done").await;
+        let users: Vec<_> = st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
+        assert_eq!(users, ["Settings page changed since you last read it: /refs/settings-page\n\ngo on"]);
+        assert!(chats.state(other.id).unwrap().items.iter().all(|i| i.kind != "user"));
         chats.shutdown().await;
     }
 
