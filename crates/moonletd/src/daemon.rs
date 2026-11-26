@@ -472,6 +472,9 @@ const LOCAL_METHODS: &[&str] = &[
     // `moonletd status`, `stop`, `restart`, `upgrade` and `proxy`.
     m::DAEMON_INFO,
     m::DAEMON_SHUTDOWN,
+    // The daemon a login starts, taking over from one started at system
+    // start (X113).
+    m::DAEMON_HAND_OVER,
     // `moonlet notify` and the agents' hooks; `moonlet open-url` (X75).
     m::AGENT_REPORT,
     m::BROWSER_OPEN,
@@ -1511,6 +1514,21 @@ impl Daemon {
                     }
                 });
                 ok(true)
+            }
+            m::DAEMON_HAND_OVER => {
+                // Only the host itself, and only a daemon outside any login
+                // session: the one a login starts can read the Keychain.
+                if conn.phone.is_some() || conn.routed_phone {
+                    return Err(RpcError::new("forbidden", "hand over on moonletd's own machine"));
+                }
+                if !crate::boot::started_at_boot() {
+                    return Err(RpcError::new("refused", "only a daemon started at system start hands over"));
+                }
+                if !self.begin_upgrade() {
+                    return Err(RpcError::new("busy", "an upgrade is already in progress"));
+                }
+                let path = crate::upgrade::hand_over(self.clone()).await.map_err(internal)?;
+                ok(path.display().to_string())
             }
             m::DAEMON_UPDATE => {
                 // On the local socket, the app that proved it is (X75).

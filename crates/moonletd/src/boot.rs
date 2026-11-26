@@ -66,6 +66,23 @@ fn user_temp_dir() -> Option<std::ffi::OsString> {
     Some(std::ffi::OsString::from_vec(buf))
 }
 
+/// For a daemon that finds one already listening on `socket`: when that
+/// one was started at system start and this one was not, it hands its
+/// terminals over, and this returns the socket to take them from.
+pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Option<std::path::PathBuf>> {
+    use moonlet_proto::methods;
+    if started_at_boot() {
+        return Ok(None);
+    }
+    let mut c = moonlet_core::client::Client::connect(socket, "moonletd-login").await?;
+    let info: moonlet_proto::types::DaemonInfo = c.request(methods::DAEMON_INFO, ()).await?;
+    if !info.started_at_boot {
+        return Ok(None);
+    }
+    let path: String = c.request(methods::DAEMON_HAND_OVER, ()).await?;
+    Ok(Some(path.into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

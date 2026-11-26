@@ -14,6 +14,10 @@ pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 pub const DAEMON_UPGRADE: &str = "daemon.upgrade";
 /// Installs a newer moonlet release on this host, then upgrades into it (X69).
 pub const DAEMON_UPDATE: &str = "daemon.update";
+/// Hands every PTY to the calling daemon, which receives them on the
+/// returned socket, then exits; only a daemon started at system start
+/// does, for the daemon its user's login starts (X113).
+pub const DAEMON_HAND_OVER: &str = "daemon.hand_over";
 
 // Sessions
 pub const TERMINAL_CREATE: &str = "terminal.create";

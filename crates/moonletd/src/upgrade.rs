@@ -121,13 +121,7 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
     if !binary.is_file() {
         bail!("new moonletd binary not found: {}", binary.display());
     }
-    let path = daemon
-        .terminals
-        .socket()
-        .with_file_name(format!("handoff-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let (path, listener) = handoff_listener(&daemon)?;
 
     let mut cmd = Command::new(&binary);
     cmd.args(["daemon", "--handoff"]).arg(&path);
@@ -145,19 +139,74 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
             Ok(())
         });
     }
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .with_context(|| format!("cannot start {}", binary.display()))?;
     tracing::info!(binary = %binary.display(), pid = child.id(), "handing terminals to new daemon");
+    serve_handoff(daemon, listener, path, Receiver::Child(child)).await
+}
 
+/// Who takes the terminals.
+enum Receiver {
+    /// The new daemon this one started (S3).
+    Child(std::process::Child),
+    /// The daemon that asked with `daemon.hand_over` (X113): it must run
+    /// this daemon's own executable.
+    Caller,
+}
+
+/// `handoff-<pid>.sock` beside the daemon's socket, for the new daemon only.
+fn handoff_listener(daemon: &Daemon) -> Result<(PathBuf, UnixListener)> {
+    let path = daemon
+        .terminals
+        .socket()
+        .with_file_name(format!("handoff-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    Ok((path, listener))
+}
+
+/// `daemon.hand_over` (X113), for a daemon that started at system start:
+/// the daemon that asks, started at login, takes every terminal over the
+/// returned socket, and this one exits. The caller claimed the upgrade.
+pub async fn hand_over(daemon: Arc<Daemon>) -> Result<PathBuf> {
+    let (path, listener) = match handoff_listener(&daemon) {
+        Ok(l) => l,
+        Err(e) => {
+            daemon.end_upgrade();
+            return Err(e);
+        }
+    };
+    let returned = path.clone();
+    tokio::spawn(async move {
+        let result = serve_handoff(daemon.clone(), listener, path, Receiver::Caller).await;
+        if let Err(e) = result {
+            tracing::error!("hand-over to the daemon started at login failed, still serving: {e:#}");
+            daemon.terminals.resume_io();
+            daemon.chats.resume();
+            daemon.end_upgrade();
+        }
+    });
+    Ok(returned)
+}
+
+async fn serve_handoff(daemon: Arc<Daemon>, listener: UnixListener, path: PathBuf, mut receiver: Receiver) -> Result<()> {
     // Chats are not handed over: the new daemon resumes them from disk.
     daemon.chats.shutdown().await;
     let terminals = daemon.terminals.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<()> {
         listener.set_nonblocking(false)?;
-        // Wait for the child to connect, but notice if it dies first.
-        let (stream, _) = accept_with_timeout(&listener, &mut child, Duration::from_secs(15))?;
+        // Wait for the new daemon to connect, but notice if a child dies first.
+        let child = match &mut receiver {
+            Receiver::Child(c) => Some(c),
+            Receiver::Caller => None,
+        };
+        let (stream, _) = accept_with_timeout(&listener, child, Duration::from_secs(15))?;
         check_peer(&stream)?;
+        if matches!(receiver, Receiver::Caller) {
+            check_peer_runs_this_executable(&stream)?;
+        }
         let exported = terminals.export();
         send_terminals(&stream, terminals.base_env(), &exported)?;
         let mut ack = [0u8; 1];
@@ -181,7 +230,7 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
 
 fn accept_with_timeout(
     listener: &UnixListener,
-    child: &mut std::process::Child,
+    mut child: Option<&mut std::process::Child>,
     timeout: Duration,
 ) -> Result<(UnixStream, std::os::unix::net::SocketAddr)> {
     listener.set_nonblocking(true)?;
@@ -195,15 +244,51 @@ fn accept_with_timeout(
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => return Err(e.into()),
         }
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(child) = child.as_mut()
+            && let Ok(Some(status)) = child.try_wait()
+        {
             bail!("new daemon exited during handoff ({status})");
         }
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            if let Some(child) = child.as_mut() {
+                let _ = child.kill();
+            }
             bail!("new daemon did not connect for the handoff");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The peer runs the same `moonletd` as this daemon (X113): a hand-over
+/// gives every terminal to whoever connects.
+fn check_peer_runs_this_executable(stream: &UnixStream) -> Result<()> {
+    let ours = std::env::current_exe().context("this daemon's executable")?;
+    let theirs = peer_executable(stream)?;
+    let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if same(&ours) != same(&theirs) {
+        bail!("hand-over refused: the peer runs {}, not {}", theirs.display(), ours.display());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn peer_executable(stream: &UnixStream) -> Result<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let pid = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::LocalPeerPid).context("peer pid")?;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is writable for its length.
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if n <= 0 {
+        bail!("cannot read the peer's executable: {}", std::io::Error::last_os_error());
+    }
+    buf.truncate(n as usize);
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(buf)))
+}
+
+#[cfg(target_os = "linux")]
+fn peer_executable(stream: &UnixStream) -> Result<PathBuf> {
+    let cred = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials).context("peer credentials")?;
+    std::fs::read_link(format!("/proc/{}/exe", cred.pid())).context("cannot read the peer's executable")
 }
 
 fn check_peer(stream: &UnixStream) -> Result<()> {

@@ -45,10 +45,10 @@ A daemon started at boot can never read the user's login Keychain, before login 
 
 ### Login takes over
 
-- [ ] At login the X56 login item starts moonletd. Today it exits 0 when a daemon is already listening. When that daemon says `started_at_boot`, the new daemon instead asks it to hand over: the boot daemon hands every terminal to the asking daemon over the S3 handoff, then exits 0. Unlike S3, the boot daemon starts no process: the daemon that asked receives the terminals itself, so it stays in the login session, where the Keychain is. Test: `a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon` (a terminal's process keeps its pid and its output after the takeover).
-- [ ] The boot daemon accepts the takeover only from a peer with the same uid (as S3) whose executable is the boot daemon's own `moonletd` (`proc_pidpath`). Test: `a_takeover_from_another_program_is_refused`.
+- [x] At login the X56 login item starts moonletd. Today it exits 0 when a daemon is already listening. When that daemon says `started_at_boot`, the new daemon instead asks it to hand over: the boot daemon hands every terminal to the asking daemon over the S3 handoff, then exits 0. Unlike S3, the boot daemon starts no process: the daemon that asked receives the terminals itself, so it stays in the login session, where the Keychain is. Test: `a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon` (a terminal's process keeps its pid and its output after the takeover). A daemon that finds a daemon not started at boot listening exits 0 as before: `a_daemon_that_was_not_started_at_boot_is_left_serving`.
+- [x] The boot daemon accepts the takeover only from a peer with the same uid (as S3) whose executable is the boot daemon's own `moonletd` (`proc_pidpath` of `LOCAL_PEERPID`). Test: `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
 - [ ] The taking daemon resumes chats from disk, as after S3, so a chat that waited for login starts. Test: `a_waiting_chat_starts_after_the_takeover`.
-- [ ] A takeover that fails leaves the boot daemon serving, and the login-session daemon exits 0 as today. The failure is logged. Test: `a_failed_takeover_leaves_the_boot_daemon_serving`.
+- [x] A takeover that fails leaves the boot daemon serving its terminals, and the login-session daemon exits 0, so launchd does not keep restarting it. The failure is logged on both sides. Test: `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
 - [ ] Terminals opened before login keep running in the boot daemon's context after the takeover: a command in them still cannot read the Keychain. New terminals can.
 
 ### The Settings switch
