@@ -187,6 +187,8 @@ pub struct ChatManager {
     /// The slash commands Claude Code offers outside any project, by Claude
     /// profile folder, with when it said so (X111).
     commands: Mutex<HashMap<Option<String>, HeldCommands>>,
+    /// Where the plans sessions' chats propose are kept (X114).
+    plans: std::sync::OnceLock<Arc<crate::artifact::Plans>>,
     /// One Claude at a time is started to ask for models or commands (X105).
     probing: tokio::sync::Mutex<()>,
     /// Each profile's usage limits, by Claude profile folder, as Claude
@@ -306,7 +308,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), until_login: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), usage: Default::default(), usage_probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), until_login: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), usage: Default::default(), usage_probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default(), plans: std::sync::OnceLock::new() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -1792,6 +1794,55 @@ impl ChatManager {
         Ok(())
     }
 
+    /// Keeps every plan a session's chat proposes in `plans` (X114).
+    pub fn keep_plans(&self, plans: Arc<crate::artifact::Plans>) {
+        let _ = self.plans.set(plans);
+    }
+
+    /// Tells the chats of `session` whose plan artifact is `key` `line`,
+    /// before their next message (X114). Returns how many were told.
+    pub fn tell_plan(&self, session: &str, key: &str, line: &str) -> usize {
+        let chats: Vec<Arc<Chat>> = self.chats.lock().unwrap().values().cloned().collect();
+        let mut told = 0;
+        for chat in chats {
+            let mut inner = chat.inner.lock().unwrap();
+            if inner.info.session_id.as_deref() != Some(session) {
+                continue;
+            }
+            let conversation = inner.state.agent_session.clone();
+            let proposed = inner.state.items.iter().filter_map(|i| i.tool.as_ref()).any(|t| {
+                t.name == "ExitPlanMode" && plan_key(t.input["planFilePath"].as_str(), conversation.as_deref()).as_deref() == Some(key)
+            });
+            if !proposed {
+                continue;
+            }
+            inner.preface = Some(match inner.preface.take() {
+                Some(p) if !p.contains(line) => format!("{p}\n{line}"),
+                Some(p) => p,
+                None => line.to_string(),
+            });
+            inner.dirty = true;
+            self.save(&chat, &mut inner);
+            told += 1;
+        }
+        told
+    }
+
+    /// Keeps `item` as a version of its chat's plan artifact, or its answer,
+    /// when it is a plan a session's chat proposed (X114).
+    fn keep_plan(&self, inner: &Inner, item: &moonlet_proto::types::ChatItem) {
+        let Some(plans) = self.plans.get() else { return };
+        let Some(tool) = item.tool.as_ref().filter(|t| t.name == "ExitPlanMode" && !item.partial) else { return };
+        let (Some(text), Some(session)) = (tool.input["plan"].as_str(), inner.info.session_id.as_deref()) else { return };
+        let key = plan_key(tool.input["planFilePath"].as_str(), inner.state.agent_session.as_deref()).unwrap_or_else(|| item.id.clone());
+        let proposal = crate::artifact::Proposal { session, key: &key, chat_title: &inner.info.title, item: &item.id, text, status: &tool.status, at: item.ts };
+        match plans.record(&proposal) {
+            Ok(Some(id)) => self.terms.emit(Message::event(methods::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": id }))),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(session, "keeping a plan failed: {e:#}"),
+        }
+    }
+
     /// Carries out an adapter's requests: stdin writes, client events,
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
@@ -1812,6 +1863,7 @@ impl ChatManager {
                     if !item.partial {
                         inner.dirty = true;
                     }
+                    self.keep_plan(inner, &item);
                     // Items are never taken out, so a plan, once there, stays.
                     if !inner.state.has_plan && super::has_plan(std::slice::from_ref(&*item)) {
                         inner.state.has_plan = true;
@@ -1949,6 +2001,15 @@ async fn probe(env: &BTreeMap<String, String>, cwd: &Path, request: serde_json::
     drop(group);
     let _ = child.kill().await;
     reply
+}
+
+
+/// A plan artifact's key (X114): its plan file's name, as Claude keeps one
+/// per conversation; without one, the conversation. Only letters, digits,
+/// `_` and `-`.
+fn plan_key(plan_file: Option<&str>, conversation: Option<&str>) -> Option<String> {
+    let key = plan_file.and_then(|p| Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned()).or_else(|| conversation.map(String::from))?;
+    Some(key.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '-' }).collect())
 }
 
 #[cfg(test)]
@@ -2546,6 +2607,39 @@ done
         wait_for(&chats2, info.id, |s| s.status == "done" && s.items.iter().filter(|i| i.kind == "user").count() == 3).await;
         assert!(last_start().contains("--permission-mode acceptEdits"), "{}", last_start());
         chats2.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_sessions_proposed_plan_is_kept_as_a_plan_artifact_with_its_answer() {
+        let (dir, _terms, chats) = setup().await;
+        let plans = Arc::new(crate::artifact::Plans::new(&dir.path().join("home")));
+        chats.keep_plans(plans.clone());
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), session_id: Some("a1b2c3d4e5f6".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "propose a plan", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+
+        // Kept while it waits: the plan file's name is unknown, so the key is Claude's conversation.
+        let id = "plan:a1b2c3d4e5f6:sess-1";
+        let waiting = plans.plan(id).unwrap().expect("the plan is kept as soon as it is proposed");
+        assert_eq!(waiting.versions.iter().map(|v| v.state).collect::<Vec<_>>(), [crate::artifact::VersionState::Pending]);
+
+        chats.permission(info.id, "p1", "allow", None, None, Some("auto")).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "done").await;
+        let plan = plans.plan(id).unwrap().unwrap();
+        assert_eq!(plan.versions.iter().map(|v| v.state).collect::<Vec<_>>(), [crate::artifact::VersionState::Approved]);
+        assert_eq!(plans.text(id, 1).unwrap(), "Add a theme\n");
+        chats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_plan_outside_any_session_is_not_an_artifact() {
+        let (dir, _terms, chats) = setup().await;
+        let plans = Arc::new(crate::artifact::Plans::new(&dir.path().join("home")));
+        chats.keep_plans(plans.clone());
+        blocked_chat(dir.path(), &chats, Some("plan"), "propose a plan").await;
+        assert!(plans.list(None).is_empty());
+        chats.shutdown().await;
     }
 
     #[tokio::test]
@@ -3174,6 +3268,26 @@ done
         assert_eq!(sent_within(dir.path(), before, 3).await, ["queue this", "queue this too", "and the docs"]);
         assert!(!here.state(id).unwrap().items.iter().any(|i| i.text == NOT_DELIVERED));
         here.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_plan_rejected_after_a_daemon_restart_is_kept_as_rejected() {
+        let (dir, terms, chats) = setup().await;
+        let plans = Arc::new(crate::artifact::Plans::new(&dir.path().join("home")));
+        chats.keep_plans(plans.clone());
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), session_id: Some("a1b2c3d4e5f6".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "propose a plan", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        chats.shutdown().await;
+
+        let chats2 = restarted(dir.path(), &terms);
+        chats2.keep_plans(plans.clone());
+        chats2.permission(info.id, "p1", "deny", Some("Keep planning: smaller steps"), None, None).unwrap();
+        wait_for(&chats2, info.id, |s| tool_status(s, "ExitPlanMode") == "denied").await;
+        let plan = plans.plan("plan:a1b2c3d4e5f6:sess-1").unwrap().unwrap();
+        assert_eq!(plan.versions.iter().map(|v| v.state).collect::<Vec<_>>(), [crate::artifact::VersionState::Rejected]);
+        chats2.shutdown().await;
     }
 
     #[tokio::test]

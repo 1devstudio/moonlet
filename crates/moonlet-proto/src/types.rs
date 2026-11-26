@@ -1780,3 +1780,58 @@ mod tests {
         assert!(!serde_json::to_string(&none).unwrap().contains("design"));
     }
 }
+
+/// Where an artifact changes (X114): a session, or a workspace.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactHome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Its session is archived: it is read only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+}
+
+/// One version of a plan artifact (X114).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactVersion {
+    pub n: u32,
+    /// `pending`, `approved`, `rejected` or `edited`.
+    pub state: String,
+    pub at: u64,
+}
+
+/// A plan or a design, as the Artifacts list shows it (X114).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactInfo {
+    /// `plan:<session>:<key>` or `design:<id>`.
+    pub id: String,
+    /// `plan` or `design`.
+    pub kind: String,
+    pub name: String,
+    pub home: ArtifactHome,
+    pub updated_at: u64,
+    /// A plan's latest version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    /// The sessions, other than its home, that refer to it.
+    #[serde(default)]
+    pub used_by: Vec<String>,
+}
+
+/// An artifact with a plan's text and versions (X114).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactText {
+    pub info: ArtifactInfo,
+    /// The text of the version read, for a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The version read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub versions: Vec<ArtifactVersion>,
+}
