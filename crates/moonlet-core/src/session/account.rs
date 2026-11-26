@@ -209,6 +209,10 @@ fn default_sign_ins() -> Vec<moonlet_proto::types::SignIn> {
 /// who owns it, the ownership number and the pin (X73).
 const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
 
+/// A session record's fields left out until first set: Pin to top and
+/// Move under (X112).
+const UNTIL_SET: &[&str] = &["pinned_top", "parent"];
+
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
 
@@ -1758,6 +1762,12 @@ fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> V
             // Who owns it is set once, as it is made: later, only the
             // central host moves it.
             if had.is_some() && OWNERSHIP.contains(&field.as_str()) {
+                continue;
+            }
+            // Recorded once set, so sessions never pinned or nested add
+            // nothing to the log; clearing one is recorded (X112).
+            let recorded = had.and_then(|r| r.get(&field));
+            if UNTIL_SET.contains(&field.as_str()) && recorded.is_none() && (value.is_null() || value == json!(false)) {
                 continue;
             }
             if had.and_then(|r| r.get(&field)) != Some(&value) {
