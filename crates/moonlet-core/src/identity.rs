@@ -46,10 +46,11 @@ pub async fn root(path: &Path) -> Option<String> {
 /// A project's name from its normalized origin: its last part, `shop` for
 /// `github.com/acme/shop`. The name is a folder under the worktrees, and an
 /// origin may come from another member, so only a plain folder name of
-/// letters, digits, `.`, `_` and `-`, not starting with `.`, is one.
+/// letters, digits, `.`, `_`, `~` and `-` (X70's origin segments), not
+/// starting with `.`, is one.
 pub fn origin_name(origin: &str) -> Option<&str> {
     origin.rsplit('/').next().filter(|n| {
-        !n.is_empty() && !n.starts_with('.') && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        !n.is_empty() && !n.starts_with('.') && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'~'))
     })
 }
 
@@ -160,6 +161,8 @@ mod tests {
     fn an_origins_name_is_its_last_part_only_when_that_is_a_plain_folder_name() {
         assert_eq!(origin_name("github.com/acme/shop"), Some("shop"));
         assert_eq!(origin_name("gitlab.example.com:8443/team/my_app-2.0"), Some("my_app-2.0"));
+        assert_eq!(origin_name("git.example.com/~me/notes"), Some("notes"));
+        assert_eq!(origin_name("git.example.com/team/notes~old"), Some("notes~old"));
         for bad in ["github.com/acme/..", "github.com/acme/.", "github.com/acme/.hidden", "github.com/acme/", "github.com/acme/a\\b", "github.com/acme/a\0b", "github.com/acme/a b"] {
             assert_eq!(origin_name(bad), None, "{bad:?}");
         }

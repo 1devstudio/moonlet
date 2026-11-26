@@ -17,7 +17,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 ## User journey
 
 1. On the MacBook, the user opens Settings › Machines › Cloud workers for `studio-mini`, the central host. They click **Add provider › Hetzner Cloud** and paste an API token for a Hetzner project they made for moonlet. Under **Tailscale**, they paste an OAuth client id and secret with the `auth_keys` scope and the tag `tag:moonlet-worker`. They leave **Remove a machine after [15] minutes idle**, **At most [2] machines** and **[40] machine-hours a month** as they are.
-2. In Settings › Projects › shop (studio-mini), under **Cloud workers**, they turn on **Use cloud machines when every worker is busy**. They pick machine type `cpx41`, location `fsn1` and image `ubuntu-24.04`. `shop`'s config has `[heavy] machine_setup = "scripts/ci-deps.sh"`, which installs Node and pnpm.
+2. In Settings › Projects › shop, under **Cloud workers**, they turn on **Use cloud machines when every worker is busy**. They pick machine type `cpx41`, location `fsn1` and image `ubuntu-24.04`. `shop`'s config has `[heavy] machine_setup = "scripts/ci-deps.sh"`, which installs Node and pnpm.
 3. Two agents run test suites while the MacBook's lid is closed and `studio-mini` is busy. The command runs on `studio-mini`, and moonlet starts `moonlet-shop-7k2q` at Hetzner. The Workers screen shows it as "Starting · 0:40".
 4. About two minutes later it reads "Ready". The next `pnpm test` runs there, and the chat chip reads **on moonlet-shop-7k2q**.
 5. Fifteen minutes pass with no heavy command. The machine is removed. The Workers screen keeps a line "moonlet-shop-7k2q removed after 15 min idle" for an hour, and the Cloud workers page reads "0.6 of 40 machine-hours this month".

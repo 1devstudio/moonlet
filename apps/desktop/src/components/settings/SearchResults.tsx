@@ -6,7 +6,7 @@ import { ChevronRight } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { profileName } from "../../lib/profiles";
 import { M, type ProjectConfig } from "../../lib/protocol";
-import { settingsHosts, settingsWorkspaces } from "../../lib/settingsPage";
+import { settingsHosts, settingsProjects, settingsWorkspaces } from "../../lib/settingsPage";
 import type { SearchContext, SearchResult } from "../../lib/settingsSearch";
 import { useStore } from "../../lib/store";
 import { cx } from "../ui";
@@ -47,7 +47,8 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       remoteHosts: Object.values(hosts).filter((h) => h.remote).length,
       phones,
       workspaces: settingsWorkspaces(settingsHosts({ hosts, workspaces, accounts })).map(({ host, id, ws, remote }) => ({ host, id, name: ws.name, color: ws.color, profile: profileName(ws, profiles[host] ?? []), remote })),
-      projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
+      // The projects the nav lists: each of an account once (X68).
+      projects: settingsProjects({ hosts, projects, accounts }).map(({ host, id, name }) => ({ host, id, name, base_branch: projects[host]?.find((p) => p.id === id)?.base_branch ?? "", config: configs[`${host}/${id}`] })),
       git,
       trackers,
     }),

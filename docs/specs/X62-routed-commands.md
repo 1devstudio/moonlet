@@ -28,7 +28,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
    rerun = ["pnpm test"]
    ```
 
-2. In Settings › Projects › shop (studio-mini), the **Heavy commands** section lists `pnpm test` and `pnpm build`, each marked **Not approved**, with a banner: "Approving the list lets agents run it without asking, on studio-mini, this Mac and devbox." The user clicks **Approve**. A toast reads "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox".
+2. In Settings › Projects › shop, the **Heavy commands** section lists `pnpm test` and `pnpm build`, each marked **Not approved**, with a banner: "Approving the list lets agents run it without asking, on studio-mini, this Mac and devbox." The user clicks **Approve**. A toast reads "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox".
 3. On the MacBook, Settings › Machines › Hosts › This Mac has **Use this Mac for heavy commands** on (X41). The user approved from this Mac, so this Mac may run them too.
 4. In session `fix-cart`, the agent runs `pnpm test`. The Bash row in the chat shows a chip, **on Alex's MacBook Pro**. This Mac has no routing copy of `fix-cart` yet, so moonlet makes one and asks once: "Run shop's setup in the copy on this Mac? `pnpm install`". The user clicks **Run setup**.
 5. 457 tests pass. A snapshot file that a test updated is in the session on `studio-mini` before the agent reads the result, and so is `coverage/`.

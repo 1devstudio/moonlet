@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, activeNavKey, restartDaemon } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, activeNavKey, projectNavKey, restartDaemon } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -150,6 +150,26 @@ describe("the projects settings list (X68)", () => {
       { host: "devbox", id: "aa1ecc8cf334", name: "shop", remote: "devbox" },
       { host: "studio-mini", id: "04e103fc04a7", name: "cloud-test", remote: "studio-mini" },
     ]);
+  });
+
+  it("keeps two checkouts of one repository on one host, each with its own entry", () => {
+    expect(
+      settingsProjects({
+        hosts,
+        accounts,
+        projects: { local: [project("7e887a1546bc", "storefront", shop), project("c3d4e5f6a7b8", "storefront-review", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop)] },
+      }),
+    ).toEqual([
+      { host: "local", id: "7e887a1546bc", name: "storefront", remote: null },
+      { host: "local", id: "c3d4e5f6a7b8", name: "storefront-review", remote: null },
+    ]);
+  });
+
+  it("highlights a project's entry when its page is open on another member's copy", () => {
+    const s = { hosts, accounts, projects: { local: [project("7e887a1546bc", "storefront", shop)], "studio-mini": [project("d137b8456a98", "moonlet", shop), project("04e103fc04a7", "cloud-test", { origin: null, root: null })] } };
+    expect(projectNavKey({ page: "project", host: "studio-mini", id: "d137b8456a98" }, s)).toBe("project:local:7e887a1546bc");
+    expect(projectNavKey({ page: "project", host: "studio-mini", id: "04e103fc04a7" }, s)).toBe("project:studio-mini:04e103fc04a7");
+    expect(projectNavKey({ page: "project", host: "local", id: "7e887a1546bc", focus: "run" }, s)).toBe("project:local:7e887a1546bc");
   });
 
   it("lists a connected member's copy while this Mac's daemon is disconnected", () => {
