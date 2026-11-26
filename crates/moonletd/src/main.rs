@@ -81,7 +81,7 @@ enum Cmd {
         /// Take over sessions from a running daemon (used by `upgrade`).
         #[arg(long, hide = true)]
         handoff: Option<PathBuf>,
-        /// Started at system start by `moonletd boot` (X113).
+        /// Started at system start by launchd, outside a login session (X113).
         #[arg(long, hide = true)]
         boot: bool,
     },
@@ -99,10 +99,6 @@ enum Cmd {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Start every local user's daemon at system start, as that user; run
-    /// as root by moonlet's launch daemon (X113).
-    #[command(hide = true)]
-    Boot,
     /// Start the daemon in the background if needed.
     Start,
     /// Bridge stdin/stdout to the daemon socket.
@@ -149,11 +145,6 @@ fn main() -> Result<()> {
     if let Some(Cmd::VerifyRelease { archive }) = &cli.cmd {
         return update::verify_file(archive);
     }
-    // Root, with no home: before anything reads one, and with no thread
-    // before it forks (X113).
-    if let Some(Cmd::Boot) = &cli.cmd {
-        return boot::run();
-    }
     if let Some(Cmd::Daemon { boot: true, handoff }) = &cli.cmd {
         // Before the runtime's threads exist: it sets the environment. A
         // handoff keeps serving the terminals it takes, whatever the choice.
@@ -176,7 +167,7 @@ fn main() -> Result<()> {
                 std::process::exit(restart::STUCK)
             }
         },
-        Cmd::VerifyRelease { .. } | Cmd::Boot => unreachable!("handled before the home is set up"),
+        Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
                 ServiceAction::Install => service::install()?,

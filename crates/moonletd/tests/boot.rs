@@ -172,24 +172,6 @@ async fn a_boot_daemon_gives_its_terminals_the_users_temporary_folder() {
     assert!(seen.contains(&format!("tmp=[{expected}]")), "{seen}");
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn the_launcher_refuses_to_run_as_a_user() {
-    let home = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_moonletd"))
-        .arg("boot")
-        .env("MOONLET_HOME", home.path())
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("moonletd boot runs from launchd at system start"),
-        "{err}"
-    );
-    assert!(!home.path().join("run").exists(), "it started no daemon");
-}
-
 /// The S3 handoff starts the new daemon from the old one, so it runs where
 /// the boot daemon ran: outside a login session.
 #[tokio::test]

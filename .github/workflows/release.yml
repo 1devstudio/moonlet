@@ -166,10 +166,6 @@ jobs:
             echo "::error::the app does not carry the daemon's login item agent (X56)"
             exit 1
           fi
-          if [ ! -f "$app/Contents/Library/LaunchDaemons/dev.onedevstudio.moonlet.boot.plist" ]; then
-            echo "::error::the app does not carry the launch daemon that starts moonletd at system start (X113)"
-            exit 1
-          fi
           for bin in "$app"/Contents/MacOS/*; do
             info=$(codesign -dv --verbose=2 "$bin" 2>&1 || true)
             if ! grep -q "TeamIdentifier=$TEAM_ID" <<<"$info"; then
