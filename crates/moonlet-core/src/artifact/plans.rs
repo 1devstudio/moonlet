@@ -76,7 +76,11 @@ pub fn display_name(plan: &Plan, session_name: Option<&str>, several: bool) -> S
     if let Some(n) = &plan.renamed {
         return n.clone();
     }
-    match session_name.map(str::trim).filter(|n| !n.is_empty()) {
+    // A session moonlet named "Untitled" has no name of its own yet.
+    match session_name
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != "Untitled")
+    {
         Some(n) if several && !plan.chat_title.trim().is_empty() => {
             format!("{n} · {}", plan.chat_title.trim())
         }
@@ -152,16 +156,15 @@ impl Plans {
             };
             if same {
                 // Proposed again with the same text: the latest version
-                // takes this proposal's answer.
+                // waits for this proposal's own answer.
                 let v = plan.versions.last_mut().unwrap();
                 v.item = Some(p.item.to_string());
-                match answer {
-                    Some(s) if v.state != s => v.state = s,
-                    _ => {
-                        write_plan(&dir, &plan)?;
-                        return Ok(None);
-                    }
+                let state = answer.unwrap_or(VersionState::Pending);
+                if v.state == state {
+                    write_plan(&dir, &plan)?;
+                    return Ok(None);
                 }
+                v.state = state;
             } else {
                 let n = plan.latest().map_or(1, |v| v.n + 1);
                 crate::paths::ensure_private_dir(&dir)?;
@@ -260,10 +263,48 @@ impl Plans {
             .collect()
     }
 
+    /// Where version `n` of plan `id` is kept, the path its chat is told.
+    pub fn version_path(&self, id: &str, n: u32) -> Option<PathBuf> {
+        Some(self.dir_of(id)?.join(version_file(n)))
+    }
+
     fn dir_of(&self, id: &str) -> Option<PathBuf> {
         let (session, key) = parse_id(id)?;
         Some(self.root.join(session).join(key))
     }
+}
+
+impl VersionState {
+    /// Its name, as the protocol and `plan.toml` spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VersionState::Pending => "pending",
+            VersionState::Approved => "approved",
+            VersionState::Rejected => "rejected",
+            VersionState::Edited => "edited",
+        }
+    }
+}
+
+/// A plan artifact's key: its plan file's name, as Claude keeps one plan
+/// file per conversation; without one, the conversation. Only letters,
+/// digits, `_` and `-`. None when there is neither.
+pub fn plan_key(plan_file: Option<&str>, conversation: Option<&str>) -> Option<String> {
+    let key = plan_file
+        .and_then(|p| Path::new(p).file_stem())
+        .map(|s| s.to_string_lossy().into_owned())
+        .or_else(|| conversation.map(String::from))?;
+    Some(
+        key.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect(),
+    )
 }
 
 /// The session and key of a plan's artifact id, when it is one.
@@ -285,8 +326,10 @@ fn safe(s: &str) -> bool {
 
 /// The answer an item's status gives, if any.
 fn state_of(status: &str) -> Option<VersionState> {
+    // A call closed when its turn ends (`ok`), interrupted or not, is no
+    // answer: only the user's approval is.
     match status {
-        "ok" => Some(VersionState::Approved),
+        "approved" => Some(VersionState::Approved),
         "denied" => Some(VersionState::Rejected),
         _ => None,
     }
@@ -429,7 +472,7 @@ mod tests {
             ))
             .unwrap();
         let changed = plans
-            .record(&proposal("toolu_2", "# Plan\n\nSecond try.", "ok", 2_500))
+            .record(&proposal("toolu_2", "# Plan\n\nSecond try.", "approved", 2_500))
             .unwrap();
 
         assert_eq!(changed.as_deref(), Some("plan:a1b2c3d4e5f6:groovy-whale"));
@@ -470,7 +513,7 @@ mod tests {
             .record(&proposal("toolu_2", "# Plan\n\nSame.\n", "running", 2_000))
             .unwrap();
         plans
-            .record(&proposal("toolu_2", "# Plan\n\nSame.\n", "ok", 2_100))
+            .record(&proposal("toolu_2", "# Plan\n\nSame.\n", "approved", 2_100))
             .unwrap();
 
         let plan = plans
@@ -633,6 +676,49 @@ mod tests {
         assert_eq!(
             display_name(&untitled_chat, Some("Checkout"), true),
             "Checkout"
+        );
+        // A session moonlet named "Untitled" has no name of its own yet.
+        assert_eq!(
+            display_name(&p, Some("Untitled"), false),
+            "Search for the product list"
+        );
+    }
+
+    #[test]
+    fn the_same_text_proposed_again_after_an_answer_waits_for_its_own() {
+        let home = tempfile::tempdir().unwrap();
+        let plans = Plans::new(home.path());
+        plans
+            .record(&proposal("toolu_1", "# Plan\n\nSame.", "running", 1_000))
+            .unwrap();
+        plans
+            .record(&proposal("toolu_1", "# Plan\n\nSame.", "denied", 1_100))
+            .unwrap();
+        plans
+            .record(&proposal("toolu_2", "# Plan\n\nSame.", "running", 2_000))
+            .unwrap();
+        let id = "plan:a1b2c3d4e5f6:groovy-whale";
+        assert_eq!(
+            plans.plan(id).unwrap().unwrap().versions[0].state,
+            VersionState::Pending
+        );
+        plans
+            .record(&proposal("toolu_2", "# Plan\n\nSame.", "approved", 2_100))
+            .unwrap();
+        assert_eq!(
+            plans.plan(id).unwrap().unwrap().versions[0].state,
+            VersionState::Approved
+        );
+        // A call closed at the end of a turn is no answer.
+        plans
+            .record(&proposal("toolu_3", "# Plan\n\nNew.", "running", 3_000))
+            .unwrap();
+        plans
+            .record(&proposal("toolu_3", "# Plan\n\nNew.", "ok", 3_100))
+            .unwrap();
+        assert_eq!(
+            plans.plan(id).unwrap().unwrap().versions[1].state,
+            VersionState::Pending
         );
     }
 }

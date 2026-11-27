@@ -716,6 +716,10 @@ impl ChatManager {
         if mode.is_some() && !inner.state.pending.iter().any(|p| p.id == ask && p.tool == "ExitPlanMode") {
             bail!("only a plan approval can switch the mode");
         }
+        // The user's answer to a plan is its version's answer (X114).
+        if let Some(p) = inner.state.pending.iter().find(|p| p.id == ask && p.tool == "ExitPlanMode").cloned() {
+            self.answer_plan(&inner, &p.input, if decision == "deny" { "denied" } else { "approved" });
+        }
         if inner.kept.iter().any(|c| c == ask) {
             return self.answer_kept(&chat, &mut inner, ask, decision, message, answers, mode);
         }
@@ -1811,21 +1815,34 @@ impl ChatManager {
             }
             let conversation = inner.state.agent_session.clone();
             let proposed = inner.state.items.iter().filter_map(|i| i.tool.as_ref()).any(|t| {
-                t.name == "ExitPlanMode" && plan_key(t.input["planFilePath"].as_str(), conversation.as_deref()).as_deref() == Some(key)
+                t.name == "ExitPlanMode" && crate::artifact::plan_key(t.input["planFilePath"].as_str(), conversation.as_deref()).as_deref() == Some(key)
             });
             if !proposed {
                 continue;
             }
-            inner.preface = Some(match inner.preface.take() {
-                Some(p) if !p.contains(line) => format!("{p}\n{line}"),
-                Some(p) => p,
-                None => line.to_string(),
-            });
+            // An older edit's line of the same plan gives way to this one.
+            let dir = line.rfind('/').map_or(line, |i| &line[..=i]);
+            let mut lines: Vec<String> = inner.preface.take().map(|p| p.lines().filter(|l| !l.starts_with(dir)).map(String::from).collect()).unwrap_or_default();
+            lines.push(line.to_string());
+            inner.preface = Some(lines.join("\n"));
             inner.dirty = true;
             self.save(&chat, &mut inner);
             told += 1;
         }
         told
+    }
+
+    /// Records `status` (`approved` or `denied`) as the answer to the plan
+    /// in `input`, which the chat's running `ExitPlanMode` call proposed.
+    fn answer_plan(&self, inner: &Inner, input: &serde_json::Value, status: &str) {
+        let Some(item) = inner.state.items.iter().rev().find(|i| i.tool.as_ref().is_some_and(|t| t.name == "ExitPlanMode" && t.input["plan"] == input["plan"])) else {
+            return;
+        };
+        let mut answered = item.clone();
+        if let Some(t) = answered.tool.as_mut() {
+            t.status = status.to_string();
+        }
+        self.keep_plan(inner, &answered);
     }
 
     /// Keeps `item` as a version of its chat's plan artifact, or its answer,
@@ -1834,7 +1851,8 @@ impl ChatManager {
         let Some(plans) = self.plans.get() else { return };
         let Some(tool) = item.tool.as_ref().filter(|t| t.name == "ExitPlanMode" && !item.partial) else { return };
         let (Some(text), Some(session)) = (tool.input["plan"].as_str(), inner.info.session_id.as_deref()) else { return };
-        let key = plan_key(tool.input["planFilePath"].as_str(), inner.state.agent_session.as_deref()).unwrap_or_else(|| item.id.clone());
+        // Without a plan file or a conversation there is nothing to key it by.
+        let Some(key) = crate::artifact::plan_key(tool.input["planFilePath"].as_str(), inner.state.agent_session.as_deref()) else { return };
         let proposal = crate::artifact::Proposal { session, key: &key, chat_title: &inner.info.title, item: &item.id, text, status: &tool.status, at: item.ts };
         match plans.record(&proposal) {
             Ok(Some(id)) => self.terms.emit(Message::event(methods::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": id }))),
@@ -2003,14 +2021,6 @@ async fn probe(env: &BTreeMap<String, String>, cwd: &Path, request: serde_json::
     reply
 }
 
-
-/// A plan artifact's key (X114): its plan file's name, as Claude keeps one
-/// per conversation; without one, the conversation. Only letters, digits,
-/// `_` and `-`.
-fn plan_key(plan_file: Option<&str>, conversation: Option<&str>) -> Option<String> {
-    let key = plan_file.and_then(|p| Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned()).or_else(|| conversation.map(String::from))?;
-    Some(key.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '-' }).collect())
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -2629,6 +2639,27 @@ done
         let plan = plans.plan(id).unwrap().unwrap();
         assert_eq!(plan.versions.iter().map(|v| v.state).collect::<Vec<_>>(), [crate::artifact::VersionState::Approved]);
         assert_eq!(plans.text(id, 1).unwrap(), "Add a theme\n");
+        chats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn two_edits_by_hand_before_a_message_tell_the_latest_once() {
+        let (dir, _terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), mode: Some("plan".into()), session_id: Some("a1b2c3d4e5f6".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "propose a plan", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        chats.permission(info.id, "p1", "deny", Some("Keep planning"), None, None).unwrap();
+        wait_for(&chats, info.id, |s| s.status != "blocked").await;
+
+        chats.tell_plan("a1b2c3d4e5f6", "sess-1", "The plan was edited by hand: /plans/a1b2c3d4e5f6/sess-1/v2.md");
+        chats.tell_plan("a1b2c3d4e5f6", "sess-1", "The plan was edited by hand: /plans/a1b2c3d4e5f6/sess-1/v3.md");
+        chats.send(info.id, "go on", &[]).unwrap();
+        // Sent as messages to Claude: shown, or queued while it works.
+        let sent = |s: &ChatState| -> Vec<String> { s.items.iter().filter(|i| i.kind == "user").map(|i| i.text.clone()).chain(s.queued.iter().map(|q| q.text.clone())).collect() };
+        let st = wait_for(&chats, info.id, |s| sent(s).iter().any(|t| t == "go on")).await;
+        let all = sent(&st);
+        assert_eq!(all[all.len() - 2..], ["The plan was edited by hand: /plans/a1b2c3d4e5f6/sess-1/v3.md".to_string(), "go on".to_string()]);
         chats.shutdown().await;
     }
 

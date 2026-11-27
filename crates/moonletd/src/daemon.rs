@@ -1470,12 +1470,13 @@ impl Daemon {
                 let plan = self.plans.plan(&r.id).map_err(internal)?.ok_or_else(|| RpcError::new("not_found", format!("no artifact {}", r.id)))?;
                 let n = r.version.or(plan.latest().map(|v| v.n)).ok_or_else(|| RpcError::new("not_found", "the plan has no version"))?;
                 let text = self.plans.text(&r.id, n).map_err(not_found)?;
-                let versions = plan.versions.iter().map(|v| ArtifactVersion { n: v.n, state: state_name(v.state).into(), at: v.at }).collect();
+                let versions = plan.versions.iter().map(|v| ArtifactVersion { n: v.n, state: v.state.as_str().into(), at: v.at }).collect();
                 ok(ArtifactText { info: self.plan_info(&plan), text: Some(text), version: Some(n), versions })
             })(),
             m::ARTIFACT_RENAME => (|| {
                 app_only(conn, "renaming an artifact")?;
                 let r: m::ArtifactRename = params(p)?;
+                self.refuse_archived_plan(&r.id)?;
                 self.plans.rename(&r.id, r.name.as_deref()).map_err(not_found)?;
                 self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": r.id })));
                 ok(())
@@ -1483,9 +1484,10 @@ impl Daemon {
             m::ARTIFACT_EDIT => (|| {
                 app_only(conn, "editing a plan")?;
                 let r: m::ArtifactEdit = params(p)?;
+                self.refuse_archived_plan(&r.id)?;
                 let n = self.plans.edit(&r.id, &r.text, moonlet_core::paths::now_ms()).map_err(not_found)?;
                 if let (Some(n), Some((session, key))) = (n, moonlet_core::artifact::parse_id(&r.id)) {
-                    let path = moonlet_core::paths::home().join("artifacts/plans").join(session).join(key).join(format!("v{n}.md"));
+                    let path = self.plans.version_path(&r.id, n).unwrap_or_default();
                     self.chats.tell_plan(session, key, &format!("The plan was edited by hand: {}", path.display()));
                     self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": r.id })));
                 }
@@ -1499,15 +1501,28 @@ impl Daemon {
     fn artifacts_of(&self, workspace: &str) -> Vec<moonlet_proto::types::ArtifactInfo> {
         let sessions: Vec<_> = self.sessions.list_sessions().into_iter().filter(|s| s.workspace_id.as_deref() == Some(workspace)).collect();
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        let mut list: Vec<_> = self.plans.list(Some(&ids)).iter().map(|p| self.plan_info(p)).collect();
+        // Each session's plans counted once, so a plan is named after its chat
+        // only when its session has several.
+        let plans = self.plans.list(Some(&ids));
+        let mut per_session: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for p in &plans {
+            *per_session.entry(p.session.as_str()).or_default() += 1;
+        }
+        let mut list: Vec<_> = plans.iter().map(|p| self.plan_info_of(p, per_session.get(p.session.as_str()).copied().unwrap_or(0) > 1)).collect();
         list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
         list
     }
 
     /// How the Artifacts list shows plan `plan` (X114).
     fn plan_info(&self, plan: &moonlet_core::artifact::Plan) -> moonlet_proto::types::ArtifactInfo {
-        let session = self.sessions.session(&plan.session).ok();
         let several = self.plans.list(Some(&[plan.session.as_str()])).len() > 1;
+        self.plan_info_of(plan, several)
+    }
+
+    /// Plan `plan` as listed, `several` saying its session has plans from
+    /// several chats.
+    fn plan_info_of(&self, plan: &moonlet_core::artifact::Plan, several: bool) -> moonlet_proto::types::ArtifactInfo {
+        let session = self.sessions.session(&plan.session).ok();
         moonlet_proto::types::ArtifactInfo {
             id: plan.id(),
             kind: "plan".into(),
@@ -1522,6 +1537,15 @@ impl Daemon {
             version: plan.latest().map(|v| v.n),
             used_by: Vec::new(),
         }
+    }
+
+    /// An archived session's plan is read only (X114).
+    fn refuse_archived_plan(&self, id: &str) -> Result<(), RpcError> {
+        let archived = moonlet_core::artifact::parse_id(id).and_then(|(session, _)| self.sessions.session(session).ok()).is_some_and(|s| s.archived);
+        if archived {
+            return Err(RpcError::new("invalid_params", "an archived session's plan is read only"));
+        }
+        Ok(())
     }
 
     async fn handle_call(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
@@ -8038,13 +8062,3 @@ fn dirs_home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
-/// A plan version's state as the protocol names it (X114).
-fn state_name(s: moonlet_core::artifact::VersionState) -> &'static str {
-    use moonlet_core::artifact::VersionState::*;
-    match s {
-        Pending => "pending",
-        Approved => "approved",
-        Rejected => "rejected",
-        Edited => "edited",
-    }
-}
