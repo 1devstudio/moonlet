@@ -1,14 +1,21 @@
 // Artifacts (X114): the sidebar's list of a workspace's plans and designs,
 // and the artifact view in the main area.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, Layers, ListChecks, MoreHorizontal, PenTool, Pencil, Search, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ArtifactInfo, type ArtifactText, type Design } from "../lib/protocol";
-import { artifactRows, markParts, versionLine, type ArtifactKind, type ArtifactRow } from "../lib/artifacts";
-import { artifactKey, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
-import { designsOf, loadDesigns, openSessionDesign, projectDesignsIn, sessionDesignsIn, useDesign } from "../lib/designStore";
-import { errorToast, shownWorkspace, useStore } from "../lib/store";
+import { artifactRows, designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind, type ArtifactRow } from "../lib/artifacts";
+import { artifactDesigns, artifactKey, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
+import { openSessionDesign, showDesign, useDesign } from "../lib/designStore";
+import { LIBRARY } from "../lib/designLibrary";
+import { placeOfDesign } from "../lib/designPlace";
+import { pageUrl, projectPageUrl } from "../lib/designView";
+import { viewportOf } from "../lib/designViewport";
+import { setMode } from "../lib/mode";
+import { useNear } from "../lib/useNear";
+import { useSize } from "../lib/useSize";
+import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { connectedHosts } from "../lib/sidebar";
 import { shortAge } from "../lib/design";
 import { Segmented } from "./settings/controls";
@@ -16,6 +23,7 @@ import { Markdown } from "./AgentView";
 import { Menu } from "./Menu";
 import { Button, IconButton, cx } from "./ui";
 import { ScrollArea } from "./ScrollArea";
+import { CardFrame } from "./design/Frame";
 
 const KINDS = [
   { id: "all", label: "All" },
@@ -48,8 +56,8 @@ function useArtifactRows(): { rows: ArtifactRow[]; workspace: string | null; hos
   const rows = useMemo(() => {
     if (!workspace) return [];
     const byHost = (f: (host: string) => Design[] | undefined) => Object.fromEntries(hosts.map((h) => [h, f(h)]));
-    const designs = byHost((h) => [...(designsOf(design, h, workspace) ?? []), ...(sessionDesignsIn(design, h, workspace) ?? []), ...(projectDesignsIn(design, h, workspace) ?? [])]);
-    const projectName = (id: string) => hosts.map((h) => (projects[h] ?? []).find((p) => p.id === id)?.name).find(Boolean);
+    const designs = byHost((h) => artifactDesigns(design, h, workspace));
+    const projectName = (host: string, id: string) => (projects[host] ?? []).find((p) => p.id === id)?.name;
     const planLists = Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]]));
     const found = Object.fromEntries(hosts.map((h) => [h, matches[artifactKey(h, workspace)]]));
     return artifactRows({ plans: planLists, designs, workspace, projectName, now: Date.now() }, kind, query, found);
@@ -67,14 +75,19 @@ export function ArtifactsList() {
     if (!workspace) return;
     const load = (h: string) => {
       void loadPlans(h, workspace).catch(() => {});
-      void loadDesigns(h, workspace).catch(() => {});
+      loadArtifactDesigns(h, workspace);
     };
     hosts.forEach(load);
     watchArtifacts((h) => {
       const ws = shownWorkspace(useStore.getState())?.id;
-      if (ws) void loadPlans(h, ws).catch(() => {});
+      if (!ws) return;
+      void loadPlans(h, ws).catch(() => {});
+      // A changed plan may now match the query, or no longer.
+      const q = useArtifacts.getState().query;
+      if (q.trim()) void searchPlans([h], ws, q);
     });
   }, [workspace, hosts]);
+  const away = useStore((s) => unreachableLine(Object.fromEntries(Object.entries(s.hosts).map(([id, h]) => [id, { label: h.label, status: h.status }]))));
   // Plan text is searched on each host, a moment after the last key.
   useEffect(() => {
     if (!workspace) return;
@@ -95,9 +108,11 @@ export function ArtifactsList() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <Segmented value={kind} options={KINDS} onChange={(k) => useArtifacts.setState({ kind: k })} labelledBy="" />
+        <span id="artifact-kinds" className="sr-only">Kind</span>
+        <Segmented value={kind} options={KINDS} onChange={(k) => useArtifacts.setState({ kind: k })} labelledBy="artifact-kinds" />
       </div>
       <ScrollArea tone="window" className="px-2 pb-3">
+        {away && <div className="px-2 pb-1 pt-2 ui-text-11.5 text-faint">{away}</div>}
         {searching && <div className="px-2 pb-1 pt-2 ui-text-11.5 text-faint">{rows.length === 1 ? "1 result" : `${rows.length} results`} for "{query.trim()}"</div>}
         {rows.length === 0 && !searching && <div className="px-3 py-2 ui-text-13 text-faint">No artifacts yet. Plans your agents propose and designs show here.</div>}
         {rows.map((r) => (
@@ -145,7 +160,7 @@ export function ArtifactView() {
       </div>
     );
   }
-  return row.info.kind === "plan" ? <PlanView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} /> : <DesignView host={row.host} info={row.info} home={row.home} />;
+  return row.info.kind === "plan" ? <PlanView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} /> : <DesignView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} />;
 }
 
 function Header({ info, children, menu }: { info: ArtifactInfo; children?: React.ReactNode; menu?: { label: string; onSelect: () => void }[] }) {
@@ -173,8 +188,36 @@ function Header({ info, children, menu }: { info: ArtifactInfo; children?: React
   );
 }
 
-function SideTitle({ children }: { children: React.ReactNode }) {
+function SideTitle({ children }: { children: ReactNode }) {
   return <div className="mb-2 ui-text-11.5 text-faint">{children}</div>;
+}
+
+/** The sessions that refer to an artifact, each opening its session. */
+function UsedBy({ host, info }: { host: string; info: ArtifactInfo }) {
+  const sessions = useStore((s) => s.sessions[host]);
+  return (
+    <div>
+      <SideTitle>Used by</SideTitle>
+      {info.used_by.length === 0 && <p className="ui-text-12 text-faint">No other session uses it.</p>}
+      {info.used_by.map((id) => (
+        <button key={id} onClick={() => selectSession(host, id)} className="flex w-full truncate rounded-md px-2 py-1.5 text-left ui-text-12.5 text-fg hover:bg-tab-hover">
+          {sessions?.find((x) => x.id === id)?.name ?? id}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A page of a design, drawn small. */
+function PageThumb({ url, title, viewport }: { url: string; title: string; viewport: [number, number] }) {
+  const [ref, [width]] = useSize<HTMLDivElement>();
+  const near = useNear(ref);
+  const scale = width ? width / viewport[0] : 0;
+  return (
+    <div ref={ref} className="relative w-full overflow-hidden rounded-lg border border-border-strong bg-panel" style={{ aspectRatio: `${viewport[0]} / ${viewport[1]}` }}>
+      {scale > 0 && <CardFrame url={url} title={title} viewport={viewport} scale={scale} live={near} />}
+    </div>
+  );
 }
 
 function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home: string }) {
@@ -193,7 +236,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
     };
   }, [host, info.id, info.version, version]);
   const latest = read?.versions.at(-1)?.n ?? null;
-  const readOnly = !!info.home.archived || (version !== null && version !== latest);
+  const readOnly = planReadOnly(info.home, version, latest);
   const save = async () => {
     if (editing === null) return;
     try {
@@ -249,12 +292,13 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
             >
               <span>v{v.n}</span>
               <span className={cx("rounded px-1.5 ui-text-11 bg-panel-2", v.state === "approved" ? "text-done" : v.state === "rejected" ? "text-error" : "text-muted")}>
-                {v.state === "edited" ? "edited by you" : v.state}
+                {stateLabel(v.state)}
               </span>
               <span className="ml-auto ui-text-11.5 text-faint">{shortAge(Math.max(0, Date.now() - v.at))}</span>
             </button>
           ))}
         </div>
+        <UsedBy host={host} info={info} />
         <div>
           <SideTitle>References</SideTitle>
           <p className="ui-text-12 leading-[1.45] text-muted">Sessions that use this plan read it live: they always get the latest version, read only. It changes only in its home.</p>
@@ -293,15 +337,20 @@ function RenameBar({ host, info, onDone }: { host: string; info: ArtifactInfo; o
 
 function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; home: string }) {
   const workspace = useStore((s) => shownWorkspace(s)?.id);
-  const design = useDesign((s) => {
-    if (!workspace) return undefined;
-    const all = [...(designsOf(s, host, workspace) ?? []), ...(sessionDesignsIn(s, host, workspace) ?? []), ...(projectDesignsIn(s, host, workspace) ?? [])];
-    return all.find((d) => info.id.endsWith(`:${d.slug}`) && (d.kind !== "session" || info.home.session === d.session));
-  });
+  const design = useDesign((s) => (workspace ? designFor(artifactDesigns(s, host, workspace), info.id, workspace) : undefined));
   const edit = () => {
     if (!design || !workspace) return;
     if (design.kind === "session" && design.session) void openSessionDesign(host, workspace, design.session, design.slug, true);
-    else useStore.setState({ showArtifacts: false });
+    else {
+      setMode("design");
+      showDesign(host, workspace, design.slug, !!design.shared);
+    }
+  };
+  const viewport = design ? viewportOf(design) : ([1280, 800] as [number, number]);
+  const urlOf = (page: string) => {
+    if (!design || !workspace) return null;
+    if (design.kind === "project") return design.project ? projectPageUrl(design.project, design.slug, page) : null;
+    return pageUrl(design.shared ? LIBRARY : placeOfDesign(design, workspace), design.slug, page);
   };
   return (
     <div className="flex h-full overflow-hidden rounded-lg bg-bg">
@@ -321,7 +370,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
           <div className="grid max-w-[900px] grid-cols-2 gap-4">
             {(design?.pages ?? []).map((p) => (
               <div key={p.name} className="flex flex-col gap-2">
-                <div className="aspect-[16/10] rounded-lg border border-border-strong bg-panel" />
+                {urlOf(p.name) ? <PageThumb url={urlOf(p.name)!} title={p.label ?? p.name} viewport={viewport} /> : <div className="aspect-[16/10] rounded-lg border border-border-strong bg-panel" />}
                 <div className="flex gap-2 ui-text-12.5 text-fg">
                   <span>{p.label ?? p.name}</span>
                   <span className="font-mono ui-text-11.5 text-faint">pages/{p.name}</span>
@@ -341,6 +390,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
             </div>
           ))}
         </div>
+        <UsedBy host={host} info={info} />
         <div>
           <SideTitle>Edit</SideTitle>
           <p className="ui-text-12 leading-[1.45] text-muted">

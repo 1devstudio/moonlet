@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactRows, designMatch, homeLine, markParts, versionLine, type ListInput } from "./artifacts";
+import { artifactRows, designFor, designMatch, homeLine, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ListInput } from "./artifacts";
 import type { ArtifactInfo, Design } from "./protocol";
 
 const MIN = 60_000;
@@ -49,7 +49,7 @@ const input = (over: Partial<ListInput> = {}): ListInput => ({
     ],
   },
   workspace: "w1",
-  projectName: (id) => projects[id],
+  projectName: (_host, id) => projects[id],
   now: NOW,
   ...over,
 });
@@ -105,7 +105,12 @@ describe("designMatch", () => {
 
 describe("homeLine", () => {
   it("names a workspace artifact's home Workspace", () => {
-    expect(homeLine(plan({ home: { workspace: "w1" } }), () => undefined)).toBe("Workspace");
+    expect(homeLine(plan({ home: { workspace: "w1" } }), "mac", () => undefined)).toBe("Workspace");
+  });
+
+  it("names a project as the artifact's own host names it", () => {
+    const names: Record<string, Record<string, string>> = { mac: { p1: "storefront" }, mini: { p1: "other repo" } };
+    expect(homeLine(plan({ home: { workspace: "w1", project: "p1" } }), "mini", (host, id) => names[host]?.[id])).toBe("other repo");
   });
 });
 
@@ -130,5 +135,63 @@ describe("versionLine", () => {
     expect(versionLine({ version: 3, versions }, NOW)).toBe("v3, approved 12m ago");
     expect(versionLine({ version: 2, versions }, NOW)).toBe("v2, edited by you 25m ago");
     expect(versionLine({ version: 1, versions: [{ n: 1, state: "pending", at: NOW }] }, NOW)).toBe("v1, pending just now");
+  });
+});
+
+describe("one row per design", () => {
+  it("lists a design copied to another Mac once, from the Mac that owns it", () => {
+    const copy = design({ owner: { worker: "mini", name: "studio-mini" } });
+    const rows = artifactRows(input({ plans: {}, designs: { laptop: [copy], mini: [design({})] } }), "design", "", {});
+    expect(rows.map((r) => [r.host, r.info.id])).toEqual([["mini", "design:workspace:w1:settings-page"]]);
+  });
+
+  it("lists a shared design under the library", () => {
+    const rows = artifactRows(input({ plans: {}, designs: { mac: [design({ shared: true })] } }), "design", "", {});
+    expect(rows.map((r) => r.info.id)).toEqual(["design:library:settings-page"]);
+  });
+});
+
+describe("designFor", () => {
+  it("finds the design an artifact is, never another of the same slug", () => {
+    const own = design({ name: "Own" });
+    const merged = design({ name: "Merged", kind: "project", project: "p-store" });
+    const ofSession = design({ name: "Session's", kind: "session", session: "s1" });
+    const all = [merged, ofSession, own];
+    expect(designFor(all, "design:workspace:w1:settings-page", "w1")?.name).toBe("Own");
+    expect(designFor(all, "design:session:s1:settings-page", "w1")?.name).toBe("Session's");
+    expect(designFor(all, "design:workspace:w1:other", "w1")).toBeUndefined();
+  });
+});
+
+describe("planReadOnly", () => {
+  it("is read only in an archived session, or on an older version", () => {
+    expect(planReadOnly({ archived: true }, null, 3)).toBe(true);
+    expect(planReadOnly({}, 2, 3)).toBe(true);
+    expect(planReadOnly({}, null, 3)).toBe(false);
+    expect(planReadOnly({}, 3, 3)).toBe(false);
+  });
+});
+
+describe("stateLabel", () => {
+  it("says a version edited by hand was edited by the user", () => {
+    expect(["pending", "approved", "rejected", "edited"].map((s) => stateLabel(s as never))).toEqual(["pending", "approved", "rejected", "edited by you"]);
+  });
+});
+
+describe("unreachableLine", () => {
+  it("names the hosts whose artifacts are not listed because they cannot be reached", () => {
+    const hosts = { local: { id: "local", label: "This Mac", status: "connected" }, mini: { id: "mini", label: "studio-mini", status: "disconnected" }, pro: { id: "pro", label: "pro", status: "connecting" } };
+    expect(unreachableLine(hosts)).toBe("Not listed from studio-mini, pro: they can't be reached");
+    expect(unreachableLine({ mini: hosts.mini })).toBe("Not listed from studio-mini: it can't be reached");
+    expect(unreachableLine({ local: hosts.local })).toBeNull();
+  });
+});
+
+describe("markParts with text whose lowercase is longer", () => {
+  it("marks the match itself", () => {
+    expect(markParts("İstanbul debounce", "debounce")).toEqual([
+      { text: "İstanbul ", mark: false },
+      { text: "debounce", mark: true },
+    ]);
   });
 });

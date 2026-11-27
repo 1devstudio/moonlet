@@ -3,6 +3,9 @@
 
 import { create } from "zustand";
 import { rpc, onDaemonEvent } from "./daemon";
+import { designsOf, loadDesigns, projectDesignsIn, sessionDesignsIn, type useDesign } from "./designStore";
+import { LIBRARY } from "./designLibrary";
+import type { Design } from "./protocol";
 import { EV, M, type ArtifactInfo, type ArtifactMatch } from "./protocol";
 import type { ArtifactKind } from "./artifacts";
 
@@ -33,16 +36,17 @@ let asked = 0;
 /** Searches each host's plans of a workspace for `query`. */
 export async function searchPlans(hosts: string[], workspace: string, query: string): Promise<void> {
   const n = ++asked;
-  useArtifacts.setState({ query });
   if (!query.trim()) {
-    useArtifacts.setState({ matches: {} });
+    useArtifacts.setState({ query, matches: {} });
     return;
   }
   const found = await Promise.all(
     hosts.map(async (h) => [artifactKey(h, workspace), await rpc<ArtifactMatch[]>(h, M.artifactSearch, { workspace, query }).catch(() => undefined)] as const),
   );
   if (n !== asked) return;
-  useArtifacts.setState({ matches: Object.fromEntries(found) });
+  // The query and what it found land together, so rows never meet the
+  // previous query's matches.
+  useArtifacts.setState({ query, matches: Object.fromEntries(found) });
 }
 
 /** Lists a workspace's plans again on every host whose plans changed. */
@@ -53,4 +57,18 @@ export function watchArtifacts(reload: (host: string) => void) {
   void onDaemonEvent((e) => {
     if (e.name === EV.artifactChanged || e.name === EV.designChanged) reload(e.host);
   });
+}
+
+/** A workspace's designs on `host`, as the Artifacts list shows them: its
+ *  own, the library's (shared with every workspace, X95), its sessions'
+ *  and those merged into its projects. */
+export function artifactDesigns(d: ReturnType<typeof useDesign.getState>, host: string, workspace: string): Design[] {
+  const shared = (designsOf(d, host, LIBRARY) ?? []).map((x) => ({ ...x, shared: true }));
+  return [...(designsOf(d, host, workspace) ?? []), ...shared, ...(sessionDesignsIn(d, host, workspace) ?? []), ...(projectDesignsIn(d, host, workspace) ?? [])];
+}
+
+/** Lists a workspace's designs on `host`, the library's too. */
+export function loadArtifactDesigns(host: string, workspace: string): void {
+  void loadDesigns(host, workspace).catch(() => {});
+  void loadDesigns(host, LIBRARY).catch(() => {});
 }
