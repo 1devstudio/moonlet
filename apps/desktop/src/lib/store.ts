@@ -6,6 +6,7 @@ import { create } from "zustand";
 import type { RowStyle } from "./sessionRows";
 import { clampSidebarWidth } from "./sidebar";
 import { autoArchivedNow } from "./autoArchive";
+import { autoFixNotices } from "./autoFix";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -1510,8 +1511,11 @@ function handleEvent(e: DaemonEvent) {
       const list = data as Session[];
       const notices = spawnedNotices(get().sessions[host], list, get().projects[host] ?? []);
       const autoArchived = autoArchivedNow(get().sessions[host] ?? [], list);
+      const fixNotices = autoFixNotices(get().sessions[host] ?? [], list);
       set((s) => ({ sessions: { ...s.sessions, [host]: list } }));
       // Its host archived it when its PR merged (X116).
+      // Auto-fix sent the session's Claude its PR's news, or stopped (X117).
+      for (const n of fixNotices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of autoArchived) {
         const why = w.auto_archive?.merged ? "merged" : "was closed";
         toast(`Archived ${w.name}: #${w.auto_archive?.pr} ${why}`, "info", { label: "Restore", run: () => void import("./actions").then((a) => a.restoreSession(host, w)) });

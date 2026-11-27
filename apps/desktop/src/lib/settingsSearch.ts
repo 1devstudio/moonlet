@@ -109,6 +109,7 @@ function gitEntries(g: GitSettings | null | undefined): [string, string, string,
     ["git-archive-on-close", "Also when its pull request is closed without merging", onOff(g.archive_on_close), "git archive PR closed auto"],
     ["git-stage-all", "Stage all changes before committing", onOff(g.stage_all), "commit"],
     ["git-draft-prs", "Open pull requests as drafts", onOff(g.draft_prs), "pull request PR"],
+    ["git-auto-fix", "Auto-fix pull requests", onOff(g.auto_fix_prs), "PR checks review comments claude agent"],
     ["git-fetch", "Fetch from origin", fetchLabel(g.fetch_minutes), "git interval pull chip"],
     ["git-fast-forward", "Fast-forward base branches automatically", onOff(g.fast_forward_base), "git pull main"],
   ];

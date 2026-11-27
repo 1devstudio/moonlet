@@ -452,6 +452,9 @@ pub struct GitSettings {
     pub archive_on_merge: bool,
     /// With `archive_on_merge`, also once its PR is closed unmerged (X116).
     pub archive_on_close: bool,
+    /// Send failed checks and reviews of PRs opened from now on to the
+    /// session's Claude (X117).
+    pub auto_fix_prs: bool,
 }
 
 impl Default for GitSettings {
@@ -469,6 +472,7 @@ impl Default for GitSettings {
             fast_forward_base: false,
             archive_on_merge: false,
             archive_on_close: false,
+            auto_fix_prs: false,
         }
     }
 }
@@ -743,6 +747,44 @@ pub struct Session {
     /// What archiving it when its PR merged did, or why it waits (X116).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_archive: Option<AutoArchive>,
+    /// Whether auto-fix covers its PR, and how it goes (X117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fix: Option<AutoFix>,
+}
+
+/// Auto-fix of a session's PR (X117).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFix {
+    pub pr: u64,
+    /// It sends this PR's failed checks and reviews to the session's Claude.
+    pub on: bool,
+    /// Failed-checks messages since its checks last all passed.
+    pub tries: u32,
+    /// Stopped after too many tries; turning it on again starts again.
+    pub stopped: bool,
+    /// Why it cannot run, such as no Claude chat in the session.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// What it last sent, and when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<AutoFixSent>,
+}
+
+/// A message auto-fix sent (X117).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFixSent {
+    pub kind: AutoFixKind,
+    /// When (ms).
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoFixKind {
+    /// The PR's failed checks.
+    Checks,
+    /// New reviews and comments.
+    Review,
 }
 
 /// A session's archive when its PR merged or closed (X116).
@@ -1324,6 +1366,14 @@ pub struct PullRequest {
     /// merge, so it is not unpushed work (X55).
     #[serde(default)]
     pub head_oid: Option<String>,
+    /// When GitHub last changed it (`updatedAt`): new reviews and comments
+    /// change it (X117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// When it was opened (`createdAt`), for auto-fix's "opened from now
+    /// on" (X117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// A GitHub stack of dependent pull requests (spec X11).

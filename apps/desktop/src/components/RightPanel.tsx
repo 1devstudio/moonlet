@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Layers, MoreHorizontal, Play, Plus } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import { M, type PrStack, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorToast, pollPr, projectOf, type RightTab, useStore, sesKey } from "../lib/store";
 import { archiveSession, openProjectSettings, runScript } from "../lib/actions";
+import { autoFixMenu } from "../lib/autoFix";
 import { latestOnly, savedUntilFetched, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
@@ -58,6 +59,9 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   const openIn = workspaceOpenIn(targets, { kind, host, path: ws.path }, copyPath);
   // A copy of another member's session offers only what it can ask it (X88).
   const offers = copyOffers(host);
+  // Auto-fix this PR (X117), for an open PR of a session this host runs.
+  const pr = useStore((s) => s.prs[sesKey(host, ws.id)]);
+  const autoFix = offers.projectSettings ? autoFixMenu(ws, pr) : null;
   const item = (label: string, run: () => void, danger = false) => (
     <button
       key={label}
@@ -72,7 +76,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
   );
   return (
     <div className="no-drag relative">
-      <button title="More" className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg" onClick={() => setOpen(!open)}>
+      <button title="More" aria-label="Session actions" className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg" onClick={() => setOpen(!open)}>
         <MoreHorizontal size={16} />
       </button>
       {open && (
@@ -82,6 +86,23 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
             {offers.openIn && openIn.choices.map((t) => item(`Open in ${t.label}`, () => void hostsApi.openIn(t.id, openIn.path, openIn.host).catch(errorToast)))}
             {offers.openIn && <div className="my-1 border-t border-border" />}
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
+            {autoFix && (
+              <button
+                role="menuitemcheckbox"
+                aria-checked={autoFix.checked}
+                className="flex w-full items-start gap-2 px-3 py-1.5 text-left ui-text-13 hover:bg-hover"
+                onClick={() => {
+                  setOpen(false);
+                  void rpc(host, M.ghAutoFix, { session: ws.id, on: !autoFix.checked }).catch(errorToast);
+                }}
+              >
+                <span className="flex w-3 shrink-0 pt-[3px]">{autoFix.checked && <Check size={12} />}</span>
+                <span className="flex min-w-0 flex-col">
+                  <span>Auto-fix this PR</span>
+                  {autoFix.hint && <span className="ui-text-11.5 text-faint">{autoFix.hint}</span>}
+                </span>
+              </button>
+            )}
             {offers.setup && item("Re-run setup script", () => void runScript("setup"))}
             {offers.processes && item("Processes…", () => useStore.setState({ rightTab: "processes", rightOpen: true }))}
             {offers.projectSettings && item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}

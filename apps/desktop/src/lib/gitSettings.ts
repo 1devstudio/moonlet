@@ -18,6 +18,7 @@ export const DEFAULT_GIT_SETTINGS: GitSettings = {
   fast_forward_base: false,
   archive_on_merge: false,
   archive_on_close: false,
+  auto_fix_prs: false,
 };
 
 /** A host's Git settings: what its daemon keeps, else the defaults (not

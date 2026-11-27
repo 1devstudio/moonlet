@@ -1850,6 +1850,7 @@ impl SessionManager {
             pinned_top: false,
             parent: None,
             auto_archive: None,
+            auto_fix: None,
         };
         // Until the session is saved, what was made for it goes again,
         // however this request ends.
@@ -2367,6 +2368,23 @@ impl SessionManager {
                 return Ok(false);
             }
             w.auto_archive = record;
+            Ok(true)
+        })?;
+        if changed {
+            self.emit_sessions();
+        }
+        Ok(())
+    }
+
+    /// Records how auto-fix of session `id`'s PR goes (X117). Tells the
+    /// clients only when it changed.
+    pub fn set_auto_fix(&self, id: &str, record: Option<moonlet_proto::types::AutoFix>) -> Result<()> {
+        let changed = self.mutate(|st| {
+            let w = st.sessions.iter_mut().find(|w| w.id == id).context("no such session")?;
+            if w.auto_fix == record {
+                return Ok(false);
+            }
+            w.auto_fix = record;
             Ok(true)
         })?;
         if changed {
@@ -5273,6 +5291,7 @@ mod tests {
             pinned_top: false,
             parent: None,
             auto_archive: None,
+            auto_fix: None,
         };
         assert_eq!(
             agent_flags("claude", &s),

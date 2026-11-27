@@ -4,6 +4,7 @@
 pub mod account;
 pub mod agent;
 pub mod auto_archive;
+pub mod autofix;
 pub mod app_token;
 pub mod artifact;
 pub mod bundle;

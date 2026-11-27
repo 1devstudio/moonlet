@@ -75,7 +75,7 @@ describe("searching settings (X43)", () => {
   });
 
   it("finds This Mac's Git settings with their values (X55)", () => {
-    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, warn_unpushed: true, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false, archive_on_merge: false, archive_on_close: false } };
+    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, warn_unpushed: true, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false, archive_on_merge: false, archive_on_close: false, auto_fix_prs: false } };
     expect(searchSettings("draft", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.route, r.setting])).toEqual([
       ["Open pull requests as drafts", "App › Git", "On", { page: "git" }, "git-draft-prs"],
     ]);
@@ -99,6 +99,13 @@ describe("searching settings (X43)", () => {
       ["Archive when its pull request merges", "App › Git", "On", "git-archive-on-merge"],
     ]);
     expect(searchSettings("closed without merging", git)[0]).toMatchObject({ value: "Off", setting: "git-archive-on-close" });
+  });
+
+  it("finds auto-fixing pull requests (X117)", () => {
+    const git = { ...ctx, git: { ...DEFAULT_GIT_SETTINGS, auto_fix_prs: true } };
+    expect(searchSettings("auto-fix", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.setting])).toEqual([
+      ["Auto-fix pull requests", "App › Git", "On", "git-auto-fix"],
+    ]);
   });
 
   it("finds keeping the Mac awake by sleep and awake (X73)", () => {
