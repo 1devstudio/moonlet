@@ -1478,13 +1478,18 @@ impl Daemon {
         };
         let at = self.locate(&r).await?;
         let store = self.design.clone();
-        let info = blocking(move || store.design(&at)).await?;
+        let (info, version) = blocking(move || {
+            let info = store.design(&at)?;
+            let version = moonlet_core::artifact::refs::design_version(Path::new(&info.path));
+            Ok((info, version))
+        })
+        .await?;
         Ok(ArtifactSource {
             name: info.name.clone(),
             kind: "design",
             folder: format!("design-{}", info.slug),
             from: ArtifactFrom::Design(PathBuf::from(&info.path)),
-            version: info.updated_at.to_string(),
+            version,
         })
     }
 

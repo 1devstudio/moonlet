@@ -151,6 +151,48 @@ pub fn mirror_design(design: &Path, folder: &Path) -> Result<()> {
     swap(&next, folder)
 }
 
+/// A design's version (X114): a fingerprint of the files its copy holds,
+/// their paths, sizes and change times, so any change to a page, an asset,
+/// its styles or its `design.toml` is a new version.
+pub fn design_version(design: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let mut seen: Vec<String> = Vec::new();
+    let mut note = |rel: &str, m: &std::fs::Metadata| {
+        seen.push(format!(
+            "{rel}\0{}\0{}\0{}",
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec()
+        ))
+    };
+    if let Ok(m) = std::fs::symlink_metadata(design.join("design.toml"))
+        && m.is_file()
+    {
+        note("design.toml", &m);
+    }
+    fn walk(dir: &Path, rel: &str, note: &mut dyn FnMut(&str, &std::fs::Metadata)) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let (Ok(kind), Ok(m)) = (e.file_type(), e.metadata()) else {
+                continue;
+            };
+            let rel = format!("{rel}/{}", e.file_name().to_string_lossy());
+            if kind.is_dir() {
+                walk(&e.path(), &rel, note);
+            } else if kind.is_file() {
+                note(&rel, &m);
+            }
+        }
+    }
+    for part in ["pages", "assets", "system"] {
+        walk(&design.join(part), part, &mut note);
+    }
+    seen.sort();
+    crate::hash::sha256_hex(seen.join("\n").as_bytes())
+}
+
 /// A name safe as one path component.
 fn safe(s: &str) -> bool {
     !s.is_empty()
@@ -377,5 +419,28 @@ mod tests {
             0,
             "read only"
         );
+    }
+
+    #[test]
+    fn a_designs_version_changes_with_any_page_and_only_then() {
+        let home = tempfile::tempdir().unwrap();
+        let design = home.path().join("settings-page");
+        std::fs::create_dir_all(design.join("pages")).unwrap();
+        std::fs::write(design.join("design.toml"), "name = \"Settings page\"\n").unwrap();
+        std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+        std::fs::write(design.join("notes.txt"), "not part of the design").unwrap();
+        let first = design_version(&design);
+        assert_eq!(design_version(&design), first, "nothing changed");
+        std::fs::write(design.join("notes.txt"), "still not part of it").unwrap();
+        assert_eq!(
+            design_version(&design),
+            first,
+            "a file outside the copy is no change"
+        );
+        std::fs::write(design.join("pages/index.html"), "<p>v22</p>").unwrap();
+        let second = design_version(&design);
+        assert_ne!(second, first);
+        std::fs::write(design.join("pages/empty.html"), "").unwrap();
+        assert_ne!(design_version(&design), second, "a new page is a change");
     }
 }
