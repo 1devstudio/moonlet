@@ -430,6 +430,13 @@ impl Store {
         Ok(slug)
     }
 
+    /// A copy of design `at`, a session's or a workspace's, made a workspace
+    /// design of `workspace` with its pages, labels, viewport, brief, assets
+    /// and comments, never its snapshots (X114). Gives its slug there.
+    pub fn copy_design_to(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {
+        self.adopt_one(at, workspace, now)
+    }
+
     /// One session design made a workspace design of `workspace`, its
     /// comments with it; gives its slug there.
     fn adopt_one(&self, at: &DesignAt, workspace: &str, now: u64) -> Result<String> {

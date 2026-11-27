@@ -25,7 +25,7 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 ### Artifacts and their homes
 
 - [ ] An artifact is a **plan** or a **design**. Its **home** is where it was made: a design made in a session, or a plan written by a session's agent, has that session as its home; a design made in Design mode has its workspace. It changes only in its home.
-- [ ] An artifact has an id that never changes while it lives: a plan's is `plan:<session id>:<key>`, the key being its plan file's name, else its chat's Claude conversation; a design's names where it is and its slug, `design:workspace:<workspace>:<slug>`, `design:library:<slug>`, `design:session:<session>:<slug>` or `design:project:<project>:<slug>`. When a design moves (to the workspace, X104; on archive, X101; to another workspace), moonlet records its old id as an alias of its new one, so a reference keeps finding it. A copy gets a new id. (`lib/artifacts.test.ts` gives each design an id from where it lives)
+- [ ] An artifact has an id that never changes while it lives: a plan's is `plan:<session id>:<key>`, the key being its plan file's name, else its chat's Claude conversation; a design's names where it is and its slug, `design:workspace:<workspace>:<slug>`, `design:library:<slug>`, `design:session:<session>:<slug>` or `design:project:<project>:<slug>`. When a design moves (to the workspace, X104; to another workspace), the references to it are renamed to its new id, so they keep finding it. A copy gets a new id. (`lib/artifacts.test.ts` gives each design an id from where it lives)
 
 ### Plan artifacts (entry 1)
 
@@ -70,10 +70,10 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### Copy and move between workspaces (entry 6)
 
-- [ ] **Copy to workspace…** copies any artifact into another workspace as a workspace artifact: a plan as a workspace plan with its latest version, a design as a workspace design with its pages, labels, viewport, brief, assets and comments, not its snapshots. The copy has a new id.
-- [ ] **Move to workspace…** moves a workspace artifact, keeping its id; sessions that refer to it keep reading it. A session's artifact can only be copied.
-- [ ] A session design referred to by another session shows "Used by <n> other sessions" in its view, with **Move to workspace** (X104) and **Not now**, which hides it until another session refers to it.
-- [ ] When a session is archived, its designs become workspace designs whichever store keeps them (X101 extended to the project store); the committed copy stays in the branch.
+- [ ] **Copy to workspace…** copies any artifact but a merged design into another workspace as a workspace artifact: a plan as the workspace's own plan with its latest version, named as it was; a design as a workspace design with its pages, labels, viewport, brief, assets and comments, not its snapshots. The copy has a new id. Nothing is copied or moved into the library: a design goes there by being shared (X95). (`artifact/plans.rs` a_plan_is_copied_into_a_workspace_and_a_workspace_plan_moves_between_them; `lib/artifacts.test.ts` copies any but a merged design, which Design mode copies; `moonletd/tests/daemon.rs` artifacts_are_copied_and_moved_between_workspaces_and_references_follow, sharing_a_design_takes_its_references_along_and_the_library_is_no_copy_target; `e2e/specs/artifacts.e2e.ts` copies the plan to another workspace from its ⋯ menu)
+- [ ] **Move to workspace…** moves a workspace artifact; sessions that refer to it keep reading it, their references renamed to its id there. A session's artifact can only be copied; a shared design moves with Stop sharing; a move into the workspace it is in is refused. A design whose agent is working is refused as busy. A session design moved to the workspace with X104's Move to workspace keeps its references too, and so does a design shared or no longer shared (X95). (`artifact/refs.rs` references_follow_an_artifact_that_moved_and_all_are_listed_with_their_sessions; `lib/artifacts.test.ts` moves only a workspace's own, and says why another cannot; `moonletd/tests/daemon.rs` artifacts_are_copied_and_moved_between_workspaces_and_references_follow, a_session_design_moved_to_the_workspace_keeps_its_references, sharing_a_design_takes_its_references_along_and_the_library_is_no_copy_target)
+- [ ] A session design referred to by another session shows "Used by <n> other sessions" in its view, with **Move to workspace** (X104) and **Not now**, which hides it while the view is open. A design's row says `used by <n>`, from `artifact.used`. (`lib/artifacts.test.ts` counts the sessions that refer to a design, its own session left out)
+- [ ] When a session is archived, its designs become workspace designs whichever store keeps them (X101 extended to the project store; the user's choice, 2026-11-27): those in its worktree are copied before the worktree goes, and the committed copy stays in the branch. An archive that keeps the worktree copies none. An archive that fails removes the copies again, unless its worktree was removed before it failed: then the copies are the designs' only ones and stay. The sessions that refer to them then refer to the workspace designs. (`moonletd/tests/daemon.rs` archiving_a_session_makes_its_worktree_designs_workspace_designs_and_references_follow, an_archive_copies_worktree_designs_only_when_the_worktree_goes_and_keeps_them_if_it_fails_after, archiving_a_session_turns_its_designs_kept_in_moonlet_into_workspace_designs)
 
 ### The CLI (entry 7)
 
@@ -99,7 +99,8 @@ The design's pages are the reference.
 - `artifact.read {id, version?}` → `{info, text?, versions?: [{n, state, at, path}]}`.
 - `artifact.rename {id, name}`, `artifact.edit {id, text}` → the new version. App only.
 - `artifact.attach {session, id}` → `{folder}`; `artifact.refs {session}` → `ArtifactRef[]`.
-- `artifact.copy {id, workspace}`, `artifact.move {id, workspace}` → the new or same id. App only.
+- `artifact.copy {id, workspace}`, `artifact.move {id, workspace}` → the copy's id, or its id there. App only.
+- `artifact.used {}` → `{id: [session]}`: every artifact this host's sessions refer to.
 - Event `artifact.changed {id}` after a plan's new version, a rename, or a design's change.
 - Allowed to an agent's CLI (`LOCAL_METHODS`): `artifact.list`, `artifact.search`, `artifact.read`, `artifact.attach` (its own session only).
 
@@ -107,7 +108,7 @@ The design's pages are the reference.
 
 - `~/.moonlet/artifacts/plans/<session id>/<key>/plan.toml`: `{session, key, chat title, renamed?, created_at}`, and `v<n>.md` with `versions` in `plan.toml`: `{n, state, at}`.
 - `~/.moonlet/artifacts/refs/<session id>.toml`: the session's references, `{id, attached_at, told_version}`; its copies in `~/.moonlet/artifacts/refs/<session id>/<slug>/`.
-- `~/.moonlet/artifacts/moved.toml`: the old ids of designs that moved, each with its new id (entry 6).
+- A workspace's own plans (copies from another workspace) in `~/.moonlet/artifacts/plans/w-<workspace id>/<key>/`.
 
 ## Security considerations
 

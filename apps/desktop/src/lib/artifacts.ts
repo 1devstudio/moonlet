@@ -62,6 +62,8 @@ export interface ListInput {
   /** A project's name on a host: project ids are unique per host only. */
   projectName: (host: string, id: string) => string | undefined;
   now: number;
+  /** Each host's artifacts referred to, with the sessions referring to each (`artifact.used`). */
+  used?: Record<string, Record<string, string[]> | undefined>;
 }
 
 /**
@@ -99,7 +101,10 @@ export function artifactRows(input: ListInput, kind: ArtifactKind, query: string
     if (kind === "plan") continue;
     for (const d of designs ?? []) {
       if (d.owner && owned.has(designArtifactId(d, input.workspace))) continue;
-      const info = designArtifact(d, input.workspace);
+      const plain = designArtifact(d, input.workspace);
+      // The sessions referring to it, its own left out.
+      const used = (input.used?.[host]?.[plain.id] ?? []).filter((s) => s !== plain.home.session);
+      const info = used.length ? { ...plain, used_by: used } : plain;
       if (!searching) add(host, info, null);
       else {
         const m = designMatch(d, query);
@@ -264,4 +269,19 @@ export function startMessage(kind: "plan" | "design", typed: string): string {
 /** The composer's prompt placeholder while it starts from an artifact. */
 export function startPlaceholder(kind: "plan" | "design"): string {
   return `Anything to add? Leave empty to ${kind === "plan" ? "implement the plan" : "build the design"}.`;
+}
+
+/** Why an artifact cannot move to another workspace; null when it can.
+ *  Only a workspace's own moves (X114). */
+export function moveRefusal(info: Pick<ArtifactInfo, "id" | "kind" | "home">): string | null {
+  if (info.id.startsWith("design:library:")) return "A shared design moves with Stop sharing";
+  if (info.id.startsWith("design:project:")) return "A merged design stays in its project";
+  if (info.home.session) return `A session's ${info.kind} can only be copied`;
+  return null;
+}
+
+/** Why an artifact cannot be copied to another workspace; null when it can.
+ *  A merged design is read from its project: Design mode copies it (X65). */
+export function copyRefusal(info: Pick<ArtifactInfo, "id">): string | null {
+  return info.id.startsWith("design:project:") ? "Copy a merged design from Design mode" : null;
 }

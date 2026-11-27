@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** Design mode
 - **Related ADRs:** none
+- **Changed by:** [X114](X114-artifacts.md) (2026-11-27): the sessions that refer to a moved design (live references) then refer to its workspace design, and its artifact view offers Move to workspace when other sessions use it.
 - **Depends on:** [X65](X65-design-mode.md) (session and workspace designs), [X101](X101-session-designs-outside-the-project.md) (session designs kept in moonlet, made workspace designs on archive), [X71](X71-designs-on-every-member.md) (workspace designs on every member)
 
 ## Summary

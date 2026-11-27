@@ -112,7 +112,10 @@ pub fn snippet(text: &str, query: &str) -> Option<String> {
         }
         let at = folded.find(&query)?;
         let start = starts.iter().rposition(|&s| s <= at)?;
-        let end = starts.iter().position(|&s| s >= at + query.len()).unwrap_or(chars.len());
+        let end = starts
+            .iter()
+            .position(|&s| s >= at + query.len())
+            .unwrap_or(chars.len());
         let mut from = start.saturating_sub(SIDE);
         if from > 0 {
             // Start at the next whole word.
@@ -129,7 +132,11 @@ pub fn snippet(text: &str, query: &str) -> Option<String> {
         }
         let cut: String = chars[from..to].iter().collect();
         let cut = cut.trim();
-        Some(format!("{}{cut}{}", if from > 0 { "…" } else { "" }, if to < chars.len() { "…" } else { "" }))
+        Some(format!(
+            "{}{cut}{}",
+            if from > 0 { "…" } else { "" },
+            if to < chars.len() { "…" } else { "" }
+        ))
     })
 }
 
@@ -312,6 +319,68 @@ impl Plans {
         Some(self.dir_of(id)?.join(version_file(n)))
     }
 
+    /// Copies plan `id`'s latest version into workspace `workspace` as a
+    /// workspace plan named `name`, one version long. Returns its id.
+    pub fn copy_to_workspace(
+        &self,
+        id: &str,
+        workspace: &str,
+        name: &str,
+        at: u64,
+    ) -> Result<String> {
+        let home = workspace_home(workspace);
+        anyhow::ensure!(super::safe_name(&home), "not a safe workspace id");
+        let from = self.plan(id)?.with_context(|| format!("no plan {id}"))?;
+        let latest = from
+            .latest()
+            .with_context(|| format!("plan {id} has no version"))?;
+        let text = self.text(id, latest.n)?;
+        let _held = self.lock.lock().unwrap();
+        let key = free_key(&self.root.join(&home), &from.key);
+        let dir = self.root.join(&home).join(&key);
+        crate::paths::ensure_private_dir(&dir)?;
+        write_file(&dir, &version_file(1), &text)?;
+        let plan = Plan {
+            session: home,
+            key,
+            chat_title: String::new(),
+            heading: from.heading.clone(),
+            renamed: Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+            created_at: at,
+            versions: vec![Version {
+                n: 1,
+                state: latest.state,
+                at,
+                item: None,
+            }],
+        };
+        write_plan(&dir, &plan)?;
+        Ok(plan.id())
+    }
+
+    /// Moves workspace plan `id` into workspace `workspace`, its versions
+    /// with it. Returns its id there.
+    pub fn move_to_workspace(&self, id: &str, workspace: &str) -> Result<String> {
+        let (session, key) = parse_id(id).context("not a plan's id")?;
+        anyhow::ensure!(
+            workspace_of_home(session).is_some(),
+            "only a workspace's own plan moves; a session's is copied"
+        );
+        let home = workspace_home(workspace);
+        anyhow::ensure!(super::safe_name(&home), "not a safe workspace id");
+        let _held = self.lock.lock().unwrap();
+        let from = self.root.join(session).join(key);
+        let mut plan = read_plan(&from)?.with_context(|| format!("no plan {id}"))?;
+        let to_key = free_key(&self.root.join(&home), key);
+        let to = self.root.join(&home).join(&to_key);
+        crate::paths::ensure_private_dir(&self.root.join(&home))?;
+        std::fs::rename(&from, &to)?;
+        plan.session = home;
+        plan.key = to_key;
+        write_plan(&to, &plan)?;
+        Ok(plan.id())
+    }
+
     fn dir_of(&self, id: &str) -> Option<PathBuf> {
         let (session, key) = parse_id(id)?;
         Some(self.root.join(session).join(key))
@@ -349,6 +418,31 @@ pub fn plan_key(plan_file: Option<&str>, conversation: Option<&str>) -> Option<S
             })
             .collect(),
     )
+}
+
+/// `key`, or `key-2`, `key-3`… when `dir` has a plan by that key already.
+fn free_key(dir: &Path, key: &str) -> String {
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                key.to_string()
+            } else {
+                format!("{key}-{n}")
+            }
+        })
+        .find(|k| !dir.join(k).exists())
+        .unwrap()
+}
+
+/// The home of a workspace's own plans, which no session has: copies from
+/// another workspace (X114).
+pub fn workspace_home(workspace: &str) -> String {
+    format!("w-{workspace}")
+}
+
+/// The workspace whose own plans `home` holds, when it is such a home.
+pub fn workspace_of_home(home: &str) -> Option<&str> {
+    home.strip_prefix("w-")
 }
 
 /// The session and key of a plan's artifact id, when it is one.
@@ -762,7 +856,9 @@ mod tests {
         let text = "# Search for the product list\n\n1. Add `SearchBox` in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones and tablets\n2. Count";
         assert_eq!(
             snippet(text, "DEBOUNCE").as_deref(),
-            Some("…in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones…")
+            Some(
+                "…in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones…"
+            )
         );
         assert_eq!(snippet(text, "count").as_deref(), Some("2. Count"));
         assert_eq!(snippet(text, "fuzzy"), None);
@@ -772,8 +868,70 @@ mod tests {
     #[test]
     fn a_snippet_never_breaks_on_text_whose_lowercase_moves_its_characters() {
         // ẞ lowercases one byte shorter, İ one byte longer: the same length, other offsets.
-        assert_eq!(snippet("ẞİ then debounce it", "debounce").as_deref(), Some("ẞİ then debounce it"));
-        assert_eq!(snippet("Straße İstanbul", "İSTANBUL").as_deref(), Some("Straße İstanbul"));
+        assert_eq!(
+            snippet("ẞİ then debounce it", "debounce").as_deref(),
+            Some("ẞİ then debounce it")
+        );
+        assert_eq!(
+            snippet("Straße İstanbul", "İSTANBUL").as_deref(),
+            Some("Straße İstanbul")
+        );
         assert_eq!(snippet("ẞİ", "x"), None);
+    }
+
+    #[test]
+    fn a_plan_is_copied_into_a_workspace_and_a_workspace_plan_moves_between_them() {
+        let home = tempfile::tempdir().unwrap();
+        let plans = Plans::new(home.path());
+        plans
+            .record(&proposal("toolu_1", "# Plan\n\nv1", "denied", 1_000))
+            .unwrap();
+        plans
+            .record(&proposal("toolu_2", "# Plan\n\nv2", "approved", 2_000))
+            .unwrap();
+
+        let copy = plans
+            .copy_to_workspace(
+                "plan:a1b2c3d4e5f6:groovy-whale",
+                "ws-personal",
+                "Search plan",
+                5_000,
+            )
+            .unwrap();
+        assert_eq!(copy, "plan:w-ws-personal:groovy-whale");
+        let p = plans.plan(&copy).unwrap().unwrap();
+        assert_eq!(
+            (
+                p.renamed.as_deref(),
+                p.versions.len(),
+                p.versions[0].state,
+                p.versions[0].at
+            ),
+            (Some("Search plan"), 1, VersionState::Approved, 5_000)
+        );
+        assert_eq!(plans.text(&copy, 1).unwrap(), "# Plan\n\nv2\n");
+        // Copied again: another plan, not over the first.
+        assert_eq!(
+            plans
+                .copy_to_workspace(
+                    "plan:a1b2c3d4e5f6:groovy-whale",
+                    "ws-personal",
+                    "Search plan",
+                    6_000
+                )
+                .unwrap(),
+            "plan:w-ws-personal:groovy-whale-2"
+        );
+
+        let moved = plans.move_to_workspace(&copy, "ws-side").unwrap();
+        assert_eq!(moved, "plan:w-ws-side:groovy-whale");
+        assert!(plans.plan(&copy).unwrap().is_none());
+        assert_eq!(plans.text(&moved, 1).unwrap(), "# Plan\n\nv2\n");
+        // Only a workspace's own plan moves; a session's is copied.
+        assert!(
+            plans
+                .move_to_workspace("plan:a1b2c3d4e5f6:groovy-whale", "ws-side")
+                .is_err()
+        );
     }
 }

@@ -21,6 +21,8 @@ export interface ArtifactChip {
 interface ArtifactState {
   /** The artifacts each session's next message refers to, by `<host>/<session>`. */
   chips: Record<string, ArtifactChip[] | undefined>;
+  /** Each host's artifacts referred to, with the sessions referring to each. */
+  used: Record<string, Record<string, string[]> | undefined>;
   /** Each host's plans of a workspace, by `<host>/<workspace>`. */
   plans: Record<string, ArtifactInfo[] | undefined>;
   /** What `artifact.search` found, by `<host>/<workspace>`, for `query`. */
@@ -31,7 +33,7 @@ interface ArtifactState {
   shown: { host: string; id: string } | null;
 }
 
-export const useArtifacts = create<ArtifactState>(() => ({ chips: {}, plans: {}, matches: {}, query: "", kind: "all", shown: null }));
+export const useArtifacts = create<ArtifactState>(() => ({ chips: {}, used: {}, plans: {}, matches: {}, query: "", kind: "all", shown: null }));
 
 const chipKey = (host: string, session: string) => `${host}/${session}`;
 
@@ -76,8 +78,8 @@ export const artifactKey = (host: string, workspace: string) => `${host}/${works
 
 /** Lists a workspace's plans on `host`. A host that cannot answer keeps what it listed before. */
 export async function loadPlans(host: string, workspace: string): Promise<void> {
-  const list = await rpc<ArtifactInfo[]>(host, M.artifactList, { workspace });
-  useArtifacts.setState((s) => ({ plans: { ...s.plans, [artifactKey(host, workspace)]: list } }));
+  const [list, used] = await Promise.all([rpc<ArtifactInfo[]>(host, M.artifactList, { workspace }), rpc<Record<string, string[]>>(host, M.artifactUsed, {}).catch(() => undefined)]);
+  useArtifacts.setState((s) => ({ plans: { ...s.plans, [artifactKey(host, workspace)]: list }, used: used ? { ...s.used, [host]: used } : s.used }));
 }
 
 /** The latest search asked, so an older answer never lands last. */
@@ -131,8 +133,10 @@ export function workspaceListInput(
   projects: Record<string, readonly { id: string; name: string }[] | undefined>,
   hosts: readonly string[],
   workspace: string,
+  used?: ListInput["used"],
 ): ListInput {
   return {
+    used,
     plans: Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]])),
     designs: Object.fromEntries(hosts.map((h) => [h, artifactDesigns(d, h, workspace)])),
     workspace,

@@ -2,13 +2,13 @@
 // and the artifact view in the main area.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, Layers, MoreHorizontal, Paperclip, Pencil, Plus, Search, X } from "lucide-react";
+import { ArrowUpFromLine, Check, Layers, MoreHorizontal, Paperclip, Pencil, Plus, Search, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ArtifactInfo, type ArtifactText } from "../lib/protocol";
-import { designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
+import { copyRefusal, designFor, markParts, moveRefusal, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
 import { KindTile, useArtifactRows } from "./ArtifactChips";
 import { addChip, artifactDesigns, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
-import { openSessionDesign, showDesign, useDesign } from "../lib/designStore";
+import { loadDesigns, openSessionDesign, showDesign, useDesign } from "../lib/designStore";
 import { LIBRARY } from "../lib/designLibrary";
 import { placeOfDesign } from "../lib/designPlace";
 import { pageUrl, projectPageUrl } from "../lib/designView";
@@ -16,12 +16,12 @@ import { viewportOf } from "../lib/designViewport";
 import { setMode } from "../lib/mode";
 import { useNear } from "../lib/useNear";
 import { useSize } from "../lib/useSize";
-import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
+import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../lib/store";
 import { shortAge } from "../lib/design";
-import { Segmented } from "./settings/controls";
+import { RadioList, Segmented } from "./settings/controls";
 import { Markdown } from "./AgentView";
 import { Menu } from "./Menu";
-import { Button, IconButton, cx } from "./ui";
+import { Button, Dialog, IconButton, cx } from "./ui";
 import { ScrollArea } from "./ScrollArea";
 import { CardFrame } from "./design/Frame";
 
@@ -129,7 +129,7 @@ export function ArtifactView() {
   return row.info.kind === "plan" ? <PlanView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} /> : <DesignView key={row.host + row.info.id} host={row.host} info={row.info} home={row.home} />;
 }
 
-function Header({ info, children, menu }: { info: ArtifactInfo; children?: ReactNode; menu?: { label: string; onSelect: () => void }[] }) {
+function Header({ info, children, menu }: { info: ArtifactInfo; children?: ReactNode; menu?: { label: string; disabled?: string; onSelect: () => void }[] }) {
   return (
     <div className="flex h-ui-52 shrink-0 items-center gap-3 border-b border-border px-5">
       <span className="flex min-w-0 items-center gap-2 ui-text-14 font-semibold">
@@ -147,11 +147,133 @@ function Header({ info, children, menu }: { info: ArtifactInfo; children?: React
               <MoreHorizontal size={16} />
             </IconButton>
           )}
-          items={menu.map((m) => ({ label: m.label, onSelect: m.onSelect }))}
+          items={menu.map((m) => ({ label: m.label, disabled: m.disabled, onSelect: m.onSelect }))}
         />
       )}
     </div>
   );
+}
+
+/** Copy to workspace… or Move to workspace… (X114): the other workspaces
+ *  of the artifact's host, Copy or Move. Only a workspace's own artifact
+ *  moves; a session's is copied. */
+function ToWorkspaceDialog({ host, info, start, onClose }: { host: string; info: ArtifactInfo; start: "copy" | "move"; onClose: () => void }) {
+  const here = useStore((s) => shownWorkspace(s)?.id);
+  const workspaces = useStore((s) => s.workspaces[host]) ?? [];
+  const movable = moveRefusal(info) === null;
+  const [how, setHow] = useState<"copy" | "move">(movable ? start : "copy");
+  const others = workspaces.filter((w) => w.id !== here);
+  const [to, setTo] = useState(others[0]?.id ?? "");
+  const [busy, setBusy] = useState(false);
+  const name = workspaces.find((w) => w.id === to)?.name ?? "";
+  const go = async () => {
+    if (!to) return;
+    setBusy(true);
+    try {
+      await rpc(host, how === "copy" ? M.artifactCopy : M.artifactMove, { id: info.id, workspace: to });
+      toast(`${how === "copy" ? "Copied" : "Moved"} ${info.name} to ${name}`);
+      if (how === "move") useArtifacts.setState({ shown: null });
+      if (here) {
+        void loadPlans(host, here).catch(() => {});
+        void loadDesigns(host, here, true).catch(() => {});
+      }
+      onClose();
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`${info.name} to another workspace`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={!to || busy} onClick={() => void go()}>
+            {how === "copy" ? "Copy" : "Move"} to {name || "…"}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <span id="to-workspace-how" className="sr-only">Copy or move</span>
+        <span id="to-workspace-where" className="sr-only">Workspace</span>
+        <Segmented
+          value={how}
+          options={[
+            { id: "copy", label: "Copy" },
+            ...(movable ? [{ id: "move" as const, label: "Move" }] : []),
+          ]}
+          onChange={setHow}
+          labelledBy="to-workspace-how"
+        />
+        <p className="ui-text-12.5 text-muted">
+          {how === "copy"
+            ? `A copy is a new ${info.kind} of that workspace${info.kind === "design" ? ", with its pages, labels, brief, assets and comments; snapshots stay here" : ", with its latest version"}. Sessions here keep using this one.`
+            : "It leaves this workspace. Sessions that use it keep reading it."}
+        </p>
+        {others.length ? (
+          <RadioList value={to} options={others.map((w) => ({ id: w.id, label: w.name, description: "" }))} onChange={setTo} labelledBy="to-workspace-where" />
+        ) : (
+          <p className="ui-text-12.5 text-faint">There is no other workspace on this host.</p>
+        )}
+        {!movable && <p className="ui-text-12 text-faint">{moveRefusal(info)}.</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+/** A session design other sessions use (X114): it changes only in its
+ *  session; Move to workspace gives it its own agent (X104). */
+function UsedByBanner({ host, info, session, slug, workspace }: { host: string; info: ArtifactInfo; session: string; slug: string; workspace: string }) {
+  const [hidden, setHidden] = useState(false);
+  const sessionName = useStore((s) => s.sessions[host]?.find((w) => w.id === session)?.name ?? "its session");
+  if (hidden || info.used_by.length === 0) return null;
+  const move = async () => {
+    try {
+      const moved = await rpc<string>(host, M.designAdopt, { session, slug });
+      await loadDesigns(host, workspace, true);
+      void loadPlans(host, workspace).catch(() => {});
+      useArtifacts.setState({ shown: { host, id: `design:workspace:${workspace}:${moved}` } });
+    } catch (e) {
+      errorToast(e);
+    }
+  };
+  const n = info.used_by.length;
+  return (
+    <div className="mx-5 mt-3 flex items-start gap-3 rounded-lg border border-border-strong bg-panel-2 p-3">
+      <Layers size={16} className="mt-0.5 shrink-0 text-merged" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1 ui-text-12.5 leading-[1.45] text-muted">
+        <span className="font-medium text-fg">
+          Used by {n} other session{n === 1 ? "" : "s"}
+        </span>
+        <span>It changes only in {sessionName}, and becomes a workspace design when that session is archived. Move it to the workspace to give it its own agent now.</span>
+      </div>
+      <div className="flex shrink-0 gap-2">
+        <Button variant="ghost" size="sm" onClick={() => setHidden(true)}>
+          Not now
+        </Button>
+        <Button size="sm" onClick={() => void move()}>
+          <ArrowUpFromLine size={13} /> Move to workspace
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The ⋯ menu's Copy and Move items, and their dialog (X114). */
+function useToWorkspace(host: string, info: ArtifactInfo) {
+  const [open, setOpen] = useState<"copy" | "move" | null>(null);
+  const items = [
+    { label: "Copy to workspace…", disabled: copyRefusal(info) ?? undefined, onSelect: () => setOpen("copy") },
+    { label: "Move to workspace…", disabled: moveRefusal(info) ?? undefined, onSelect: () => setOpen("move") },
+  ];
+  const dialog = open && <ToWorkspaceDialog host={host} info={info} start={open} onClose={() => setOpen(null)} />;
+  return { items, dialog };
 }
 
 /** Start session: the New session composer, the artifact its source, in
@@ -246,6 +368,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
   const [version, setVersion] = useState<number | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const toWorkspace = useToWorkspace(host, info);
   useEffect(() => {
     let live = true;
     rpc<ArtifactText>(host, M.artifactRead, { id: info.id, version }).then(
@@ -271,7 +394,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
   return (
     <div className="flex h-full overflow-hidden rounded-lg bg-bg">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header info={info} menu={info.home.archived ? [] : [{ label: "Rename…", onSelect: () => setRenaming(true) }]}>
+        <Header info={info} menu={[...(info.home.archived ? [] : [{ label: "Rename…", onSelect: () => setRenaming(true) }]), ...toWorkspace.items]}>
           {editing === null && <AttachToSession host={host} info={info} />}
           {editing === null && <StartSession host={host} info={info} />}
           {editing === null ? (
@@ -290,6 +413,7 @@ function PlanView({ host, info, home }: { host: string; info: ArtifactInfo; home
           )}
         </Header>
         {renaming && <RenameBar host={host} info={info} onDone={() => setRenaming(false)} />}
+        {toWorkspace.dialog}
         <div className="flex flex-wrap items-center gap-2 px-5 pt-3 ui-text-12.5 text-muted">
           <span>Home</span>
           <span className="text-fg">{home}</span>
@@ -361,6 +485,7 @@ function RenameBar({ host, info, onDone }: { host: string; info: ArtifactInfo; o
 function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; home: string }) {
   const workspace = useStore((s) => shownWorkspace(s)?.id);
   const design = useDesign((s) => (workspace ? designFor(artifactDesigns(s, host, workspace), info.id, workspace) : undefined));
+  const toWorkspace = useToWorkspace(host, info);
   const edit = () => {
     if (!design || !workspace) return;
     if (design.kind === "session" && design.session) void openSessionDesign(host, workspace, design.session, design.slug, true);
@@ -378,7 +503,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
   return (
     <div className="flex h-full overflow-hidden rounded-lg bg-bg">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header info={info}>
+        <Header info={info} menu={design?.kind === "project" ? [] : toWorkspace.items}>
           {design?.kind !== "project" && <AttachToSession host={host} info={info} />}
           {!info.home.merged && <StartSession host={host} info={info} />}
           <Button disabled={!design || design.kind === "project"} onClick={edit}>
@@ -391,6 +516,8 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
           {design && <span className="text-faint">·</span>}
           {design && <span>{design.system} design system</span>}
         </div>
+        {toWorkspace.dialog}
+        {design?.kind === "session" && design.session && workspace && <UsedByBanner host={host} info={info} session={design.session} slug={design.slug} workspace={workspace} />}
         <ScrollArea className="px-5 pb-8 pt-4">
           <div className="grid max-w-[900px] grid-cols-2 gap-4">
             {(design?.pages ?? []).map((p) => (

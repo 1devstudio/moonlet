@@ -1795,6 +1795,9 @@ export const M = {
   artifactRename: "artifact.rename",
   artifactEdit: "artifact.edit",
   artifactAttach: "artifact.attach",
+  artifactCopy: "artifact.copy",
+  artifactMove: "artifact.move",
+  artifactUsed: "artifact.used",
 } as const;
 
 export const EV = {

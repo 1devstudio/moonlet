@@ -201,4 +201,26 @@ describe("artifacts", () => {
     expect(first()).toMatch(new RegExp(`^Artifact "${SESSION}" \\(plan, live, read only\\): /.+/artifacts/refs/${started}/plan-search-products\\. It always holds the latest version; it changes only in its home\\.\\n\\nImplement the plan\\.$`));
     rpc(w, "session.archive", { id: started });
   });
+
+  it("copies the plan to another workspace from its ⋯ menu", async () => {
+    const other = rpc<{ id: string }>(w, "workspace.create", { name: "Side projects", color: "blue" }).id;
+    try {
+      await $(artifactsRow).click();
+      await $(planRow).click();
+      await $('//button[@title="More"]').click();
+      await $(sel.button("Copy to workspace…")).click();
+      const dialog = '//div[@role="dialog"][.//*[normalize-space()=' + JSON.stringify(`${SESSION} to another workspace`) + "]]";
+      await expect($(dialog)).toBeDisplayed();
+      // A session's plan is copied, never moved.
+      await expect($(`${dialog}//*[contains(normalize-space(), "can only be copied")]`)).toBeDisplayed();
+      await $(`${dialog}//button[@role="radio"][starts-with(normalize-space(), "Side projects")]`).click();
+      await $(`${dialog}${sel.button("Copy to Side projects")}`).click();
+      await expect($(dialog)).not.toBeExisting();
+      await browser.waitUntil(() => rpc<{ name: string; home: { workspace?: string; session?: string } }[]>(w, "artifact.list", { workspace: other }).some((a) => a.name === SESSION && !a.home.session), {
+        timeoutMsg: "the copy never showed in the other workspace",
+      });
+    } finally {
+      rpc(w, "workspace.delete", { id: other });
+    }
+  });
 });

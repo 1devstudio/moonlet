@@ -483,6 +483,18 @@ pub const ARTIFACT_EDIT: &str = "artifact.edit";
 /// [`ArtifactAttach`]; the answer is `{folder, line}`, the line the
 /// message sent with it carries.
 pub const ARTIFACT_ATTACH: &str = "artifact.attach";
+/// Copies an artifact into another workspace as that workspace's own: a
+/// design with its pages, labels, brief, assets and comments, a plan with
+/// its latest version. App only. Params: [`ArtifactTo`]; the answer is the
+/// copy's id.
+pub const ARTIFACT_COPY: &str = "artifact.copy";
+/// Moves a workspace's own artifact into another workspace; the sessions
+/// that refer to it follow it. A session's artifact can only be copied.
+/// App only. Params: [`ArtifactTo`]; the answer is its id there.
+pub const ARTIFACT_MOVE: &str = "artifact.move";
+/// Every artifact this host's sessions refer to, each with those sessions:
+/// `{id: [session]}`.
+pub const ARTIFACT_USED: &str = "artifact.used";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -2480,6 +2492,12 @@ pub struct ArtifactRead {
     /// The version to read; the latest without one.
     #[serde(default)]
     pub version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactTo {
+    pub id: String,
+    pub workspace: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

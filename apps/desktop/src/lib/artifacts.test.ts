@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactRows, artifactSessionName, KIND_WORDS, startRefusal, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, startMessage, startPlaceholder, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
+import { artifactRows, artifactSessionName, KIND_WORDS, copyRefusal, moveRefusal, startRefusal, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, startMessage, startPlaceholder, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
 import type { ArtifactInfo, Design } from "./protocol";
 
 const MIN = 60_000;
@@ -300,5 +300,33 @@ describe("startRefusal", () => {
 describe("KIND_WORDS", () => {
   it("names each kind as the app shows it", () => {
     expect(KIND_WORDS).toEqual({ plan: "Plan", design: "Design" });
+  });
+});
+
+describe("used by", () => {
+  it("counts the sessions that refer to a design, its own session left out", () => {
+    const used = { mac: { "design:workspace:w1:settings-page": ["s2", "s3"], "design:session:a1b2c3d4e5f6:checkout-flow": ["a1b2c3d4e5f6", "s4"] } };
+    const rows = artifactRows(input({ plans: {}, used }), "design", "", {});
+    expect(rows.map((r) => [r.info.name, r.info.used_by, r.usedBy])).toEqual([
+      ["Settings page", ["s2", "s3"], "used by 2"],
+      ["Checkout flow", ["s4"], "used by 1"],
+      ["Account pages, dark", [], null],
+    ]);
+  });
+});
+
+describe("moveRefusal and copyRefusal", () => {
+  const info = (id: string, kind: "plan" | "design", session?: string): ArtifactInfo => ({ id, kind, name: "x", home: { workspace: "w1", session }, updated_at: 0, used_by: [] });
+  it("moves only a workspace's own, and says why another cannot", () => {
+    expect(moveRefusal(info("plan:w-w1:search", "plan"))).toBeNull();
+    expect(moveRefusal(info("design:workspace:w1:settings-page", "design"))).toBeNull();
+    expect(moveRefusal(info("plan:a1b2c3d4e5f6:search", "plan", "a1b2c3d4e5f6"))).toBe("A session's plan can only be copied");
+    expect(moveRefusal(info("design:session:a1b2c3d4e5f6:checkout", "design", "a1b2c3d4e5f6"))).toBe("A session's design can only be copied");
+    expect(moveRefusal(info("design:library:settings-page", "design"))).toBe("A shared design moves with Stop sharing");
+    expect(moveRefusal(info("design:project:p1:settings-page", "design"))).toBe("A merged design stays in its project");
+  });
+  it("copies any but a merged design, which Design mode copies", () => {
+    expect(copyRefusal(info("design:session:a1b2c3d4e5f6:checkout", "design", "a1b2c3d4e5f6"))).toBeNull();
+    expect(copyRefusal(info("design:project:p1:settings-page", "design"))).toBe("Copy a merged design from Design mode");
   });
 });

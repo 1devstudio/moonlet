@@ -29,6 +29,7 @@ export function useArtifactRows(): { rows: ArtifactRow[]; workspace: string | nu
   const joined = connectedHosts(hostsMap);
   const hosts = useMemo(() => joined.split(",").filter(Boolean), [joined]);
   const plans = useArtifacts((s) => s.plans);
+  const used = useArtifacts((s) => s.used);
   const matches = useArtifacts((s) => s.matches);
   const query = useArtifacts((s) => s.query);
   const kind = useArtifacts((s) => s.kind);
@@ -37,8 +38,8 @@ export function useArtifactRows(): { rows: ArtifactRow[]; workspace: string | nu
   const rows = useMemo(() => {
     if (!workspace) return [];
     const found = Object.fromEntries(hosts.map((h) => [h, matches[artifactKey(h, workspace)]]));
-    return artifactRows(workspaceListInput(design, plans, projects, hosts, workspace), kind, query, found);
-  }, [workspace, hosts, plans, matches, query, kind, design, projects]);
+    return artifactRows(workspaceListInput(design, plans, projects, hosts, workspace, used), kind, query, found);
+  }, [workspace, hosts, plans, used, matches, query, kind, design, projects]);
   return { rows, workspace, hosts };
 }
 
@@ -49,7 +50,8 @@ export function currentArtifactRows(): ArtifactRow[] {
   const workspace = shownWorkspace(st)?.id;
   if (!workspace) return [];
   const hosts = connectedHosts(st.hosts).split(",").filter(Boolean);
-  return artifactRows(workspaceListInput(useDesign.getState(), useArtifacts.getState().plans, st.projects, hosts, workspace), "all", "", {});
+  const { plans, used } = useArtifacts.getState();
+  return artifactRows(workspaceListInput(useDesign.getState(), plans, st.projects, hosts, workspace, used), "all", "", {});
 }
 
 /** Lists the shown workspace's plans and designs afresh on every host. */
