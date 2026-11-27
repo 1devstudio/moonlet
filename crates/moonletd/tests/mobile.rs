@@ -1031,7 +1031,8 @@ const PHONE_APP_SENDS: &[&str] = &[
     "git.apply_patch", "git.commit", "git.branches", "git.pull_base", "git.unpushed", "git.push",
     "gh.prs", "gh.pr_context", "gh.pr_status", "gh.pr_stack", "gh.pr_create", "job.list",
     "job.stayed", "job.output", "job.stop", "job.stop_all", "job.run_here", "exec.setups",
-    "sync.run_setup", "sync.skip_setup", "tasks.app", "tasks.snapshot", "tasks.request",
+    "sync.run_setup", "sync.skip_setup", "tasks.app", "tasks.snapshot", "tasks.request", "session.fork",
+    "section.update",
 ];
 
 #[tokio::test]

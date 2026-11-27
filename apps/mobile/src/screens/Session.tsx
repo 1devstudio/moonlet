@@ -39,7 +39,7 @@ const TAB_LABEL: Record<SessionTab, string> = { chat: "Chat", terminal: "Termina
 
 /** Archiving, as the host's Git settings say (X55): what happens to the
  * folder and branch, and work that is only on the host. */
-function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: Session; pr: PullRequest | null | undefined; onClose: () => void }) {
+export function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: Session; pr: PullRequest | null | undefined; onClose: () => void }) {
   const d = useApp((s) => s.data[host]);
   const hostLabel = useApp((s) => session.owner?.name ?? s.hosts[host]?.label ?? host);
   const git = d?.git ?? null;

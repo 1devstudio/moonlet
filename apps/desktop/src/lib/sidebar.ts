@@ -354,6 +354,14 @@ export function holdsProject(ws: Workspace, sections: Section[], projectId: stri
   return workspaceSections(ws, sections).some((s) => s.project_ids.includes(projectId));
 }
 
+/** A section's project filter after ticking or unticking `id` among `all`
+ * its projects: an empty filter is every project (X32). */
+export function filterAfterToggle(filter: string[], all: string[], id: string): string[] {
+  const cur = filter.length ? filter : all;
+  const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+  return next.length === all.length ? [] : next;
+}
+
 /** `5512` → `5.5k`, as in Conductor's sidebar. */
 export function compact(n: number): string {
   if (n < 1000) return String(n);

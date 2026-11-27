@@ -8,7 +8,7 @@ import { workspaceOpenIn, type OpenTarget } from "../lib/openIn";
 import { menuTop } from "../lib/menuPlace";
 import { copyOffers } from "../lib/centralCopies";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, moveUnderTargets, nestedIn, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, filterAfterToggle, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, moveUnderTargets, nestedIn, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, markUnread, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -674,11 +674,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
-  const toggleFilter = (id: string) => {
-    const cur = v.filter.length ? v.filter : secProjects.map((p) => p.id);
-    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    setView({ filter: next.length === secProjects.length ? [] : next });
-  };
+  const toggleFilter = (id: string) => setView({ filter: filterAfterToggle(v.filter, secProjects.map((p) => p.id), id) });
   const items: MenuItem[] = [
     {
       kind: "submenu",
