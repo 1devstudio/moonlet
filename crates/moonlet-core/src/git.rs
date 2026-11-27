@@ -1298,7 +1298,7 @@ const PR_ITEM_MAX: usize = 1000;
 
 /// Whose words a PR's attachment sends: people with a role in the
 /// repository. A CONTRIBUTOR is anyone with one merged PR, so not them.
-const TRUSTED: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
+pub(crate) const TRUSTED: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 /// `s` trimmed and cut to `max` characters, the ellipsis included.
 fn shorten(s: &str, max: usize) -> String {
@@ -1407,6 +1407,13 @@ pub fn pr_context_text(view: &serde_json::Value, lines: &serde_json::Value) -> S
 /// A PR's description, reviews and comments for its attachment (X54).
 /// Without its line comments (an old `gh`, a fork) the rest still comes.
 pub async fn gh_pr_context(repo: &Path, number: u64) -> Result<String> {
+    let (view, lines) = pr_reviews(repo, number).await?;
+    Ok(pr_context_text(&view, &lines))
+}
+
+/// PR `number`'s author, description, reviews and comments (`gh pr view`),
+/// and its line comments (`gh api`, `null` when they cannot be read).
+pub async fn pr_reviews(repo: &Path, number: u64) -> Result<(serde_json::Value, serde_json::Value)> {
     let n = number.to_string();
     let view = gh(repo, &["pr", "view", &n, "--json", "author,body,reviews,comments"]).await?;
     let view: serde_json::Value = serde_json::from_slice(&view)?;
@@ -1418,7 +1425,7 @@ pub async fn gh_pr_context(repo: &Path, number: u64) -> Result<String> {
             serde_json::Value::Null
         }
     };
-    Ok(pr_context_text(&view, &lines))
+    Ok((view, lines))
 }
 
 /// An issue or PR body, at most 4000 characters.
@@ -1628,7 +1635,7 @@ pub async fn pr_list_head(path: &Path, branch: &str) -> Result<serde_json::Value
 }
 
 /// Fields `parse_pr` reads, plus `createdAt` for `session_pr`.
-const PR_FIELDS: &str = "number,url,state,title,isDraft,reviewDecision,statusCheckRollup,headRefOid,createdAt";
+const PR_FIELDS: &str = "number,url,state,title,isDraft,reviewDecision,statusCheckRollup,headRefOid,createdAt,updatedAt";
 
 /// Maps one PR object from `gh pr view` or `gh pr list`.
 fn parse_pr(v: &serde_json::Value) -> PullRequest {
@@ -1650,6 +1657,7 @@ fn parse_pr(v: &serde_json::Value) -> PullRequest {
             .map(String::from),
         draft: v["isDraft"].as_bool().unwrap_or(false),
         head_oid: v["headRefOid"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        updated_at: v["updatedAt"].as_str().filter(|s| !s.is_empty()).map(String::from),
     }
 }
 

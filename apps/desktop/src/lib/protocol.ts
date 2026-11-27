@@ -466,6 +466,8 @@ export interface GitSettings {
   archive_on_merge: boolean;
   /** With `archive_on_merge`, also once its PR is closed unmerged (X116). */
   archive_on_close: boolean;
+  /** Send failed checks and reviews of PRs opened from now on to the session's Claude (X117). */
+  auto_fix_prs: boolean;
 }
 
 export interface ProjectConfig {
@@ -805,6 +807,22 @@ export interface Session {
   parent?: string | null;
   /** What archiving it when its PR merged did, or why it waits (X116). */
   auto_archive?: AutoArchive | null;
+  /** Whether auto-fix covers its PR, and how it goes (X117). */
+  auto_fix?: AutoFix | null;
+}
+
+/** Auto-fix of a session's PR (X117). */
+export interface AutoFix {
+  pr: number;
+  on: boolean;
+  /** Failed-checks messages since its checks last all passed. */
+  tries: number;
+  /** Stopped after too many tries. */
+  stopped: boolean;
+  /** Why it cannot run, such as no Claude chat in the session. */
+  note?: string;
+  /** What it last sent (`checks` or `review`) and when (ms). */
+  last?: [string, number] | null;
 }
 
 /** A session's archive when its PR merged or closed (X116). */
@@ -1696,6 +1714,7 @@ export const M = {
   prStatus: "gh.pr_status",
   prStack: "gh.pr_stack",
   prKnown: "gh.pr_known",
+  ghAutoFix: "gh.auto_fix",
   fsList: "fs.list",
   fsFiles: "fs.files",
   fsRead: "fs.read",

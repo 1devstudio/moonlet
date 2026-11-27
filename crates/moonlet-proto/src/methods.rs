@@ -323,6 +323,9 @@ pub const GH_PR_STACK: &str = "gh.pr_stack";
 /// `{}` → `{ [session id]: { pr, checked_at } }`: each live session's PR as
 /// the daemon last heard it from GitHub, without asking again (X108).
 pub const GH_PR_KNOWN: &str = "gh.pr_known";
+/// `{ session, on }` → the session's `AutoFix`: turns auto-fix of its PR
+/// on or off (X117).
+pub const GH_AUTO_FIX: &str = "gh.auto_fix";
 
 // Files
 pub const FS_LIST: &str = "fs.list";
@@ -2353,6 +2356,13 @@ pub struct GhTaskUpdate {
     pub close: bool,
     #[serde(default)]
     pub reopen: bool,
+}
+
+/// `gh.auto_fix`'s parameters (X117).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoFixSet {
+    pub session: String,
+    pub on: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

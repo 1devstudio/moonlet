@@ -233,6 +233,18 @@ export function GitPage() {
           <SwitchRow setting="git-draft-prs" label="Open pull requests as drafts" hint="Create pull request's Draft checkbox starts this way." on={g.draft_prs} disabled={tooOld} onChange={(on) => set({ draft_prs: on })} />
         </Card>
       </Section>
+      <Section title="Pull requests">
+        <Card>
+          <SwitchRow
+            setting="git-auto-fix"
+            label="Auto-fix pull requests"
+            hint="Claude fixes failing checks and answers review comments on your pull requests opened from now on. It pushes and may post as you."
+            on={g.auto_fix_prs}
+            disabled={tooOld}
+            onChange={(on) => set({ auto_fix_prs: on })}
+          />
+        </Card>
+      </Section>
       <Section title="Keeping base branches current">
         <Card>
           <Row setting="git-fetch" label="Fetch from origin" labelId={fetchId} hint="For the ↓ chip next to a project. Also after a session's PR merges.">

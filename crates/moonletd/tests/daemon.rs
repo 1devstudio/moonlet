@@ -2163,6 +2163,99 @@ async fn a_merged_session_with_work_only_here_waits_until_the_work_is_gone() {
     assert!(after.archived, "{after:?}");
 }
 
+/// A daemon whose terminals find `gh` and `claude` as the scripts given,
+/// with its own PR checks (X116, X117) every `unit_ms`.
+async fn fake_gh_and_claude_daemon(gh: &str, claude: &str, unit_ms: u64) -> HomeDaemon {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    write_script(&bin.join("gh"), gh);
+    write_script(&bin.join("claude"), claude);
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let log = bin.join("gh.log").display().to_string();
+    let env = vec![("GH_LOG".into(), log), ("MOONLET_TEST_PR_WATCH_MS".into(), unit_ms.to_string())];
+    HomeDaemon::start_with(home, Some(&path), env).await
+}
+
+/// A fake `gh` for auto-fix (X117): the user is sam-rivera, whose open
+/// PR #12 failed its `test` check on abc1234. Its reviews are the file
+/// `$GH_LOG.view` (none while there is none), and `$GH_LOG.updated` is its
+/// `updatedAt`.
+const GH_FAILING_PR: &str = r#"#!/bin/sh
+echo "$@" >> "$GH_LOG"
+case "$*" in
+  "api user --jq .login") echo sam-rivera; exit 0 ;;
+  *author,body,reviews,comments*) cat "$GH_LOG.view" 2>/dev/null || echo '{"author":{"login":"sam-rivera"},"body":"","reviews":[],"comments":[]}'; exit 0 ;;
+  "api repos/"*) echo '[]'; exit 0 ;;
+esac
+updated=2099-01-01T00:00:00Z; [ -f "$GH_LOG.updated" ] && updated=$(cat "$GH_LOG.updated")
+pr='{"number":12,"url":"https://github.com/acme/web/pull/12","state":"OPEN","title":"Gift cards","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/web/actions/runs/1/job/2"}],"headRefOid":"abc1234def","createdAt":"2099-01-01T00:00:00Z","updatedAt":"'$updated'"}'
+case "$1 $2" in
+  "pr list") echo "[$pr]" ;;
+  "pr view") echo "$pr" ;;
+  *) exit 1 ;;
+esac
+"#;
+
+/// X117: with auto-fix on, a PR opened afterwards whose checks failed puts
+/// one Auto-fix message in the session's Claude chat, once per commit; a
+/// teammate's review comes as a second message.
+#[tokio::test]
+async fn auto_fix_sends_failed_checks_once_and_then_a_review_to_the_sessions_claude() {
+    let d = fake_gh_and_claude_daemon(GH_FAILING_PR, FAKE_CLAUDE, 100).await;
+    let mut c = d.client().await;
+    let _: serde_json::Value = c.request(methods::GIT_SET_SETTINGS, serde_json::json!({"auto_fix_prs": true})).await.unwrap();
+    let p = home_project(&d, &mut c).await;
+    let s: moonlet_proto::types::Session =
+        c.request(methods::SESSION_CREATE, serde_json::json!({"project_id": p.id, "name": "Gift cards", "agent": "claude"})).await.unwrap();
+    let user = {
+        let p = std::path::Path::new(&s.path).join("claude-user");
+        move || std::fs::read_to_string(&p).unwrap_or_default()
+    };
+
+    let sent = until_contains(user.clone(), "[Auto-fix] Checks failed on #12 (abc1234): test.").await;
+    assert!(sent.contains("- test: https://github.com/acme/web/actions/runs/1/job/2"), "{sent}");
+    let on = session_once(&mut c, &s.id, |s| s.auto_fix.is_some()).await;
+    assert_eq!((on.auto_fix.as_ref().map(|a| (a.pr, a.on, a.tries))), Some((12, true, 1)));
+
+    std::fs::write(
+        d.home.path().join("bin/gh.log.view"),
+        r#"{"author":{"login":"sam-rivera"},"body":"","comments":[{"id":"IC1","author":{"login":"jo-park"},"authorAssociation":"MEMBER","body":"Rename fetchAll to fetchPage.","isMinimized":false}],"reviews":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(d.home.path().join("bin/gh.log.updated"), "2099-01-02T00:00:00Z").unwrap();
+    let both = until_contains(user.clone(), "- @jo-park: Rename fetchAll to fetchPage.").await;
+    assert!(both.contains("[Auto-fix] New review on #12:"), "{both}");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(user().matches("Checks failed on #12").count(), 1, "one message per commit");
+    assert_eq!(user().matches("New review on #12").count(), 1, "each comment once");
+}
+
+/// X117: a PR open before auto-fix was turned on is not covered, and
+/// nothing goes to its Claude.
+#[tokio::test]
+async fn auto_fix_leaves_a_pr_seen_before_it_was_turned_on() {
+    let d = fake_gh_and_claude_daemon(GH_FAILING_PR, FAKE_CLAUDE, 100).await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s: moonlet_proto::types::Session =
+        c.request(methods::SESSION_CREATE, serde_json::json!({"project_id": p.id, "name": "Gift cards", "agent": "claude"})).await.unwrap();
+    let _: serde_json::Value = c.request(methods::GH_PR_STATUS, serde_json::json!({"path": s.path})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _: serde_json::Value = c.request(methods::GIT_SET_SETTINGS, serde_json::json!({"auto_fix_prs": true})).await.unwrap();
+
+    let off = session_once(&mut c, &s.id, |s| s.auto_fix.is_some()).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    assert_eq!(off.auto_fix.as_ref().map(|a| a.on), Some(false), "{off:?}");
+    let user = std::fs::read_to_string(std::path::Path::new(&s.path).join("claude-user")).unwrap_or_default();
+    assert!(!user.contains("[Auto-fix]"), "{user}");
+}
+
 /// The `gh pr …` and `gh api …` lines the fake `gh` of
 /// [`fake_gh_home_daemon`] was run with.
 fn gh_pr_calls(d: &HomeDaemon) -> Vec<String> {

@@ -5,6 +5,7 @@ import { ArtifactChipRow, AtMenu, SentArtifactsView, currentArtifactRows, loadAr
 import { atKey, atRows, atSections, nextAtTab, withoutToken, type AtRow, type AtTab } from "../lib/atPicker";
 import { useDesign } from "../lib/designStore";
 import type { ArtifactRow } from "../lib/artifacts";
+import { autoFixMessage } from "../lib/autoFix";
 import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -512,14 +513,23 @@ function ErrorItem({ item }: { item: ChatItem }) {
 
 export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
   switch (item.kind) {
-    case "user":
+    case "user": {
+      // Sent by auto-fix, not the user (X117).
+      const fix = autoFixMessage(item.text);
       return (
-        <div className="flex justify-end py-1">
+        <div className="flex flex-col items-end gap-1 py-1">
+          {fix !== null && (
+            <span className="flex items-center gap-1 ui-text-11.5 text-muted">
+              <Wrench size={11} />
+              Auto-fix
+            </span>
+          )}
           <div className="min-w-0 max-w-[85%] break-words rounded-2xl rounded-br-md bg-raised px-3.5 py-2">
-            <Markdown text={item.text} kind="user" />
+            <Markdown text={fix ?? item.text} kind="user" />
           </div>
         </div>
       );
+    }
     case "assistant":
       return item.text ? (
         <div className="px-2 py-1">

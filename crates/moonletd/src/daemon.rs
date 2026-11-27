@@ -235,6 +235,12 @@ pub struct Daemon {
     /// Sessions whose archive when their PR merged is being looked at
     /// (X116), so the daemon's check and the app's poll do not race.
     auto_archiving: Mutex<std::collections::HashSet<String>>,
+    /// What auto-fix keeps about each session's PR (X117).
+    autofix: moonlet_core::autofix::Store,
+    /// Sessions whose auto-fix is being looked at (X117).
+    auto_fixing: Mutex<std::collections::HashSet<String>>,
+    /// The `gh` login, read once (X117): its own comments are never sent.
+    gh_viewer: tokio::sync::Mutex<Option<String>>,
     /// Board snapshots the app shares, and the phone's requests to it (X76).
     task_snapshots: Arc<TaskSnapshots>,
     task_relay: TaskRelay,
@@ -1200,6 +1206,9 @@ impl Daemon {
             relay,
             jobs,
             auto_archiving: Default::default(),
+            autofix: moonlet_core::autofix::Store::load(moonlet_core::paths::home().join("autofix.json")),
+            auto_fixing: Default::default(),
+            gh_viewer: Default::default(),
             clones,
             terminals,
             chats,
@@ -4823,7 +4832,12 @@ impl Daemon {
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(unit));
             loop {
                 tick.tick().await;
-                if !git_settings::load(&git_settings::path()).archive_on_merge {
+                // Auto-fix forgets archived and deleted sessions (X117).
+                let live = d.sessions.list_sessions().into_iter().filter(|s| !s.archived).map(|s| s.id).collect();
+                d.autofix.keep_only(&live);
+                let settings = git_settings::load(&git_settings::path());
+                let fix_any = settings.auto_fix_prs || d.autofix.any_on();
+                if !settings.archive_on_merge && !fix_any {
                     continue;
                 }
                 let known = d.sessions.known_prs();
@@ -4838,6 +4852,8 @@ impl Daemon {
                         let pr = saved.and_then(|k| k.pr.clone());
                         let every = match pr.as_ref().map(|p| p.state.as_str()) {
                             Some("merged") => None,
+                            // Auto-fix answers within minutes (X117).
+                            Some("open") if fix_any => Some(2 * unit),
                             Some("open") => Some(5 * unit),
                             _ => Some(15 * unit),
                         };
@@ -4867,7 +4883,8 @@ impl Daemon {
                             } else {
                                 saved
                             };
-                            d.check_auto_archive(s, pr).await;
+                            d.check_auto_archive(s.clone(), pr.clone()).await;
+                            d.check_auto_fix(s, pr).await;
                         }
                     });
                 }
@@ -4902,6 +4919,121 @@ impl Daemon {
             return Some("archives when its heavy command ends");
         }
         None
+    }
+
+    /// Sends session `s`'s Claude what its open PR `pr` needs, if auto-fix
+    /// covers it: failed checks once per head commit, and new reviews and
+    /// comments from people with a role in the repository, gathered for
+    /// two minutes (X117). Records how it goes on the session.
+    async fn check_auto_fix(&self, s: moonlet_proto::types::Session, pr: Option<moonlet_proto::types::PullRequest>) {
+        let Some(pr) = pr.filter(|p| p.state == "open") else { return };
+        if s.archived || s.owner.is_some() || !self.auto_fixing.lock().unwrap().insert(s.id.clone()) {
+            return;
+        }
+        self.auto_fix_step(&s, &pr).await;
+        self.auto_fixing.lock().unwrap().remove(&s.id);
+    }
+
+    async fn auto_fix_step(&self, s: &moonlet_proto::types::Session, pr: &moonlet_proto::types::PullRequest) {
+        use moonlet_core::autofix::{ChecksStep, Record, checks_step, covered, review_message};
+        let unit = std::env::var("MOONLET_TEST_PR_WATCH_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000u64);
+        let now = now_ms();
+        let mut rec = self
+            .autofix
+            .update(&s.id, |r| {
+                if r.as_ref().is_none_or(|r| r.pr != pr.number) {
+                    *r = Some(Record { pr: pr.number, first_seen: now, ..Record::default() });
+                }
+            })
+            .expect("just set");
+        let settings = git_settings::load(&git_settings::path());
+        let show = |rec: &Record, on: bool, note: &str, last: Option<(String, u64)>| moonlet_proto::types::AutoFix {
+            pr: rec.pr,
+            on,
+            tries: rec.tries,
+            stopped: rec.stopped,
+            note: note.into(),
+            last: last.or_else(|| s.auto_fix.as_ref().filter(|a| a.pr == rec.pr).and_then(|a| a.last.clone())),
+        };
+        if !covered(&rec, settings.auto_fix_prs, self.autofix.since()) {
+            let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, false, "", None)));
+            return;
+        }
+        let dir = Path::new(&s.path);
+        // Its reviews, read when the PR changed, or to send what waits.
+        let reviews = if rec.updated_at != pr.updated_at || rec.new_since.is_some() || rec.author.is_none() {
+            match git::pr_reviews(dir, pr.number).await {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::debug!(session = %s.id, "cannot read the PR's reviews: {e:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let viewer = {
+            let mut v = self.gh_viewer.lock().await;
+            if v.is_none() {
+                *v = git::gh_whoami().await.ok().filter(|l| !l.is_empty());
+            }
+            v.clone()
+        };
+        if let Some((view, _)) = &reviews {
+            rec.author = view["author"]["login"].as_str().map(String::from);
+        }
+        // Only the user's own PRs: a fork's PR can share the branch's name.
+        let Some(viewer) = viewer.filter(|v| rec.author.as_deref() == Some(v.as_str())) else {
+            self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
+            let note = if rec.author.is_some() { "Only your own pull requests are auto-fixed" } else { "" };
+            let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, note, None)));
+            return;
+        };
+        let Some(chat) = self.session_claude_chat(&s.id) else {
+            self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
+            let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, "Needs a Claude chat in this session", None)));
+            return;
+        };
+        let mut last = None;
+        match checks_step(&mut rec, pr) {
+            ChecksStep::Send(text) => match self.chats.send(chat, &text, &[]) {
+                Ok(()) => last = Some(("checks".to_string(), now)),
+                Err(e) => tracing::warn!(session = %s.id, "auto-fix could not send: {e:#}"),
+            },
+            ChecksStep::Stop | ChecksStep::Nothing => {}
+        }
+        if let Some((view, lines)) = &reviews {
+            match review_message(pr.number, view, lines, &rec.sent, &viewer) {
+                // Those arriving together go as one message.
+                Some(_) if rec.new_since.is_none() => rec.new_since = Some(now),
+                Some((text, ids)) if now.saturating_sub(rec.new_since.unwrap_or(now)) >= 2 * unit => match self.chats.send(chat, &text, &[]) {
+                    Ok(()) => {
+                        rec.sent.extend(ids);
+                        rec.new_since = None;
+                        rec.updated_at = pr.updated_at.clone();
+                        last = Some(("review".to_string(), now));
+                    }
+                    Err(e) => tracing::warn!(session = %s.id, "auto-fix could not send: {e:#}"),
+                },
+                Some(_) => {}
+                None => {
+                    rec.new_since = None;
+                    rec.updated_at = pr.updated_at.clone();
+                }
+            }
+        }
+        self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
+        let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, "", last)));
+    }
+
+    /// The Claude chat of session `id` that last worked (X117).
+    fn session_claude_chat(&self, id: &str) -> Option<u32> {
+        self.terminals
+            .list()
+            .into_iter()
+            .filter(|t| t.chat && t.session_id.as_deref() == Some(id) && t.agent.as_deref() == Some("claude") && t.exit.is_none())
+            .max_by_key(|t| t.last_output_at)
+            .map(|t| t.id)
     }
 
     /// Whether `pr` ends at the last commit of session `s`'s branch.
@@ -5422,6 +5554,7 @@ impl Daemon {
                 pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                 parent: text("parent"),
                 auto_archive: None,
+                auto_fix: None,
             })
             .map_err(internal)?;
         if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
@@ -5768,6 +5901,7 @@ impl Daemon {
                 pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                 parent: text("parent"),
                 auto_archive: None,
+                auto_fix: None,
             })
             .map_err(internal)
     }
@@ -8014,6 +8148,7 @@ impl Daemon {
                     pinned_top: r.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                     parent: text("parent"),
                 auto_archive: None,
+                auto_fix: None,
                     owner: Some({
                         // The central host is never linked here as a worker:
                         // this Mac's link to it says.
@@ -8586,6 +8721,8 @@ impl Daemon {
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),
             m::GIT_SET_SETTINGS => {
                 let saved = git_settings::update(&git_settings::path(), p).map_err(internal)?;
+                // PRs first seen from now on are auto-fixed (X117).
+                self.autofix.setting(saved.auto_fix_prs, now_ms());
                 self.terminals.emit(Message::event(m::EV_GIT_SETTINGS_CHANGED, &saved));
                 ok(saved)
             }
@@ -8665,7 +8802,10 @@ impl Daemon {
                 if let Some(s) = w.list_sessions().into_iter().find(|s| !s.archived && Path::new(&s.path) == path(&r.path)) {
                     let d = self.clone();
                     let found = pr.clone();
-                    tokio::spawn(async move { d.check_auto_archive(s, found).await });
+                    tokio::spawn(async move {
+                        d.check_auto_archive(s.clone(), found.clone()).await;
+                        d.check_auto_fix(s, found).await;
+                    });
                 }
                 ok(pr)
             }
@@ -8676,6 +8816,28 @@ impl Daemon {
                     .map_err(internal)?)
             }
             m::GH_PR_KNOWN => ok(w.known_prs()),
+            m::GH_AUTO_FIX => {
+                let r: m::AutoFixSet = params(p)?;
+                let s = w.session(&r.session).map_err(internal)?;
+                let pr = w.pr_status(Path::new(&s.path)).await.map_err(internal)?;
+                let Some(pr) = pr.filter(|pr| pr.state == "open") else {
+                    return Err(RpcError::new("failed", "the session has no open pull request"));
+                };
+                self.autofix.update(&s.id, |rec| {
+                    let r0 = rec.get_or_insert_with(|| moonlet_core::autofix::Record { pr: pr.number, first_seen: now_ms(), ..Default::default() });
+                    if r0.pr != pr.number {
+                        *r0 = moonlet_core::autofix::Record { pr: pr.number, first_seen: now_ms(), ..Default::default() };
+                    }
+                    r0.on = Some(r.on);
+                    if r.on {
+                        // Checked again: a new count.
+                        r0.stopped = false;
+                        r0.tries = 0;
+                    }
+                });
+                self.check_auto_fix(s.clone(), Some(pr)).await;
+                ok(w.session(&s.id).map_err(internal)?.auto_fix)
+            }
             m::FS_LIST => {
                 let r: m::FsList = params(p)?;
                 ok(blocking(move || fs::list(&r.path, r.show_ignored)).await?)
