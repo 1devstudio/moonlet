@@ -9,7 +9,8 @@ import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget, firstCreateColumn } from "../../lib/newIssue";
 import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
-import { enterOpensFirst, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
+import { enterOpensFirst, sessionCard, stateOptions } from "../../lib/taskDetails";
+import { TaskGlyph } from "../SessionRowView";
 import { type BoardWorktree, type Card, type CardRow, isDimmed, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
@@ -80,20 +81,6 @@ const TONE: Record<CardRow["meta"]["tone"], string> = {
   muted: "text-muted",
   faint: "text-faint",
 };
-
-/** Task state by shape: ring Todo, half In Progress, three quarters In Review, filled check Done. */
-export function TaskGlyph({ column, size = 14, dashed = false }: { column: Column; size?: number; dashed?: boolean }) {
-  const shape = glyphShape(column);
-  const done = shape === "check";
-  const pie = shape === "half" ? "M7 7 L7 4 A3 3 0 0 1 7 10 Z" : shape === "three-quarters" ? "M7 7 L7 4 A3 3 0 1 1 4 7 Z" : "";
-  return (
-    <svg viewBox="0 0 14 14" width={size} height={size} className={cx("shrink-0", done ? "text-merged" : column === "todo" ? "text-muted" : "text-fg")} aria-hidden="true">
-      <circle cx="7" cy="7" r="5.5" fill={done ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeDasharray={dashed ? "2 2" : undefined} />
-      {pie && <path d={pie} fill="currentColor" />}
-      {done && <path d="M4.6 7.1 L6.3 8.8 L9.4 5.4" fill="none" stroke="var(--color-bg)" strokeWidth="1.5" />}
-    </svg>
-  );
-}
 
 /** Keeps the shown workspace's tasks fresh while Tasks mode is open: now,
  *  every minute, and when the window comes to the front (at most every 15 s). */

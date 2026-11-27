@@ -48,7 +48,7 @@ import { trackerName, trackerOf } from "../../lib/tasks";
 import { type BoardPreview, GITHUB, openBoard, previewBoard, previewFailed, removeBoard, saveTrackersConfig, trackersConfig, useTasks, workspaceProjects } from "../../lib/tasksStore";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { BoardMark, Button, cx, IconButton, inputCls, selectCls } from "../ui";
-import { TaskGlyph } from "./TasksMode";
+import { TaskGlyph } from "../SessionRowView";
 
 type Build = "board" | "jql" | "project" | "repo";
 

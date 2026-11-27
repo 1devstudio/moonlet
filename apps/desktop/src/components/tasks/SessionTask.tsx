@@ -16,7 +16,8 @@ import { ensureTasks, linkTask, lookUpPasted, originRepoOf, placedTasks, setKeep
 import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph, TRAFFIC_LIGHTS } from "../ui";
-import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
+import { StateMenu, startSession, useWorkspaceBoard } from "./TasksMode";
+import { TaskGlyph } from "../SessionRowView";
 import { TaskComments } from "./TaskComments";
 
 /** The workspace whose boards hold a session's task: on another member of its account when the boards are there (X68). */

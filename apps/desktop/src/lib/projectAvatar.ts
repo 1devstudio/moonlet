@@ -21,3 +21,11 @@ export function avatarUrl(remote: string | null): string | null {
   const owner = remote ? githubOwner(remote.trim()) : null;
   return owner && OWNER.test(owner) ? `https://github.com/${owner}.png?size=64` : null;
 }
+
+/** The avatar of a project's GitHub owner from its identity's normalised
+ * origin (`github.com/acme/storefront`), on GitHub's avatar host, which the
+ * phone's CSP allows (X118). */
+export function identityAvatar(origin: string | null): string | null {
+  const [host, owner] = origin?.split("/") ?? [];
+  return host === "github.com" && owner && OWNER.test(owner) ? `https://avatars.githubusercontent.com/${owner}?s=64` : null;
+}
