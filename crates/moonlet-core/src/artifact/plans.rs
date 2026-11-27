@@ -887,7 +887,7 @@ mod tests {
             .record(&proposal("toolu_1", "# Plan\n\nv1", "denied", 1_000))
             .unwrap();
         plans
-            .record(&proposal("toolu_2", "# Plan\n\nv2", "ok", 2_000))
+            .record(&proposal("toolu_2", "# Plan\n\nv2", "approved", 2_000))
             .unwrap();
 
         let copy = plans
