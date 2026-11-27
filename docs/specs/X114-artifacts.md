@@ -60,8 +60,8 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### The @ picker (entry 4)
 
-- [ ] Typing `@` in the chat input opens a picker that matches what follows, fuzzily, in three sections, **Plans · Designs · Files**, at most 5 each, with **Show all** on a section with more. Tab narrows to the next section, ⇧Tab goes back; ↑↓ move; ↵ picks; Esc closes and keeps the text.
-- [ ] Files are the session's worktree files, as ⌘P finds them (X96), with their git status. Picking a file inserts `@<path>`; picking an artifact replaces the typed `@…` with its chip.
+- [ ] Typing `@` in a session's chat input opens a picker that matches what follows, fuzzily, in three sections, **Plans · Designs · Files**, at most 5 each, with **Show all** on a section with more, and the tabs' counts; a section Tab narrowed to shows at most 200 rows. Tab narrows to the next section, ⇧Tab goes back; ↑↓ move; ↵ picks; Esc closes and keeps the text, even when nothing matches. Plans and designs listed while it is open show at once. It extends X30's `@` file list; a chat outside a session keeps that list. (`lib/atPicker.test.ts` lists plans, designs and files that match, at most five of each, with where each lives, narrowed to one section, lists all of its matches, leaves out a section with nothing found, and lists everything for a bare @, counts each section's matches whichever section is shown, for the tabs, shows at most 200 rows of a section narrowed to, and counts them all, Tab narrows, Enter picks a row, Esc closes, even with no row, is the rows in the order shown, goes All, Plans, Designs, Files and round again; `e2e/specs/artifacts.e2e.ts` @ lists the plan under Plans and the session's files under Files; Tab narrows, Enter picks)
+- [ ] Files are the session's worktree files, ranked as ⌘P ranks them (X96). Picking a file inserts `@<path>`; picking an artifact replaces the typed `@…` with its chip. (Not yet: each file's git status.) (`lib/atPicker.test.ts` takes the typed @word out, also past the caret, and keeps one space; `e2e/specs/artifacts.e2e.ts` @ lists the plan under Plans and the session's files under Files; Tab narrows, Enter picks)
 
 ### Start a session from an artifact (entry 5)
 
@@ -90,7 +90,7 @@ The design's pages are the reference.
 - **Chat input** (`attach`, `at-picker`, `at-files`): chips above the text; the `+` menu's **Attach artifact** row opens a search panel beside it; the `@` picker sits above the input.
 - **Composer** (`start-session`): the artifact as the chip after the project, attachment rows "Plan, live and read only · <name> · v<n>".
 - **Copy or move** (`copy-move`): Copy/Move segmented control, the workspaces as a radio list, the current one disabled.
-- **Transcript** (`transcript`): a sent message shows its chips without ×; the changed and unreachable lines show above the message they came with.
+- **Transcript** (`transcript`): a sent message shows its chips without ×; the changed, edited-by-hand and deleted lines show above the message they came with, and the reference lines themselves are left out of what it shows; a note line is one that names a folder (`lib/artifacts.test.ts` reads the artifacts a message refers to and the notes before it, then what the user typed, reads a plan edited by hand, and leaves a message with no artifact lines alone, reads the daemon's notes, a blank line, then the artifact lines, as the agent gets them, takes a note only when it names a folder; `e2e/specs/artifacts.e2e.ts` attaches the plan to another session, whose next message refers to it live).
 
 ## Protocol and RPCs
 

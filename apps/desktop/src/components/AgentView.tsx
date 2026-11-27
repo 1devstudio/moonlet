@@ -1,7 +1,10 @@
 import { sendOrBring } from "../lib/followStore";
 import { addChip, attachChips, chipsOf, useArtifacts } from "../lib/artifactStore";
-import { planArtifactId, withArtifactLines } from "../lib/artifacts";
-import { ArtifactChipRow } from "./ArtifactChips";
+import { planArtifactId, sentArtifacts, withArtifactLines } from "../lib/artifacts";
+import { ArtifactChipRow, AtMenu, SentArtifactsView, currentArtifactRows, loadArtifacts } from "./ArtifactChips";
+import { atKey, atRows, atSections, nextAtTab, withoutToken, type AtRow, type AtTab } from "../lib/atPicker";
+import { useDesign } from "../lib/designStore";
+import type { ArtifactRow } from "../lib/artifacts";
 import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -954,6 +957,7 @@ function ChatEditor({
   layout,
   designSlash = null,
   refuse = null,
+  onPickArtifact,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -992,6 +996,9 @@ function ChatEditor({
   /** Why nothing can be sent now, said instead of sending, keeping the
    *  text: a copy whose member is away (X88). */
   refuse?: string | null;
+  /** In a session's chat: @ lists plans and designs too, and picking one
+   *  adds it to the next message (X114). */
+  onPickArtifact?: (row: ArtifactRow) => void;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -1051,14 +1058,31 @@ function ChatEditor({
   useEffect(() => {
     if (token?.kind === "@" && files === null) void projectFiles(host, root).then(setFiles);
   }, [token?.kind, files, host, root]);
+  // The @ picker's plans and designs, listed afresh as an @ starts (X114).
+  const [atTab, setAtTab] = useState<AtTab>("all");
+  const atOn = !!onPickArtifact && token?.kind === "@" && dismissed !== token.start;
+  const plansNow = useArtifacts((s) => (atOn ? s.plans : null));
+  const designsNow = useDesign((s) => (atOn ? s.designs : null));
+  const sessionDesignsNow = useDesign((s) => (atOn ? s.sessionDesigns : null));
+  useEffect(() => {
+    if (atOn) loadArtifacts();
+    else setAtTab("all");
+  }, [atOn]);
+  const at = useMemo(() => {
+    if (!atOn || !token) return null;
+    const input = { files: files ?? [], artifacts: currentArtifactRows() };
+    const { sections, totals } = atSections(input, token.query, atTab);
+    return { sections, rows: atRows(sections), totals };
+    // plansNow, designsNow: a listing that lands shows at once.
+  }, [atOn, token?.query, files, atTab, plansNow, designsNow, sessionDesignsNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const menu = useMemo((): { rows: SlashRow[]; footer: string | null } => {
     if (!token || dismissed === token.start) return { rows: [], footer: null };
     if (token.kind === "/") return slashMenu(commands, text, token, designSlash);
     return { rows: fuzzyFilter(files ?? [], token.query, 8).map((f) => ({ value: "@" + f, hint: null })), footer: null };
   }, [token, dismissed, commands, files, text, designSlash]);
-  const options = menu.rows;
-  useEffect(() => setSel(0), [options.length, token?.query]);
+  const options = at ? at.rows.map((r) => ({ value: r.value, hint: null })) : menu.rows;
+  useEffect(() => setSel(0), [options.length, token?.query, atTab]);
 
   const ghost = !options.length && walk === null && !text.includes("\n") ? suggest(history, text) : null;
 
@@ -1088,6 +1112,14 @@ function ChatEditor({
     const r = withCompletion(text, caret, token, choice);
     set(r.text, r.caret);
   };
+  // A file goes in as @path; a plan or design leaves the text and goes as a chip (X114).
+  const pickAt = (row: AtRow) => {
+    if (!token) return;
+    if (row.kind === "file") return accept("@" + row.value);
+    const r = withoutToken(text, caret, token);
+    set(r.text, r.caret);
+    if (row.artifact) onPickArtifact?.(row.artifact);
+  };
 
   // Something to send: the send key lifts, and send goes ahead.
   const canSend = text.trim() !== "" || images.length > 0;
@@ -1109,6 +1141,15 @@ function ChatEditor({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     const el = e.currentTarget;
+    const atDoes = at ? atKey(e.key, e.shiftKey, at.rows.length) : null;
+    if (atDoes) {
+      e.preventDefault();
+      if (atDoes === "next" || atDoes === "back") setAtTab((t) => nextAtTab(t, atDoes === "back"));
+      else if (atDoes === "pick") pickAt(at!.rows[Math.min(sel, at!.rows.length - 1)]);
+      // Closed, rows or none: Esc never goes on to stop the agent.
+      else setDismissed(token?.start ?? null);
+      return;
+    }
     if (options.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1177,7 +1218,12 @@ function ChatEditor({
 
   return (
     <div className="relative">
-      {options.length > 0 && (
+      {at && (
+        <div className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-[460px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
+          <AtMenu sections={at.sections} totals={at.totals} tab={atTab} sel={sel} onPick={pickAt} onTab={setAtTab} />
+        </div>
+      )}
+      {!at && options.length > 0 && (
         <div className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-[520px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
           <CompletionRows rows={options} sel={sel} onPick={accept} />
           {menu.footer && (
@@ -1795,6 +1841,8 @@ export function AgentView({
                   : placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />)),
                 ...renderedBlocks.map((b) => {
                   const own = b.kind === "item" && b.item.kind === "user" ? (userView?.(b.item.text) ?? null) : null;
+                  // A message sent with artifacts shows them as chips before its text (X114).
+                  const sent = !own && b.kind === "item" && b.item.kind === "user" ? sentArtifacts(b.item.text) : null;
                   const view =
                     b.kind === "agents" ? (
                       <LaunchedCard key={b.id} tools={b.tools} rows={agentRowsHere} />
@@ -1802,6 +1850,11 @@ export function AgentView({
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
                     ) : own ? (
                       <Fragment key={b.item.id}>{own}</Fragment>
+                    ) : sent ? (
+                      <Fragment key={b.item.id}>
+                        <SentArtifactsView sent={sent} />
+                        {sent.rest.trim() && <ChatItemView item={{ ...itemShown(b.item, userText, b.item.id === firstUser), text: sent.rest }} cwd={info?.cwd ?? ""} />}
+                      </Fragment>
                     ) : (
                       <ChatItemView key={b.item.id} item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
                     );
@@ -1933,6 +1986,7 @@ export function AgentView({
             </>
           }
           layout={layout}
+          onPickArtifact={wsId ? (r) => addChip(host, wsId, { host: r.host, id: r.info.id, name: r.info.name, kind: r.info.kind }) : undefined}
           designSlash={designSlash}
           refuse={copyRefusal}
         />

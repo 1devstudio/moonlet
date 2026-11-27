@@ -114,6 +114,10 @@ describe("artifacts", () => {
       el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     }, input);
     await expect($(chip)).not.toBeExisting();
+    // The message shows the plan as a chip, without ×, above what was typed; the line itself is the agent's.
+    await expect($(sel.text("Build the results page from the plan"))).toBeDisplayed();
+    await expect($(`//span[contains(@title, "plan-search-products")][.//span[normalize-space()=${JSON.stringify(SESSION)}]]`)).toBeDisplayed();
+    await expect($('//*[contains(text(), "It always holds the latest version")]')).not.toBeExisting();
     const id = `plan:${sessionId}:search-products`;
     await browser.waitUntil(() => rpc<{ id: string; used_by: string[] }[]>(w, "artifact.list", { workspace }).find((a) => a.id === id)?.used_by.includes(readerId) ?? false, {
       timeout: 15_000,
@@ -124,5 +128,48 @@ describe("artifacts", () => {
     const sent = () => rpc<{ items: { kind: string; text: string }[] }>(w, "chat.state", { id: chat }).items.filter((i) => i.kind === "user").at(-1)?.text ?? "";
     await browser.waitUntil(() => sent().endsWith("Build the results page from the plan"), { timeout: 15_000, timeoutMsg: "the message never reached the session's agent" });
     expect(sent()).toMatch(new RegExp(`^Artifact "${SESSION}" \\(plan, live, read only\\): /.+/artifacts/refs/${readerId}/plan-search-products\\. It always holds the latest version; it changes only in its home\\.\\n\\nBuild the results page from the plan$`));
+  });
+
+  it("@ lists the plan under Plans and the session's files under Files; Tab narrows, Enter picks", async () => {
+    const input = '//section[@aria-label="Chat input"]//textarea';
+    const typed = (text: string) =>
+      browser.execute(
+        (xp: string, t: string) => {
+          const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLTextAreaElement;
+          return el.value === t;
+        },
+        input,
+        text,
+      );
+    const key = (k: string, shift = false) =>
+      browser.execute(
+        (xp: string, name: string, sh: boolean) => {
+          const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+          el.dispatchEvent(new KeyboardEvent("keydown", { key: name, shiftKey: sh, bubbles: true }));
+        },
+        input,
+        k,
+        shift,
+      );
+    const picker = '//section[@aria-label="Chat input"]//div[.//span[normalize-space()="↑↓ move"]]';
+    await fill(input, "Match @product");
+    await expect($(`${picker}//div[normalize-space()="Plans"]`)).toBeDisplayed();
+    await expect($(`${picker}//button[.//span[normalize-space()=${JSON.stringify(SESSION)}]]`)).toBeDisplayed();
+    // Tab narrows to Plans; Enter picks the plan: a chip, the @word gone.
+    await key("Tab");
+    await expect($(`${picker}//button[starts-with(normalize-space(), "Plans")]`)).toHaveAttribute("class", expect.stringContaining("bg-hover"));
+    await key("Enter");
+    const chip = `//section[@aria-label="Chat input"]//span[@title=${JSON.stringify(`${SESSION}: a live reference, read only`)}]`;
+    await expect($(chip)).toBeDisplayed();
+    await browser.waitUntil(() => typed("Match "), { timeoutMsg: "the @word stayed in the input" });
+    // Files: the session's own, inserted as @path.
+    await fill(input, "See @READ");
+    await key("Tab", true);
+    await expect($(`${picker}//div[normalize-space()="Files"]`)).toBeDisplayed();
+    await key("Enter");
+    await browser.waitUntil(() => typed("See @README.md "), { timeoutMsg: "the file never went in as @path" });
+    await fill(input, "");
+    await $(`${chip}//button[@title="Remove"]`).click();
+    await expect($(chip)).not.toBeExisting();
   });
 });
