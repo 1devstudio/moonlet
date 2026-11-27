@@ -56,15 +56,15 @@ A daemon started at boot can never read the user's login Keychain, before login 
 ### The Settings switch
 
 - [x] Settings › App › General › Background daemon gets "Start moonletd at system start" under the X56 switch. It is shown only for the login-item mechanism (release and `pnpm bundle` builds) and is disabled, with "Needs Start the moonlet daemon at login", while that switch is off: without the login item nothing takes over at login. An app outside `/Applications` says "Move moonlet to Applications first", as X56 does. Turning the login item off saves `start_daemon_at_boot = false` too, so a daemon started at boot exits without serving (the plist then shows **Remove**). Vitest: "offers start at system start only with the login item on"; the login item: M13.
-- [x] Turning it on saves `start_daemon_at_boot = true` in `~/.moonlet/app.toml`, then asks for the password and writes the plist. A cancelled password, or a write that fails, puts the choice back to off. Tests: `the_boot_choice_is_kept_in_app_toml`; the password: M13.
+- [x] Turning it on saves `start_daemon_at_boot = true` in `~/.moonlet/app.toml`, then asks for the password and writes the plist, and says "moonletd now starts at system start". The app refuses it while the login item is off, as the switch is disabled then. A cancelled password, or a write that fails, puts the choice back to off. Tests: `the_boot_choice_is_kept_in_app_toml`; the password: M13.
 - [x] Turning it off saves `start_daemon_at_boot = false` at once, so a boot daemon started from the plist exits without serving. Then the app asks for the password to delete the plist; it never boots the job out, so no running daemon stops. Cancelled, the plist stays, harmless, and the line offers **Remove**. M13.
 - [x] Its line follows the plist and Login Items (Vitest: "says what starts moonletd at system start"; Rust: `the_boot_state_follows_the_plist`):
-  - the plist is the one the app would write and Login Items allows it: "Starts at system start · moonlet in System Settings › Login Items";
+  - the plist is the one the app would write and Login Items does not report it switched off (`statusForLegacyPlist` other than requires approval): "Starts at system start · moonlet in System Settings › Login Items";
   - switched off in Login Items (`SMAppService.statusForLegacyPlist`): "Turned off in System Settings › Login Items", with **Open Login Items**;
-  - the plist differs, as when the app moved: "Points at another copy of moonlet", with **Repair** (the password again);
+  - the plist differs from the one the app would write now, as when the app moved or a later moonlet writes it differently: "Points at another copy of moonlet", with **Repair** (the password again);
   - choice off but the plist still there: "Not starting at system start", with **Remove**;
   - no plist: no line.
-- [x] Below the line, the app shows what still stops the Mac being useful before login, each only when it applies (Vitest: "warns about Tailscale, FileVault and automatic login only when they apply"):
+- [x] Below the line, while something starts at system start (on, turned off in Login Items, or pointing at another copy), the app shows what still stops the Mac being useful before login, each only when it applies (Vitest: "warns about Tailscale, FileVault and automatic login only when they apply"):
   - Tailscale without `tailscaled` (`/Library/LaunchDaemons/com.tailscale.tailscaled.plist` missing): "Tailscale joins the tailnet only after login. To reach this Mac before then, use tailscaled.";
   - FileVault on (`fdesetup isactive`): "FileVault is on: after a restart nothing starts until someone unlocks the disk.";
   - automatic login off (no `autoLoginUser` in `/Library/Preferences/com.apple.loginwindow.plist`): "Claude chats wait until someone logs in. Automatic login in System Settings › Users & Groups logs in right after a restart (needs FileVault off)."
@@ -77,7 +77,8 @@ Settings › App › General › Background daemon, below X56's switch:
 ```
 Start moonletd at system start                            [on]
 Runs moonletd after a restart, before anyone logs in. Claude chats
-wait for login, because the Keychain unlocks only then.
+wait for login, because the Keychain unlocks only then. Turning it on
+or off asks for an administrator's password.
 ● Starts at system start · moonlet in System Settings › Login Items
 △ Claude chats wait until someone logs in. Automatic login in System
   Settings › Users & Groups logs in right after a restart (needs FileVault off).
@@ -88,7 +89,7 @@ wait for login, because the Keychain unlocks only then.
 - `daemon.info` gains `started_at_boot: bool`.
 - New method `daemon.hand_over` `{ token }`, local socket only and in `LOCAL_METHODS` so that moonletd can reach it, with its own check: the caller runs the daemon's own executable and sends the app credential. It returns `{ path, secret }`: the private handoff socket, and a one-time secret the caller sends there before any terminal comes back. It is refused unless the daemon was started at boot.
 - Chat state gains `waiting_for_login`.
-- Tauri command `daemon_boot` with `install | uninstall | status`, returning `{ state }`: `on`, `requires_approval`, `stale`, `left_behind` or `off`, and the warnings that apply. `open_login_items` is reused.
+- Tauri command `daemon_boot` with `install | repair | uninstall | status` (`repair` writes the plist again, for **Repair**), returning `{ state }`: `on`, `requires_approval`, `stale`, `left_behind` or `off`, and the warnings that apply. `open_login_items` is reused.
 
 ## Data and config
 

@@ -47,12 +47,6 @@ export function chatFooter(st: ChatSummary): ChatFooter {
   };
 }
 
-/** The line of a chat in a daemon started at system start (X113): Claude
- * cannot read its sign-in there until the user logs in on `host`. */
-export function waitingForLogin(st: Pick<ChatState, "status">, host: string): string | null {
-  return st.status === "waiting_for_login" ? `Claude starts once you log in on ${host}` : null;
-}
-
 /** The buttons under the queued messages (X49): Send now for all of them,
  * Ask aside for the last; none once Send now was asked. */
 export function queuedActions(queued: readonly QueuedMessage[]): { sendNow: string; params: { message?: string }; aside: QueuedMessage } | null {

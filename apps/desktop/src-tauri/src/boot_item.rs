@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
+use base64::Engine;
 
 /// The user's choice in `~/.moonlet/app.toml`, which the daemon started at
 /// boot reads too: off, it exits without serving.
@@ -114,25 +115,6 @@ pub fn plist(a: &Account, program: &Path) -> String {
     )
 }
 
-fn base64(bytes: &[u8]) -> String {
-    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 /// The shell command, run as root, that writes `xml` as the plist of the
 /// user `uid`. The plist comes from the command itself, never from a file
 /// a process of the user's could swap before root reads it; the command
@@ -142,7 +124,7 @@ pub fn install_command(uid: u32, xml: &str) -> String {
     let path = path.display();
     format!(
         "umask 022 && /bin/echo {b64} | /usr/bin/base64 -D -o {path} && /usr/sbin/chown root:wheel {path} && /bin/chmod 644 {path}",
-        b64 = base64(xml.as_bytes())
+        b64 = base64::engine::general_purpose::STANDARD.encode(xml)
     )
 }
 
@@ -533,16 +515,6 @@ mod tests {
         assert!(!command.contains("rm -rf"));
         assert!(with_administrator("echo \"hi\"").is_err());
         assert!(with_administrator("echo $HOME").is_err());
-    }
-
-    #[test]
-    fn base64_matches_what_base64_prints() {
-        // `printf 'moonlet' | base64` and friends.
-        assert_eq!(base64(b"moonlet"), "bW9vbmxldA==");
-        assert_eq!(base64(b"moonletd"), "bW9vbmxldGQ=");
-        assert_eq!(base64(b"boot"), "Ym9vdA==");
-        assert_eq!(base64(b"abc"), "YWJj");
-        assert_eq!(base64(b""), "");
     }
 
     #[test]
