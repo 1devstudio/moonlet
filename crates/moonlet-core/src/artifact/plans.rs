@@ -100,13 +100,19 @@ pub fn snippet(text: &str, query: &str) -> Option<String> {
     }
     text.lines().find_map(|line| {
         let line = line.trim();
-        let lower = line.to_lowercase();
-        // Lowercasing keeps byte offsets for the ASCII queries plans are
-        // searched with; any other line is shown from its start.
-        let at = lower.find(&query).filter(|_| lower.len() == line.len())?;
         let chars: Vec<char> = line.chars().collect();
-        let start = line[..at].chars().count();
-        let end = start + query.chars().count();
+        // Each character lowercased on its own, with where it starts in the
+        // lowercased line, so a match maps back to whole characters whatever
+        // lowercasing does to their lengths.
+        let mut folded = String::new();
+        let mut starts = Vec::with_capacity(chars.len());
+        for c in &chars {
+            starts.push(folded.len());
+            folded.extend(c.to_lowercase());
+        }
+        let at = folded.find(&query)?;
+        let start = starts.iter().rposition(|&s| s <= at)?;
+        let end = starts.iter().position(|&s| s >= at + query.len()).unwrap_or(chars.len());
         let mut from = start.saturating_sub(SIDE);
         if from > 0 {
             // Start at the next whole word.
@@ -770,5 +776,13 @@ mod tests {
         assert_eq!(snippet(text, "count").as_deref(), Some("2. Count"));
         assert_eq!(snippet(text, "fuzzy"), None);
         assert_eq!(snippet(text, "  "), None);
+    }
+
+    #[test]
+    fn a_snippet_never_breaks_on_text_whose_lowercase_moves_its_characters() {
+        // ẞ lowercases one byte shorter, İ one byte longer: the same length, other offsets.
+        assert_eq!(snippet("ẞİ then debounce it", "debounce").as_deref(), Some("ẞİ then debounce it"));
+        assert_eq!(snippet("Straße İstanbul", "İSTANBUL").as_deref(), Some("Straße İstanbul"));
+        assert_eq!(snippet("ẞİ", "x"), None);
     }
 }
