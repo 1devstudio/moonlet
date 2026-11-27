@@ -52,11 +52,14 @@ export function actionCall(s: Session, a: SessionAction): { method: string; para
   }
 }
 
-/** A choice in a section's ⋯ menu: its grouping, its sorting, or a project ticked or unticked. */
-export type ViewChoice = Pick<SectionView, "group_by"> | Pick<SectionView, "sort_by"> | { toggle: string };
+/** A choice in a section's ⋯ menu: its grouping, its sorting, a project ticked or unticked, or All projects. */
+export type ViewChoice = Pick<SectionView, "group_by"> | Pick<SectionView, "sort_by"> | { toggle: string } | { all: true };
 
-/** The `section.update` saving `sec`'s view after `c`, on its host, so the Mac shows it too. */
-export function viewCall(sec: Section, c: ViewChoice): { method: string; params: { id: string; view: SectionView } } {
-  const view = "toggle" in c ? { ...sec.view, filter: filterAfterToggle(sec.view.filter, sec.project_ids, c.toggle) } : { ...sec.view, ...c };
+/** The `section.update` saving `sec`'s view after `c`, on its host, so the
+ * Mac shows it too. `known`: the section's projects its host has, which
+ * the filter counts, as the desktop's does. */
+export function viewCall(sec: Section, c: ViewChoice, known: string[]): { method: string; params: { id: string; view: SectionView } } {
+  const view =
+    "toggle" in c ? { ...sec.view, filter: filterAfterToggle(sec.view.filter, known, c.toggle) } : "all" in c ? { ...sec.view, filter: [] } : { ...sec.view, ...c };
   return { method: M.sectionUpdate, params: { id: sec.id, view } };
 }

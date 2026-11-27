@@ -40,14 +40,23 @@ describe("viewCall (X118)", () => {
   const sec: Section = { id: "dev", name: "1devstudio", project_ids: ["storefront", "changedeck", "docs"], view: { group_by: "project", sort_by: "recent", filter: [] }, created_at: NOW };
 
   it("saves the section's grouping or sorting with section.update, keeping the rest of its view", () => {
-    expect(viewCall(sec, { group_by: "status" })).toEqual({ method: "section.update", params: { id: "dev", view: { group_by: "status", sort_by: "recent", filter: [] } } });
-    expect(viewCall(sec, { sort_by: "name" })).toEqual({ method: "section.update", params: { id: "dev", view: { group_by: "project", sort_by: "name", filter: [] } } });
+    expect(viewCall(sec, { group_by: "status" }, sec.project_ids)).toEqual({ method: "section.update", params: { id: "dev", view: { group_by: "status", sort_by: "recent", filter: [] } } });
+    expect(viewCall(sec, { sort_by: "name" }, sec.project_ids)).toEqual({ method: "section.update", params: { id: "dev", view: { group_by: "project", sort_by: "name", filter: [] } } });
   });
 
   it("unticks a project from the filter, and ticking it back shows every project again", () => {
-    const less = viewCall(sec, { toggle: "changedeck" });
+    const less = viewCall(sec, { toggle: "changedeck" }, sec.project_ids);
     expect(less.params.view.filter).toEqual(["storefront", "docs"]);
-    const back = viewCall({ ...sec, view: less.params.view }, { toggle: "changedeck" });
+    const back = viewCall({ ...sec, view: less.params.view }, { toggle: "changedeck" }, sec.project_ids);
     expect(back.params.view.filter).toEqual([]);
+  });
+
+  it("counts only the projects its host has, as the desktop does, and All projects shows every one", () => {
+    // "docs" is listed in the section but its host no longer has it.
+    const here = ["storefront", "changedeck"];
+    const less = viewCall(sec, { toggle: "changedeck" }, here);
+    expect(less.params.view.filter).toEqual(["storefront"]);
+    expect(viewCall({ ...sec, view: less.params.view }, { toggle: "changedeck" }, here).params.view.filter).toEqual([]);
+    expect(viewCall({ ...sec, view: less.params.view }, { all: true }, here).params.view.filter).toEqual([]);
   });
 });

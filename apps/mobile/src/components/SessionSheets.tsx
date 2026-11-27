@@ -59,12 +59,13 @@ export function SessionSheet({ r, pr, onClose }: { r: SessionRow; pr: PullReques
   const [page, setPage] = useState<Page>("menu");
   const [name, setName] = useState(s.name);
   const { busy, error, run } = useBusy();
-  const linked = !!s.task;
-  const sources = !!(s.workspace_id && d?.tasks[s.workspace_id]?.boards.length);
-  const items = menuItems(s, { linked, sources, pr: !!pr?.url });
+  // Its host's boards and those another member of its account shares (X76), as the row has them.
+  const items = menuItems(s, { linked: !!s.task, sources: r.sources, pr: !!pr?.url });
   // A change to another member's session goes through its central host (X72).
   const host = sessionHost(r.host, s);
   const act = (a: SessionAction) =>
+    // Enter pressed again while it saves sends nothing more.
+    !busy &&
     run(async () => {
       const call = actionCall(s, a);
       if (!call) return onClose();
@@ -178,9 +179,11 @@ export function SectionSheet({ host, sec, onClose }: { host: string; sec: Sectio
   const projects = useApp((s) => s.data[host]?.projects ?? []);
   const { busy, error, run } = useBusy();
   const v = sec.view;
+  // The section's projects its host has: the filter counts only these, as the desktop's does.
+  const known = sec.project_ids.filter((id) => projects.some((p) => p.id === id));
   const pick = (c: ViewChoice) =>
     run(async () => {
-      const call = viewCall(sec, c);
+      const call = viewCall(sec, c, known);
       await rpc(host, call.method, call.params);
     });
   const label = (t: string) => <div className="eyebrow px-4 pt-2 pb-1">{t}</div>;
@@ -193,10 +196,11 @@ export function SectionSheet({ host, sec, onClose }: { host: string; sec: Sectio
           <Item key={id} label={name} checked={v.group_by === id} disabled={busy} onClick={() => void pick({ group_by: id })} />
         ))}
         {label("Filter by project")}
-        {sec.project_ids.flatMap((id) => {
-          const p = projects.find((x) => x.id === id);
-          return p ? [<Item key={id} label={p.name} checked={v.filter.length === 0 || v.filter.includes(id)} disabled={busy} onClick={() => void pick({ toggle: id })} />] : [];
-        })}
+        <Item label="All projects" checked={v.filter.length === 0} disabled={busy} onClick={() => void pick({ all: true })} />
+        <Divider />
+        {known.map((id) => (
+          <Item key={id} label={projects.find((x) => x.id === id)!.name} checked={v.filter.length === 0 || v.filter.includes(id)} disabled={busy} onClick={() => void pick({ toggle: id })} />
+        ))}
         {label("Sort by")}
         {SORT_BY.map(([id, name]) => (
           <Item key={id} label={name} checked={v.sort_by === id} disabled={busy} onClick={() => void pick({ sort_by: id })} />
