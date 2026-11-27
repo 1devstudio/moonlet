@@ -1528,6 +1528,7 @@ impl Daemon {
                 // executable, showing the app credential, may ask.
                 let r: m::HandOverRequest = params(p).unwrap_or_default();
                 let Some(pid) = conn.peer_pid.filter(|_| self.proves_own_daemon(&r.token, conn.peer_pid)) else {
+                    tracing::warn!(peer = ?conn.peer_pid, client = %conn.client, "refused a hand-over: not this moonletd with the app credential");
                     return Err(RpcError::new("forbidden", "only moonletd started at login takes the terminals over"));
                 };
                 if !self.begin_upgrade() {

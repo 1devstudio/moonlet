@@ -148,6 +148,15 @@ fn rest_after() -> u64 {
 pub const WAITING_FOR_LOGIN: &str = "waiting_for_login";
 const WAITS_FOR_LOGIN: &str = "Claude starts once you log in on this Mac";
 
+/// Marks a chat as waiting for login (X113), unless kept asks wait for
+/// their answer: it stays blocked, and the answer, after login, sends what
+/// it holds (X73).
+fn mark_waiting(inner: &mut Inner) {
+    if inner.kept.is_empty() {
+        inner.state.status = WAITING_FOR_LOGIN.into();
+    }
+}
+
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
@@ -400,6 +409,7 @@ impl ChatManager {
                 inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
             } else if self.waiting_for_login() {
                 // No agent before login (X113): its first message waits.
+                mark_waiting(&mut inner);
             } else if let Err(e) = self.spawn(&chat, &mut inner) {
                 // A new chat starts right away, so the agent is warm when
                 // the first message comes.
@@ -474,11 +484,7 @@ impl ChatManager {
         let id = uuid::Uuid::new_v4().to_string();
         inner.state.queued.push(moonlet_proto::types::QueuedMessage { id: id.clone(), text: text.to_string(), sending: false });
         inner.held.push(id);
-        // A chat whose kept asks wait for their answer stays blocked: the
-        // answer, after login, sends what it holds (X73).
-        if inner.kept.is_empty() {
-            inner.state.status = WAITING_FOR_LOGIN.into();
-        }
+        mark_waiting(inner);
         self.apply(chat, inner, vec![Out::State]);
         Ok(())
     }
@@ -497,8 +503,17 @@ impl ChatManager {
         for id in waiting {
             let gone_on = self.get(id).and_then(|chat| {
                 let mut inner = chat.inner.lock().unwrap();
+                if !inner.kept.is_empty() {
+                    return Ok(());
+                }
                 // The note of a move that came before login goes first.
-                if inner.kept.is_empty() { self.go_on_held(&chat, &mut inner) } else { Ok(()) }
+                self.go_on_held(&chat, &mut inner)?;
+                // One that held nothing has nothing to wait for any more.
+                if inner.state.status == WAITING_FOR_LOGIN {
+                    inner.state.status = "idle".into();
+                    self.apply(&chat, &mut inner, vec![Out::State]);
+                }
+                Ok(())
             });
             if let Err(e) = gone_on {
                 tracing::warn!(chat = %id, "a chat that waited for login cannot go on: {e:#}");
@@ -581,9 +596,7 @@ impl ChatManager {
             if let Some(n) = note {
                 inner.preface = Some(n.to_string());
             }
-            if inner.kept.is_empty() {
-                inner.state.status = WAITING_FOR_LOGIN.into();
-            }
+            mark_waiting(&mut inner);
             self.apply(&chat, &mut inner, vec![Out::State]);
             return Ok(());
         }
@@ -1069,6 +1082,10 @@ impl ChatManager {
         inner.state.queued = gone;
         super::undeliver(&mut inner.state);
         inner.state.queued = waiting;
+        // In a daemon started at system start, it waits for login (X113).
+        if self.waiting_for_login() {
+            mark_waiting(&mut inner);
+        }
         self.save(&chat, &mut inner);
         // Saved under its id now: a file kept elsewhere (X86), or under an
         // id another chat took meanwhile, goes.
@@ -3340,6 +3357,8 @@ done
         let (dir, _terms, chats) = setup().await;
         chats.wait_for_login();
         let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        // A new chat says so before its first message.
+        assert_eq!(chats.state(id).unwrap().status, "waiting_for_login");
         chats.send(id, "hi", &[]).unwrap();
         let st = chats.state(id).unwrap();
         assert_eq!(st.status, "waiting_for_login");
@@ -3384,6 +3403,32 @@ done
         let st = wait_for(&at_login, id, |s| s.status == "done").await;
         let users: Vec<_> = st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
         assert_eq!(users, ["You moved to studio-mini"]);
+    }
+
+    /// X113: a chat restored by a daemon started at system start waits for
+    /// login too, and one that held nothing is idle again after login,
+    /// with no agent started for it.
+    #[tokio::test]
+    async fn a_restored_chat_waits_for_login_and_is_idle_again_after_it() {
+        let (dir, _terms, chats) = setup().await;
+        chats.wait_for_login();
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        chats.shutdown().await;
+
+        let terms = TerminalManager::new(dir.path().join("sock-at-boot"), fake_claude_env(dir.path()));
+        let at_boot = ChatManager::new(terms, dir.path().join("chats"));
+        at_boot.wait_for_login();
+        at_boot.restore();
+        assert_eq!(at_boot.state(id).unwrap().status, "waiting_for_login");
+        at_boot.shutdown().await;
+
+        let terms = TerminalManager::new(dir.path().join("sock-at-login"), fake_claude_env(dir.path()));
+        let at_login = ChatManager::new(terms, dir.path().join("chats"));
+        at_login.restore();
+        at_login.start_waiting();
+        assert_eq!(at_login.state(id).unwrap().status, "idle");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!dir.path().join("claude-args").exists(), "no agent started");
     }
 
     /// X113: the daemon a login starts takes the chats over from disk, and

@@ -307,23 +307,8 @@ fn peer_pid(stream: &UnixStream) -> Result<u32> {
     Ok(cred.pid() as u32)
 }
 
-#[cfg(target_os = "macos")]
 fn peer_executable(stream: &UnixStream) -> Result<PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    let pid = peer_pid(stream)? as i32;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: `buf` is writable for its length.
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    if n <= 0 {
-        bail!("cannot read the peer's executable: {}", std::io::Error::last_os_error());
-    }
-    buf.truncate(n as usize);
-    Ok(PathBuf::from(std::ffi::OsString::from_vec(buf)))
-}
-
-#[cfg(target_os = "linux")]
-fn peer_executable(stream: &UnixStream) -> Result<PathBuf> {
-    std::fs::read_link(format!("/proc/{}/exe", peer_pid(stream)?)).context("cannot read the peer's executable")
+    moonlet_core::process::executable(peer_pid(stream)?).context("cannot read the peer's executable")
 }
 
 fn check_peer(stream: &UnixStream) -> Result<()> {
