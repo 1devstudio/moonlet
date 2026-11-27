@@ -1849,6 +1849,7 @@ impl SessionManager {
             pinned: None,
             pinned_top: false,
             parent: None,
+            auto_archive: None,
         };
         // Until the session is saved, what was made for it goes again,
         // however this request ends.
@@ -2255,6 +2256,10 @@ impl SessionManager {
                 w.archived = false;
                 w.archived_at = None;
                 tabs = std::mem::take(&mut w.archived_restore);
+                // Not archived again for the PR that archived it (X116).
+                if let Some(a) = w.auto_archive.as_mut().filter(|a| a.state == moonlet_proto::types::AutoArchiveState::Archived) {
+                    a.state = moonlet_proto::types::AutoArchiveState::Restored;
+                }
             }
             Ok(())
         })?;
@@ -2351,6 +2356,23 @@ impl SessionManager {
         })?;
         self.emit_sessions();
         self.session(&req.id)
+    }
+
+    /// Records what archiving session `id` when its PR merged did, or why it
+    /// waits (X116). Tells the clients only when it changed.
+    pub fn set_auto_archive(&self, id: &str, record: Option<moonlet_proto::types::AutoArchive>) -> Result<()> {
+        let changed = self.mutate(|st| {
+            let w = st.sessions.iter_mut().find(|w| w.id == id).context("no such session")?;
+            if w.auto_archive == record {
+                return Ok(false);
+            }
+            w.auto_archive = record;
+            Ok(true)
+        })?;
+        if changed {
+            self.emit_sessions();
+        }
+        Ok(())
     }
 
     /// Records PR `number` as the pull request of the session at `path`, if
@@ -3642,6 +3664,25 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
         move |sock: &str| SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), TerminalManager::new(home.path().join(sock), env.clone()))
+    }
+
+    /// X116: a session restored after it was archived when its PR merged
+    /// is not archived again for that PR.
+    #[tokio::test]
+    async fn restoring_a_session_archived_when_its_pr_merged_marks_it_restored() {
+        use moonlet_proto::types::{AutoArchive, AutoArchiveState};
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        mgr.archive(SessionArchive { id: s.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+        mgr.set_auto_archive(&s.id, Some(AutoArchive { pr: 12, state: AutoArchiveState::Archived, reason: String::new(), merged: true })).unwrap();
+
+        let back = mgr.unarchive(&s.id).await.unwrap();
+
+        assert_eq!(
+            back.auto_archive,
+            Some(AutoArchive { pr: 12, state: AutoArchiveState::Restored, reason: String::new(), merged: true })
+        );
     }
 
     /// X86: Restore brings back an archived session's tabs, and its Claude
@@ -5231,6 +5272,7 @@ mod tests {
             pinned: None,
             pinned_top: false,
             parent: None,
+            auto_archive: None,
         };
         assert_eq!(
             agent_flags("claude", &s),

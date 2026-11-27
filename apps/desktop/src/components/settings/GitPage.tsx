@@ -207,6 +207,24 @@ export function GitPage() {
             disabled={tooOld}
             onChange={(on) => set({ warn_unpushed: on })}
           />
+          <SwitchRow
+            setting="git-archive-on-merge"
+            label="Archive when its pull request merges"
+            hint="Archives a session, as Archive does, once its pull request merges. Sessions with uncommitted files or commits not on origin are left alone."
+            on={g.archive_on_merge}
+            disabled={tooOld}
+            onChange={(on) => set({ archive_on_merge: on })}
+          />
+          <div className="pl-6">
+            <SwitchRow
+              setting="git-archive-on-close"
+              label="Also when its pull request is closed without merging"
+              hint="A closed pull request can be reopened. Its branch and commits stay unless the settings above delete them."
+              on={g.archive_on_close}
+              disabled={tooOld || !g.archive_on_merge}
+              onChange={(on) => set({ archive_on_close: on })}
+            />
+          </div>
         </Card>
       </Section>
       <Section title="Commits and pull requests">

@@ -5,6 +5,7 @@ import type { ArtifactChip } from "./artifactStore";
 import { create } from "zustand";
 import type { RowStyle } from "./sessionRows";
 import { clampSidebarWidth } from "./sidebar";
+import { autoArchivedNow } from "./autoArchive";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -1508,7 +1509,13 @@ function handleEvent(e: DaemonEvent) {
     case EV.sessionsChanged: {
       const list = data as Session[];
       const notices = spawnedNotices(get().sessions[host], list, get().projects[host] ?? []);
+      const autoArchived = autoArchivedNow(get().sessions[host] ?? [], list);
       set((s) => ({ sessions: { ...s.sessions, [host]: list } }));
+      // Its host archived it when its PR merged (X116).
+      for (const w of autoArchived) {
+        const why = w.auto_archive?.merged ? "merged" : "was closed";
+        toast(`Archived ${w.name}: #${w.auto_archive?.pr} ${why}`, "info", { label: "Restore", run: () => void import("./actions").then((a) => a.restoreSession(host, w)) });
+      }
       // An agent opened a session (X22): say so, and leave the user where they are.
       for (const n of notices) toast(n.text, "info", { label: "Go to", run: () => selectSession(host, n.session) });
       for (const w of list) if (!w.archived) syncLayout(host, w);

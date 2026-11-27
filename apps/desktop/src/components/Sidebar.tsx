@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { archivedReason, autoArchiveNote } from "../lib/autoArchive";
 import { Archive, ArrowDown, Eye, EyeOff, Layers, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, GitFork, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -321,6 +322,7 @@ function RowView({
   name,
   badge,
   merged,
+  mergedNote,
   selected,
   picked,
   nested,
@@ -332,6 +334,9 @@ function RowView({
   badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
   /** The session's PR is merged: a merge icon ends the row. */
   merged?: boolean;
+  /** Why its host has not archived the merged session (X116): the icon's
+   *  tooltip, amber when it needs the user. */
+  mergedNote?: { text: string; warn: boolean } | null;
   selected: boolean;
   /** Picked with ⌘- or ⇧-click (X106): tinted. */
   picked?: boolean;
@@ -356,7 +361,8 @@ function RowView({
       {name}
       {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
       {merged && (
-        <span role="img" aria-label="merged" title="PR merged" className="shrink-0">
+        <span role="img" aria-label={mergedNote?.text ?? "merged"} title={mergedNote?.text ?? "PR merged"} className={cx("shrink-0", mergedNote?.warn && "flex items-center gap-0.5 text-blocked")}>
+          {mergedNote?.warn && <CircleAlert size={11} />}
           <BranchIcon state="merged" />
         </span>
       )}
@@ -414,6 +420,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
+  const hostLabel = useStore((st) => (host === "local" ? "This Mac" : st.hosts[host]?.label || host));
   // The pen icon while the session has a design (X65).
   const mark = designMark(useDesign((d) => sessionDesignsOf(d, host, s.id)));
   const { lines } = useContext(TaskLines);
@@ -478,6 +485,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
         )}
       badge={renaming ? null : badge}
       merged={!renaming && pr?.state === "merged"}
+      mergedNote={autoArchiveNote(s.auto_archive, hostLabel)}
       name={
         renaming ? (
           <InlineInput
@@ -1206,8 +1214,8 @@ function HistoryList() {
     <div>
       <div className="flex h-[34px] items-center pl-4 ui-text-12 font-medium uppercase tracking-[0.12em] text-muted">Archived sessions</div>
       {archived.length === 0 && <div className="px-[22px] py-1 ui-text-13 text-faint">Nothing archived yet.</div>}
-      {archived.map(({ host, w }) => (
-        <div key={host + w.id} className="group flex h-[38px] items-center gap-3 pl-[22px] pr-4 hover:bg-panel-2">
+      {archived.map(({ host, w }) => ({ host, w, why: archivedReason(w.auto_archive) })).map(({ host, w, why }) => (
+        <div key={host + w.id} className="group flex min-h-[38px] items-center py-1 gap-3 pl-[22px] pr-4 hover:bg-panel-2">
           <Archive size={13} className="text-faint" />
           {/* Its read-only page, with Restore in the header (X86). */}
           <button className="min-w-0 flex-1 truncate text-left ui-text-14 text-[#cfcfcf] hover:text-fg" onClick={() => {
@@ -1215,6 +1223,7 @@ function HistoryList() {
               selectSession(host, w.id);
             }}>
             {w.name}
+            {why && <span className="block truncate ui-text-11.5 text-faint">{why}</span>}
           </button>
           <IconButton
             title="Restore session"

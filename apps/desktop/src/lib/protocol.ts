@@ -462,6 +462,10 @@ export interface GitSettings {
   fetch_minutes: number;
   /** Pull a base branch that is only behind origin without a click. */
   fast_forward_base: boolean;
+  /** Archive a session by itself once its PR merges (X116). */
+  archive_on_merge: boolean;
+  /** With `archive_on_merge`, also once its PR is closed unmerged (X116). */
+  archive_on_close: boolean;
 }
 
 export interface ProjectConfig {
@@ -799,6 +803,18 @@ export interface Session {
   pinned_top?: boolean;
   /** The session of its project it is nested under: Move under (X112). */
   parent?: string | null;
+  /** What archiving it when its PR merged did, or why it waits (X116). */
+  auto_archive?: AutoArchive | null;
+}
+
+/** A session's archive when its PR merged or closed (X116). */
+export interface AutoArchive {
+  pr: number;
+  state: "waiting" | "refused" | "failed" | "archived" | "restored";
+  /** Why it waits, was refused or failed. */
+  reason?: string;
+  /** Merged, rather than closed without merging. */
+  merged: boolean;
 }
 
 /** The member that owns a session another member lists (X72). */

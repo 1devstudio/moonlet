@@ -448,6 +448,10 @@ pub struct GitSettings {
     pub fetch_minutes: u32,
     /// Pull a base branch that is only behind origin without a click.
     pub fast_forward_base: bool,
+    /// Archive a session by itself once its PR merges (X116).
+    pub archive_on_merge: bool,
+    /// With `archive_on_merge`, also once its PR is closed unmerged (X116).
+    pub archive_on_close: bool,
 }
 
 impl Default for GitSettings {
@@ -463,6 +467,8 @@ impl Default for GitSettings {
             draft_prs: false,
             fetch_minutes: 5,
             fast_forward_base: false,
+            archive_on_merge: false,
+            archive_on_close: false,
         }
     }
 }
@@ -734,6 +740,36 @@ pub struct Session {
     /// The session of its project it is nested under: Move under (X112).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// What archiving it when its PR merged did, or why it waits (X116).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_archive: Option<AutoArchive>,
+}
+
+/// A session's archive when its PR merged or closed (X116).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArchive {
+    /// The PR it is about.
+    pub pr: u64,
+    pub state: AutoArchiveState,
+    /// Why it waits, was refused or failed; empty once archived.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// Merged, rather than closed without merging.
+    pub merged: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoArchiveState {
+    /// Something in the session still runs; tried again at the next check.
+    Waiting,
+    /// Archiving would lose work only on this host; checked again.
+    Refused,
+    /// The archive failed; not tried again for this PR.
+    Failed,
+    Archived,
+    /// The user restored it: not archived again for this PR.
+    Restored,
 }
 
 /// The member that owns a session another member lists (X72).

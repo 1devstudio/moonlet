@@ -1,3 +1,4 @@
+import { DEFAULT_GIT_SETTINGS } from "./gitSettings";
 import { describe, expect, it } from "vitest";
 import { moveSelection, searchSettings, type SearchContext } from "./settingsSearch";
 import { defaultTermSettings } from "./terminals";
@@ -74,7 +75,7 @@ describe("searching settings (X43)", () => {
   });
 
   it("finds This Mac's Git settings with their values (X55)", () => {
-    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, warn_unpushed: true, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false } };
+    const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, warn_unpushed: true, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false, archive_on_merge: false, archive_on_close: false } };
     expect(searchSettings("draft", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.route, r.setting])).toEqual([
       ["Open pull requests as drafts", "App › Git", "On", { page: "git" }, "git-draft-prs"],
     ]);
@@ -90,6 +91,14 @@ describe("searching settings (X43)", () => {
     expect(searchSettings("unpushed", git)[0]).toMatchObject({ value: "On", setting: "git-warn-unpushed" });
     expect(searchSettings("fetch from origin", git)[0]).toMatchObject({ value: "15 min", setting: "git-fetch" });
     expect(searchSettings("start new branches", git)[0]).toMatchObject({ value: "origin/main", setting: "git-start-from" });
+  });
+
+  it("finds archiving when a pull request merges or closes (X116)", () => {
+    const git = { ...ctx, git: { ...DEFAULT_GIT_SETTINGS, archive_on_merge: true } };
+    expect(searchSettings("pull request merges", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.setting])).toEqual([
+      ["Archive when its pull request merges", "App › Git", "On", "git-archive-on-merge"],
+    ]);
+    expect(searchSettings("closed without merging", git)[0]).toMatchObject({ value: "Off", setting: "git-archive-on-close" });
   });
 
   it("finds keeping the Mac awake by sleep and awake (X73)", () => {
