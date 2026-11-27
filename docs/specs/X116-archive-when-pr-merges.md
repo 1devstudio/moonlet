@@ -21,15 +21,15 @@ A session's work is usually over once its pull request merges, but the session s
 
 ### Settings
 
-- [ ] Settings › Git › Archiving a session gains **Archive when its pull request merges** (default off), with the hint "Archives a session, as Archive does, once its pull request merges. Sessions with uncommitted files or commits not on origin are left alone."
-- [ ] Under it, indented and enabled only while it is on: **Also when its pull request is closed without merging** (default off), with the hint "A closed pull request can be reopened. Its branch and commits stay unless the settings above delete them."
+- [x] Settings › Git › Archiving a session gains **Archive when its pull request merges** (default off), with the hint "Archives a session, as Archive does, once its pull request merges. Sessions with uncommitted files or commits not on origin are left alone."
+- [x] Under it, indented and enabled only while it is on: **Also when its pull request is closed without merging** (default off), with the hint "A closed pull request can be reopened. Its branch and commits stay unless the settings above delete them."
 - [x] Both save through `git.set_settings` per host, like every Git setting, and are found by Search settings under `App › Git`. (`lib/settingsSearch.test.ts` "finds archiving when a pull request merges or closes (X116)"; `e2e/specs/git-settings.e2e.ts` "keeps archiving when a pull request merges, and closed ones only under it (X116)")
 
 ### Which sessions are archived
 
 - [x] A session is archived when the setting is on, its PR is the session's PR as X2 defines it, and that PR is merged (or closed, with the second switch on). A session without a PR is never archived. (`auto_archive.rs` tests `an_idle_session_whose_pr_merged_is_archived_as_the_git_settings_say`, `a_closed_pr_archives_only_with_the_second_switch_and_keeps_the_branch`; daemon test `a_session_is_archived_by_the_daemon_once_its_pr_merges`)
 - [x] Only the host that runs the session archives it. A session another member owns (X72) is not archived here. (`another_members_session_and_an_archived_one_are_left_alone`)
-- [x] It waits, and is tried again at the next check, while an agent in the session is working or blocked, a chat of the session has queued messages (X49) or an open permission ask, or a heavy command of the session runs (X62). The record says why, for example "archives when the agent is done". (`a_session_where_something_runs_waits_with_the_reason`)
+- [x] It waits, and is tried again at the next check, while an agent in the session is working or blocked, a chat of the session has queued messages (X49) or an open permission ask, or a heavy command of the session runs (X62). The record says why, for example "archives when the agent is done". (`a_session_where_something_runs_waits_with_the_reason`) It is asked again right before archiving, after git was read, since an agent may have started meanwhile.
 - [x] It is not archived while archiving would lose work only on this host, read with `git.unpushed` (the merged PR's head as `merged_head`): uncommitted files when the folder is removed, and commits not on origin when the folder is removed or the branch deleted. The record is `refused`, with what would be lost ("1 uncommitted file · 3 commits not on origin"). Every check reads it again, so committing and pushing, or discarding the files, lets the next check archive it. (`work_only_on_this_host_is_lost_only_by_what_the_plan_removes`; daemon test `a_merged_session_with_work_only_here_waits_until_the_work_is_gone`)
 - [x] A closed PR archives its session only when the PR's head commit is the session branch's last commit. Anyone can open and close a PR from a fork whose branch has the session branch's name; merging one needs write access. Otherwise the record is `refused` with "the closed PR does not end at this branch's last commit". (daemon test `a_closed_pr_that_does_not_end_at_the_branch_archives_nothing`)
 - [x] A PR merged before the setting was turned on counts too: the first check after turning it on archives every such session that passes the rules above.
@@ -55,10 +55,10 @@ A session's work is usually over once its pull request merges, but the session s
 ### How the daemon watches PRs
 
 - [x] While the setting is on, the daemon looks every minute. It asks GitHub (through `gh.pr_status`'s own lookup, saved as X108 does) about a session whose saved PR is open every 5 minutes, and about one with no saved PR, or a closed one, every 15 minutes, so a PR an agent opened in a session the app never polled is found. A saved merged PR is not asked about again.
-- [x] A PR state the app's own `gh.pr_status` finds triggers the same rules at once.
+- [x] A PR state any `gh.pr_status` answer finds (the app's polls, or the phone's) triggers the same rules at once.
 - [x] Checks run at most 4 sessions at a time.
 - [x] With the setting off, the daemon asks GitHub nothing by itself. (daemon test `with_archiving_on_merge_off_the_daemon_checks_no_prs`)
-- [x] A failed lookup (`gh` missing, offline, not logged in) archives nothing and is retried at the next due check.
+- [x] A failed lookup (`gh` missing, offline, not logged in) archives nothing and is tried again at the next minute's look.
 
 ## UI
 

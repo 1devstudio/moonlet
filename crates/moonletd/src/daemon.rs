@@ -780,6 +780,12 @@ fn session_agent(terminals: &[moonlet_proto::types::TerminalInfo], session: &str
         .map(|t| t.id)
 }
 
+/// The minute of the daemon's own PR checks (X116), in ms; tests shorten
+/// it with `MOONLET_TEST_PR_WATCH_MS`.
+fn pr_watch_unit() -> u64 {
+    std::env::var("MOONLET_TEST_PR_WATCH_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000)
+}
+
 /// Runs synchronous filesystem work off the async workers, so a large
 /// directory walk does not stall other connections.
 async fn blocking<T: Send + 'static>(
@@ -4764,19 +4770,6 @@ impl Daemon {
         pending.quiet = Some(quiet.abort_handle());
     }
 
-    /// A design's snapshots as its agent works (X65): a workspace design's
-    /// agent's, and a session's agent's for that session's designs (entry
-    /// 12). When the agent starts working, the edits by hand not kept yet
-    /// are kept, if `chat.send` did not keep them already (see
-    /// [`Self::keep_before_message`]), so the turn's snapshot holds only
-    /// the agent's work; when its turn ends, done, stopped (idle) or
-    /// failed (error), the turn's snapshot is taken. Each is
-    /// taken in the order its event came, one after the other, without
-    /// holding up the events. A turn that starts without `chat.send` keeps
-    /// the edits only once the daemon hears the agent works, so its first
-    /// writes could go with them; none does on a design with edits waiting
-    /// (the first message comes as the design is made, and a queued one
-    /// after the turn's snapshot). Runs for the daemon's life.
     /// Archives a session as `session.archive` does: its copies, routed
     /// commands, reads and designs follow.
     async fn archive_session(&self, r: m::SessionArchive) -> anyhow::Result<moonlet_proto::types::SessionArchived> {
@@ -4824,11 +4817,7 @@ impl Daemon {
     /// every 15, and a merged one is answered from what was saved (X108).
     /// With the setting off it asks nothing. Runs for the daemon's life.
     pub fn follow_prs_to_archive(self: &Arc<Self>) {
-        // Tests shorten the minute.
-        let unit = std::env::var("MOONLET_TEST_PR_WATCH_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(60_000u64);
+        let unit = pr_watch_unit();
         let d = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(unit));
@@ -4963,9 +4952,11 @@ impl Daemon {
                 let merged_head = pr.as_ref().filter(|_| plan.merged).and_then(|p| p.head_oid.clone());
                 match git::unpushed(Path::new(&s.path), Some(&s.branch), merged_head.as_deref()).await {
                     Err(e) => Some(record(AutoArchiveState::Waiting, format!("cannot read its unpushed work: {e:#}"), plan.pr, plan.merged)),
-                    Ok(work) => match lost_work(&plan, &work) {
-                        Some(lost) => Some(record(AutoArchiveState::Refused, lost, plan.pr, plan.merged)),
-                        None => {
+                    Ok(work) => match (lost_work(&plan, &work), self.busy_reason(&s.id)) {
+                        (Some(lost), _) => Some(record(AutoArchiveState::Refused, lost, plan.pr, plan.merged)),
+                        // An agent may have started while git was read.
+                        (None, Some(busy)) => Some(record(AutoArchiveState::Waiting, busy.into(), plan.pr, plan.merged)),
+                        (None, None) => {
                             let req = m::SessionArchive {
                                 id: s.id.clone(),
                                 remove_worktree: plan.remove_worktree,
@@ -7764,6 +7755,19 @@ impl Daemon {
         self.copies.spawn();
     }
 
+    /// A design's snapshots as its agent works (X65): a workspace design's
+    /// agent's, and a session's agent's for that session's designs (entry
+    /// 12). When the agent starts working, the edits by hand not kept yet
+    /// are kept, if `chat.send` did not keep them already (see
+    /// [`Self::keep_before_message`]), so the turn's snapshot holds only
+    /// the agent's work; when its turn ends, done, stopped (idle) or
+    /// failed (error), the turn's snapshot is taken. Each is
+    /// taken in the order its event came, one after the other, without
+    /// holding up the events. A turn that starts without `chat.send` keeps
+    /// the edits only once the daemon hears the agent works, so its first
+    /// writes could go with them; none does on a design with edits waiting
+    /// (the first message comes as the design is made, and a queued one
+    /// after the turn's snapshot). Runs for the daemon's life.
     pub fn snapshot_agent_turns(self: &Arc<Self>) {
         use moonlet_proto::types::{AgentState, TerminalInfo};
         let mut events = self.terminals.subscribe_events();

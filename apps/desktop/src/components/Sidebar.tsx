@@ -1214,7 +1214,7 @@ function HistoryList() {
     <div>
       <div className="flex h-[34px] items-center pl-4 ui-text-12 font-medium uppercase tracking-[0.12em] text-muted">Archived sessions</div>
       {archived.length === 0 && <div className="px-[22px] py-1 ui-text-13 text-faint">Nothing archived yet.</div>}
-      {archived.map(({ host, w }) => (
+      {archived.map(({ host, w }) => ({ host, w, why: archivedReason(w.auto_archive) })).map(({ host, w, why }) => (
         <div key={host + w.id} className="group flex min-h-[38px] items-center py-1 gap-3 pl-[22px] pr-4 hover:bg-panel-2">
           <Archive size={13} className="text-faint" />
           {/* Its read-only page, with Restore in the header (X86). */}
@@ -1223,7 +1223,7 @@ function HistoryList() {
               selectSession(host, w.id);
             }}>
             {w.name}
-            {archivedReason(w.auto_archive) && <span className="block truncate ui-text-11.5 text-faint">{archivedReason(w.auto_archive)}</span>}
+            {why && <span className="block truncate ui-text-11.5 text-faint">{why}</span>}
           </button>
           <IconButton
             title="Restore session"
