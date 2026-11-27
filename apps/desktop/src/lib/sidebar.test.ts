@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, openShortcut, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -382,9 +382,9 @@ describe("groupHeading", () => {
 
 describe("sessionMenu (X46 linking from the right-click menu)", () => {
   it("offers Link to task… only for a session without a task, in a workspace with a task source", () => {
-    expect(sessionMenu({ linked: false, sources: true })).toEqual(["open", "link-task", "archive"]);
-    expect(sessionMenu({ linked: true, sources: true })).toEqual(["open", "archive"]);
-    expect(sessionMenu({ linked: false, sources: false })).toEqual(["open", "archive"]);
+    expect(sessionMenu({ linked: false, sources: true })).toContain("link-task");
+    expect(sessionMenu({ linked: true, sources: true })).not.toContain("link-task");
+    expect(sessionMenu({ linked: false, sources: false })).not.toContain("link-task");
   });
 
   it("offers only Open for a session another member runs, and Archive while that member is reachable (X88)", () => {
@@ -393,9 +393,43 @@ describe("sessionMenu (X46 linking from the right-click menu)", () => {
   });
 
   it("offers Keep in sync with this Mac where the session can be kept in sync (X60)", () => {
-    expect(sessionMenu({ linked: false, sources: true, sync: true })).toEqual(["open", "link-task", "keep-sync", "archive"]);
-    expect(sessionMenu({ linked: true, sources: false, sync: true })).toEqual(["open", "keep-sync", "archive"]);
-    expect(sessionMenu({ linked: true, sources: false, sync: false })).toEqual(["open", "archive"]);
+    expect(sessionMenu({ linked: false, sources: true, sync: true }).slice(-3)).toEqual(["link-task", "keep-sync", "archive"]);
+    expect(sessionMenu({ linked: true, sources: false, sync: true }).slice(-2)).toEqual(["keep-sync", "archive"]);
+    expect(sessionMenu({ linked: true, sources: false, sync: false })).not.toContain("keep-sync");
+  });
+});
+
+describe("sessionMenu (X112 actions in a session's menu)", () => {
+  const plain = { linked: true, sources: false, pr: false, unread: false, agent: true };
+  it("lists a session's actions in groups", () => {
+    expect(sessionMenu({ linked: false, sources: true, sync: true, pr: true, unread: false, agent: true })).toEqual([
+      "open", "open-pr", "open-in", "-",
+      "mark-unread", "rename", "-",
+      "move-workspace", "-",
+      "link-task", "keep-sync",
+      "archive",
+    ]);
+  });
+
+  it("offers Open PR only with a PR", () => {
+    expect(sessionMenu(plain).slice(0, 3)).toEqual(["open", "open-in", "-"]);
+    expect(sessionMenu({ ...plain, pr: true }).slice(0, 3)).toEqual(["open", "open-pr", "open-in"]);
+  });
+
+  it("offers Mark as unread on a read session with an agent and Mark as read on an unread one", () => {
+    const marks = (o: Partial<typeof plain>) => sessionMenu({ ...plain, ...o }).filter((x) => x === "mark-read" || x === "mark-unread");
+    expect(marks({ unread: false, agent: true })).toEqual(["mark-unread"]);
+    expect(marks({ unread: true, agent: true })).toEqual(["mark-read"]);
+    expect(marks({ unread: false, agent: false })).toEqual([]);
+  });
+});
+
+describe("openShortcut (X112)", () => {
+  it("Open shows the ⌘ key that opens the row, for the first nine", () => {
+    expect(openShortcut(0)).toBe("⌘1");
+    expect(openShortcut(8)).toBe("⌘9");
+    expect(openShortcut(9)).toBeUndefined();
+    expect(openShortcut(-1)).toBeUndefined();
   });
 });
 

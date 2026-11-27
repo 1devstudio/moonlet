@@ -1,9 +1,14 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Eye, FolderInput, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
-import { rpc } from "../lib/daemon";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { create } from "zustand";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { hostsApi, rpc } from "../lib/daemon";
+import { workspaceOpenIn, type OpenTarget } from "../lib/openIn";
+import { menuTop } from "../lib/menuPlace";
+import { copyOffers } from "../lib/centralCopies";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
-import { closeClaudeUpdate, errorToast, markRead, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { closeClaudeUpdate, errorToast, markRead, markUnread, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
 import { bringHere, moveSession, useReady } from "../lib/followStore";
@@ -287,6 +292,10 @@ function BasePullChip({ host, projectId }: { host: string; projectId: string }) 
 
 // ------------------------------------------------------------------- rows
 
+/** The session row whose inline rename the menu's Rename starts (X112), by
+ * `host/session` key. */
+const useRenameRequest = create<{ key: string | null }>(() => ({ key: null }));
+
 /** A right-clicked session row, or a project header when `projectId` is set. */
 interface RowMenuState {
   x: number;
@@ -408,6 +417,12 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const { lines } = useContext(TaskLines);
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
+  const renameAsked = useRenameRequest((r) => r.key === sesKey(host, s.id));
+  useEffect(() => {
+    if (!renameAsked) return;
+    useRenameRequest.setState({ key: null });
+    setRenaming(true);
+  }, [renameAsked]);
   const glyph = sessionGlyph(state, pr?.state);
   // Where it runs, when not here (X73).
   const hostInfo = useStore((st) => st.hosts[host]);
@@ -561,7 +576,7 @@ function bulkItems(picked: PickedSession[]): MenuItem[] {
     markReadItem(picked),
     { kind: "submenu", label: "Move to workspace", icon: <FolderInput size={14} className="text-muted" />, items: move.items, disabled: move.disabled ?? undefined },
     { kind: "divider" },
-    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} className="text-muted" />, onSelect: () => void archiveSessions(picked) },
+    { label: picked.length === 1 ? "Archive session" : `Archive ${n}`, icon: <Archive size={14} />, danger: true, onSelect: () => void archiveSessions(picked) },
   ];
 }
 
@@ -919,17 +934,34 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const sync = s ? { offered: !!syncChoice(host, kind, central), copy } : { offered: false, copy: undefined };
   // A picked row acts on every pick (X106).
   const bulk = useStore((st) => !!s && st.pick.keys.includes(sesKey(host, s.id)));
-  const items = bulk ? bulkItems(pickedTargets()) : s ? sessionItems(host, s, { linked: !!lines[s.id], sources }, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
-  // Another member's session, through its copy here, cannot be renamed (X88).
-  const renames = !!s && !s.owner && !bulk;
+  const pr = useStore((st) => (s ? st.prs[sesKey(host, s.id)] : undefined));
+  const unread = useStore((st) => !!s && sessionTerminals(st, host, s.id).some((x) => st.unread[termKey(host, x.id)]));
+  const agent = useStore((st) => !!s && sessionTerminals(st, host, s.id).some((x) => !!x.agent));
+  const copyPath = useSync((st) => (s ? st.copies[sesKey(host, s.id)]?.path || null : null));
+  const [targets, setTargets] = useState<OpenTarget[]>([]);
+  useEffect(() => {
+    if (s && !bulk) void hostsApi.openTargets().then(setTargets, () => {});
+  }, [s, bulk]);
+  const openIn = s ? workspaceOpenIn(targets, { kind: kind ?? (host !== "local" ? "ssh" : "local"), host, path: s.path }, copyPath) : null;
+  const ctx = { linked: !!s && !!lines[s.id], sources, pr: pr?.url ?? null, unread, agent, openIn };
+  const items = bulk ? bulkItems(pickedTargets()) : s ? sessionItems(host, s, ctx, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
+  // Kept inside the window by its real height, which grew with X112; taller
+  // than the window, it scrolls.
+  const box = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(m.y);
+  useLayoutEffect(() => {
+    const h = box.current?.offsetHeight ?? 0;
+    setTop(menuTop(m.y, h, window.innerHeight));
+  }, [m.y, items.length]);
   return (
     <div
-      className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
-      style={{ left: Math.min(m.x, window.innerWidth - 250), top: Math.min(m.y, window.innerHeight - 220) }}
+      className="fixed z-50 max-h-[calc(100vh-16px)] w-60 overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+      ref={box}
+      data-menu-panel
+      style={{ left: Math.min(m.x, window.innerWidth - 250), top }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MenuItems items={items} onClose={onClose} />
-      {renames && <div className="px-3 pb-1 pt-1.5 ui-text-11.5 text-faint">Double-click a session to rename it</div>}
     </div>
   );
 }
@@ -1058,19 +1090,63 @@ function followItems(host: string, s: Session): MenuItem[] {
   ];
 }
 
-function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
+interface SessionMenuContext {
+  linked: boolean;
+  sources: boolean;
+  /** Its pull request's page, when it has one. */
+  pr: string | null;
+  unread: boolean;
+  agent: boolean;
+  /** Where Open in… opens it, as the header's ⋯ menu does. */
+  openIn: ReturnType<typeof workspaceOpenIn> | null;
+}
+
+/** A session row's own menu (X112): what `sessionMenu` lists, as items. */
+function sessionItems(host: string, s: Session, c: SessionMenuContext, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
   const copy = s.owner ? { reachable: s.owner.reachable } : undefined;
-  return sessionMenu({ ...task, sync: sync.offered, copy }).flatMap((id): MenuItem[] => {
+  const icon = (I: typeof Archive) => <I size={14} className="text-muted" />;
+  const ids = sessionMenu({ linked: c.linked, sources: c.sources, sync: sync.offered, copy, pr: !!c.pr, unread: c.unread, agent: c.agent });
+  return ids.flatMap((id): MenuItem[] => {
     switch (id) {
-      case "open":
-        return [{ label: "Open", onSelect: () => selectSession(host, s.id) }];
+      case "-":
+        return [{ kind: "divider" }];
+      case "open": {
+        const at = visibleSessionOrder().findIndex((t) => t.host === host && t.id === s.id);
+        // An empty icon slot keeps its label in line with the others'.
+        return [{ label: "Open", icon: <span className="size-[14px] shrink-0" />, hint: openShortcut(at), onSelect: () => selectSession(host, s.id) }];
+      }
+      case "open-pr":
+        return c.pr ? [{ label: "Open PR", icon: icon(ExternalLink), onSelect: () => void openUrl(c.pr!).catch(errorToast) }] : [];
+      case "open-in": {
+        const o = c.openIn;
+        const choices = o && copyOffers(host).openIn ? o.choices : [];
+        return [
+          {
+            kind: "submenu",
+            label: "Open in",
+            icon: icon(AppWindow),
+            disabled: choices.length ? undefined : "No app to open it in",
+            items: choices.map((t): MenuItem => ({ label: t.label, onSelect: () => void hostsApi.openIn(t.id, o!.path, o!.host).catch(errorToast) })),
+          },
+        ];
+      }
+      case "mark-read":
+        return [{ label: "Mark as read", icon: icon(Eye), onSelect: () => markRead([{ host, id: s.id }]) }];
+      case "mark-unread":
+        return [{ label: "Mark as unread", icon: icon(EyeOff), onSelect: () => markUnread(host, s.id) }];
+      case "rename":
+        return [{ label: "Rename", icon: icon(Pencil), onSelect: () => useRenameRequest.setState({ key: sesKey(host, s.id) }) }];
+      case "move-workspace": {
+        const move = moveItems([{ host, ws: s }]);
+        return [{ kind: "submenu", label: "Move to workspace", icon: icon(FolderInput), items: move.items, disabled: move.disabled ?? undefined }];
+      }
       case "link-task":
-        return [{ label: "Link to task…", icon: <Link2 size={14} className="text-muted" />, onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
+        return [{ label: "Link to task…", icon: icon(Link2), onSelect: () => useStore.setState({ dialog: { kind: "link-task", host, session: s.id } }) }];
       case "keep-sync":
         return [
           {
             label: "Keep in sync with this Mac",
-            icon: <ArrowLeftRight size={14} className="text-muted" />,
+            icon: icon(ArrowLeftRight),
             checked: !!sync.copy,
             onSelect: () => void (sync.copy ? stopSync(sync.copy) : keepInSync(host, s.id)),
           },
@@ -1081,7 +1157,8 @@ function sessionItems(host: string, s: Session, task: { linked: boolean; sources
           { kind: "divider" },
           {
             label: "Archive",
-            icon: <Archive size={14} className="text-muted" />,
+            icon: <Archive size={14} />,
+            danger: true,
             onSelect: () => {
               void archiveSession({ host, ws: s });
             },

@@ -804,6 +804,15 @@ export function markRead(sessions: { host: string; id: string }[]) {
   updateBadge();
 }
 
+/** Mark as unread (X112): the session's first agent tab gets the unread
+ * mark a finished agent leaves, without opening anything. */
+export function markUnread(host: string, id: string) {
+  const agent = sessionTerminals(get(), host, id).find((t) => t.agent);
+  if (!agent) return;
+  set((s) => ({ unread: { ...s.unread, [termKey(host, agent.id)]: "done" } }));
+  updateBadge();
+}
+
 /** Every host's workspaces, local first, as the switcher lists them (X32). */
 export function hostWorkspaces(s: Pick<State, "hosts" | "accounts" | "workspaces" | "sections" | "sessions" | "profiles">): HostWorkspaces[] {
   return Object.values(s.hosts)

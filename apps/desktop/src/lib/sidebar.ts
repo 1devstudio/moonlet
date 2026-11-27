@@ -408,13 +408,29 @@ export function lastActive(own: readonly { last_output_at: number }[], s: Sessio
   return own.reduce((m, t) => Math.max(m, t.last_output_at), s.created_at);
 }
 
+export type SessionMenuItem = "open" | "open-pr" | "open-in" | "mark-read" | "mark-unread" | "rename" | "move-workspace" | "link-task" | "keep-sync" | "archive" | "-";
+
 /**
- * A session row's right-click menu. Link to task… is there for a session
- * without a task in a workspace with a task source (X46). A copy of a
- * session another member runs (X88) has only what the central host can ask
- * that member for: Open, and Archive while the member is reachable.
+ * A session row's right-click menu (X112), its groups split by "-". Open PR
+ * shows with a PR; Mark as read on an unread session, Mark as unread on a
+ * read one with an agent tab. Link to task… is there for a session without a
+ * task in a workspace with a task source (X46). A copy of a session another
+ * member runs (X88) has only what the central host can ask that member for:
+ * Open, and Archive while the member is reachable.
  */
-export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean } }): ("open" | "link-task" | "keep-sync" | "archive")[] {
+export function sessionMenu(s: { linked: boolean; sources: boolean; sync?: boolean; copy?: { reachable: boolean }; pr?: boolean; unread?: boolean; agent?: boolean }): SessionMenuItem[] {
   if (s.copy) return s.copy.reachable ? ["open", "archive"] : ["open"];
-  return ["open", ...(!s.linked && s.sources ? (["link-task"] as const) : []), ...(s.sync ? (["keep-sync"] as const) : []), "archive"];
+  const groups: SessionMenuItem[][] = [
+    ["open", ...(s.pr ? (["open-pr"] as const) : []), "open-in"],
+    [...(s.unread ? (["mark-read"] as const) : s.agent ? (["mark-unread"] as const) : []), "rename"],
+    ["move-workspace"],
+    [...(!s.linked && s.sources ? (["link-task"] as const) : []), ...(s.sync ? (["keep-sync"] as const) : [])],
+  ];
+  // Archive brings its own divider, after the Run only on… items (X73).
+  return [...groups.filter((g) => g.length).flatMap((g, i) => (i ? ["-" as const, ...g] : g)), "archive"];
 }
+
+/** The key shown beside Open in a session's menu (X112): ⌘1 to ⌘9 open the
+ * first nine sessions in sidebar order (`selectSessionByIndex`). */
+export const openShortcut = (index: number): string | undefined => (index >= 0 && index < 9 ? `⌘${index + 1}` : undefined);
+

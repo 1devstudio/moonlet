@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { focusTerminal, markRead, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
+import { focusTerminal, markRead, markUnread, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
 import { openDiffTab, visibleSessionOrder } from "./actions";
 import type { Section, Session, TerminalInfo, Workspace } from "./protocol";
 
@@ -94,6 +94,16 @@ describe("markRead (X106)", () => {
     expect(useStore.getState().unread).toEqual({ "local:8": "error" });
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
     expect(sessionNeedsYou(useStore.getState(), "local", "s2")).toBe(false);
+  });
+});
+
+describe("markUnread (X112)", () => {
+  it("marks a session's first agent tab unread without opening it", () => {
+    useStore.setState({ terminals: { local: { 9: term(9, "s3", { kind: "shell", agent: undefined }), 11: term(11, "s3"), 12: term(12, "s3") } } });
+    markUnread("local", "s3");
+    expect(useStore.getState().unread).toEqual({ "local:11": "done" });
+    expect(useStore.getState().selected).toEqual({ host: "local", session: "s1" });
+    expect(sessionNeedsYou(useStore.getState(), "local", "s3")).toBe(true);
   });
 });
 

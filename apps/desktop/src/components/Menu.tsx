@@ -1,7 +1,8 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight } from "lucide-react";
 import { firstActive, menuKey, sameItem } from "../lib/menuNav";
+import { menuTop, submenuLeft } from "../lib/menuPlace";
 import { cx } from "./ui";
 
 export type MenuItem =
@@ -53,7 +54,7 @@ export function MenuItems({
           return (
             <button key={i} type="button" disabled title={it.disabled} className="flex w-full cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14 opacity-50">
               {it.icon}
-              <span className="flex-1">{it.label}</span>
+              <span className="flex-1 truncate whitespace-nowrap">{it.label}</span>
               <ChevronRight size={14} className="text-muted" />
             </button>
           );
@@ -69,14 +70,10 @@ export function MenuItems({
                 className={cx("flex w-full cursor-default items-center gap-2.5 rounded-md px-3 py-[7px] text-left ui-text-14", open === i && "bg-hover")}
               >
                 {it.icon}
-                <span className="flex-1">{it.label}</span>
+                <span className="flex-1 truncate whitespace-nowrap">{it.label}</span>
                 <ChevronRight size={14} className="text-muted" />
               </button>
-              {open === i && (
-                <div className="absolute left-full top-[-5px] z-50 ml-1 min-w-[200px] rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
-                  <MenuItems items={it.items} onClose={onClose} />
-                </div>
-              )}
+              {open === i && <Submenu items={it.items} onClose={onClose} />}
             </div>
           );
         return (
@@ -108,6 +105,32 @@ export function MenuItems({
         );
       })}
     </>
+  );
+}
+
+/** A submenu beside its item, placed against the window rather than in the
+ *  menu's flow, so a menu that scrolls (X112) never clips it. */
+function Submenu({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const row = box.current?.parentElement;
+    const item = row?.getBoundingClientRect();
+    // Beside the menu's edge, not the row's, which a scrollbar narrows.
+    const panel = row?.closest("[data-menu-panel]")?.getBoundingClientRect() ?? item;
+    const own = box.current?.getBoundingClientRect();
+    if (!item || !panel || !own) return;
+    setAt({ left: submenuLeft(panel.left, panel.right, own.width, window.innerWidth), top: menuTop(item.top - 5, own.height, window.innerHeight) });
+  }, [items.length]);
+  return (
+    <div
+      ref={box}
+      data-menu-panel
+      style={{ position: "fixed", left: at?.left ?? -9999, top: at?.top ?? 0, visibility: at ? "visible" : "hidden" }}
+      className="z-50 max-h-[calc(100vh-16px)] min-w-[200px] overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+    >
+      <MenuItems items={items} onClose={onClose} />
+    </div>
   );
 }
 
@@ -272,6 +295,7 @@ export function ContextMenu({ at, label, items, onClose, height = 260 }: { at: {
     <div
       role="menu"
       aria-label={label}
+      data-menu-panel
       className="fixed z-50 w-56 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
       style={{ left: Math.min(at.x, window.innerWidth - 234), top: Math.min(at.y, window.innerHeight - height) }}
       onMouseDown={(e) => e.stopPropagation()}
