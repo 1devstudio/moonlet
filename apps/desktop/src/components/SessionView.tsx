@@ -10,6 +10,7 @@ import { agentLabel } from "../lib/agents";
 import { TaskBar, useSessionTask } from "./tasks/SessionTask";
 import { TabStrip } from "./SessionTabs";
 import { CopyLine } from "./CopyLine";
+import { CopyOnHover } from "./CopyOnHover";
 
 /** A session without a task heads its column with its name and branch (X94). */
 function SessionHeader({ ws }: { ws: Session }) {
@@ -24,7 +25,11 @@ function SessionHeader({ ws }: { ws: Session }) {
     >
       <GitBranch size={14} strokeWidth={1.75} className="shrink-0 text-muted" />
       <h1 className="min-w-0 truncate ui-text-13.5 font-medium text-fg">{ws.name}</h1>
-      {ws.branch && <span className="min-w-0 truncate font-mono ui-text-12 text-faint">{ws.branch}</span>}
+      {ws.branch && (
+        <CopyOnHover copies={[{ label: "Copy branch name", text: ws.branch }]}>
+          <span className="min-w-0 truncate font-mono ui-text-12 text-faint">{ws.branch}</span>
+        </CopyOnHover>
+      )}
     </header>
   );
 }
