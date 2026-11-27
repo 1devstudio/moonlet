@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ArtifactView } from "./components/Artifacts";
 import { ChevronDown, ChevronUp, FolderPlus, Plus, Search, X } from "lucide-react";
 import { ArchivedSession } from "./components/ArchivedSession";
 import { Sidebar } from "./components/Sidebar";
@@ -213,13 +214,13 @@ export default function App() {
       )}
       {/* 6 px between the panes and the window's edges (X94): the gaps between columns are the splitters. */}
       <main
-        className={cx("relative min-w-0 flex-1 pb-[6px]", !s.sidebarOpen && "pl-[6px]", !(s.rightOpen && sessions && ws && host && !ws.archived) && "pr-[6px]")}
+        className={cx("relative min-w-0 flex-1 pb-[6px]", !s.sidebarOpen && "pl-[6px]", !(s.rightOpen && sessions && ws && host && !ws.archived && !s.showArtifacts) && "pr-[6px]")}
         inert={!!s.settingsPage}
       >
-        {mode === "tasks" ? <TasksMode /> : mode === "design" ? <DesignMain /> : ws && host ? ws.archived ? <ArchivedSession key={host + ws.id} host={host} ws={ws} /> : <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
+        {mode === "tasks" ? <TasksMode /> : mode === "design" ? <DesignMain /> : s.showArtifacts ? <ArtifactView /> : ws && host ? ws.archived ? <ArchivedSession key={host + ws.id} host={host} ws={ws} /> : <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
         {finding && ws && sessions && <FindBar onClose={() => setFinding(false)} />}
       </main>
-      {s.rightOpen && sessions && ws && host && !ws.archived && (
+      {s.rightOpen && sessions && ws && host && !ws.archived && !s.showArtifacts && (
         <>
           <Splitter dir="row" gap onDrag={(d) => (designTab ? setDesignWidth(clampRight(rightWidth - d)) : useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) })))} />
           <div style={{ width: rightWidth }} className="shrink-0 pb-[6px] pr-[6px]" inert={!!s.settingsPage}>

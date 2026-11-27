@@ -1473,6 +1473,26 @@ impl Daemon {
                 let versions = plan.versions.iter().map(|v| ArtifactVersion { n: v.n, state: v.state.as_str().into(), at: v.at }).collect();
                 ok(ArtifactText { info: self.plan_info(&plan), text: Some(text), version: Some(n), versions })
             })(),
+            m::ARTIFACT_SEARCH => (|| {
+                let r: m::ArtifactSearch = params(p)?;
+                let query = r.query.trim().to_lowercase();
+                if query.is_empty() {
+                    return ok(Vec::<moonlet_proto::types::ArtifactMatch>::new());
+                }
+                let matches: Vec<_> = self
+                    .artifacts_of(&r.workspace)
+                    .into_iter()
+                    .filter_map(|a| {
+                        if a.name.to_lowercase().contains(&query) {
+                            return Some(moonlet_proto::types::ArtifactMatch { id: a.id, field: "name".into(), snippet: None });
+                        }
+                        let text = self.plans.text(&a.id, a.version?).ok()?;
+                        let snippet = moonlet_core::artifact::snippet(&text, &query)?;
+                        Some(moonlet_proto::types::ArtifactMatch { id: a.id, field: "text".into(), snippet: Some(snippet) })
+                    })
+                    .collect();
+                ok(matches)
+            })(),
             m::ARTIFACT_RENAME => (|| {
                 app_only(conn, "renaming an artifact")?;
                 let r: m::ArtifactRename = params(p)?;

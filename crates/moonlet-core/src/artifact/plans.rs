@@ -89,6 +89,50 @@ pub fn display_name(plan: &Plan, session_name: Option<&str>, several: bool) -> S
     }
 }
 
+/// Where `query` is in `text`, ignoring case: the line it is on, cut at
+/// whole words to at most 40 characters each side of it, with `…` where it
+/// was cut. `None` when it is not there.
+pub fn snippet(text: &str, query: &str) -> Option<String> {
+    const SIDE: usize = 40;
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        let chars: Vec<char> = line.chars().collect();
+        // Each character lowercased on its own, with where it starts in the
+        // lowercased line, so a match maps back to whole characters whatever
+        // lowercasing does to their lengths.
+        let mut folded = String::new();
+        let mut starts = Vec::with_capacity(chars.len());
+        for c in &chars {
+            starts.push(folded.len());
+            folded.extend(c.to_lowercase());
+        }
+        let at = folded.find(&query)?;
+        let start = starts.iter().rposition(|&s| s <= at)?;
+        let end = starts.iter().position(|&s| s >= at + query.len()).unwrap_or(chars.len());
+        let mut from = start.saturating_sub(SIDE);
+        if from > 0 {
+            // Start at the next whole word.
+            while from < start && !chars[from - 1].is_whitespace() {
+                from += 1;
+            }
+        }
+        let mut to = (end + SIDE).min(chars.len());
+        if to < chars.len() {
+            // End at the last whole word.
+            while to > end && !chars[to].is_whitespace() {
+                to -= 1;
+            }
+        }
+        let cut: String = chars[from..to].iter().collect();
+        let cut = cut.trim();
+        Some(format!("{}{cut}{}", if from > 0 { "…" } else { "" }, if to < chars.len() { "…" } else { "" }))
+    })
+}
+
 /// A plan a chat proposed, or its answer, as the chat's item has it.
 pub struct Proposal<'a> {
     pub session: &'a str,
@@ -720,5 +764,25 @@ mod tests {
             plans.plan(id).unwrap().unwrap().versions[1].state,
             VersionState::Pending
         );
+    }
+
+    #[test]
+    fn a_snippet_is_the_line_the_text_was_found_on_cut_around_it() {
+        let text = "# Search for the product list\n\n1. Add `SearchBox` in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones and tablets\n2. Count";
+        assert_eq!(
+            snippet(text, "DEBOUNCE").as_deref(),
+            Some("…in `src/components/` with a 150 ms debounce so typing stays smooth on slow phones…")
+        );
+        assert_eq!(snippet(text, "count").as_deref(), Some("2. Count"));
+        assert_eq!(snippet(text, "fuzzy"), None);
+        assert_eq!(snippet(text, "  "), None);
+    }
+
+    #[test]
+    fn a_snippet_never_breaks_on_text_whose_lowercase_moves_its_characters() {
+        // ẞ lowercases one byte shorter, İ one byte longer: the same length, other offsets.
+        assert_eq!(snippet("ẞİ then debounce it", "debounce").as_deref(), Some("ẞİ then debounce it"));
+        assert_eq!(snippet("Straße İstanbul", "İSTANBUL").as_deref(), Some("Straße İstanbul"));
+        assert_eq!(snippet("ẞİ", "x"), None);
     }
 }

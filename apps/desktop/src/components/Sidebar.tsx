@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, Eye, EyeOff, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, GitFork, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Eye, EyeOff, Layers, ExternalLink, FolderInput, Pencil, AppWindow, PinOff, CornerDownRight, ArrowUpToLine, GitFork, Clock, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { hostsApi, rpc } from "../lib/daemon";
@@ -42,6 +42,7 @@ import { sidebarNotice } from "../lib/hostUpdate";
 import { useHostUpdates } from "../lib/hostUpdateStore";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 import { ScrollArea } from "./ScrollArea";
+import { ArtifactsList } from "./Artifacts";
 
 // ------------------------------------------------------------------ helpers
 
@@ -1283,6 +1284,7 @@ export function Sidebar() {
   const accounts = useStore((s) => s.accounts);
   const shown = useStore((s) => shownWorkspace(s));
   const showHistory = useStore((s) => s.showHistory);
+  const showArtifacts = useStore((s) => s.showArtifacts);
   const mode = useStore((s) => modeOf(s));
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1330,8 +1332,13 @@ export function Sidebar() {
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />
-        <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory })} />
+        {/* A workspace's plans and designs (X114). */}
+        <NavRow icon={<Layers size={15} strokeWidth={1.75} />} label="Artifacts" active={showArtifacts} onClick={() => useStore.setState({ showArtifacts: !showArtifacts, showHistory: false })} />
+        <NavRow icon={<History size={15} strokeWidth={1.75} />} label="History" active={showHistory} onClick={() => useStore.setState({ showHistory: !showHistory, showArtifacts: false })} />
       </nav>
+      {showArtifacts ? (
+        <ArtifactsList />
+      ) : (
       <ScrollArea tone="window" className="pb-3">
         {showHistory ? (
           <HistoryList />
@@ -1376,10 +1383,11 @@ export function Sidebar() {
           </div>
         )}
       </ScrollArea>
+      )}
       </>
       )}
       <ClaudeUpdateBanner />
-      {picking && mode === "sessions" && !showHistory ? (
+      {picking && mode === "sessions" && !showHistory && !showArtifacts ? (
         <PickBar />
       ) : (
       <div className="flex items-center gap-1 px-3 py-2.5">

@@ -16,7 +16,7 @@ export function setMode(mode: AppMode) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
   if (!ws || modeOf(s) === mode) return;
-  useStore.setState({ mode: { ...s.mode, [wsKey(ws.host, ws.id)]: mode }, showHistory: false });
+  useStore.setState({ mode: { ...s.mode, [wsKey(ws.host, ws.id)]: mode }, showHistory: false, showArtifacts: false });
 }
 
 /** A mode's shortcut (⌃⌘T, ⌃⌘D): opens it, or goes back to Sessions from it. */

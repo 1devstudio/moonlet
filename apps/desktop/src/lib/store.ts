@@ -255,6 +255,8 @@ interface State extends UiPersist {
   /** Files with unsaved edits in an editor tab (`host|path`, X26). */
   dirtyFiles: Record<string, true>;
   showHistory: boolean;
+  /** The sidebar lists the workspace's artifacts, and the main area shows the one open (X114). */
+  showArtifacts: boolean;
   dialog:
     | null
     | {
@@ -358,6 +360,7 @@ function makeStore() {
   fsVersion: {},
   dirtyFiles: {},
   showHistory: false,
+  showArtifacts: false,
   dialog: null,
   confirm: null,
   settingsPage: null,
@@ -768,7 +771,7 @@ export function focusTerminal(host: string, session: number) {
   set((s) => {
     const unread = { ...s.unread };
     delete unread[termKey(host, session)];
-    return { selected: { host, session: ws }, unread, showHistory: false, ...showSessionWorkspace(s, host, ws) };
+    return { selected: { host, session: ws }, unread, showHistory: false, showArtifacts: false, ...showSessionWorkspace(s, host, ws) };
   });
   if (tab) setLayout(host, ws, { ...layout, active: tab.id, focused: session });
   doneBursts.seen(sesKey(host, ws));
@@ -955,7 +958,7 @@ export function switchWorkspace(ref: WorkspaceRef) {
   const to = { ...ref, account: ref.account ?? s.accounts[ref.host]?.account ?? ref.host };
   // Kept before X68 under the host's key, as an id alone.
   const restore = restoreTarget(lastSession[lastSessionKey(to)] ?? lastSession[wsKey(ref.host, ref.id)], hostWorkspaces(s), to);
-  set({ workspace: to, lastSession, showHistory: false });
+  set({ workspace: to, lastSession, showHistory: false, showArtifacts: false });
   if (restore) selectSession(restore.host, restore.session, true);
   else set({ selected: null });
 }
