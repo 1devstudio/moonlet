@@ -4,6 +4,7 @@
 pub mod account;
 pub mod agent;
 pub mod app_token;
+pub mod artifact;
 pub mod bundle;
 pub mod chat;
 pub mod claude_settings;

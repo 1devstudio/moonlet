@@ -1788,6 +1788,11 @@ export const M = {
   designShare: "design.share",
   designUnshare: "design.unshare",
   designAdopt: "design.adopt",
+  // Artifacts (X114)
+  artifactList: "artifact.list",
+  artifactRead: "artifact.read",
+  artifactRename: "artifact.rename",
+  artifactEdit: "artifact.edit",
 } as const;
 
 export const EV = {
@@ -1840,6 +1845,8 @@ export const EV = {
   cloudChanged: "cloud.changed",
   jobOutput: "job.output",
   designChanged: "design.changed",
+  /** `{id}`: an artifact changed: a plan's new version, answer or name (X114). */
+  artifactChanged: "artifact.changed",
   designOpen: "design.open",
 } as const;
 
@@ -1866,4 +1873,41 @@ export interface SignIn {
   name: string;
   login: string;
   check: string;
+}
+
+/** Where an artifact changes (X114): a session, or a workspace. */
+export interface ArtifactHome {
+  workspace?: string;
+  session?: string;
+  project?: string;
+  /** Its session is archived: it is read only. */
+  archived?: boolean;
+}
+
+/** One version of a plan artifact (X114). */
+export interface ArtifactVersion {
+  n: number;
+  state: "pending" | "approved" | "rejected" | "edited";
+  at: number;
+}
+
+/** A plan or a design, as the Artifacts list shows it (X114). */
+export interface ArtifactInfo {
+  /** `plan:<session>:<key>` or `design:<id>`. */
+  id: string;
+  kind: "plan" | "design";
+  name: string;
+  home: ArtifactHome;
+  updated_at: number;
+  version?: number;
+  /** The sessions, other than its home, that refer to it. */
+  used_by: string[];
+}
+
+/** An artifact with a plan's text and versions (X114). */
+export interface ArtifactText {
+  info: ArtifactInfo;
+  text?: string;
+  version?: number;
+  versions: ArtifactVersion[];
 }

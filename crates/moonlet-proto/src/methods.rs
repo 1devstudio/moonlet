@@ -459,6 +459,21 @@ pub const DESIGN_UNSHARE: &str = "design.unshare";
 /// [`DesignRef`] naming the session; the answer is its slug there.
 pub const DESIGN_ADOPT: &str = "design.adopt";
 
+// Artifacts (X114)
+/// A workspace's artifacts, newest change first: [`ArtifactInfo`]s.
+/// Params: [`ArtifactWorkspace`].
+pub const ARTIFACT_LIST: &str = "artifact.list";
+/// One artifact with a plan's text and versions: [`ArtifactText`].
+/// Params: [`ArtifactRead`].
+pub const ARTIFACT_READ: &str = "artifact.read";
+/// Names a plan as the user does; `name: null` gives back its session's
+/// name. App only. Params: [`ArtifactRename`].
+pub const ARTIFACT_RENAME: &str = "artifact.rename";
+/// Saves a plan's text edited by hand as a new version, and tells its
+/// chat with its next message. App only. Params: [`ArtifactEdit`]; the
+/// answer is the new version's number, or `null` when nothing changed.
+pub const ARTIFACT_EDIT: &str = "artifact.edit";
+
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
 pub const MOBILE_STATUS: &str = "mobile.status";
@@ -738,6 +753,8 @@ pub const EV_SYNC_CHANGED: &str = "sync.changed";
 /// in a workspace design (`design`, X65), or in a workspace's other design
 /// files (both `null`) (X64).
 pub const EV_DESIGN_CHANGED: &str = "design.changed";
+/// `{id}`: an artifact changed: a plan's new version, answer or name (X114).
+pub const EV_ARTIFACT_CHANGED: &str = "artifact.changed";
 /// [`DesignRender`]: render a card, sent only to the connection of the app
 /// that said [`DESIGN_RENDER_READY`] (X64).
 pub const EV_DESIGN_RENDER: &str = "design.render";
@@ -2434,6 +2451,32 @@ pub struct FsRead {
     pub path: String,
     #[serde(default)]
     pub max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactWorkspace {
+    pub workspace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRead {
+    pub id: String,
+    /// The version to read; the latest without one.
+    #[serde(default)]
+    pub version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRename {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactEdit {
+    pub id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

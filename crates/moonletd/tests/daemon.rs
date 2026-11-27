@@ -7038,3 +7038,103 @@ async fn a_local_connection_named_as_a_worker_sends_no_pack() {
     let Some(Frame::Json(Message::Response { id: 0, error: Some(e), .. })) = answer else { panic!("{answer:?}") };
     assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "only a worker sends packs"));
 }
+
+/// X114: a fake `claude` that writes a plan when asked, as Claude's
+/// `ExitPlanMode` call with its plan file, and records every user message.
+const FAKE_PLANNER: &str = r##"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> claude-user
+      case "$line" in *'propose a plan'*)
+        printf '%s\n' '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"ExitPlanMode","input":{"plan":"# Search for the product list\n\nAdd a search box.","planFilePath":"/Users/me/.claude/plans/search-plan.md"}}]}}' ;;
+      esac
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"##;
+
+/// X114: the artifacts of `ws`, waited for until `f` holds.
+async fn artifacts_until(c: &mut Client, ws: &str, f: impl Fn(&[moonlet_proto::types::ArtifactInfo]) -> bool) -> Vec<moonlet_proto::types::ArtifactInfo> {
+    for _ in 0..100 {
+        let list: Vec<moonlet_proto::types::ArtifactInfo> = c.request(methods::ARTIFACT_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+        if f(&list) {
+            return list;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the artifacts never got there");
+}
+
+/// X114: a plan a session's agent proposes is listed as an artifact of the
+/// session's workspace, named after the session; it is read with its
+/// versions, renamed and edited by hand by the app alone, and an edit is
+/// told to its chat with the next message.
+#[tokio::test]
+async fn a_plan_a_sessions_agent_proposes_is_an_artifact_the_app_renames_and_edits() {
+    use moonlet_proto::types::{ArtifactText, Session};
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Add search to the product list", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let chat = session.terminals[0];
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": chat, "text": "propose a plan"})).await.unwrap();
+
+    let id = format!("plan:{}:search-plan", session.id);
+    let list = artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id)).await;
+    let plan = list.iter().find(|a| a.id == id).unwrap();
+    assert_eq!((plan.kind.as_str(), plan.name.as_str(), plan.version), ("plan", "Add search to the product list", Some(1)));
+    assert_eq!((plan.home.workspace.as_deref(), plan.home.session.as_deref(), plan.home.project.as_deref(), plan.home.archived), (Some(ws.as_str()), Some(session.id.as_str()), Some(project.id.as_str()), false));
+
+    // Nobody answered it: the turn ended with the call closed, which is no approval.
+    let read: ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await.unwrap();
+    assert_eq!(read.text.as_deref(), Some("# Search for the product list\n\nAdd a search box.\n"));
+    assert_eq!(read.versions.iter().map(|v| (v.n, v.state.as_str())).collect::<Vec<_>>(), [(1, "pending")]);
+
+    // It follows the session's renames until it is renamed itself.
+    let _: serde_json::Value = c.request(methods::SESSION_UPDATE, serde_json::json!({"id": session.id, "name": "Product search"})).await.unwrap();
+    artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id && a.name == "Product search")).await;
+
+    // An agent's CLI may neither rename nor edit it.
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    for (method, params) in [(methods::ARTIFACT_RENAME, serde_json::json!({"id": id, "name": "Mine"})), (methods::ARTIFACT_EDIT, serde_json::json!({"id": id, "text": "x"}))] {
+        let refused = cli.request::<_, serde_json::Value>(method, params).await;
+        assert!(refused.is_err(), "{method}: {refused:?}");
+    }
+
+    let _: serde_json::Value = c.request(methods::ARTIFACT_RENAME, serde_json::json!({"id": id, "name": "Search plan"})).await.unwrap();
+    let v: Option<u32> = c.request(methods::ARTIFACT_EDIT, serde_json::json!({"id": id, "text": "# Search for the product list\n\nAdd a search box.\nShow a count."})).await.unwrap();
+    assert_eq!(v, Some(2));
+    let list = artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id && a.version == Some(2))).await;
+    assert_eq!(list.iter().find(|a| a.id == id).unwrap().name, "Search plan");
+
+    // The chat hears of the edit before its next message.
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": chat, "text": "go on"})).await.unwrap();
+    let worktree = std::path::PathBuf::from(&session.path);
+    let told = d.home.path().join(".moonlet/artifacts/plans").join(&session.id).join("search-plan/v2.md");
+    let mut heard = String::new();
+    for _ in 0..100 {
+        heard = std::fs::read_to_string(worktree.join("claude-user")).unwrap_or_default();
+        if heard.contains("go on") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let edit_line = heard.find(&format!("The plan was edited by hand: {}", told.display())).expect(&heard);
+    assert!(edit_line < heard.find("go on").unwrap(), "{heard}");
+
+    // Archived, its session's plan stays listed and readable, read only.
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": session.id})).await.unwrap();
+    let list = artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id && a.home.archived)).await;
+    assert_eq!(list.iter().find(|a| a.id == id).unwrap().version, Some(2));
+    let read: ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id, "version": 1})).await.unwrap();
+    assert_eq!(read.text.as_deref(), Some("# Search for the product list\n\nAdd a search box.\n"));
+    // Read only: neither renamed nor edited any more.
+    for (method, params) in [(methods::ARTIFACT_RENAME, serde_json::json!({"id": id, "name": "Later"})), (methods::ARTIFACT_EDIT, serde_json::json!({"id": id, "text": "late"}))] {
+        let refused = c.request::<_, serde_json::Value>(method, params).await;
+        assert!(refused.as_ref().is_err_and(|e| e.to_string() == "invalid_params: an archived session's plan is read only"), "{method}: {refused:?}");
+    }
+}
