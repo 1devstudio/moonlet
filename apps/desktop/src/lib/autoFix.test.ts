@@ -14,19 +14,19 @@ describe("auto-fixing a PR (X117)", () => {
   it("offers Auto-fix this PR only for an open PR, checked as the host says", () => {
     expect(autoFixMenu(session("a"), { state: "merged" })).toBeNull();
     expect(autoFixMenu(session("a"), null)).toBeNull();
-    expect(autoFixMenu(session("a"), { state: "open" })).toEqual({ checked: false, hint: null, disabled: false });
+    expect(autoFixMenu(session("a"), { state: "open" })).toEqual({ checked: false, hint: null });
     const on = session("a", { auto_fix: { pr: 12, on: true, tries: 1, stopped: false } });
-    expect(autoFixMenu(on, { state: "open" })).toEqual({ checked: true, hint: null, disabled: false });
+    expect(autoFixMenu(on, { state: "open" })).toEqual({ checked: true, hint: null });
     const stopped = session("a", { auto_fix: { pr: 12, on: true, tries: 3, stopped: true } });
-    expect(autoFixMenu(stopped, { state: "open" })).toEqual({ checked: false, hint: "Auto-fix stopped after 3 tries", disabled: false });
+    expect(autoFixMenu(stopped, { state: "open" })).toEqual({ checked: false, hint: "Auto-fix stopped after 3 tries" });
     const noChat = session("a", { auto_fix: { pr: 12, on: true, tries: 0, stopped: false, note: "Needs a Claude chat in this session" } });
-    expect(autoFixMenu(noChat, { state: "open" })).toEqual({ checked: true, hint: "Needs a Claude chat in this session", disabled: false });
+    expect(autoFixMenu(noChat, { state: "open" })).toEqual({ checked: true, hint: "Needs a Claude chat in this session" });
   });
 
   it("says what auto-fix just sent or that it stopped, once", () => {
     const before = [session("a", { auto_fix: { pr: 12, on: true, tries: 0, stopped: false } }), session("b", { auto_fix: { pr: 7, on: true, tries: 2, stopped: false } })];
     const after = [
-      session("a", { auto_fix: { pr: 12, on: true, tries: 1, stopped: false, last: ["checks", 5] } }),
+      session("a", { auto_fix: { pr: 12, on: true, tries: 1, stopped: false, last: { kind: "checks", at: 5 } } }),
       session("b", { auto_fix: { pr: 7, on: true, tries: 3, stopped: true } }),
     ];
     expect(autoFixNotices(before, after)).toEqual([
@@ -34,5 +34,7 @@ describe("auto-fixing a PR (X117)", () => {
       { session: "b", text: "Auto-fix stopped on #7 after 3 tries. Checks still fail." },
     ]);
     expect(autoFixNotices(after, after)).toEqual([]);
+    // Sessions the app had not loaded yet, as on reconnecting: nothing new.
+    expect(autoFixNotices([], after)).toEqual([]);
   });
 });

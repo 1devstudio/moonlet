@@ -127,7 +127,7 @@ impl TaskSnapshots {
 }
 
 /// Writes `file` through a temporary file, mode 0600.
-fn write_private(file: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(file: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let dir = file.parent().context("no folder")?;

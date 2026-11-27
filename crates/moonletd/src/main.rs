@@ -407,7 +407,7 @@ fn run_daemon(
         // Designs follow a merged workspace (X71).
         daemon.follow_merges();
         // Sessions archived once their PR merges (X116).
-        daemon.follow_prs_to_archive();
+        daemon.follow_prs();
         // Design systems and designs on every member of the account (X71).
         daemon.keep_design_copies();
         daemon.keep_session_copies();

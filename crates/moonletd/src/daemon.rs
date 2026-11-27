@@ -4820,12 +4820,13 @@ impl Daemon {
         Ok(done)
     }
 
-    /// Archives this host's sessions once their PR merges, or closes, when
-    /// the Git settings say so (X116). Looks every minute: an open PR is
+    /// Follows this host's sessions' PRs: archives a session once its PR
+    /// merges, or closes, when the Git settings say so (X116), and sends
+    /// its Claude what auto-fix covers (X117). Looks every minute: an open PR is
     /// asked about every 5 minutes, a session with no PR or a closed one
     /// every 15, and a merged one is answered from what was saved (X108).
     /// With the setting off it asks nothing. Runs for the daemon's life.
-    pub fn follow_prs_to_archive(self: &Arc<Self>) {
+    pub fn follow_prs(self: &Arc<Self>) {
         let unit = pr_watch_unit();
         let d = self.clone();
         tokio::spawn(async move {
@@ -4936,13 +4937,14 @@ impl Daemon {
 
     async fn auto_fix_step(&self, s: &moonlet_proto::types::Session, pr: &moonlet_proto::types::PullRequest) {
         use moonlet_core::autofix::{ChecksStep, Record, after_step, checks_step, covered, review_message};
-        let unit = std::env::var("MOONLET_TEST_PR_WATCH_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000u64);
+        use moonlet_proto::types::{AutoFixKind, AutoFixSent};
+        let unit = pr_watch_unit();
         let now = now_ms();
         let mut rec = self
             .autofix
             .update(&s.id, |r| {
                 if r.as_ref().is_none_or(|r| r.pr != pr.number) {
-                    *r = Some(Record { pr: pr.number, first_seen: now, ..Record::default() });
+                    *r = Some(Record::new(pr, now));
                 }
             })
             .expect("just set");
@@ -4952,7 +4954,7 @@ impl Daemon {
         // Turned off while the step read GitHub: send nothing.
         let still_on = || self.autofix.get(&s.id).is_none_or(|r| r.on != Some(false));
         let settings = git_settings::load(&git_settings::path());
-        let show = |rec: &Record, on: bool, note: &str, last: Option<(String, u64)>| moonlet_proto::types::AutoFix {
+        let show = |rec: &Record, on: bool, note: &str, last: Option<AutoFixSent>| moonlet_proto::types::AutoFix {
             pr: rec.pr,
             on,
             tries: rec.tries,
@@ -4988,9 +4990,13 @@ impl Daemon {
             rec.author = view["author"]["login"].as_str().map(String::from);
         }
         // Only the user's own PRs: a fork's PR can share the branch's name.
-        let Some(viewer) = viewer.filter(|v| rec.author.as_deref() == Some(v.as_str())) else {
+        let Some(viewer) = viewer.clone().filter(|v| rec.author.as_deref() == Some(v.as_str())) else {
             let rec = save(&rec);
-            let note = if rec.author.is_some() { "Only your own pull requests are auto-fixed" } else { "" };
+            let note = match (&viewer, &rec.author) {
+                (None, _) => "Cannot read your GitHub login (gh api user)",
+                (Some(_), Some(_)) => "Only your own pull requests are auto-fixed",
+                (Some(_), None) => "",
+            };
             let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, note, None)));
             return;
         };
@@ -5001,28 +5007,35 @@ impl Daemon {
         };
         let mut last = None;
         match checks_step(&mut rec, pr) {
-            ChecksStep::Send(_) if !still_on() => {}
-            ChecksStep::Send(text) => match self.chats.send(chat, &text, &[]) {
-                Ok(()) => last = Some(("checks".to_string(), now)),
+            ChecksStep::Send { .. } if !still_on() => {}
+            // Counted only once the chat took it: a failed send is tried again.
+            ChecksStep::Send { head, text } => match self.chats.send(chat, &text, &[]) {
+                Ok(()) => {
+                    rec.checks_sent(head);
+                    last = Some(AutoFixSent { kind: AutoFixKind::Checks, at: now });
+                }
                 Err(e) => tracing::warn!(session = %s.id, "auto-fix could not send: {e:#}"),
             },
             ChecksStep::Stop | ChecksStep::Nothing => {}
         }
         if let Some((view, lines)) = &reviews {
-            match review_message(pr.number, view, lines, &rec.sent, &viewer) {
+            let scan = review_message(pr.number, view, lines, &rec.sent, &viewer);
+            match scan.message {
                 // Those arriving together go as one message.
                 Some(_) if rec.new_since.is_none() => rec.new_since = Some(now),
-                Some((text, ids)) if now.saturating_sub(rec.new_since.unwrap_or(now)) >= 2 * unit && still_on() => match self.chats.send(chat, &text, &[]) {
+                Some(text) if now.saturating_sub(rec.new_since.unwrap_or(now)) >= 2 * unit && still_on() => match self.chats.send(chat, &text, &[]) {
                     Ok(()) => {
-                        rec.sent.extend(ids);
+                        rec.sent.extend(scan.ids);
                         rec.new_since = None;
                         rec.updated_at = pr.updated_at.clone();
-                        last = Some(("review".to_string(), now));
+                        last = Some(AutoFixSent { kind: AutoFixKind::Review, at: now });
                     }
                     Err(e) => tracing::warn!(session = %s.id, "auto-fix could not send: {e:#}"),
                 },
                 Some(_) => {}
+                // Nothing for the agent: what was looked at is seen.
                 None => {
+                    rec.sent.extend(scan.ids);
                     rec.new_since = None;
                     rec.updated_at = pr.updated_at.clone();
                 }
@@ -8829,18 +8842,26 @@ impl Daemon {
                 let Some(pr) = pr.filter(|pr| pr.state == "open") else {
                     return Err(RpcError::new("failed", "the session has no open pull request"));
                 };
-                self.autofix.update(&s.id, |rec| {
-                    let r0 = rec.get_or_insert_with(|| moonlet_core::autofix::Record { pr: pr.number, first_seen: now_ms(), ..Default::default() });
-                    if r0.pr != pr.number {
-                        *r0 = moonlet_core::autofix::Record { pr: pr.number, first_seen: now_ms(), ..Default::default() };
-                    }
-                    r0.on = Some(r.on);
+                let now = now_ms();
+                let rec = self.autofix.update(&s.id, |rec| {
+                    let r0 = match rec.take() {
+                        Some(r0) if r0.pr == pr.number => r0,
+                        _ => moonlet_core::autofix::Record::new(&pr, now),
+                    };
+                    let mut r0 = moonlet_core::autofix::Record { on: Some(r.on), ..r0 };
                     if r.on {
                         // Checked again: a new count.
                         r0.stopped = false;
                         r0.tries = 0;
                     }
+                    *rec = Some(r0);
                 });
+                // Shown at once, even while a check of it is running.
+                if let Some(rec) = rec {
+                    let last = s.auto_fix.as_ref().filter(|a| a.pr == rec.pr).and_then(|a| a.last.clone());
+                    let shown = moonlet_proto::types::AutoFix { pr: rec.pr, on: r.on, tries: rec.tries, stopped: rec.stopped, note: String::new(), last };
+                    let _ = w.set_auto_fix(&s.id, Some(shown));
+                }
                 self.check_auto_fix(s.clone(), Some(pr)).await;
                 ok(w.session(&s.id).map_err(internal)?.auto_fix)
             }

@@ -1658,6 +1658,7 @@ fn parse_pr(v: &serde_json::Value) -> PullRequest {
         draft: v["isDraft"].as_bool().unwrap_or(false),
         head_oid: v["headRefOid"].as_str().filter(|s| !s.is_empty()).map(String::from),
         updated_at: v["updatedAt"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        created_at: v["createdAt"].as_str().filter(|s| !s.is_empty()).map(String::from),
     }
 }
 

@@ -765,9 +765,26 @@ pub struct AutoFix {
     /// Why it cannot run, such as no Claude chat in the session.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
-    /// What it last sent, and when (ms): `checks` or `review`.
+    /// What it last sent, and when.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last: Option<(String, u64)>,
+    pub last: Option<AutoFixSent>,
+}
+
+/// A message auto-fix sent (X117).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFixSent {
+    pub kind: AutoFixKind,
+    /// When (ms).
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoFixKind {
+    /// The PR's failed checks.
+    Checks,
+    /// New reviews and comments.
+    Review,
 }
 
 /// A session's archive when its PR merged or closed (X116).
@@ -1353,6 +1370,10 @@ pub struct PullRequest {
     /// change it (X117).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// When it was opened (`createdAt`), for auto-fix's "opened from now
+    /// on" (X117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// A GitHub stack of dependent pull requests (spec X11).

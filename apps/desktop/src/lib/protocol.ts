@@ -821,8 +821,8 @@ export interface AutoFix {
   stopped: boolean;
   /** Why it cannot run, such as no Claude chat in the session. */
   note?: string;
-  /** What it last sent (`checks` or `review`) and when (ms). */
-  last?: [string, number] | null;
+  /** What it last sent, and when (ms). */
+  last?: { kind: "checks" | "review"; at: number } | null;
 }
 
 /** A session's archive when its PR merged or closed (X116). */
