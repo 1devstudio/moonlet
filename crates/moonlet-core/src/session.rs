@@ -353,6 +353,7 @@ pub struct SessionManager {
     account: Mutex<Option<account::Account>>,
     /// The design store (X101), once the daemon has set it.
     design: std::sync::OnceLock<crate::design::store::Store>,
+    refs: std::sync::OnceLock<Arc<crate::artifact::refs::Refs>>,
     /// Sessions this member runs whatever the account's record says (X73):
     /// one taken over while the central host was offline, or brought here
     /// while the news of it is on its way. Listed as its own all the same.
@@ -488,6 +489,7 @@ impl SessionManager {
             kept_listed: Mutex::new(std::collections::BTreeSet::new()),
             account: Mutex::new(None),
             design: std::sync::OnceLock::new(),
+            refs: std::sync::OnceLock::new(),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -497,6 +499,24 @@ impl SessionManager {
     /// session designs in moonlet is given its own folder there.
     pub fn set_design_store(&self, store: crate::design::store::Store) {
         let _ = self.design.set(store);
+    }
+
+    /// The artifacts sessions refer to (X114): a chat started in a session
+    /// that refers to some reads their copies too.
+    pub fn set_refs(&self, refs: Arc<crate::artifact::refs::Refs>) {
+        let _ = self.refs.set(refs);
+    }
+
+    /// Gives a Claude chat just started in session `session` the session's
+    /// reference folder, read only, when the session refers to anything.
+    fn refer_new_chat(&self, chats: &crate::chat::runtime::ChatManager, chat: TerminalId, session: &str) {
+        let Some(refs) = self.refs.get() else { return };
+        if refs.of(session).is_empty() {
+            return;
+        }
+        if let Err(e) = chats.refer_dir(chat, &refs.session_dir(session).display().to_string()) {
+            tracing::warn!(chat, "giving a chat its session's reference folder failed: {e:#}");
+        }
     }
 
     /// The design folder a session's Claude may work in (X101): its own,
@@ -1423,6 +1443,7 @@ impl SessionManager {
             },
             history,
         )?;
+        self.refer_new_chat(chats, info.id, &ws.id);
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
                 w.terminals.push(info.id);
@@ -1468,7 +1489,8 @@ impl SessionManager {
             req.add_dirs.push(dir);
         }
         let info = match chats {
-            Some(chats) => chats.create(crate::chat::runtime::ChatCreate {
+            Some(chats) => {
+                let info = chats.create(crate::chat::runtime::ChatCreate {
                 cwd: req.cwd.clone(),
                 agent: req.agent.clone().unwrap_or_default(),
                 model: req.model.clone().or_else(|| ws.model.clone()),
@@ -1483,7 +1505,12 @@ impl SessionManager {
                 settings: None,
                 workspace: None,
                 design: None,
-            })?,
+            })?;
+                if req.agent.as_deref() == Some("claude") {
+                    self.refer_new_chat(chats, info.id, &ws.id);
+                }
+                info
+            }
             None => self.terminals.create(req.clone())?,
         };
         // Chats persist and restore themselves; they need no restore entry.

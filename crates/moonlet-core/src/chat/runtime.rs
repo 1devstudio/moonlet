@@ -696,6 +696,15 @@ impl ChatManager {
                 t
             }
         };
+        // What the agent is told goes at the start of the answer (X114).
+        let text = match text {
+            Some(t) if !inner.told.is_empty() => {
+                let told = std::mem::take(&mut inner.told);
+                inner.dirty = true;
+                Some(format!("{}\n\n{t}", told.join("\n")))
+            }
+            t => t,
+        };
         if text.is_none() && inner.held.is_empty() {
             return Ok(());
         }
@@ -3030,6 +3039,24 @@ done
         assert_eq!(last_user_text(&st), "Answers to your questions:\n\nWhich size?\nLarge\n\nWhich colours?\nGitHub");
         let start = last_start(dir.path());
         assert!(start.contains("--resume sess-1"), "{start}");
+        chats2.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_line_told_while_a_question_waits_goes_with_its_answer_after_a_restart() {
+        let (dir, terms, chats) = setup().await;
+        let info = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), session_id: Some("s-api".into()), ..Default::default() }).unwrap();
+        wait_for(&chats, info.id, |s| s.agent_session.is_some()).await;
+        chats.send(info.id, "ask me", &[]).unwrap();
+        wait_for(&chats, info.id, |s| s.status == "blocked").await;
+        chats.shutdown().await;
+
+        let chats2 = restarted(dir.path(), &terms);
+        chats2.tell_session("s-api", "Settings page changed since you last read it: /refs/settings-page");
+        let answers = BTreeMap::from([("Which colours?".to_string(), "GitHub".to_string()), ("Which size?".to_string(), "Large".to_string())]);
+        chats2.permission(info.id, "q1", "allow", None, Some(&answers), None).unwrap();
+        let st = wait_for(&chats2, info.id, |s| s.status == "done").await;
+        assert_eq!(last_user_text(&st), "Settings page changed since you last read it: /refs/settings-page\n\nAnswers to your questions:\n\nWhich size?\nLarge\n\nWhich colours?\nGitHub");
         chats2.shutdown().await;
     }
 

@@ -7228,6 +7228,104 @@ async fn a_session_refers_to_another_sessions_plan_live_and_read_only() {
     assert!(changed < heard.find("go on").unwrap(), "{heard}");
 }
 
+/// X114: a reference reaches the session's chats started after it; a
+/// referred design that is deleted keeps its last copy and is told once;
+/// and the session's references end when it is archived.
+#[tokio::test]
+async fn a_reference_reaches_later_chats_says_once_its_artifact_was_deleted_and_ends_with_its_session() {
+    use moonlet_proto::types::{Session, TerminalInfo};
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let refs = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id);
+    let folder = refs.join("design-settings-page");
+
+    // A chat started in the session afterwards reads the references too.
+    let later: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({"cwd": "", "session_id": reader.id, "kind": "agent", "agent": "claude", "chat": true}))
+        .await
+        .unwrap();
+    let real = std::fs::canonicalize(&refs).unwrap().display().to_string();
+    assert!(add_dirs(&mut c, later.id).await.contains(&real));
+
+    // The design is deleted: its copy stays, and the next message says so, once.
+    let _: bool = c.request(methods::DESIGN_REMOVE, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let gone = format!("The artifact in {} was deleted in its home; that folder keeps its last copy.", folder.display());
+    let mut heard = String::new();
+    for i in 0..200 {
+        let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": format!("go on {i}")})).await.unwrap();
+        heard = heard_until(std::path::Path::new(&reader.path), &format!("go on {i}")).await;
+        if heard.contains(&gone) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(heard.contains(&gone), "{heard}");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "last"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "last").await;
+    assert_eq!(heard.matches(&gone).count(), 1, "{heard}");
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v1</p>");
+
+    // Archived, the session refers to nothing, and its copies are gone.
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": reader.id})).await.unwrap();
+    assert!(!refs.exists());
+    assert!(!d.home.path().join(".moonlet/artifacts/refs").join(format!("{}.toml", reader.id)).exists());
+}
+
+/// X114: a design changed while moonlet was not running is copied again
+/// once it starts, and the referring session is told.
+#[tokio::test]
+async fn a_design_changed_while_moonlet_was_stopped_is_copied_again_at_start() {
+    use moonlet_proto::types::Session;
+    let mut d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let folder = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id).join("design-settings-page");
+    drop(c);
+
+    d.stop();
+    std::fs::write(design.join("pages/index.html"), "<p>v2</p>").unwrap();
+    d.start_again().await;
+
+    for _ in 0..200 {
+        if std::fs::read_to_string(folder.join("pages/index.html")).unwrap_or_default() == "<p>v2</p>" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v2</p>");
+    let mut c = d.client().await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "go on"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "go on").await;
+    assert!(heard.contains(&format!("Settings page changed since you last read it: {}", folder.display())), "{heard}");
+}
+
 /// X114: a session refers to a workspace design: its pages are copied read
 /// only into the session's reference folder, and a page changed in the
 /// design is changed in the copy and told with the session's next message.

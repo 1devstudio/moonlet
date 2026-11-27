@@ -167,7 +167,7 @@ impl Plans {
     /// changed.
     pub fn record(&self, p: &Proposal) -> Result<Option<String>> {
         let text = p.text.trim_end();
-        if text.trim().is_empty() || !safe(p.session) || !safe(p.key) {
+        if text.trim().is_empty() || !super::safe_name(p.session) || !super::safe_name(p.key) {
             return Ok(None);
         }
         let _held = self.lock.lock().unwrap();
@@ -289,7 +289,7 @@ impl Plans {
         let session_dirs: Vec<PathBuf> = match sessions {
             Some(ids) => ids
                 .iter()
-                .filter(|s| safe(s))
+                .filter(|s| super::safe_name(s))
                 .map(|s| self.root.join(s))
                 .collect(),
             None => children(&self.root),
@@ -355,18 +355,9 @@ pub fn plan_key(plan_file: Option<&str>, conversation: Option<&str>) -> Option<S
 pub fn parse_id(id: &str) -> Option<(&str, &str)> {
     let rest = id.strip_prefix("plan:")?;
     let (session, key) = rest.split_once(':')?;
-    (safe(session) && safe(key)).then_some((session, key))
+    (super::safe_name(session) && super::safe_name(key)).then_some((session, key))
 }
 
-/// A name safe as one path component: letters, digits, `.`, `_` and `-`,
-/// not starting with a dot.
-fn safe(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && !s.starts_with('.')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
 
 /// The answer an item's status gives, if any.
 fn state_of(status: &str) -> Option<VersionState> {

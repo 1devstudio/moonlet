@@ -52,7 +52,7 @@ impl Refs {
     /// copy's folder.
     pub fn add(&self, session: &str, id: &str, name: &str, at: u64) -> Result<PathBuf> {
         anyhow::ensure!(
-            safe(session) && safe(name),
+            super::safe_name(session) && super::safe_name(name),
             "not a safe session or folder name"
         );
         let _held = self.lock.lock().unwrap();
@@ -71,7 +71,7 @@ impl Refs {
 
     /// The artifacts session `session` refers to.
     pub fn of(&self, session: &str) -> Vec<Ref> {
-        if !safe(session) {
+        if !super::safe_name(session) {
             return Vec::new();
         }
         self.read(session).map(|r| r.refs).unwrap_or_default()
@@ -89,14 +89,35 @@ impl Refs {
                     .and_then(|n| n.strip_suffix(".toml"))
                     .map(String::from)
             })
-            .filter(|s| safe(s) && self.of(s).iter().any(|r| r.id == id))
+            .filter(|s| super::safe_name(s) && self.of(s).iter().any(|r| r.id == id))
             .collect()
+    }
+
+    /// Every artifact some session refers to, each once.
+    pub fn ids(&self) -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = rd
+            .flatten()
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_suffix(".toml"))
+                    .map(String::from)
+            })
+            .filter(|s| super::safe_name(s))
+            .flat_map(|s| self.of(&s).into_iter().map(|r| r.id))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 
     /// Notes that session `session`'s agent was given or told of version
     /// `version` of artifact `id`. Returns whether that version is new to it.
     pub fn see(&self, session: &str, id: &str, version: &str) -> Result<bool> {
-        anyhow::ensure!(safe(session), "not a safe session id");
+        anyhow::ensure!(super::safe_name(session), "not a safe session id");
         let _held = self.lock.lock().unwrap();
         let mut refs = self.read(session)?;
         let r = refs
@@ -110,6 +131,33 @@ impl Refs {
         r.seen = Some(version.to_string());
         self.write(session, &refs)?;
         Ok(true)
+    }
+
+    /// Notes `before` as the version of artifact `id` session `session`
+    /// has seen again: the copy of a newer one was never put in place, so
+    /// the next refresh copies it again.
+    pub fn unsee(&self, session: &str, id: &str, before: Option<&str>) -> Result<()> {
+        anyhow::ensure!(super::safe_name(session), "not a safe session id");
+        let _held = self.lock.lock().unwrap();
+        let mut refs = self.read(session)?;
+        if let Some(r) = refs.refs.iter_mut().find(|r| r.id == id) {
+            r.seen = before.map(String::from);
+            self.write(session, &refs)?;
+        }
+        Ok(())
+    }
+
+    /// Ends every reference of session `session` and removes its copies:
+    /// an archived session refers to nothing.
+    pub fn forget_session(&self, session: &str) -> Result<()> {
+        anyhow::ensure!(super::safe_name(session), "not a safe session id");
+        let _held = self.lock.lock().unwrap();
+        match std::fs::remove_file(self.root.join(format!("{session}.toml"))) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        remove_tree(&self.session_dir(session))
     }
 
     fn read(&self, session: &str) -> Result<SessionRefs> {
@@ -212,24 +260,23 @@ pub fn design_version(design: &Path) -> String {
     crate::hash::sha256_hex(seen.join("\n").as_bytes())
 }
 
-/// A name safe as one path component.
-fn safe(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 160
-        && !s.starts_with('.')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
 
-/// An empty folder beside `folder` to build its next copy in.
-fn fresh(folder: &Path) -> Result<PathBuf> {
+/// A hidden name beside `folder` no other copy uses: `.<name>.<what>-<n>`.
+fn beside(folder: &Path, what: &str) -> Result<PathBuf> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parent = folder.parent().context("a copy needs a parent folder")?;
-    crate::paths::ensure_private_dir(parent)?;
     let name = folder
         .file_name()
         .context("a copy needs a name")?
         .to_string_lossy();
-    let next = parent.join(format!(".{name}.next"));
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(parent.join(format!(".{name}.{what}-{}-{n}", std::process::id())))
+}
+
+/// An empty folder beside `folder`, its own, to build its next copy in.
+fn fresh(folder: &Path) -> Result<PathBuf> {
+    crate::paths::ensure_private_dir(folder.parent().context("a copy needs a parent folder")?)?;
+    let next = beside(folder, "next")?;
     remove_tree(&next)?;
     std::fs::create_dir(&next)?;
     Ok(next)
@@ -239,14 +286,7 @@ fn fresh(folder: &Path) -> Result<PathBuf> {
 fn swap(next: &Path, folder: &Path) -> Result<()> {
     // The old copy goes aside first, so the folder is missing only between
     // two renames, never while a copy is deleted.
-    let old = folder.with_file_name(format!(
-        ".{}.old",
-        folder
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default()
-    ));
-    remove_tree(&old)?;
+    let old = beside(folder, "old")?;
     if folder.exists() {
         std::fs::rename(folder, &old)?;
     }
@@ -356,6 +396,18 @@ mod tests {
     }
 
     #[test]
+    fn every_artifact_referred_to_is_listed_once() {
+        let home = tempfile::tempdir().unwrap();
+        let refs = Refs::new(home.path());
+        assert!(refs.ids().is_empty());
+        refs.add("s-api", "plan:a1b2c3d4e5f6:search-plan", "plan-search-plan", 1_000).unwrap();
+        refs.add("s-search", "plan:a1b2c3d4e5f6:search-plan", "plan-search-plan", 1_000).unwrap();
+        refs.add("s-search", "design:library:settings-page", "design-settings-page", 1_000).unwrap();
+
+        assert_eq!(refs.ids(), ["design:library:settings-page", "plan:a1b2c3d4e5f6:search-plan"]);
+    }
+
+    #[test]
     fn a_version_is_new_to_a_session_once() {
         let home = tempfile::tempdir().unwrap();
         let refs = Refs::new(home.path());
@@ -381,6 +433,43 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(refs.of("s-api")[0].seen.as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn a_version_whose_copy_was_not_put_in_place_is_new_again() {
+        let home = tempfile::tempdir().unwrap();
+        let refs = Refs::new(home.path());
+        let id = "plan:a1b2c3d4e5f6:search-plan";
+        refs.add("s-api", id, "plan-search-plan", 1_000).unwrap();
+        assert!(refs.see("s-api", id, "v1").unwrap());
+        assert!(refs.see("s-api", id, "v2").unwrap());
+
+        refs.unsee("s-api", id, Some("v1")).unwrap();
+
+        assert_eq!(refs.of("s-api")[0].seen.as_deref(), Some("v1"));
+        assert!(refs.see("s-api", id, "v2").unwrap());
+    }
+
+    #[test]
+    fn two_copies_staged_at_once_are_built_apart_and_the_last_put_in_place_shows() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join("refs/s-api/plan-search-plan");
+
+        let first = stage_plan(&folder, "# Search\n\nv1\n", "v1").unwrap();
+        let second = stage_plan(&folder, "# Search\n\nv2\n", "v2").unwrap();
+        commit(&first, &folder).unwrap();
+        commit(&second, &folder).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(folder.join("plan.md")).unwrap(),
+            "# Search\n\nv2\n"
+        );
+        let left: Vec<_> = std::fs::read_dir(folder.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["plan-search-plan"]);
     }
 
     #[test]
