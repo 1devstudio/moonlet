@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { artifactSessionName, startMessage, startPlaceholder } from "../lib/artifacts";
-import { startWithArtifact, type ArtifactChip } from "../lib/artifactStore";
+import { KIND_WORDS, artifactSessionName, startMessage, startPlaceholder, startRefusal } from "../lib/artifacts";
+import { addChip, startWithArtifact, type ArtifactChip } from "../lib/artifactStore";
 import { KindTile } from "./ArtifactChips";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, Radio, X } from "lucide-react";
@@ -9,7 +9,7 @@ import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { pasteLookup, typedTask } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
-import { afterCreate, attachments, branchRow, composerSlash, firstMessage, slashKey, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
+import { afterCreate, attachments, branchRow, composerSlash, firstMessage, slashKey, linkMenu, newBranch, paragraphs, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type ClaudeModel, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, hostWorkspaces, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { syncOffered } from "../lib/sync";
@@ -338,6 +338,20 @@ function ModelPicker({ agents, choice, onChange, label, effortLabel, models }: {
  * New session (X5): "What do you want to work on?" The name and branch come
  * from the prompt; the session is a fresh worktree of the chosen project.
  */
+/** The composer's source chip, after the project: what the session starts
+ *  from, with × to start without it (X65 Build it, X114 an artifact). */
+function SourceChip({ label, title, drop, onDrop, children }: { label: string; title: string; drop: string; onDrop: () => void; children: React.ReactNode }) {
+  return (
+    <span role="group" aria-label={label} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={title}>
+      {children}
+      <span className="flex-1" />
+      <IconButton title={drop} className="shrink-0" onClick={onDrop}>
+        <X size={12} />
+      </IconButton>
+    </span>
+  );
+}
+
 export function Composer({
   host: presetHost,
   project: presetProject,
@@ -633,6 +647,9 @@ export function Composer({
 
   const create = async () => {
     if (!current || !createReady({ busy, project: true, building: !!design, configRead })) return;
+    // An artifact this session cannot refer to is said before any session is made (X114).
+    const cannot = artifact ? startRefusal(artifact, current.host, choice.agent) : null;
+    if (cannot) return setRefused(cannot);
     setBusy(true);
     setRefused(null);
     try {
@@ -661,7 +678,14 @@ export function Composer({
         rows: 32,
       });
       close();
-      if (artifact) void startWithArtifact(current.host, s.id, artifact, firstMessage(sent, startMessage(artifact.kind, prompt)) ?? startMessage(artifact.kind, prompt)).catch(errorToast);
+      if (artifact) {
+        const from = artifact;
+        // Not sent: the artifact stays picked in the new session's input, to send again.
+        void startWithArtifact(current.host, s.id, from, paragraphs(...sent.map((a) => a.message), startMessage(from.kind, prompt))).catch((e) => {
+          addChip(current.host, s.id, from);
+          errorToast(e);
+        });
+      }
       // The checkbox decides for this session, Build it's too (afterCreate).
       const next = afterCreate({ building: !!design, box: { shown: syncShown, value: keepSync, touched: syncTouched } });
       if (next.sync === "keep") void keepInSync(current.host, s.id);
@@ -764,25 +788,17 @@ export function Composer({
           <span className="text-border-strong">|</span>
           {artifact ? (
             // The artifact is the composer's source (X114).
-            <span role="group" aria-label={`${artifact.kind === "plan" ? "Plan" : "Design"} ${artifact.name}`} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={artifact.name}>
+            <SourceChip label={`${KIND_WORDS[artifact.kind]} ${artifact.name}`} title={artifact.name} drop={`Start without the ${artifact.kind}`} onDrop={() => (setArtifact(null), setRefused(null))}>
               <KindTile kind={artifact.kind} size={18} />
-              <span className="shrink-0 font-mono ui-text-12 text-muted">{artifact.kind === "plan" ? "Plan" : "Design"}</span>
+              <span className="shrink-0 font-mono ui-text-12 text-muted">{KIND_WORDS[artifact.kind]}</span>
               <span className="min-w-0 truncate">{artifact.name}</span>
-              <span className="flex-1" />
-              <IconButton title={`Start without the ${artifact.kind}`} className="shrink-0" onClick={() => setArtifact(null)}>
-                <X size={12} />
-              </IconButton>
-            </span>
+            </SourceChip>
           ) : design && built ? (
             // The design is the composer's source (X65 Build it).
-            <span role="group" aria-label={built.chip} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={design.name}>
+            <SourceChip label={built.chip} title={design.name} drop="Don’t build the design" onDrop={() => (setPrompt((p) => promptAfterDrop(p, design)), setDesign(null), setRefused(null))}>
               <PenTool size={13} className="shrink-0 text-accent" />
               <span className="min-w-0 truncate">{built.chip}</span>
-              <span className="flex-1" />
-              <IconButton title="Don’t build the design" className="shrink-0" onClick={() => (setPrompt((p) => promptAfterDrop(p, design)), setDesign(null), setRefused(null))}>
-                <X size={12} />
-              </IconButton>
-            </span>
+            </SourceChip>
           ) : task ? (
             // The task chip takes the spare width (X54).
             <span role="group" aria-label={`Task ${task.key}`} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={task.title}>
@@ -976,10 +992,10 @@ export function Composer({
         {/* The attachments above the prompt (X54); the prompt fills what is left. */}
         <div className="flex min-h-[168px] flex-col gap-2 px-6 pb-2 pt-4">
           {artifact && (
-            <div role="group" aria-label={`${artifact.kind === "plan" ? "Plan" : "Design"}, live and read only · ${artifact.name}`} className="flex items-center gap-2 rounded-[10px] border border-border bg-panel-2 px-3 py-[9px] ui-text-12.5 text-muted">
+            <div role="group" aria-label={`${KIND_WORDS[artifact.kind]}, live and read only · ${artifact.name}`} className="flex items-center gap-2 rounded-[10px] border border-border bg-panel-2 px-3 py-[9px] ui-text-12.5 text-muted">
               <Radio size={13} className="shrink-0" />
               <span className="min-w-0 flex-1 truncate">
-                {artifact.kind === "plan" ? "Plan" : "Design"}, live and read only · <span className="text-fg">{artifact.name}</span>
+                {KIND_WORDS[artifact.kind]}, live and read only · <span className="text-fg">{artifact.name}</span>
               </span>
             </div>
           )}

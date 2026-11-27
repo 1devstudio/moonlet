@@ -1,6 +1,7 @@
 // App state. Daemons own the truth (projects, sessions, terminals); this store
 // mirrors it per host from RPCs and events, plus UI-only state.
 
+import type { ArtifactChip } from "./artifactStore";
 import { create } from "zustand";
 import type { RowStyle } from "./sessionRows";
 import { clampSidebarWidth } from "./sidebar";
@@ -271,7 +272,7 @@ interface State extends UiPersist {
         /** Building a workspace design (X65 Build it). */
         design?: BuildDesign;
         /** Starting from an artifact (X114). */
-        artifact?: import("./artifactStore").ArtifactChip;
+        artifact?: ArtifactChip;
       }
     /** `clone`: the `<host>/<id>` of the clone the dialog shows (X59). */
     | { kind: "add-project"; host?: string; section?: string; clone?: string }

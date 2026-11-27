@@ -237,6 +237,19 @@ export function sentArtifacts(text: string): SentArtifacts | null {
   return out;
 }
 
+/** Each kind's word, as the app shows it. */
+export const KIND_WORDS = { plan: "Plan", design: "Design" } as const satisfies Record<"plan" | "design", string>;
+
+/** Why a session cannot start from `artifact` on `host` with `agent`; null
+ *  when it can. Only Claude's and Codex's chats are sent the reference, and
+ *  a session refers to its own host's artifacts for now. Asked before the
+ *  session is made, so none is made for nothing. */
+export function startRefusal(artifact: { host: string; name: string; kind: "plan" | "design" }, host: string, agent: string | null | undefined): string | null {
+  if (artifact.host !== host) return `${artifact.name} is on another host: a session refers to the artifacts of its own host for now`;
+  if (agent !== "claude" && agent !== "codex") return `Start a session from a ${artifact.kind} with Claude or Codex: only their chats are sent its reference`;
+  return null;
+}
+
 /** A session started from an artifact (X114): named for what it does with it. */
 export function artifactSessionName(a: { kind: "plan" | "design"; name: string }): string {
   return `${a.kind === "plan" ? "Implement" : "Build"} ${a.name}`;

@@ -194,6 +194,11 @@ describe("artifacts", () => {
       },
       { timeout: 20_000, timeoutMsg: "the new session never referred to the plan" },
     );
+    // Its first message: the plan's live line, then what an empty prompt asks.
+    const chat = rpc<{ id: number; chat: boolean; session_id?: string }[]>(w, "terminal.list", {}).find((t) => t.chat && t.session_id === started)!.id;
+    const first = () => rpc<{ items: { kind: string; text: string }[] }>(w, "chat.state", { id: chat }).items.find((i) => i.kind === "user")?.text ?? "";
+    await browser.waitUntil(() => first() !== "", { timeout: 15_000, timeoutMsg: "the new session's agent never got its first message" });
+    expect(first()).toMatch(new RegExp(`^Artifact "${SESSION}" \\(plan, live, read only\\): /.+/artifacts/refs/${started}/plan-search-products\\. It always holds the latest version; it changes only in its home\\.\\n\\nImplement the plan\\.$`));
     rpc(w, "session.archive", { id: started });
   });
 });

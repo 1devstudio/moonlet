@@ -380,7 +380,7 @@ function DesignView({ host, info, home }: { host: string; info: ArtifactInfo; ho
       <div className="flex min-w-0 flex-1 flex-col">
         <Header info={info}>
           {design?.kind !== "project" && <AttachToSession host={host} info={info} />}
-          {design?.kind !== "project" && <StartSession host={host} info={info} />}
+          {!info.home.merged && <StartSession host={host} info={info} />}
           <Button disabled={!design || design.kind === "project"} onClick={edit}>
             <Pencil size={13} /> Edit
           </Button>

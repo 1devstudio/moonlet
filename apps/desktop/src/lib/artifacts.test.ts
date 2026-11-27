@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactRows, artifactSessionName, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, startMessage, startPlaceholder, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
+import { artifactRows, artifactSessionName, KIND_WORDS, startRefusal, designFor, designMatch, homeLine, markParts, planArtifactId, planReadOnly, sentArtifacts, startMessage, startPlaceholder, stateLabel, unreachableLine, versionLine, withArtifactLines, type ListInput } from "./artifacts";
 import type { ArtifactInfo, Design } from "./protocol";
 
 const MIN = 60_000;
@@ -281,5 +281,24 @@ describe("starting a session from an artifact", () => {
   it("says in the prompt what an empty one does", () => {
     expect(startPlaceholder("plan")).toBe("Anything to add? Leave empty to implement the plan.");
     expect(startPlaceholder("design")).toBe("Anything to add? Leave empty to build the design.");
+  });
+});
+
+describe("startRefusal", () => {
+  const plan = { host: "local", name: "Add search", kind: "plan" as const };
+  it("starts with Claude or Codex, on the artifact's own Mac", () => {
+    expect(startRefusal(plan, "local", "claude")).toBeNull();
+    expect(startRefusal(plan, "local", "codex")).toBeNull();
+  });
+  it("says why it cannot otherwise, before any session is made", () => {
+    expect(startRefusal(plan, "studio", "claude")).toBe("Add search is on another host: a session refers to the artifacts of its own host for now");
+    expect(startRefusal(plan, "local", "none")).toBe("Start a session from a plan with Claude or Codex: only their chats are sent its reference");
+    expect(startRefusal({ ...plan, kind: "design" }, "local", "gemini")).toBe("Start a session from a design with Claude or Codex: only their chats are sent its reference");
+  });
+});
+
+describe("KIND_WORDS", () => {
+  it("names each kind as the app shows it", () => {
+    expect(KIND_WORDS).toEqual({ plan: "Plan", design: "Design" });
   });
 });

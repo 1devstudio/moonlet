@@ -53,6 +53,7 @@ A design lives in one of three places:
 6. The user asks for two more variants of the Git section. The agent adds `git-a.html` and `git-b.html`. **Overview** shows the three pages side by side, each labelled ("rows", "cards", "compact").
 7. History lists the snapshots. The user previews the one from before variant B, then goes back to the current state.
 8. **Build it** opens the New session composer in the design system's first source project. The design is its source, its pages and styles are listed as attachments, and the prompt reads "Implement the Settings page design". Create copies the design into the new session as a session design, so the session has a Design tab and can go on to the spec and the PR as in journey B. A row under the design's header then says "Building in moonlet · implement-settings-page".
+   Since [X114](X114-artifacts.md), **Start session** in a design's artifact view is the other way to start from it: the new session refers to the design live and read only instead of taking a copy. Build it is unchanged.
 
 ### B session design: requirements, design, spec, code in one session
 
