@@ -66,6 +66,8 @@ describe("usageView (X115)", () => {
     expect(level(40, "warning")).toBe("warn");
     expect(level(100)).toBe("error");
     expect(level(60, "critical")).toBe("error");
+    // The footer's ring takes the current session's level.
+    expect(usageView({ ...team, limits: [limit("session", 85, null), limit("weekly_all", 100, null)] }, now).ringLevel).toBe("warn");
   });
 
   it("leaves out what Claude did not report", () => {

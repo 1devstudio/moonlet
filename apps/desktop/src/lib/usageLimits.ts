@@ -20,8 +20,9 @@ export interface UsageView {
   /** "48%": the current session's. */
   footer: string;
   title: string;
-  /** How full the footer's ring is: the session's percentage. */
+  /** How full the footer's ring is, and its colour: the session's. */
   ring: number;
+  ringLevel: UsageLevel;
   plan: string | null;
   updated: string;
   sections: { heading: string; rows: UsageRow[] }[];
@@ -48,6 +49,7 @@ export function usageView(u: ClaudeUsage, now: number, locale?: string): UsageVi
     footer,
     title: `Claude usage: ${title || footer}`,
     ring: session?.percent ?? 0,
+    ringLevel: session?.level ?? "ok",
     plan: u.plan ? u.plan[0].toUpperCase() + u.plan.slice(1) : null,
     updated: `Updated ${ago(Math.max(0, now - u.at))}`,
     sections,

@@ -1364,6 +1364,34 @@ async fn claude_usage_comes_from_claude_codes_get_usage_reply() {
     assert_eq!((work.limits[0].percent, work.limits[0].severity.as_str()), (91, "warning"));
 }
 
+/// X115: a fake `claude` whose session limit is the number of times it
+/// was started, so a test sees when Claude was asked again.
+const COUNTING_USAGE_CLAUDE: &str = r#"#!/bin/sh
+echo started >> "$HOME/claude-starts"
+n=$(wc -l < "$HOME/claude-starts" | tr -d ' ')
+read line
+id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"subscription_type":"pro","rate_limits_available":true,"rate_limits":{"limits":[{"kind":"session","group":"session","percent":%s,"severity":"normal","resets_at":null}]}}}}\n' "$id" "$n"
+sleep 20
+"#;
+
+/// X115: `refresh` asks Claude again, unless its answer is under 5 s old.
+#[tokio::test]
+async fn claude_usage_refresh_asks_claude_again_after_five_seconds() {
+    use moonlet_proto::types::ClaudeUsage;
+    let d = fake_claude_daemon(COUNTING_USAGE_CLAUDE).await;
+    let mut c = d.client().await;
+    let mut session = async |refresh: bool| {
+        let u: Option<ClaudeUsage> = c.request(methods::CLAUDE_USAGE, serde_json::json!({"refresh": refresh})).await.unwrap();
+        u.unwrap().limits[0].percent
+    };
+    assert_eq!(session(false).await, 1);
+    assert_eq!(session(true).await, 1);
+    tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
+    assert_eq!(session(false).await, 1);
+    assert_eq!(session(true).await, 2);
+}
+
 /// X115: a Claude that cannot say gives no usage, not an error.
 #[tokio::test]
 async fn claude_usage_is_null_when_claude_cannot_say() {

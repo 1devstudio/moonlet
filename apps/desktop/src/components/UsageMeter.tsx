@@ -1,7 +1,7 @@
 import { RotateCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useClaudeUsage } from "../lib/claudeUsageStore";
+import { useClaudeUsage } from "../lib/claudeUsage";
 import { shownWorkspace, useStore } from "../lib/store";
 import { usageView, type UsageLevel } from "../lib/usageLimits";
 import { IconButton, cx } from "./ui";
@@ -13,8 +13,9 @@ const TEXT: Record<UsageLevel, string> = { ok: "text-muted", warn: "text-blocked
 
 /**
  * The shown workspace's Claude usage limits in the sidebar footer (X115):
- * a ring and the session and weekly percentages, and a card with every
- * limit and when it resets. Hidden while Claude cannot say.
+ * a ring and the current session's percentage at the right end of the
+ * row, and a card with every limit and when it resets. Hidden while Claude
+ * cannot say.
  */
 export function UsageMeter() {
   const shown = useStore((s) => shownWorkspace(s));
@@ -52,7 +53,6 @@ export function UsageMeter() {
   }, [open]);
   if (!usage || usage.limits.length === 0) return null;
   const view = usageView(usage, now);
-  const ringLevel = view.sections.flatMap((s) => s.rows).find((r) => r.label === "Current session")?.level ?? "ok";
   return (
     <>
       <button
@@ -67,7 +67,7 @@ export function UsageMeter() {
           setRect(anchor.current?.getBoundingClientRect() ?? null);
         }}
       >
-        <span className="grid h-3 w-3 place-items-center rounded-full" style={{ background: `conic-gradient(${BAR[ringLevel]} 0 ${view.ring}%, var(--color-border-strong) ${view.ring}% 100%)` }}>
+        <span className="grid h-3 w-3 place-items-center rounded-full" style={{ background: `conic-gradient(${BAR[view.ringLevel]} 0 ${view.ring}%, var(--color-border-strong) ${view.ring}% 100%)` }}>
           <span className="h-[7px] w-[7px] rounded-full bg-panel" />
         </span>
         <span className="whitespace-nowrap font-mono ui-text-11.5 text-faint">{view.footer}</span>

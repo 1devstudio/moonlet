@@ -1479,8 +1479,7 @@ impl ChatManager {
     /// `initialize`, and keeps both its models (X105) and its slash
     /// commands (X111) for the profile.
     async fn ask_profile(&self, env: &BTreeMap<String, String>, profile: Option<String>) {
-        let home = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
-        let reply = probe(env, &home, serde_json::json!({"subtype": "initialize"})).await.ok();
+        let reply = probe(env, &probe_home(env), serde_json::json!({"subtype": "initialize"})).await.ok();
         let models = reply.as_ref().map(super::claude::models).unwrap_or_default();
         let commands = reply.as_ref().map(super::claude::commands).unwrap_or_default();
         if models.is_empty() {
@@ -1532,8 +1531,7 @@ impl ChatManager {
         if let Some(u) = known() {
             return u;
         }
-        let home = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
-        let reply = probe(&env, &home, serde_json::json!({"subtype": "get_usage"})).await.ok();
+        let reply = probe(&env, &probe_home(&env), serde_json::json!({"subtype": "get_usage"})).await.ok();
         let u = reply.and_then(|r| super::claude::usage(&r, crate::paths::now_ms()));
         self.usage.lock().unwrap().insert(profile, (Instant::now(), u.clone()));
         u
@@ -1895,6 +1893,12 @@ fn require_folder(cwd: &str) -> Result<()> {
         bail!("This session's folder no longer exists: {cwd}");
     }
     Ok(())
+}
+
+/// Where a probe Claude starts: the profile's home, else `/`, so no
+/// project's files are read.
+fn probe_home(env: &BTreeMap<String, String>) -> PathBuf {
+    env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Starts `claude` in `cwd` only to send it one control `request`, such as

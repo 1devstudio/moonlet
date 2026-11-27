@@ -7,7 +7,7 @@
 
 ## Summary
 
-A Claude subscription has a 5-hour session limit and weekly limits: one for all models, and some for a single model. Claude Code shows them in `/usage`, and claude.ai shows them in Settings › Usage. Until now, moonlet showed neither. The sidebar footer now shows how much of the current session limit is used, next to the workspace's Claude profile. A click opens a card with every limit, its bar and when it resets.
+A Claude subscription has a 5-hour session limit and weekly limits: one for all models, and some for a single model. Claude Code shows them in `/usage`, and claude.ai shows them in Settings › Usage. Until now, moonlet showed neither. The sidebar footer now shows how much of the current session limit is used, for the workspace's Claude profile, at the right end of the footer row. A click opens a card with every limit, its bar and when it resets.
 
 The numbers come from Claude Code itself: its `get_usage` control request answers with the same limits `/usage` shows, without a turn and without spending tokens. So moonlet never reads the account's credentials or calls Anthropic's API itself.
 
@@ -25,12 +25,12 @@ The numbers come from Claude Code itself: its `get_usage` control request answer
 ## Behaviour and acceptance criteria
 
 - [x] `claude.usage {workspace?}` answers with the limits Claude Code's `get_usage` reports in that workspace's Claude profile: each limit's kind, model (for a model's own weekly limit), percent used, severity and reset time, plus the plan.
-- [x] It answers `null` when Claude Code cannot say: it is missing, it fails or times out, or the account has no limits (`rate_limits_available: false`, as with an API key).
+- [x] It answers `null` when Claude Code cannot say: it is missing, it fails or times out, or the account has no limits (`rate_limits_available: false`, as with an API key). A `null` is held for the minute too, so a Claude that cannot answer is not started on every ask.
 - [x] An answer is reused for 60 s per profile, so several windows and the poll start at most one Claude a minute per profile. `refresh: true` asks again unless the held answer is younger than 5 s.
-- [x] The footer shows the current session's percentage (the user's choice), and hides itself when the answer is `null`. Its tooltip names the weekly one too.
+- [x] The footer shows the current session's percentage (the user's choice), else the first limit Claude reported, at the right end of the row. It hides itself when the answer is `null` or has no limits. Its tooltip names the weekly one too.
 - [x] The card lists every limit in Claude's order, labelled "Current session", "All models" and the model's name, under the headings Session and Weekly.
 - [x] A reset today reads "Resets 2:40 PM"; a later one "Resets Wed 5:00 AM"; one more than 6 days away "Resets Dec 9".
-- [x] A limit whose reset time has passed shows no percentage ("—"), because it no longer holds, until the next answer.
+- [x] A limit whose reset time has passed shows no percentage ("—") and "Reset at 11:00 AM", because it no longer holds, until the next answer.
 - [x] A limit at `warning` severity, or 80% and above, is drawn in the warning colour; at `critical`, or 100%, in the error colour.
 - [x] The app asks when the footer mounts, when the shown workspace changes, every 5 minutes, and when the card opens (with `refresh`).
 
@@ -83,9 +83,9 @@ No new input crosses a trust boundary. The Claude started to answer runs as the 
 
 ## Test plan
 
-- Rust unit: `claude::usage` parses a reply captured from Claude Code 2.1.332 (`fixtures/claude-usage.json`), and gives `None` for `rate_limits_available: false`.
-- Daemon: `claude_usage_comes_from_claude_codes_get_usage_reply` (a fake `claude` that answers `get_usage`, per profile, and is asked once within the minute), and `claude_usage_is_null_when_claude_cannot_say`.
-- Vitest `lib/usageLimits.test.ts`: the footer text, labels, reset wording, passed resets and warning levels.
+- Rust unit: `the_get_usage_reply_gives_the_accounts_limits`, on a reply captured from Claude Code 2.1.332 (`fixtures/claude-usage.json`), and `None` for `rate_limits_available: false`.
+- Daemon: `claude_usage_comes_from_claude_codes_get_usage_reply` (a fake `claude` that answers `get_usage`, per profile, and is asked once within the minute), `claude_usage_refresh_asks_claude_again_after_five_seconds` and `claude_usage_is_null_when_claude_cannot_say`.
+- Vitest `lib/usageLimits.test.ts`: the footer text, labels, reset wording, passed resets and warning levels. `lib/claudeUsage.test.ts`: "asks at once and every 5 minutes, and afresh on refresh" and "drops an answer that comes after a newer ask's, and a failed ask".
 - Manual: the footer and card in the real app, by screenshot (`e2e/snap.ts`).
 
 ## Open questions
