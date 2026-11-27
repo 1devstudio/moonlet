@@ -11,6 +11,15 @@ export function pagePath(page: string): string {
   return `pages/${pageFile(page)}`;
 }
 
+/** What hovering the file above a page offers to copy: the path it shows,
+ *  and the page's full path in its design's folder (`folder`), once when
+ *  they are the same. */
+export function pageCopies(shown: string, folder: string, page: string): { label: string; text: string }[] {
+  const full = `${folder.replace(/\/+$/, "")}/${pagePath(page)}`;
+  const copies = [{ label: "Copy path", text: shown }];
+  return full === shown ? copies : [...copies, { label: "Copy full path", text: full }];
+}
+
 /** A page's name, `index` for `pages/index.html`, as the daemon takes it
  *  (`is_page_name` in design/pages.rs): not empty, no folder, no hidden
  *  file, and no `@`, which names a snapshot's folder (`designs/<slug>@<n>/`). */

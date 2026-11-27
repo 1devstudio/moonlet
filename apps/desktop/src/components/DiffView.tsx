@@ -14,6 +14,8 @@ import { askConfirm } from "../lib/confirm";
 import { editorFont } from "../lib/uiScale";
 import { Button, Empty, IconButton, Kbd, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { CopyOnHover } from "./CopyOnHover";
+import { fileCopies } from "../lib/copyPaths";
 
 /** Pending diff-model cleanups per tab, cancelled if the tab mounts again. */
 const modelCleanup = new Map<string, number>();
@@ -179,9 +181,11 @@ export default function DiffView({ host, wsId, path, mode, visible }: { host: st
   return (
     <div className="flex h-full flex-col bg-bg">
       <div className="flex h-[36px] shrink-0 items-center gap-2 border-b border-border px-4 ui-text-12">
-        <span className="truncate font-mono text-muted" title={path}>
-          {path}
-        </span>
+        <CopyOnHover copies={fileCopies(ws.path, path)}>
+          <span className="selectable truncate font-mono text-muted" title={path}>
+            {path}
+          </span>
+        </CopyOnHover>
         <span className="shrink-0 text-faint">{diffModeLabel(mode, ws.base)}</span>
         {/* Hunk staging works on uncommitted changes only. */}
         {mode === "head" && !showPreview && diff && diff.hunks.length > 0 && (

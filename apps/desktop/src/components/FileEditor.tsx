@@ -10,6 +10,8 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { isMarkdownPath } from "../lib/markdown";
 import { afterRead, afterSave } from "../lib/fileSync";
 import { rangeToShow } from "../lib/openFileQuery";
+import { CopyOnHover } from "./CopyOnHover";
+import { fileCopies } from "../lib/copyPaths";
 
 /**
  * A file in an editor tab of the main window (X26): writable at once, ⌘S
@@ -131,9 +133,11 @@ export default function FileEditor({ host, wsId, path, line, endLine, visible }:
   return (
     <div className="flex h-full flex-col bg-bg">
       <div className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border px-4 ui-text-12">
-        <span className="truncate font-mono text-muted" title={path}>
-          {rel}
-        </span>
+        <CopyOnHover copies={fileCopies(root, path)}>
+          <span className="selectable truncate font-mono text-muted" title={path}>
+            {rel}
+          </span>
+        </CopyOnHover>
         {file?.truncated && <span className="text-blocked">truncated · read-only</span>}
         {markdown && file && !file.binary && (
           <div className="ml-auto flex rounded-md border border-border-strong p-0.5 ui-text-11.5">

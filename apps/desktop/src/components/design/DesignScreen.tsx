@@ -56,7 +56,7 @@ import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, 
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, showsPin, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
-import { pageFile, pagePath } from "../../lib/designPage";
+import { pageCopies, pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { LOAD_WAIT_MS, LOADING, framesWithBridge, fromFraming, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
@@ -67,6 +67,7 @@ import { workspaceProjects } from "../../lib/tasksStore";
 import { buildItTarget, buildingIn, type BuildDesign } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
+import { CopyOnHover } from "../CopyOnHover";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
@@ -798,14 +799,14 @@ export function DesignCanvas({
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
           ) : previewed ? (
             <>
-              <span className="font-mono text-fg">{fileOf(page)}</span>
+              <PagePath shown={fileOf(page)} folder={design.path} page={page} />
               <span className="truncate text-faint">at {snapshotTime(previewed.time, Date.now())} · read only</span>
             </>
           ) : mode === "edit" && selected && breadcrumb(layers, selected).length ? (
             <Breadcrumb path={breadcrumb(layers, selected)} hint={hintLine(mode, layers, dragging)} onSelect={select} />
           ) : (
             <>
-              <span className="truncate font-mono text-fg">{fileOf(page)}</span>
+              <PagePath shown={fileOf(page)} folder={design.path} page={page} />
               <span className="truncate text-faint">{names.includes(page) ? hintLine(mode, layers, dragging) : "not written yet"}</span>
             </>
           )}
@@ -1364,5 +1365,15 @@ function DetailsDialog({ page, problems, onClose }: { page: string | null; probl
         <p className="ui-text-13 text-muted">No problems.</p>
       )}
     </Dialog>
+  );
+}
+
+/** The file above a page; hovering it shows buttons that copy its path and
+ *  its full path. */
+function PagePath({ shown, folder, page }: { shown: string; folder: string; page: string }) {
+  return (
+    <CopyOnHover copies={pageCopies(shown, folder, page)}>
+      <span className="selectable truncate font-mono text-fg">{shown}</span>
+    </CopyOnHover>
   );
 }
