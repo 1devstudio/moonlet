@@ -1478,18 +1478,14 @@ impl Daemon {
         };
         let at = self.locate(&r).await?;
         let store = self.design.clone();
-        let (info, version) = blocking(move || {
-            let info = store.design(&at)?;
-            let version = moonlet_core::artifact::refs::design_version(Path::new(&info.path));
-            Ok((info, version))
-        })
-        .await?;
+        let info = blocking(move || store.design(&at)).await?;
         Ok(ArtifactSource {
             name: info.name.clone(),
             kind: "design",
             folder: format!("design-{}", info.slug),
             from: ArtifactFrom::Design(PathBuf::from(&info.path)),
-            version,
+            // A design's version is that of the copy made of it.
+            version: String::new(),
         })
     }
 
@@ -1500,8 +1496,10 @@ impl Daemon {
         self.sessions.session(session).map_err(|_| RpcError::new("invalid_params", format!("no session \"{session}\"")))?;
         let src = self.artifact_source(id).await?;
         let folder = self.refs.add(session, id, &src.folder, moonlet_core::paths::now_ms()).map_err(internal)?;
-        self.copy_artifact(&src, &folder).await?;
-        self.refs.see(session, id, &src.version).map_err(internal)?;
+        let staged = self.stage_copy(&src, &folder).await?;
+        let version = staged.version.clone();
+        self.commit_copy(staged, &folder).await?;
+        self.refs.see(session, id, &version).map_err(internal)?;
         let dir = self.refs.session_dir(session).display().to_string();
         for t in self.terminals.list() {
             if t.session_id.as_deref() == Some(session) && self.chats.is_chat(t.id) && t.agent.as_deref() == Some("claude") {
@@ -1515,18 +1513,25 @@ impl Daemon {
         Ok(serde_json::json!({ "folder": folder, "line": line }))
     }
 
-    async fn copy_artifact(&self, src: &ArtifactSource, folder: &Path) -> Result<(), RpcError> {
+    /// Builds artifact `src`'s next copy beside `folder`, with the version
+    /// it holds (X114); [`Self::commit_copy`] puts it in place.
+    async fn stage_copy(&self, src: &ArtifactSource, folder: &Path) -> Result<moonlet_core::artifact::refs::Staged, RpcError> {
         let folder = folder.to_path_buf();
         match &src.from {
             ArtifactFrom::Plan(text) => {
-                let text = text.clone();
-                blocking(move || moonlet_core::artifact::refs::mirror_plan(&folder, &text)).await
+                let (text, version) = (text.clone(), src.version.clone());
+                blocking(move || moonlet_core::artifact::refs::stage_plan(&folder, &text, &version)).await
             }
             ArtifactFrom::Design(path) => {
                 let path = path.clone();
-                blocking(move || moonlet_core::artifact::refs::mirror_design(&path, &folder)).await
+                blocking(move || moonlet_core::artifact::refs::stage_design(&path, &folder)).await
             }
         }
+    }
+
+    async fn commit_copy(&self, staged: moonlet_core::artifact::refs::Staged, folder: &Path) -> Result<(), RpcError> {
+        let folder = folder.to_path_buf();
+        blocking(move || moonlet_core::artifact::refs::commit(&staged, &folder)).await
     }
 
     /// Brings artifact `id`'s copies up to date in every session that
@@ -1547,14 +1552,22 @@ impl Daemon {
         for session in referrers {
             let Some(r) = self.refs.of(&session).into_iter().find(|r| r.id == id) else { continue };
             let folder = self.refs.session_dir(&session).join(&r.name);
-            // Told first, so a message sent meanwhile never goes without it:
-            // its agent reads the copy only once the message arrives, by
-            // which time the copy below is in place.
-            if self.refs.see(&session, id, &src.version).unwrap_or(false) {
+            // The next copy is built first, so its version is that of what
+            // it holds; the session is told before it is put in place, so a
+            // message sent meanwhile never goes without the line, and its
+            // agent reads the copy only once the message arrives.
+            let staged = match self.stage_copy(&src, &folder).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(id, session, "updating an artifact's copy failed: {e:?}");
+                    continue;
+                }
+            };
+            if self.refs.see(&session, id, &staged.version).unwrap_or(false) {
                 self.chats.tell_session(&session, &format!("{} changed since you last read it: {}", src.name, folder.display()));
             }
-            if let Err(e) = self.copy_artifact(&src, &folder).await {
-                tracing::warn!(id, session, "updating an artifact's copy failed: {e:?}");
+            if let Err(e) = self.commit_copy(staged, &folder).await {
+                tracing::warn!(id, session, "putting an artifact's copy in place failed: {e:?}");
             }
         }
     }

@@ -129,17 +129,27 @@ impl Refs {
     }
 }
 
-/// Writes a plan's text as `plan.md` in `folder`, read only.
-pub fn mirror_plan(folder: &Path, text: &str) -> Result<()> {
-    let next = fresh(folder)?;
-    write_read_only(&next.join("plan.md"), text.as_bytes())?;
-    swap(&next, folder)
+/// A copy built beside its folder, not in place yet, and the version it holds.
+pub struct Staged {
+    pub next: PathBuf,
+    pub version: String,
 }
 
-/// Copies a design's `design.toml`, `pages/`, `assets/` and `system/` from
-/// `design` into `folder`, read only, in place of what it held. Links are
-/// left out.
-pub fn mirror_design(design: &Path, folder: &Path) -> Result<()> {
+/// Builds the copy of a plan's text, version `version`, beside `folder`.
+pub fn stage_plan(folder: &Path, text: &str, version: &str) -> Result<Staged> {
+    let next = fresh(folder)?;
+    write_read_only(&next.join("plan.md"), text.as_bytes())?;
+    Ok(Staged {
+        next,
+        version: version.to_string(),
+    })
+}
+
+/// Builds the copy of a design beside `folder`: its `design.toml`, `pages/`,
+/// `assets/` and `system/`, read only, links left out. Its version is that
+/// of what was copied, so a change made meanwhile is never taken for one
+/// the copy has.
+pub fn stage_design(design: &Path, folder: &Path) -> Result<Staged> {
     let next = fresh(folder)?;
     let toml = design.join("design.toml");
     if std::fs::symlink_metadata(&toml).is_ok_and(|m| m.is_file()) {
@@ -148,41 +158,50 @@ pub fn mirror_design(design: &Path, folder: &Path) -> Result<()> {
     for part in ["pages", "assets", "system"] {
         copy_tree(&design.join(part), &next.join(part))?;
     }
-    swap(&next, folder)
+    let version = design_version(&next);
+    Ok(Staged { next, version })
 }
 
-/// A design's version (X114): a fingerprint of the files its copy holds,
-/// their paths, sizes and change times, so any change to a page, an asset,
-/// its styles or its `design.toml` is a new version.
+/// Puts a staged copy in place of what `folder` held.
+pub fn commit(staged: &Staged, folder: &Path) -> Result<()> {
+    swap(&staged.next, folder)
+}
+
+/// Writes a plan's text as `plan.md` in `folder`, read only.
+pub fn mirror_plan(folder: &Path, text: &str) -> Result<()> {
+    commit(&stage_plan(folder, text, "")?, folder)
+}
+
+/// Copies a design into `folder`, read only, in place of what it held
+/// (see [`stage_design`]).
+pub fn mirror_design(design: &Path, folder: &Path) -> Result<()> {
+    commit(&stage_design(design, folder)?, folder)
+}
+
+/// A design's version (X114): a fingerprint of what its copy holds, each
+/// file's path and contents, so any change to a page, an asset, its styles
+/// or its `design.toml` is a new version, and the same files the same one.
 pub fn design_version(design: &Path) -> String {
-    use std::os::unix::fs::MetadataExt;
     let mut seen: Vec<String> = Vec::new();
-    let mut note = |rel: &str, m: &std::fs::Metadata| {
-        seen.push(format!(
-            "{rel}\0{}\0{}\0{}",
-            m.len(),
-            m.mtime(),
-            m.mtime_nsec()
-        ))
+    let mut note = |rel: &str, path: &Path| {
+        if let Ok(bytes) = std::fs::read(path) {
+            seen.push(format!("{rel}\0{}", crate::hash::sha256_hex(&bytes)));
+        }
     };
-    if let Ok(m) = std::fs::symlink_metadata(design.join("design.toml"))
-        && m.is_file()
-    {
-        note("design.toml", &m);
+    if std::fs::symlink_metadata(design.join("design.toml")).is_ok_and(|m| m.is_file()) {
+        note("design.toml", &design.join("design.toml"));
     }
-    fn walk(dir: &Path, rel: &str, note: &mut dyn FnMut(&str, &std::fs::Metadata)) {
+    fn walk(dir: &Path, rel: &str, note: &mut dyn FnMut(&str, &Path)) {
         let Ok(rd) = std::fs::read_dir(dir) else {
             return;
         };
         for e in rd.flatten() {
-            let (Ok(kind), Ok(m)) = (e.file_type(), e.metadata()) else {
-                continue;
-            };
+            let Ok(kind) = e.file_type() else { continue };
             let rel = format!("{rel}/{}", e.file_name().to_string_lossy());
             if kind.is_dir() {
                 walk(&e.path(), &rel, note);
             } else if kind.is_file() {
-                note(&rel, &m);
+                note(&rel, &e.path());
             }
         }
     }
@@ -442,5 +461,40 @@ mod tests {
         assert_ne!(second, first);
         std::fs::write(design.join("pages/empty.html"), "").unwrap();
         assert_ne!(design_version(&design), second, "a new page is a change");
+    }
+
+    #[test]
+    fn a_staged_design_copy_says_the_version_it_holds_and_shows_only_once_committed() {
+        let home = tempfile::tempdir().unwrap();
+        let design = home.path().join("settings-page");
+        std::fs::create_dir_all(design.join("pages")).unwrap();
+        std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+        let folder = home.path().join("refs/s-api/design-settings-page");
+        mirror_design(&design, &folder).unwrap();
+        let v1 = design_version(&folder);
+
+        std::fs::write(design.join("pages/index.html"), "<p>v2</p>").unwrap();
+        let staged = stage_design(&design, &folder).unwrap();
+        assert_ne!(staged.version, v1);
+        assert_eq!(
+            std::fs::read_to_string(folder.join("pages/index.html")).unwrap(),
+            "<p>v1</p>",
+            "not in place yet"
+        );
+        commit(&staged, &folder).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join("pages/index.html")).unwrap(),
+            "<p>v2</p>"
+        );
+        assert_eq!(
+            design_version(&folder),
+            staged.version,
+            "the version of what it holds"
+        );
+        assert_eq!(
+            stage_design(&design, &folder).unwrap().version,
+            staged.version,
+            "the same files, the same version"
+        );
     }
 }
