@@ -4389,11 +4389,72 @@ impl Daemon {
             let (store, session) = (self.design.clone(), id.clone());
             match blocking(move || store.adopt_session_designs(&session, now_ms())).await {
                 Ok(done) => {
+                    // The sessions that refer to them follow them (X114).
+                    let moved: Vec<(String, String, String)> = done.moved.iter().map(|(from, to)| (done.workspace.clone(), from.clone(), to.clone())).collect();
+                    self.follow_design_copies(&id, &moved);
                     for (slug, error) in &done.left {
                         tracing::warn!("cannot move design {slug} of session {id} into its workspace: {error}");
                     }
                 }
                 Err(e) => tracing::warn!("cannot move the designs of session {id}: {}", e.message),
+            }
+        }
+    }
+
+    /// Copies the designs in session `id`'s worktree into its workspace as
+    /// workspace designs (X114): `(workspace, slug, slug there)` for each
+    /// copied. One that cannot be copied is logged and stays in the branch.
+    async fn copy_worktree_designs(&self, id: &str) -> Vec<(String, String, String)> {
+        let Ok((s, shelves)) = self.design_session(id) else { return Vec::new() };
+        let Some(workspace) = s.workspace_id.clone() else { return Vec::new() };
+        // Only the worktree's: those kept in moonlet move on their own (X101).
+        let shelves: Vec<_> = shelves.into_iter().filter(|sh| sh.root == Path::new(&s.path)).collect();
+        let (store, sid, ws) = (self.design.clone(), s.id.clone(), workspace.clone());
+        let copied = blocking(move || {
+            let mut copied = Vec::new();
+            for d in store.session_designs_on(&sid, &shelves, &ws)? {
+                let at = match moonlet_core::design::session::session_design_on(&sid, &shelves, &d.slug) {
+                    Ok(at) => at,
+                    Err(e) => {
+                        tracing::warn!("cannot find design {} of session {sid}: {e:#}", d.slug);
+                        continue;
+                    }
+                };
+                match store.copy_design_to(&at, &ws, now_ms()) {
+                    Ok(to) => copied.push((ws.clone(), d.slug.clone(), to)),
+                    Err(e) => tracing::warn!("cannot make design {} of session {sid} a workspace design: {e:#}", d.slug),
+                }
+            }
+            Ok(copied)
+        })
+        .await;
+        copied.unwrap_or_else(|e| {
+            tracing::warn!("cannot list the designs of session {id}: {}", e.message);
+            Vec::new()
+        })
+    }
+
+    /// Removes copies made for an archive that then failed (X114).
+    async fn drop_design_copies(&self, copied: &[(String, String, String)]) {
+        for (ws, _, slug) in copied {
+            let (store, ws, slug) = (self.design.clone(), ws.clone(), slug.clone());
+            let removed = blocking(move || {
+                let at = store.workspace_design(&ws, &slug)?;
+                store.remove_design(&at)
+            })
+            .await;
+            if let Err(e) = removed {
+                tracing::warn!("cannot remove a design copied for an archive that failed: {}", e.message);
+            }
+        }
+    }
+
+    /// The sessions that refer to session `session`'s designs now refer to
+    /// their workspace designs (X114).
+    fn follow_design_copies(&self, session: &str, copied: &[(String, String, String)]) {
+        for (ws, from, to) in copied {
+            if let Err(e) = self.refs.rename_id(&format!("design:session:{session}:{from}"), &format!("design:workspace:{ws}:{to}")) {
+                tracing::warn!("references to design {from} did not follow it to the workspace: {e:#}");
             }
         }
     }
@@ -8031,7 +8092,18 @@ impl Daemon {
                 // Its live copies go once it is archived, never holding the
                 // archive up; what they need is read first (X60).
                 let archiving = self.sync.archiving(&id).await;
-                let done = w.archive(r).await.map_err(internal)?;
+                // The designs in its worktree become workspace designs too,
+                // copied before the worktree goes; the committed ones stay in
+                // its branch (X114).
+                let copied = self.copy_worktree_designs(&id).await;
+                let done = match w.archive(r).await {
+                    Ok(done) => done,
+                    Err(e) => {
+                        self.drop_design_copies(&copied).await;
+                        return Err(internal(e));
+                    }
+                };
+                self.follow_design_copies(&id, &copied);
                 self.sync.archived(archiving);
                 self.jobs.forget(&id);
                 self.reads.clear_grant(&id);

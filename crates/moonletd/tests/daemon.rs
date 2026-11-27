@@ -7486,3 +7486,41 @@ async fn a_session_design_moved_to_the_workspace_keeps_its_references() {
     assert_eq!(used.get(&format!("design:workspace:{ws}:{slug}")), Some(&vec![reader.id.clone()]));
     assert_eq!(used.get(&id), None);
 }
+
+/// X114: when a session is archived, the designs in its worktree become
+/// workspace designs too, with their pages, and the sessions that refer to
+/// one then refer to the workspace design.
+#[tokio::test]
+async fn archiving_a_session_makes_its_worktree_designs_workspace_designs_and_references_follow() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let maker: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Fix checkout button", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Payment retries", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let made: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "session": maker.id, "name": "Checkout flow", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let dir = std::path::PathBuf::from(made["path"].as_str().unwrap());
+    assert!(dir.starts_with(&maker.path), "a design in the worktree: {}", dir.display());
+    std::fs::write(dir.join("pages/index.html"), "<p>cart</p>").unwrap();
+    let id = format!("design:session:{}:checkout-flow", maker.id);
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": maker.id})).await.unwrap();
+
+    let list: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let kept = list.iter().find(|d| d["kind"] == "workspace" && d["name"] == "Checkout flow").expect("a workspace design now");
+    let path = std::path::PathBuf::from(kept["path"].as_str().unwrap());
+    assert_eq!(std::fs::read_to_string(path.join("pages/index.html")).unwrap(), "<p>cart</p>");
+    let used: std::collections::BTreeMap<String, Vec<String>> = c.request(methods::ARTIFACT_USED, serde_json::json!({})).await.unwrap();
+    assert_eq!(used.get(&format!("design:workspace:{ws}:{}", kept["slug"].as_str().unwrap())), Some(&vec![reader.id.clone()]));
+    assert_eq!(used.get(&id), None);
+}
