@@ -1542,12 +1542,14 @@ impl Daemon {
         for session in referrers {
             let Some(r) = self.refs.of(&session).into_iter().find(|r| r.id == id) else { continue };
             let folder = self.refs.session_dir(&session).join(&r.name);
-            if let Err(e) = self.copy_artifact(&src, &folder).await {
-                tracing::warn!(id, session, "updating an artifact's copy failed: {e:?}");
-                continue;
-            }
+            // Told first, so a message sent meanwhile never goes without it:
+            // its agent reads the copy only once the message arrives, by
+            // which time the copy below is in place.
             if self.refs.see(&session, id, &src.version).unwrap_or(false) {
                 self.chats.tell_session(&session, &format!("{} changed since you last read it: {}", src.name, folder.display()));
+            }
+            if let Err(e) = self.copy_artifact(&src, &folder).await {
+                tracing::warn!(id, session, "updating an artifact's copy failed: {e:?}");
             }
         }
     }
