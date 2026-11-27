@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, activeNavKey, projectNavKey, restartDaemon } from "./settingsPage";
-import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace } from "./protocol";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsProjects, settingsWorkspaces, activeNavKey, projectNavKey, restartDaemon, bootSwitch, bootLine, bootOn, bootWarnings } from "./settingsPage";
+import type { DaemonBoot, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Project, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
   const app = (page: string, label: string, extra = {}) => ({ key: page, route: { page }, label, ...extra });
@@ -666,5 +666,40 @@ describe("restart the daemon (X97)", () => {
     const c = dialog(true);
     await expect(restartDaemon(d.restart, c.ask)).rejects.toEqual({ code: "failed", message: "moonletd not found next to moonlet" });
     expect(c.asked).toEqual([]);
+  });
+});
+
+describe("Start moonletd at system start (X113)", () => {
+  const loginItem = (state: "enabled" | "requires_approval" | "not_registered" | "not_found") => ({ mechanism: "login_item" as const, state });
+  const boot = (state: DaemonBoot["state"], warnings: DaemonBoot["warnings"] = []): DaemonBoot => ({ state, warnings });
+
+  it("offers start at system start only with the login item on", () => {
+    expect(bootSwitch(loginItem("enabled"))).toEqual({ shown: true, disabledBecause: null });
+    expect(bootSwitch(loginItem("not_registered"))).toEqual({ shown: true, disabledBecause: "Needs Start the moonlet daemon at login" });
+    expect(bootSwitch(loginItem("requires_approval"))).toEqual({ shown: true, disabledBecause: "Needs Start the moonlet daemon at login" });
+    // Dev and e2e builds keep the plist and have no bundle to start from.
+    expect(bootSwitch({ mechanism: "plist", state: "loaded", plist: "/Users/alex/Library/LaunchAgents/dev.onedevstudio.moonlet.daemon.plist" })).toEqual({ shown: false, disabledBecause: null });
+    expect(bootSwitch(null)).toEqual({ shown: false, disabledBecause: null });
+  });
+
+  it("says what starts moonletd at system start", () => {
+    expect(bootLine(boot("on"))).toEqual({ line: { tone: "done", text: "Starts at system start · moonlet in System Settings › Login Items" }, action: null });
+    expect(bootLine(boot("requires_approval"))).toEqual({ line: { tone: "blocked", text: "Turned off in System Settings › Login Items" }, action: "open_login_items" });
+    expect(bootLine(boot("stale"))).toEqual({ line: { tone: "error", text: "Points at another copy of moonlet" }, action: "repair" });
+    expect(bootLine(boot("left_behind"))).toEqual({ line: { tone: "muted", text: "Not starting at system start" }, action: "remove" });
+    expect(bootLine(boot("off"))).toBeNull();
+    expect([bootOn(boot("on")), bootOn(boot("requires_approval")), bootOn(boot("stale")), bootOn(boot("left_behind")), bootOn(boot("off"))]).toEqual([true, true, true, false, false]);
+  });
+
+  it("warns about Tailscale, FileVault and automatic login only when they apply", () => {
+    expect(bootWarnings(boot("on"))).toEqual([]);
+    expect(bootWarnings(boot("on", ["tailscale", "filevault", "auto_login"]))).toEqual([
+      "Tailscale joins the tailnet only after login. To reach this Mac before then, use tailscaled.",
+      "FileVault is on: after a restart nothing starts until someone unlocks the disk.",
+      "Claude chats wait until someone logs in. Automatic login in System Settings › Users & Groups logs in right after a restart (needs FileVault off).",
+    ]);
+    // Nothing starts at system start: nothing to warn about.
+    expect(bootWarnings(boot("off", ["filevault"]))).toEqual([]);
+    expect(bootWarnings(boot("left_behind", ["filevault"]))).toEqual([]);
   });
 });

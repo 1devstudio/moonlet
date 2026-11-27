@@ -35,6 +35,12 @@ describe("searching settings (X43)", () => {
     }
   });
 
+  it("finds start at system start (X113)", () => {
+    for (const q of ["boot", "system start", "startup", "before login", "launch daemon"]) {
+      expect(shown(q)).toEqual([["Start moonletd at system start", "App › General › Background daemon", ""]]);
+    }
+  });
+
   it("finds Restart the daemon by what a stuck daemon looks like (X97)", () => {
     for (const q of ["restart", "stuck", "force restart", "not answering"]) {
       expect(shown(q)).toEqual([["Restart the daemon", "App › General › Background daemon", ""]]);

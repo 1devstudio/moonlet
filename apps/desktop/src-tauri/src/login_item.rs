@@ -31,17 +31,29 @@ fn read_table(file: &Path) -> Result<Option<toml::Table>> {
 /// Whether the user wants the daemon to start at login, if they ever said.
 /// A file that does not parse counts as no choice.
 pub fn saved_choice(file: &Path) -> Option<bool> {
+    saved_flag(file, CHOICE)
+}
+
+/// The user's choice `key` in `app.toml`, if they ever said. A file that
+/// does not parse counts as no choice.
+pub fn saved_flag(file: &Path, key: &str) -> Option<bool> {
     let table = read_table(file)
         .map_err(|e| tracing::warn!("{e:#}"))
         .ok()??;
-    table.get(CHOICE)?.as_bool()
+    table.get(key)?.as_bool()
 }
 
 /// Saves the user's choice, keeping the file's other keys. A file that does
 /// not parse is left as it is, with an error.
 pub fn save_choice(file: &Path, on: bool) -> Result<()> {
+    save_flag(file, CHOICE, on)
+}
+
+/// Saves the user's choice `key`, keeping the file's other keys. A file
+/// that does not parse is left as it is, with an error.
+pub fn save_flag(file: &Path, key: &str, on: bool) -> Result<()> {
     let mut table = read_table(file)?.unwrap_or_default();
-    table.insert(CHOICE.into(), toml::Value::Boolean(on));
+    table.insert(key.into(), toml::Value::Boolean(on));
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -243,6 +255,12 @@ pub fn launch() {
     }
 }
 
+/// Whether the login item starts the daemon at login: what takes over from
+/// a daemon started at system start (X113).
+pub fn starts_at_login() -> bool {
+    sm::state() == LoginItemState::Enabled
+}
+
 /// The login item's state for Settings.
 pub fn status() -> Service {
     Service::LoginItem { state: sm::state() }
@@ -278,6 +296,9 @@ pub fn set(on: bool) -> Result<Service> {
             sm::unregister()?;
         }
         save_choice(&file, false)?;
+        // Nothing would take over at login from a daemon started at system
+        // start (X113): that one stops serving too.
+        save_flag(&file, crate::boot_item::CHOICE, false)?;
         return Ok(status());
     }
     if !installed(&std::env::current_exe()?) {

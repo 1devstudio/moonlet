@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, ListChecks, Loader2, MessageCircleQuestion, MessageSquareDashed, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChatDraft, turnRunning, useChat, useChatOnScreen } from "@desktop/lib/chat";
+import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChatDraft, turnRunning, useChat, useChatOnScreen, waitingForLogin } from "@desktop/lib/chat";
 import { CLAUDE_MODES, agentEfforts, chatModelPatch } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
@@ -311,6 +311,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
 /** A chat terminal's conversation; `from` is the screen a plan sheet opens over. */
 export function ChatView({ host, terminal, cwd, from }: { host: string; terminal: number; cwd: string; from: Screen }) {
   const st = useChat((s) => s.chats[chatKey(host, terminal)]);
+  const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
   // The subagent whose sheet is open, by its key (X42).
   const [agentOpen, setAgentOpen] = useState<string | null>(null);
@@ -376,6 +377,7 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         )}
         {queueNote && <div className="self-end text-[12.5px] text-muted">{queueNote}</div>}
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
+        {waitingForLogin(st.status, hostLabel) && <div className="text-[13px] text-muted">{waitingForLogin(st.status, hostLabel)}</div>}
       </main>
       {ask && <HeldLine host={host} terminal={terminal} what="answer" onTakeBack={() => {}} />}
       <FailedAnswer host={host} terminal={terminal} />

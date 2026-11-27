@@ -3,7 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DaemonService, HostInfo, LinkInfo } from "./protocol";
+import type { DaemonBoot, DaemonService, HostInfo, LinkInfo } from "./protocol";
 import { EarlyOutput, PendingAttaches, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
 
 export interface RpcError {
@@ -113,6 +113,8 @@ export const hostsApi = {
   openIn: (target: string, path: string, host?: string, root?: string) => invoke("open_in", { target, path, host, root }),
   playSound: (name: string) => invoke("play_sound", { name }),
   service: (action: "install" | "uninstall" | "status") => invoke<DaemonService>("daemon_service", { action }),
+  /** moonletd at system start, before login (X113); `install` and `uninstall` ask for an administrator's password. */
+  boot: (action: "install" | "repair" | "uninstall" | "status") => invoke<DaemonBoot>("daemon_boot", { action }),
   openLoginItems: () => invoke("open_login_items"),
   /** Restarts this Mac's moonletd (X97); rejects with `not_responding` when only `force` can. */
   restartDaemon: (force: boolean) => invoke("restart_daemon", { force }),

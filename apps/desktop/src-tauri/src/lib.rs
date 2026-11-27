@@ -3,6 +3,7 @@
 //! PTY output to the webview over a binary channel.
 
 mod attach;
+mod boot_item;
 mod design_download;
 mod design_render;
 mod design_scheme;
@@ -343,6 +344,24 @@ fn restart_result(code: Option<i32>, stderr: &str) -> Result<(), RpcError> {
     }
 }
 
+/// Starts moonletd at system start, before login, or stops doing so
+/// (X113): `install`, `repair`, `uninstall` or `status`. Only for builds
+/// with the login item, which takes over at login.
+#[tauri::command]
+async fn daemon_boot(action: String) -> Result<Value, RpcError> {
+    if !["install", "repair", "uninstall", "status"].contains(&action.as_str()) {
+        return Err(RpcError::new("invalid_params", "unknown action"));
+    }
+    if !login_item::bundled() {
+        return Err(RpcError::new("unsupported", "only an installed moonlet starts moonletd at system start"));
+    }
+    let status = tokio::task::spawn_blocking(move || boot_item::set(&action))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    serde_json::to_value(status).map_err(err)
+}
+
 /// Opens System Settings › Login Items, where the user allows the login
 /// item again after switching it off there (X56).
 #[tauri::command]
@@ -619,6 +638,7 @@ pub fn run() {
             open_targets,
             open_in,
             daemon_service,
+            daemon_boot,
             restart_daemon,
             open_login_items,
             log_js,

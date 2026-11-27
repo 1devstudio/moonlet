@@ -58,7 +58,8 @@ export type DesignTag = DesignAgent | boolean;
 
 export type ChatKind = "user" | "assistant" | "thinking" | "tool" | "system" | "error";
 export type ToolStatus = "running" | "ok" | "error" | "denied";
-export type ChatStatus = "idle" | "working" | "blocked" | "done" | "error";
+/** `waiting_for_login`: in a daemon started at system start, until the user logs in (X113). */
+export type ChatStatus = "idle" | "working" | "blocked" | "done" | "error" | "waiting_for_login";
 
 export interface ToolCall {
   name: string;
@@ -1817,6 +1818,14 @@ export const EV = {
 export type DaemonService =
   | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
   | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
+
+/** moonletd at system start, before login (X113): the launch daemon plist
+ * the app writes with an administrator's password, and what still stops
+ * the Mac being useful before login. */
+export interface DaemonBoot {
+  state: "on" | "requires_approval" | "stale" | "left_behind" | "off";
+  warnings: ("tailscale" | "filevault" | "auto_login")[];
+}
 
 /** A sign-in every member can run (X75). */
 export interface SignIn {
