@@ -5,6 +5,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use moonlet_proto::methods;
+
 static STARTED_AT_BOOT: AtomicBool = AtomicBool::new(false);
 
 /// Whether this daemon was started at system start, outside a login session.
@@ -64,6 +66,29 @@ fn user_temp_dir() -> Option<std::ffi::OsString> {
     }
     buf.truncate(n - 1);
     Some(std::ffi::OsString::from_vec(buf))
+}
+
+/// For a daemon that finds one already listening on `socket`: when that
+/// one was started at system start and this one was not, it hands its
+/// terminals over, and this returns the socket to take them from and the
+/// secret to send there.
+pub async fn take_over_from_boot(socket: &std::path::Path) -> anyhow::Result<Option<methods::HandOver>> {
+    if started_at_boot() {
+        return Ok(None);
+    }
+    // A daemon that listens but no longer answers (X97) must not hold up
+    // the login: this one exits, and the stuck one keeps what it has.
+    let limit = std::time::Duration::from_secs(10);
+    let mut c = tokio::time::timeout(limit, moonlet_core::client::Client::connect(socket, "moonletd-login")).await??;
+    let info: moonlet_proto::types::DaemonInfo = tokio::time::timeout(limit, c.request(methods::DAEMON_INFO, ())).await??;
+    if !info.started_at_boot {
+        return Ok(None);
+    }
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file())
+        .ok_or_else(|| anyhow::anyhow!("no app credential to show"))?;
+    let given: methods::HandOver =
+        tokio::time::timeout(limit, c.request(methods::DAEMON_HAND_OVER, methods::HandOverRequest { token })).await??;
+    Ok(Some(given))
 }
 
 #[cfg(test)]

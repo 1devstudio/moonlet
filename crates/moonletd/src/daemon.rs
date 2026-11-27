@@ -472,6 +472,9 @@ const LOCAL_METHODS: &[&str] = &[
     // `moonletd status`, `stop`, `restart`, `upgrade` and `proxy`.
     m::DAEMON_INFO,
     m::DAEMON_SHUTDOWN,
+    // The daemon a login starts, taking over from one started at system
+    // start (X113).
+    m::DAEMON_HAND_OVER,
     // `moonlet notify` and the agents' hooks; `moonlet open-url` (X75).
     m::AGENT_REPORT,
     m::BROWSER_OPEN,
@@ -1511,6 +1514,28 @@ impl Daemon {
                     }
                 });
                 ok(true)
+            }
+            m::DAEMON_HAND_OVER => {
+                // Only the host itself, and only a daemon outside any login
+                // session: the one a login starts can read the Keychain.
+                if conn.phone.is_some() || conn.routed_phone {
+                    return Err(RpcError::new("forbidden", "hand over on moonletd's own machine"));
+                }
+                if !crate::boot::started_at_boot() {
+                    return Err(RpcError::new("refused", "only a daemon started at system start hands over"));
+                }
+                // Every terminal goes to the caller: only this daemon's own
+                // executable, showing the app credential, may ask.
+                let r: m::HandOverRequest = params(p).unwrap_or_default();
+                let Some(pid) = conn.peer_pid.filter(|_| self.proves_own_daemon(&r.token, conn.peer_pid)) else {
+                    tracing::warn!(peer = ?conn.peer_pid, client = %conn.client, "refused a hand-over: not this moonletd with the app credential");
+                    return Err(RpcError::new("forbidden", "only moonletd started at login takes the terminals over"));
+                };
+                if !self.begin_upgrade() {
+                    return Err(RpcError::new("busy", "an upgrade is already in progress"));
+                }
+                let (path, secret) = crate::upgrade::hand_over(self.clone(), pid).await.map_err(internal)?;
+                ok(m::HandOver { path: path.display().to_string(), secret })
             }
             m::DAEMON_UPDATE => {
                 // On the local socket, the app that proved it is (X75).
@@ -6541,6 +6566,21 @@ impl Daemon {
             tracing::warn!(?exe, ?peer, "a connection with the app credential is not the app");
         }
         app
+    }
+
+    /// Whether a local connection runs this daemon's own executable and
+    /// sent this Mac's app credential (X113): the daemon a login starts,
+    /// asking a daemon started at system start for its terminals. Unlike
+    /// [`Self::proves_app`], no login need vouch for it: launchd started it.
+    pub fn proves_own_daemon(&self, sent: &str, peer_pid: Option<u32>) -> bool {
+        use moonlet_core::app_token::{self, Peer};
+        if self.app_token.is_empty() || !app_token::matches(&self.app_token, sent) {
+            return false;
+        }
+        let (Some(pid), Ok(daemon)) = (peer_pid, std::env::current_exe()) else {
+            return false;
+        };
+        moonlet_core::process::executable(pid).is_some_and(|exe| app_token::peer(&exe, &daemon, None) == Peer::Moonletd)
     }
 
     /// This Mac's app connected, or (`false`) one of its connections

@@ -121,13 +121,7 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
     if !binary.is_file() {
         bail!("new moonletd binary not found: {}", binary.display());
     }
-    let path = daemon
-        .terminals
-        .socket()
-        .with_file_name(format!("handoff-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let (path, listener) = handoff_listener(&daemon)?;
 
     let mut cmd = Command::new(&binary);
     cmd.args(["daemon", "--handoff"]).arg(&path);
@@ -145,19 +139,97 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
             Ok(())
         });
     }
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .with_context(|| format!("cannot start {}", binary.display()))?;
     tracing::info!(binary = %binary.display(), pid = child.id(), "handing terminals to new daemon");
+    serve_handoff(daemon, listener, path, Receiver::Child(child)).await
+}
 
+/// Who takes the terminals.
+enum Receiver {
+    /// The new daemon this one started (S3).
+    Child(std::process::Child),
+    /// The daemon that asked with `daemon.hand_over` (X113): the process
+    /// that asked, running this daemon's own executable, which sends the
+    /// one-time secret it was given first.
+    Caller { pid: u32, secret: String },
+}
+
+/// `handoff-<pid>.sock` beside the daemon's socket, for the new daemon only.
+fn handoff_listener(daemon: &Daemon) -> Result<(PathBuf, UnixListener)> {
+    let path = daemon
+        .terminals
+        .socket()
+        .with_file_name(format!("handoff-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    Ok((path, listener))
+}
+
+/// `daemon.hand_over` (X113), for a daemon that started at system start:
+/// the daemon that asks, process `caller`, started at login, takes every
+/// terminal over the returned socket once it sends the returned secret,
+/// and this one exits. The caller claimed the upgrade.
+pub async fn hand_over(daemon: Arc<Daemon>, caller: u32) -> Result<(PathBuf, String)> {
+    let made = one_time_secret().and_then(|secret| Ok((handoff_listener(&daemon)?, secret)));
+    let ((path, listener), secret) = match made {
+        Ok(m) => m,
+        Err(e) => {
+            daemon.end_upgrade();
+            return Err(e);
+        }
+    };
+    let returned = (path.clone(), secret.clone());
+    tokio::spawn(async move {
+        let receiver = Receiver::Caller { pid: caller, secret };
+        let result = serve_handoff(daemon.clone(), listener, path, receiver).await;
+        if let Err(e) = result {
+            tracing::error!("hand-over to the daemon started at login failed, still serving: {e:#}");
+            daemon.terminals.resume_io();
+            daemon.chats.resume();
+            daemon.end_upgrade();
+        }
+    });
+    Ok(returned)
+}
+
+/// 32 random bytes as hex.
+fn one_time_secret() -> Result<String> {
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+async fn serve_handoff(daemon: Arc<Daemon>, listener: UnixListener, path: PathBuf, mut receiver: Receiver) -> Result<()> {
     // Chats are not handed over: the new daemon resumes them from disk.
     daemon.chats.shutdown().await;
     let terminals = daemon.terminals.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<()> {
         listener.set_nonblocking(false)?;
-        // Wait for the child to connect, but notice if it dies first.
-        let (stream, _) = accept_with_timeout(&listener, &mut child, Duration::from_secs(15))?;
+        // Wait for the new daemon to connect, but notice if a child dies first.
+        let child = match &mut receiver {
+            Receiver::Child(c) => Some(c),
+            Receiver::Caller { .. } => None,
+        };
+        let (stream, _) = accept_with_timeout(&listener, child, Duration::from_secs(15))?;
         check_peer(&stream)?;
+        if let Receiver::Caller { pid, secret } = &receiver {
+            // The process that asked, still running this executable, and
+            // holding the secret only its reply carried.
+            if peer_pid(&stream)? != *pid {
+                bail!("hand-over refused: another process connected");
+            }
+            check_peer_runs_this_executable(&stream)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut sent = vec![0u8; secret.len()];
+            (&stream).read_exact(&mut sent).context("no hand-over secret")?;
+            stream.set_read_timeout(None)?;
+            if !moonlet_core::app_token::matches(secret, &String::from_utf8_lossy(&sent)) {
+                bail!("hand-over refused: wrong secret");
+            }
+        }
         let exported = terminals.export();
         send_terminals(&stream, terminals.base_env(), &exported)?;
         let mut ack = [0u8; 1];
@@ -181,7 +253,7 @@ async fn hand_off_once(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<(
 
 fn accept_with_timeout(
     listener: &UnixListener,
-    child: &mut std::process::Child,
+    mut child: Option<&mut std::process::Child>,
     timeout: Duration,
 ) -> Result<(UnixStream, std::os::unix::net::SocketAddr)> {
     listener.set_nonblocking(true)?;
@@ -195,15 +267,48 @@ fn accept_with_timeout(
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => return Err(e.into()),
         }
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(child) = child.as_mut()
+            && let Ok(Some(status)) = child.try_wait()
+        {
             bail!("new daemon exited during handoff ({status})");
         }
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            if let Some(child) = child.as_mut() {
+                let _ = child.kill();
+            }
             bail!("new daemon did not connect for the handoff");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The peer runs the same `moonletd` as this daemon (X113): a hand-over
+/// gives every terminal to whoever connects.
+fn check_peer_runs_this_executable(stream: &UnixStream) -> Result<()> {
+    let ours = std::env::current_exe().context("this daemon's executable")?;
+    let theirs = peer_executable(stream)?;
+    let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if same(&ours) != same(&theirs) {
+        bail!("hand-over refused: the peer runs {}, not {}", theirs.display(), ours.display());
+    }
+    Ok(())
+}
+
+/// The process at the other end of `stream`, as the kernel says.
+#[cfg(target_os = "macos")]
+fn peer_pid(stream: &UnixStream) -> Result<u32> {
+    let pid = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::LocalPeerPid).context("peer pid")?;
+    Ok(pid as u32)
+}
+
+#[cfg(target_os = "linux")]
+fn peer_pid(stream: &UnixStream) -> Result<u32> {
+    let cred = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials).context("peer credentials")?;
+    Ok(cred.pid() as u32)
+}
+
+fn peer_executable(stream: &UnixStream) -> Result<PathBuf> {
+    moonlet_core::process::executable(peer_pid(stream)?).context("cannot read the peer's executable")
 }
 
 fn check_peer(stream: &UnixStream) -> Result<()> {
@@ -266,10 +371,14 @@ pub struct Incoming {
 }
 
 /// New-daemon side, step 1: read the header and the PTY fds.
-pub fn receive(path: &Path) -> Result<Incoming> {
+/// With `secret`, the one-time secret of a hand-over (X113), sent first.
+pub fn receive(path: &Path, secret: Option<&str>) -> Result<Incoming> {
     let stream =
         UnixStream::connect(path).with_context(|| format!("connect {}", path.display()))?;
     check_peer(&stream)?;
+    if let Some(secret) = secret {
+        (&stream).write_all(secret.as_bytes())?;
+    }
     let mut s = &stream;
     let mut len = [0u8; 4];
     s.read_exact(&mut len)?;

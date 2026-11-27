@@ -103,7 +103,12 @@ fn only_users_who_turned_it_on_get_a_daemon() {
 }
 
 async fn output_until(c: &mut Client, needle: &str) -> String {
-    let mut seen = String::new();
+    output_until_from(c, String::new(), needle).await
+}
+
+/// What `c` has seen of a terminal: `seen` so far, then its output until
+/// `needle` shows.
+async fn output_until_from(c: &mut Client, mut seen: String, needle: &str) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !seen.contains(needle) {
         let f = tokio::time::timeout_at(deadline, c.next_frame())
@@ -118,8 +123,9 @@ async fn output_until(c: &mut Client, needle: &str) -> String {
     seen
 }
 
-/// Opens a terminal running `script` in `sh` and follows its output.
-async fn terminal(c: &mut Client, home: &Path, script: &str) -> TerminalInfo {
+/// Opens a terminal running `script` in `sh` and follows its output. Also
+/// returns its screen when the client attached: what it printed before.
+async fn terminal(c: &mut Client, home: &Path, script: &str) -> (TerminalInfo, String) {
     let t: TerminalInfo = c
         .request(
             methods::TERMINAL_CREATE,
@@ -131,7 +137,7 @@ async fn terminal(c: &mut Client, home: &Path, script: &str) -> TerminalInfo {
         )
         .await
         .unwrap();
-    let _: AttachResult = c
+    let attach: AttachResult = c
         .request(
             methods::TERMINAL_ATTACH,
             TerminalAttach {
@@ -142,7 +148,7 @@ async fn terminal(c: &mut Client, home: &Path, script: &str) -> TerminalInfo {
         )
         .await
         .unwrap();
-    t
+    (t, attach.snapshot)
 }
 
 /// launchd gives a launch daemon no `TMPDIR` (X113 Findings).
@@ -167,8 +173,8 @@ async fn a_boot_daemon_gives_its_terminals_the_users_temporary_folder() {
     );
     info(&socket, home.path()).await;
     let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
-    terminal(&mut c, home.path(), "echo \"tmp=[$TMPDIR]\"; sleep 30").await;
-    let seen = output_until(&mut c, "]").await;
+    let (_, screen) = terminal(&mut c, home.path(), "echo \"tmp=[$TMPDIR]\"; sleep 30").await;
+    let seen = output_until_from(&mut c, screen, "]").await;
     assert!(seen.contains(&format!("tmp=[{expected}]")), "{seen}");
 }
 
@@ -197,5 +203,246 @@ async fn an_upgraded_boot_daemon_still_says_so() {
     assert!(after.started_at_boot);
 
     let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+}
+
+/// Waits for `child` to exit, for up to 15 s.
+fn exit_code(child: &mut Child) -> Option<i32> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            return s.code();
+        }
+        assert!(std::time::Instant::now() < deadline, "still running");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[tokio::test]
+async fn a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    turn_boot(home.path(), true);
+    let socket = home.path().join("run/d.sock");
+    let mut boot = Kill(moonletd(home.path(), &socket, &["daemon", "--boot"]).spawn().unwrap());
+    let before = info(&socket, home.path()).await;
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
+    let (t, screen) = terminal(&mut c, home.path(), "echo before-$((6*7)); exec sh").await;
+    output_until_from(&mut c, screen, "before-42").await;
+    drop(c);
+
+    // The login item starts its daemon, as at every login.
+    let _login = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
+    assert_eq!(exit_code(&mut boot.0), Some(0), "the boot daemon handed over and exited");
+
+    let after = info(&socket, home.path()).await;
+    assert_ne!(after.pid, before.pid);
+    assert!(!after.started_at_boot, "the daemon in the login session serves");
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
+    let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let same = list.iter().find(|x| x.id == t.id).expect("the terminal is still there");
+    assert_eq!(same.pid, t.pid, "same process");
+    let attach: AttachResult = c
+        .request(methods::TERMINAL_ATTACH, TerminalAttach { id: t.id, cols: None, rows: None })
+        .await
+        .unwrap();
+    assert!(attach.snapshot.contains("before-42"), "{}", attach.snapshot);
+    c.send(&Frame::Input { terminal: t.id, data: b"echo after-$((1+2))\n".to_vec() })
+        .await
+        .unwrap();
+    output_until(&mut c, "after-3").await;
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_daemon_that_was_not_started_at_boot_is_left_serving() {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let _first = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
+    let before = info(&socket, home.path()).await;
+
+    let mut second = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
+    assert_eq!(exit_code(&mut second.0), Some(0));
+    assert_eq!(info(&socket, home.path()).await.pid, before.pid);
+}
+
+/// A hand-over gives every terminal to whoever connects: only the boot
+/// daemon's own executable may take them. The other program exits 0, so
+/// launchd does not keep starting it.
+#[tokio::test]
+async fn a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving() {
+    let home = tempfile::tempdir().unwrap();
+    turn_boot(home.path(), true);
+    let socket = home.path().join("run/d.sock");
+    let _boot = Kill(moonletd(home.path(), &socket, &["daemon", "--boot"]).spawn().unwrap());
+    let before = info(&socket, home.path()).await;
+    let mut c = Client::connect_app(&socket, home.path()).await.unwrap();
+    let (t, screen) = terminal(&mut c, home.path(), "echo before-$((6*7)); exec sh").await;
+    output_until_from(&mut c, screen, "before-42").await;
+
+    // The same build, copied elsewhere: another program as far as the
+    // boot daemon can tell.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let copy = elsewhere.path().join("moonletd");
+    std::fs::copy(env!("CARGO_BIN_EXE_moonletd"), &copy).unwrap();
+    let mut other = Kill(
+        Command::new(&copy)
+            .arg("daemon")
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
+            .env("MOONLET_SOCK", &socket)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    assert_eq!(exit_code(&mut other.0), Some(0));
+
+    let after = info(&socket, home.path()).await;
+    assert_eq!(after.pid, before.pid, "the boot daemon still serves");
+    assert!(after.started_at_boot);
+    c.send(&Frame::Input { terminal: t.id, data: b"echo after-$((1+2))\n".to_vec() })
+        .await
+        .unwrap();
+    output_until(&mut c, "after-3").await;
+}
+
+/// Only a daemon of this executable that shows the app credential may ask:
+/// a hand-over gives it every terminal.
+#[tokio::test]
+async fn a_hand_over_is_refused_to_anything_but_this_moonletd_with_the_credential() {
+    let home = tempfile::tempdir().unwrap();
+    turn_boot(home.path(), true);
+    let socket = home.path().join("run/d.sock");
+    let _boot = Kill(moonletd(home.path(), &socket, &["daemon", "--boot"]).spawn().unwrap());
+    let before = info(&socket, home.path()).await;
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file_in(home.path())).unwrap();
+
+    // An agent's CLI, with no credential.
+    let mut cli = Client::connect(&socket, "moonlet-cli").await.unwrap();
+    let refused: Result<String, _> = cli.request(methods::DAEMON_HAND_OVER, serde_json::json!({})).await;
+    assert!(refused.is_err(), "{refused:?}");
+    // Another program of the user's that read the credential.
+    let refused: Result<String, _> =
+        cli.request(methods::DAEMON_HAND_OVER, serde_json::json!({ "token": token })).await;
+    let err = format!("{:?}", refused.unwrap_err());
+    assert!(err.contains("forbidden"), "{err}");
+
+    let after = info(&socket, home.path()).await;
+    assert_eq!(after.pid, before.pid, "the boot daemon still serves");
+}
+
+/// A `claude` that records each start (`claude-starts`) and each message it
+/// reads (`claude-user`) in `$HOME`, and answers at once.
+const RECORDING_CLAUDE: &str = r#"#!/bin/sh
+echo started >> "$HOME/claude-starts"
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> "$HOME/claude-user"
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+  esac
+done
+"#;
+
+/// A daemon on `home` as its user's HOME, whose agents find the recording
+/// `claude` first on the login shell's PATH.
+fn home_daemon(home: &Path, args: &[&str]) -> Command {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("claude"), RECORDING_CLAUDE).unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.join(rc), &first).unwrap();
+    }
+    let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+    c.args(args)
+        .env("HOME", home)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
+        .env_remove("MOONLET_SOCK")
+        .env_remove("MOONLET_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .keep_logs(&home.join(".moonlet"));
+    c
+}
+
+/// Waits up to 15 s for `file` to hold `text`.
+fn file_holds(file: &Path, text: &str) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(file).is_ok_and(|t| t.contains(text)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// Before login Claude cannot read its sign-in: a session's first message
+/// waits, and the daemon a login starts sends it.
+#[tokio::test]
+async fn a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message() {
+    use moonlet_proto::types::{ChatState, Project, Session};
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join(".moonlet");
+    std::fs::create_dir_all(&data).unwrap();
+    turn_boot(&data, true);
+    let mut boot = Kill(home_daemon(home.path(), &["daemon", "--boot"]).spawn().unwrap());
+    // The daemon's own socket in its data folder.
+    let socket = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(s) = std::fs::read_dir(data.join("run")).ok().and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "sock") && !p.to_string_lossy().contains("handoff"))) {
+                break s;
+            }
+            assert!(std::time::Instant::now() < deadline, "no socket");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    assert!(info(&socket, &data).await.started_at_boot);
+
+    let repo = home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [&["init", "-q", "-b", "main"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        assert!(Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+    }
+    let mut c = Client::connect_app(&socket, &data).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let _: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Fix login", "agent": "claude", "prompt": "hello before login"}))
+        .await
+        .unwrap();
+    let chat = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+            if let Some(t) = list.into_iter().find(|t| t.agent.as_deref() == Some("claude")) {
+                break t.id;
+            }
+            assert!(std::time::Instant::now() < deadline, "no chat");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let state: ChatState = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat})).await.unwrap();
+    assert_eq!(state.status, "waiting_for_login");
+    assert_eq!(state.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["hello before login"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!home.path().join("claude-starts").exists(), "no Claude before login");
+    drop(c);
+
+    // The login item starts its daemon.
+    let _login = Kill(home_daemon(home.path(), &["daemon"]).spawn().unwrap());
+    assert_eq!(exit_code(&mut boot.0), Some(0));
+    assert!(file_holds(&home.path().join("claude-user"), "hello before login"), "the message reached Claude");
+    let mut c = Client::connect_app(&socket, &data).await.unwrap();
+    let state: ChatState = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat})).await.unwrap();
+    assert!(state.queued.is_empty(), "{state:?}");
     let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
 }

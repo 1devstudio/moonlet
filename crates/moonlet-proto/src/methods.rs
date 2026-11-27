@@ -14,6 +14,25 @@ pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 pub const DAEMON_UPGRADE: &str = "daemon.upgrade";
 /// Installs a newer moonlet release on this host, then upgrades into it (X69).
 pub const DAEMON_UPDATE: &str = "daemon.update";
+/// Hands every PTY to the calling daemon, which receives them on the
+/// returned socket, then exits; only a daemon started at system start
+/// does, for the daemon its user's login starts (X113).
+pub const DAEMON_HAND_OVER: &str = "daemon.hand_over";
+
+/// `daemon.hand_over`'s parameters: this Mac's app credential (X75), which
+/// the daemon a login starts reads as the app does.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HandOverRequest {
+    pub token: String,
+}
+
+/// `daemon.hand_over`'s reply: the private socket to take the terminals
+/// from, and a one-time secret to send on it first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandOver {
+    pub path: String,
+    pub secret: String,
+}
 
 // Sessions
 pub const TERMINAL_CREATE: &str = "terminal.create";

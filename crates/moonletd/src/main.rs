@@ -249,40 +249,72 @@ fn run_daemon(
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
-    let fresh = handoff.is_none();
     rt.block_on(async move {
-        let (listener, daemon) = match handoff {
-            None => {
-                // The app credential exists before anyone can connect, so the
-                // app never reads a missing one (X75).
-                if let Err(e) = moonlet_core::app_token::load_or_create(&moonlet_core::app_token::file()) {
-                    tracing::error!("cannot keep the app credential: {e}");
+        let mut handoff = handoff;
+        let mut bound = None;
+        let mut from_boot = None;
+        if handoff.is_none() {
+            // The app credential exists before anyone can connect, so the
+            // app never reads a missing one (X75).
+            if let Err(e) = moonlet_core::app_token::load_or_create(&moonlet_core::app_token::file()) {
+                tracing::error!("cannot keep the app credential: {e}");
+            }
+            // Bind first so clients waiting for the socket never time out;
+            // they queue in the backlog while the login env is captured.
+            match server::bind(&socket).await {
+                Ok(l) => bound = Some(l),
+                Err(e) if e.to_string().contains("already listening") => {
+                    // A daemon started at system start hands its terminals
+                    // to the one a login starts, which can read the
+                    // Keychain (X113).
+                    match boot::take_over_from_boot(&socket).await {
+                        Ok(Some(given)) => {
+                            tracing::info!("taking over from the daemon started at system start");
+                            handoff = Some(PathBuf::from(given.path));
+                            from_boot = Some(given.secret);
+                        }
+                        result => {
+                            if let Err(e) = result {
+                                tracing::warn!("cannot take over from the daemon started at system start: {e:#}");
+                            }
+                            // Not a failure: launchd must not keep restarting us.
+                            tracing::info!("{e:#}; exiting");
+                            std::process::exit(0);
+                        }
+                    }
                 }
-                // Bind first so clients waiting for the socket never time out;
-                // they queue in the backlog while the login env is captured.
-                let listener = match server::bind(&socket).await {
-                    Ok(l) => l,
-                    Err(e) if e.to_string().contains("already listening") => {
-                        // Not a failure: launchd must not keep restarting us.
-                        tracing::info!("{e:#}; exiting");
-                        std::process::exit(0);
-                    }
-                    Err(e) => {
-                        tracing::error!("cannot listen: {e:#}");
-                        return Err(e);
-                    }
-                };
+                Err(e) => {
+                    tracing::error!("cannot listen: {e:#}");
+                    return Err(e);
+                }
+            }
+        }
+        let fresh = handoff.is_none();
+        let (listener, daemon) = match (bound, handoff) {
+            (Some(listener), _) => {
                 tracing::info!(pid = std::process::id(), socket = %socket.display(), "moonletd listening");
                 let env = tokio::task::spawn_blocking(launch::login_environment).await?;
                 set_path(&env);
                 (listener, daemon::Daemon::new(socket.clone(), env))
             }
-            Some(path) => {
+            (None, None) => unreachable!("either bound or handed a socket"),
+            (None, Some(path)) => {
                 // Upgrade: take the PTYs first, then the socket once the old
                 // daemon lets go of it.
-                let incoming = tokio::task::spawn_blocking(move || upgrade::receive(&path))
-                    .await?
-                    .inspect_err(|e| tracing::error!("handoff failed: {e:#}"))?;
+                let taking_over = from_boot.is_some();
+                let incoming = match tokio::task::spawn_blocking(move || upgrade::receive(&path, from_boot.as_deref())).await? {
+                    Ok(incoming) => incoming,
+                    // The daemon started at system start keeps serving;
+                    // launchd must not keep restarting us (X113).
+                    Err(e) if taking_over => {
+                        tracing::warn!("the daemon started at system start did not hand over, and keeps serving: {e:#}; exiting");
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        tracing::error!("handoff failed: {e:#}");
+                        return Err(e);
+                    }
+                };
                 // Terminals get a freshly captured login environment, never
                 // the old daemon's: an older daemon may have inherited
                 // credentials from whatever started it.
@@ -311,6 +343,11 @@ fn run_daemon(
         stop_with_owner(&daemon);
         upgrade::write_pid(&socket);
         update::clean_leftovers();
+        // Outside a login session Claude cannot read its sign-in: chats
+        // hold their messages for the daemon a login starts (X113).
+        if boot::started_at_boot() {
+            daemon.chats.wait_for_login();
+        }
         let chats = daemon.chats.restore();
         if chats > 0 {
             tracing::info!(chats, "restored structured agent conversations");
@@ -387,6 +424,11 @@ fn run_daemon(
         // A daemon that took over already told systemd (X58).
         if fresh {
             notify::ready();
+        }
+        // What chats held while the daemon started at system start ran
+        // goes to their agents now (X113).
+        if !boot::started_at_boot() {
+            daemon.chats.start_waiting();
         }
         server::serve(daemon, listener, socket).await
     })?;

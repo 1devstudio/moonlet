@@ -41,14 +41,16 @@ A daemon started at boot can never read the user's login Keychain, before login 
 - [x] `moonletd daemon --boot` serves like any daemon, and `daemon.info` says `started_at_boot: true` (`false` otherwise). Test: `a_boot_daemon_says_so`.
 - [x] A boot daemon that upgrades (S3) starts the new daemon with `--boot`: it runs outside a login session too. The new daemon keeps the terminals it takes even if the user has turned the switch off since. Test: `an_upgraded_boot_daemon_still_says_so`.
 - [ ] Before login it serves sessions, terminals, restored workspaces, the tailnet listener and heavy commands as usual. It reads no Keychain item, as no daemon does today.
-- [ ] A Claude chat that starts or resumes in a boot daemon waits instead of running `claude`. Its state says `waiting_for_login`, and the app and the phone show "Claude starts once you log in on <host>". A message sent to it is queued as usual. Test: `a_chat_in_a_boot_daemon_waits_for_login`; Vitest: "says a chat waits for login on its host".
+- [x] A Claude chat in a boot daemon starts no `claude`: a new chat starts none and says `waiting_for_login` at once, as does a chat the boot daemon restores (one that held nothing is idle again after login; `a_restored_chat_waits_for_login_and_is_idle_again_after_it`), and a message sent to it is held, as a moved chat holds its messages (X73), saved with the chat. Its state says `waiting_for_login` and lists the message as queued. A message with images is refused ("Claude starts once you log in on this Mac: send the images once it does"), and so are Send now and answers to asks, before anything changes ("Claude starts once you log in on this Mac"), so nothing the user did is lost to a start that cannot work. A chat with kept asks stays blocked; a move's note (X73) is kept with the chat and goes first after login. Tests also: `send_now_before_login_is_refused_and_the_message_stays_held`, `a_moves_note_before_login_is_sent_after_login`. Tests: `a_chat_waiting_for_login_holds_its_message_and_starts_no_agent`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
+- [ ] The app and the phone show "Claude starts once you log in on <host>" for a chat in `waiting_for_login`. Vitest: "says a chat waits for login on its host".
 
 ### Login takes over
 
-- [ ] At login the X56 login item starts moonletd. Today it exits 0 when a daemon is already listening. When that daemon says `started_at_boot`, the new daemon instead asks it to hand over: the boot daemon hands every terminal to the asking daemon over the S3 handoff, then exits 0. Unlike S3, the boot daemon starts no process: the daemon that asked receives the terminals itself, so it stays in the login session, where the Keychain is. Test: `a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon` (a terminal's process keeps its pid and its output after the takeover).
-- [ ] The boot daemon accepts the takeover only from a peer with the same uid (as S3) whose executable is the boot daemon's own `moonletd` (`proc_pidpath`). Test: `a_takeover_from_another_program_is_refused`.
-- [ ] The taking daemon resumes chats from disk, as after S3, so a chat that waited for login starts. Test: `a_waiting_chat_starts_after_the_takeover`.
-- [ ] A takeover that fails leaves the boot daemon serving, and the login-session daemon exits 0 as today. The failure is logged. Test: `a_failed_takeover_leaves_the_boot_daemon_serving`.
+- [x] At login the X56 login item starts moonletd. Today it exits 0 when a daemon is already listening. When that daemon says `started_at_boot`, the new daemon instead asks it to hand over: the boot daemon hands every terminal to the asking daemon over the S3 handoff, then exits 0. Unlike S3, the boot daemon starts no process: the daemon that asked receives the terminals itself, so it stays in the login session, where the Keychain is. Test: `a_daemon_started_at_login_takes_every_terminal_from_the_boot_daemon` (a terminal's process keeps its pid and its output after the takeover). A daemon that finds a daemon not started at boot listening exits 0 as before: `a_daemon_that_was_not_started_at_boot_is_left_serving`.
+- [x] The boot daemon hands over only to the daemon a login starts. `daemon.hand_over` must come from a local process running the boot daemon's own `moonletd` (as the kernel reports its executable) that sends this Mac's app credential (X75): an agent's CLI or another program of the user's is refused with `forbidden`. Tests: `a_hand_over_is_refused_to_anything_but_this_moonletd_with_the_credential`, `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
+- [x] The terminals go only to the process that asked: the handoff socket accepts that process only (same uid as S3, same pid, still running the boot daemon's executable), and it must first send the one-time secret that only its `daemon.hand_over` reply carried. No automated test of a second process racing to connect: the checks sit before any terminal is sent.
+- [x] The taking daemon resumes chats from disk, as after S3, and a chat that waited for login sends its held messages to a new agent, in the login session. Tests: `a_chat_that_waited_for_login_is_answered_by_the_daemon_a_login_starts`, `a_chat_waits_for_login_and_the_daemon_a_login_starts_sends_its_message`.
+- [x] A takeover that fails leaves the boot daemon serving its terminals, and the login-session daemon exits 0, so launchd does not keep restarting it. The failure is logged on both sides. Test: `a_takeover_from_another_program_is_refused_and_the_boot_daemon_keeps_serving`.
 - [ ] Terminals opened before login keep running in the boot daemon's context after the takeover: a command in them still cannot read the Keychain. New terminals can.
 
 ### The Settings switch
@@ -66,7 +68,7 @@ A daemon started at boot can never read the user's login Keychain, before login 
   - Tailscale without `tailscaled` (`/Library/LaunchDaemons/com.tailscale.tailscaled.plist` missing): "Tailscale joins the tailnet only after login. To reach this Mac before then, use tailscaled.";
   - FileVault on (`fdesetup isactive`): "FileVault is on: after a restart nothing starts until someone unlocks the disk.";
   - automatic login off (no `autoLoginUser` in `/Library/Preferences/com.apple.loginwindow.plist`): "Claude chats wait until someone logs in. Automatic login in System Settings › Users & Groups logs in right after a restart (needs FileVault off)."
-- [ ] Search settings finds the switch under "boot", "system start", "restart", "before login" and "launch daemon". Vitest: "finds start at system start (X113)".
+- [ ] Search settings finds the switch under "boot", "system start", "startup", "before login" and "launch daemon" (not "restart", which finds X97's Restart the daemon alone). Vitest: "finds start at system start (X113)".
 
 ## UI
 
@@ -84,7 +86,7 @@ wait for login, because the Keychain unlocks only then.
 ## Protocol and RPCs
 
 - `daemon.info` gains `started_at_boot: bool`.
-- New method `daemon.hand_over`, local socket only and added to `LOCAL_METHODS`: the caller asks the daemon to hand its terminals to it. It returns the private handoff socket's path, to which the caller connects. It is refused unless the daemon was started at boot.
+- New method `daemon.hand_over` `{ token }`, local socket only and in `LOCAL_METHODS` so that moonletd can reach it, with its own check: the caller runs the daemon's own executable and sends the app credential. It returns `{ path, secret }`: the private handoff socket, and a one-time secret the caller sends there before any terminal comes back. It is refused unless the daemon was started at boot.
 - Chat state gains `waiting_for_login`.
 - Tauri command `daemon_boot` with `install | uninstall | status`, returning `{ state }`: `on`, `requires_approval`, `stale`, `left_behind` or `off`, and the warnings that apply. `open_login_items` is reused.
 
@@ -99,12 +101,17 @@ wait for login, because the Keychain unlocks only then.
 - An earlier design ran a root launcher from the bundle through `SMAppService.daemon`, whose sealed plist cannot name the user. The commit security review found that any process of the user's, such as an agent or a package script in a moonlet terminal, could replace that binary and run as root at the next restart. Apple documents no protection for it: a `SpawnConstraint` "exists to prevent substitution" (DTS, forums 762200) but is not documented for `SMAppService` plists, and DTS advises a program run as root lives where only root can write (782026). The user chose the most secure option: no root at all.
 - The privileged step writes the plist from content inside its own command, never from a temporary file: a process of the user's could swap such a file between its writing and its install and get a root-owned plist with no `UserName`.
 - The plist lives where only root can write, so no process of the user's can change it to run something else, as someone else.
-- `daemon.hand_over` hands every terminal to the caller. It is limited to a daemon started at boot, a peer of the same uid, and a peer running the same `moonletd` executable. The S3 upgrade signal already lets any process of the user hand the terminals to a binary of its choice, so this adds no new reach for a process of the user's.
+- `daemon.hand_over` hands every terminal to the caller. Only a daemon started at boot answers it, and only to a local process running its own `moonletd` that shows the app credential; the terminals go only to that process, which must send a one-time secret first. A process of the user's that reads the credential and runs moonletd's executable could still ask, as it could already prove itself the app (X75) or send the S3 upgrade signal to hand the terminals to a binary of its choice: no new reach for a process of the user's.
 - A daemon started at boot runs in a "mixed context" (Apple DTS): a user's process in the system's security session. Anything that needs the login session, such as the Keychain or the pasteboard, fails in it. That is why chats wait and login takes over.
 
 ## Out of scope
 
 - After a logout without a restart, nothing runs until the next login or restart: the boot daemon already handed over.
+- A forced restart (X97 `--force`), or `moonletd start` with no daemon running, starts an ordinary daemon wherever it is run: from the app it is in the login session, as it should be; from a terminal opened before login it is not, and its chats fail to sign in until the next login.
+- A daemon that listens but no longer answers keeps its terminals: the daemon a login starts gives up after 10 s and exits 0.
+- Another process of the user's that connects to the handoff socket first ends that takeover (it gets no terminal); the login item's daemon tries again at the next login.
+- After a takeover, the new daemon binds the socket with the S3 retry (10 s); a bind that still fails ends the terminals, as in S3.
+- The login item switched off in System Settings › Login Items while this is on: nothing takes over at login, so the daemon started at boot keeps serving and its chats wait. Settings shows this switch disabled with "Needs Start the moonlet daemon at login"; turning the login item back on fixes it at the next login.
 - gh and git credentials in the Keychain: commands that need them fail before login, as they would over SSH.
 - Linux hosts, which start at boot already (X58).
 - Unlocking FileVault after a restart (macOS can do it over SSH with Remote Login on, or `fdesetup authrestart` before a planned restart).
