@@ -115,8 +115,8 @@ export function HeavySection({
                   placeholder="pnpm test"
                   onChange={(e) => set({ commands: draft.commands.map((x, j) => (j === i ? e.target.value : x)) })}
                 />
-                <span className={cx("inline-flex h-[26px] w-[118px] shrink-0 items-center gap-1.5 rounded-md border px-2 ui-text-12", approved ? "border-border text-muted" : "border-[#6b5a1e] bg-[#2a2410] text-blocked")}>
-                  <span aria-hidden="true" className={cx("h-1.5 w-1.5 rounded-full", approved ? "bg-done" : "bg-blocked")} />
+                <span className={cx("inline-flex h-[26px] min-w-[118px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 ui-text-12", approved ? "border-border text-muted" : "border-[#6b5a1e] bg-[#2a2410] text-blocked")}>
+                  <span aria-hidden="true" className={cx("h-1.5 w-1.5 shrink-0 rounded-full", approved ? "bg-done" : "bg-blocked")} />
                   {approved ? "Approved" : "Not approved"}
                 </span>
                 <IconButton title={`Remove ${c || "command"}`} onClick={() => set({ commands: draft.commands.filter((_, j) => j !== i) })}>
