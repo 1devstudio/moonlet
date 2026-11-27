@@ -209,6 +209,10 @@ fn default_sign_ins() -> Vec<moonlet_proto::types::SignIn> {
 /// who owns it, the ownership number and the pin (X73).
 const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
 
+/// A session record's fields left out until first set: Pin to top and
+/// Move under (X112).
+const UNTIL_SET: &[&str] = &["pinned_top", "parent"];
+
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
 
@@ -1722,6 +1726,9 @@ fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
         // What its new chats run, for a member that continues it (X73).
         ("model".to_string(), json!(s.model)),
         ("effort".to_string(), json!(s.effort)),
+        // Its place in the sidebar: Pin to top and Move under (X112).
+        ("pinned_top".to_string(), json!(s.pinned_top)),
+        ("parent".to_string(), json!(s.parent)),
     ])
 }
 
@@ -1755,6 +1762,12 @@ fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> V
             // Who owns it is set once, as it is made: later, only the
             // central host moves it.
             if had.is_some() && OWNERSHIP.contains(&field.as_str()) {
+                continue;
+            }
+            // Recorded once set, so sessions never pinned or nested add
+            // nothing to the log; clearing one is recorded (X112).
+            let recorded = had.and_then(|r| r.get(&field));
+            if UNTIL_SET.contains(&field.as_str()) && recorded.is_none() && (value.is_null() || value == json!(false)) {
                 continue;
             }
             if had.and_then(|r| r.get(&field)) != Some(&value) {
@@ -4037,7 +4050,7 @@ mod tests {
         mini.apply_account(vec![forged]);
         assert_eq!(mini.session_records()[&session.id]["owner"], serde_json::json!("mini"));
         // The MacBook no longer records it: a rename there stays there.
-        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None, workspace_id: None })
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None, workspace_id: None, ..Default::default() })
             .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
@@ -4299,11 +4312,39 @@ mod tests {
         book.section_add_project(&client.id, &path).await.unwrap();
         sync(&book, &mini);
 
-        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: None, layout: None, task: None, workspace_id: Some(acme.id.clone()) })
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: None, layout: None, task: None, workspace_id: Some(acme.id.clone()), ..Default::default() })
             .unwrap();
         sync(&book, &mini);
 
         assert_eq!(mini.session_records()[&session.id]["workspace"], serde_json::json!(acme.id));
+    }
+
+    /// X112: Pin to top and Move under reach every member, so the phone and
+    /// the other Macs show the same order.
+    #[tokio::test]
+    async fn a_pin_to_the_top_and_a_parent_reach_every_member() {
+        let shop = repo_named("shop").await;
+        let path = shop.path().display().to_string();
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book.section_add_project(&mine.id, &path).await.unwrap();
+        let new = |name: &str| SessionCreate { name: Some(name.into()), agent: Some("none".into()), cols: 80, rows: 24, ..SessionCreate::new(&p.id) };
+        let spike = book.create_session(new("Cart spike")).await.unwrap();
+        let fix = book.create_session(new("Fix cart")).await.unwrap();
+        sync(&book, &mini);
+
+        book.update(moonlet_proto::methods::SessionUpdate { id: fix.id.clone(), pinned_top: Some(true), parent: Some(Some(spike.id.clone())), ..Default::default() })
+            .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&fix.id];
+        assert_eq!((&r["pinned_top"], &r["parent"]), (&serde_json::json!(true), &serde_json::json!(spike.id)));
+
+        book.update(moonlet_proto::methods::SessionUpdate { id: fix.id.clone(), pinned_top: Some(false), parent: Some(None), ..Default::default() })
+            .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&fix.id];
+        assert_eq!((&r["pinned_top"], &r["parent"]), (&serde_json::json!(false), &serde_json::Value::Null));
     }
 
     #[tokio::test]
@@ -4325,6 +4366,7 @@ mod tests {
             layout: None,
             task: None,
             workspace_id: None,
+            ..Default::default()
         })
         .unwrap();
         sync(&book, &mini);
@@ -4408,6 +4450,7 @@ mod tests {
             layout: None,
             task: None,
             workspace_id: None,
+            ..Default::default()
         })
         .unwrap();
         sync(&book, &mini);
@@ -4452,6 +4495,7 @@ mod tests {
             layout: None,
             task: None,
             workspace_id: None,
+            ..Default::default()
         })
         .unwrap();
         sync(&book, &mini);

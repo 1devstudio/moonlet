@@ -728,6 +728,12 @@ pub struct Session {
     /// (X73).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<String>,
+    /// Shown first in its group: Pin to top (X112).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned_top: bool,
+    /// The session of its project it is nested under: Move under (X112).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 /// The member that owns a session another member lists (X72).

@@ -769,6 +769,10 @@ export interface Session {
   owner?: SessionOwner;
   /** The member it is kept on, by worker id, when pinned with Run only on… (X73). */
   pinned?: string | null;
+  /** Shown first in its group: Pin to top (X112). */
+  pinned_top?: boolean;
+  /** The session of its project it is nested under: Move under (X112). */
+  parent?: string | null;
 }
 
 /** The member that owns a session another member lists (X72). */

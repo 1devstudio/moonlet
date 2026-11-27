@@ -1791,6 +1791,8 @@ impl SessionManager {
             archived_restore: Vec::new(),
             owner: None,
             pinned: None,
+            pinned_top: false,
+            parent: None,
         };
         // Until the session is saved, what was made for it goes again,
         // however this request ends.
@@ -2126,11 +2128,40 @@ impl SessionManager {
                     bail!("the project is not in this workspace");
                 }
             }
+            // Move under (X112): one level deep, within its project.
+            if let Some(Some(parent)) = &req.parent {
+                let me = st.sessions.iter().find(|w| w.id == req.id).context("no such session")?;
+                let p = st.sessions.iter().find(|w| &w.id == parent).context("no such parent session")?;
+                if p.id == me.id {
+                    bail!("a session cannot be under itself");
+                }
+                if p.project_id != me.project_id {
+                    bail!("the parent session is in another project");
+                }
+                if p.workspace_id != me.workspace_id {
+                    bail!("the parent session is in another workspace");
+                }
+                if p.archived {
+                    bail!("the parent session is archived");
+                }
+                if p.parent.is_some() {
+                    bail!("the parent session is under another session");
+                }
+                if st.sessions.iter().any(|w| w.parent.as_deref() == Some(me.id.as_str()) && !w.archived) {
+                    bail!("sessions are under this session");
+                }
+            }
             let w = st
                 .sessions
                 .iter_mut()
                 .find(|w| w.id == req.id)
                 .context("no such session")?;
+            if let Some(pinned) = req.pinned_top {
+                w.pinned_top = pinned;
+            }
+            if let Some(parent) = req.parent {
+                w.parent = parent;
+            }
             if let Some(n) = req
                 .name
                 .map(|n| n.trim().to_string())
@@ -4514,7 +4545,65 @@ mod tests {
     }
 
     fn move_to(mgr: &SessionManager, id: &str, workspace: &str) -> Result<Session> {
-        mgr.update(SessionUpdate { id: id.into(), name: None, layout: None, task: None, workspace_id: Some(workspace.into()) })
+        mgr.update(SessionUpdate { id: id.into(), workspace_id: Some(workspace.into()), ..Default::default() })
+    }
+
+    fn place(mgr: &SessionManager, id: &str, pinned_top: Option<bool>, parent: Option<Option<&str>>) -> Result<Session> {
+        mgr.update(SessionUpdate { id: id.into(), pinned_top, parent: parent.map(|p| p.map(Into::into)), ..Default::default() })
+    }
+
+    /// X112: Pin to top and Move under are kept with the session, and
+    /// cleared again.
+    #[tokio::test]
+    async fn a_session_is_pinned_to_the_top_and_nested_under_another() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let spike = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let retries = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+
+        let pinned = place(&mgr, &retries.id, Some(true), None).unwrap();
+        assert!(pinned.pinned_top);
+        let nested = place(&mgr, &retries.id, None, Some(Some(&spike.id))).unwrap();
+        assert_eq!(nested.parent.as_deref(), Some(spike.id.as_str()));
+        assert!(nested.pinned_top, "moving it under leaves its pin");
+
+        let back = place(&mgr, &retries.id, Some(false), Some(None)).unwrap();
+        assert!(!back.pinned_top);
+        assert_eq!(back.parent, None);
+        assert_eq!(mgr.session(&retries.id).unwrap().parent, None);
+    }
+
+    /// X112: nesting is one level deep, within the session's project, under
+    /// a session that is not archived.
+    #[tokio::test]
+    async fn a_session_is_not_nested_under_itself_another_project_or_a_nested_one() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let other = crate::git::tests::repo().await;
+        let o = mgr.add_project(&other.path().display().to_string()).await.unwrap();
+        let spike = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let retries = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let docs = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let elsewhere = mgr.create_session(new_session(&o.id, None)).await.unwrap();
+        let gone = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        mgr.archive(SessionArchive { id: gone.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+
+        let err = |id: &str, parent: &str| place(&mgr, id, None, Some(Some(parent))).unwrap_err().to_string();
+        assert_eq!(err(&retries.id, &retries.id), "a session cannot be under itself");
+        assert_eq!(err(&retries.id, &elsewhere.id), "the parent session is in another project");
+        assert_eq!(err(&retries.id, &gone.id), "the parent session is archived");
+        place(&mgr, &retries.id, None, Some(Some(&spike.id))).unwrap();
+        assert_eq!(err(&docs.id, &retries.id), "the parent session is under another session");
+        assert_eq!(err(&spike.id, &docs.id), "sessions are under this session");
+        assert_eq!(mgr.session(&docs.id).unwrap().parent, None);
+
+        // Its project in another workspace too: that workspace's session is
+        // not one this session shows under.
+        let acme = workspace(&mgr, "Acme", vec![]);
+        let shop = mgr.create_section(&acme.id, "Shop").unwrap();
+        mgr.section_add_project(&shop.id, &repo.path().display().to_string()).await.unwrap();
+        let there = mgr.create_session(new_session(&r.id, Some(&acme.id))).await.unwrap();
+        assert_eq!(err(&docs.id, &there.id), "the parent session is in another workspace");
     }
 
     /// X106: Move to workspace puts the session in a workspace that has a
@@ -4742,6 +4831,8 @@ mod tests {
             archived_restore: Vec::new(),
             owner: None,
             pinned: None,
+            pinned_top: false,
+            parent: None,
         };
         assert_eq!(
             agent_flags("claude", &s),

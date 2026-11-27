@@ -1989,7 +1989,7 @@ pub struct ProcessesKilled {
     pub still_running: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionUpdate {
     pub id: String,
     #[serde(default)]
@@ -2008,6 +2008,17 @@ pub struct SessionUpdate {
     /// project (X106).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
+    /// Keeps the session first in its group, or not (X112).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_top: Option<bool>,
+    /// Absent: leave it where it is. A session id: nest it under that
+    /// session of its project. `null`: back to the top level (X112).
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parent: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

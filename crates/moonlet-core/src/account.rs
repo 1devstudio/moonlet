@@ -25,7 +25,8 @@ pub enum RecordKind {
     Design,
     /// A session (X72): its `name`, `project` (an identity), `workspace`,
     /// `branch`, `owner` (the worker id of the member running its agent),
-    /// `created_at` and `archived`.
+    /// `created_at`, `archived`, and its place in the sidebar: `pinned_top`
+    /// and `parent` (X112).
     Session,
     /// A project's copied files (X74), by project identity: its `patterns`
     /// and `cloud`.

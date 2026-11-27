@@ -4623,6 +4623,9 @@ impl Daemon {
                 archived_restore: Vec::new(),
                 owner: None,
                 pinned: None,
+                // Its place in the sidebar, as the account keeps it (X112).
+                pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
+                parent: text("parent"),
             })
             .map_err(internal)?;
         if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
@@ -4965,6 +4968,9 @@ impl Daemon {
                 archived_restore: Vec::new(),
                 owner: None,
                 pinned: None,
+                // Its place in the sidebar, as the account keeps it (X112).
+                pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
+                parent: text("parent"),
             })
             .map_err(internal)
     }
@@ -7195,6 +7201,8 @@ impl Daemon {
                     archived_at: None,
                     archived_restore: Vec::new(),
                     pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
+                    pinned_top: r.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
+                    parent: text("parent"),
                     owner: Some({
                         // The central host is never linked here as a worker:
                         // this Mac's link to it says.
