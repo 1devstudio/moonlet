@@ -4,6 +4,7 @@
    phone's own files may not use: Tailwind only scans this app's folder. */
 @source "../../desktop/src/components/ui.tsx";
 @source "../../desktop/src/components/ShowEarlier.tsx";
+@source "../../desktop/src/components/SessionRowView.tsx";
 
 /* A phone screen: the app fills it, respects the notch and the home bar,
    and only the content scrolls. */

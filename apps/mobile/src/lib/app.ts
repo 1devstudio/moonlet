@@ -108,6 +108,8 @@ export interface Settings {
   mine?: Record<string, boolean>;
   /** Out-of-sync chips put off with Not now, by the desktop's `driftKey` (X76). */
   notNow?: Record<string, true>;
+  /** How Sessions shows each session's task (X48, X118): A, `"number"`, by default; B, `"task"`. */
+  sessionRows?: string;
 }
 
 const SETTINGS = "mobile.settings";

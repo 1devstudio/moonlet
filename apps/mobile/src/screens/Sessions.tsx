@@ -1,129 +1,129 @@
-// Sessions (X40): the workspace's sessions on every host, by section and
-// project, with chips for what needs the user, what works and what waits.
+// Sessions (X40, X118): the workspace's sessions on every host, drawn as the
+// desktop sidebar draws them, with chips for what needs the user, what works
+// and what waits.
 
-import { useState } from "react";
-import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucide-react";
+import { createContext, useContext, useState } from "react";
+import { ArrowDown, Loader2, Search, Server, ShieldAlert, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
-import { prTone } from "@desktop/components/ui";
+import { baseChip } from "@desktop/lib/baseSync";
+import { numberColumn, rowStyle, taskGroups } from "@desktop/lib/sessionRows";
+import { cellOf, ProjectMarkView, RowGlyph, RowView, TaskGroupList, type RowCell } from "@desktop/components/SessionRowView";
 import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, sessionTask, suggestedTask } from "../lib/sessionList";
-import { LinkSheet } from "../components/LinkSheet";
+import { type ChipId, type ProjectGroup, type SessionRow, type SessionSection, chips, filterGroups, rowBadge, rowGlyph, rowTarget, sessionSections, taskLine } from "../lib/sessionList";
 import { sessionBoards } from "../lib/board";
 import { useBusy } from "../lib/busy";
-import { STATE_COLOR } from "../lib/palette";
-import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
+import { Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
 import { useNow } from "../lib/now";
 
-const AVATAR = ["#d97757", "#5aa9e6", "#a371f7", "#3ecf6e", "#f2c94c"];
+/** Each shown session's task line (X48), and whether any board is shared. */
+const TaskLines = createContext<{ lines: Record<string, NonNullable<ReturnType<typeof taskLine>>>; sources: boolean }>({ lines: {}, sources: false });
 
-function BehindButton({ host, project }: { host: string; project: Project }) {
+const CHIP_TONE = { behind: "text-accent", pulling: "text-muted", diverged: "text-error" } as const;
+
+/** The desktop's base chip (X13): `↓ 3` pulls the base branch on a tap. */
+function BaseChip({ host, project }: { host: string; project: Project }) {
   const [base, reload] = useBase(host, project);
   const { busy, run } = useBusy();
-  if (!base || base.behind === 0 || base.ahead > 0) return null;
+  const chip = baseChip(base, busy);
+  if (!chip) return null;
   return (
     <button
       type="button"
-      disabled={busy}
-      onClick={() => void run(() => rpc(host, M.gitPullBase, { path: project.path, branch: project.base_branch }), reload)}
-      className="flex h-7 items-center gap-1 rounded-full border border-border-strong px-2.5 text-[12px] text-muted"
+      aria-label={chip.title}
+      disabled={busy || chip.kind !== "behind"}
+      onClick={(e) => {
+        e.stopPropagation();
+        void run(() => rpc(host, M.gitPullBase, { path: project.path, branch: project.base_branch }), reload);
+      }}
+      className={cx("flex h-[26px] shrink-0 items-center gap-1 rounded-md border border-border-strong bg-panel-2 px-2 font-mono ui-text-11.5", CHIP_TONE[chip.kind])}
     >
-      <GitBranch size={12} />
-      {busy ? "Pulling…" : `${base.branch} ${base.behind} behind · Pull`}
+      {chip.kind === "behind" ? <ArrowDown size={12} strokeWidth={1.75} /> : chip.kind === "pulling" ? <Loader2 size={12} strokeWidth={1.75} className="animate-spin" /> : <ShieldAlert size={12} strokeWidth={1.75} />}
+      <span>{chip.text}</span>
     </button>
   );
 }
 
-function Row({ r }: { r: SessionRow }) {
+function Row({ r, cell, nested }: { r: SessionRow; cell?: RowCell; nested: boolean }) {
   // git and gh run on the host for each row: only for rows on screen.
   const [ref, seen] = useSeen();
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
-  const d = useApp((s) => s.data[r.host]);
-  const hosts = useApp((s) => s.hosts);
-  const data = useApp((s) => s.data);
-  // Boards another member of the account shares count too (X68).
-  const shared = sessionBoards(hosts, data, r.host, r.session).map((b) => b.snapshot);
-  // The task the session works on: its link, or the one its branch or PR names (X46, X76).
-  const task = d ? sessionTask(d, r.session, pr, shared) : null;
-  // A task its name suggests, to link from here (X76).
-  const suggested = d && !task ? suggestedTask(d, r.session, shared) : null;
-  const [linking, setLinking] = useState(false);
+  const prState = pr?.state.toLowerCase();
+  const badge = rowBadge(r, stat, pr?.state);
   return (
-    <>
-    <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
-      <span className="pt-[3px]">
-        <StateGlyph state={r.state} />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[15px]">{r.session.name}</span>
-          <span className="text-[12px]" style={{ color: STATE_COLOR[r.state] }}>
-            {r.word}
-          </span>
-        </span>
-        <span className="flex items-center gap-2 text-[12px] text-faint">
-          {task && <span className="flex-none font-mono font-semibold text-accent-2">{task.key}</span>}
-          {suggested && (
-            <span
-              role="button"
-              tabIndex={0}
-              aria-label={`Link to ${suggested.key}?`}
-              onClick={(e) => (e.stopPropagation(), setLinking(true))}
-              onKeyDown={(e) => e.key === "Enter" && (e.stopPropagation(), setLinking(true))}
-              className="flex-none font-mono font-semibold text-faint"
-            >
-              {suggested.key}?
-            </span>
-          )}
-          <span className="min-w-0 truncate font-mono">{r.session.branch}</span>
-          {stat && (
-            <span className="flex-none whitespace-nowrap">
-              <DiffStat add={stat.additions} del={stat.deletions} />
-            </span>
-          )}
-          {r.agents && (
-            <span className="flex flex-none items-center gap-1">
-              <Bot size={12} />
-              {r.agents}
-            </span>
-          )}
-          {pr && (
-            <span className={cx("flex flex-none items-center gap-1 whitespace-nowrap", prTone(pr.state.toLowerCase()))}>
-              <GitPullRequest size={12} />#{pr.number}
-              {pr.state.toLowerCase() === "merged" ? " merged" : ""}
-            </span>
-          )}
-          {r.on && <span className="flex-none font-mono">on {r.on}</span>}
-        </span>
-      </span>
-    </button>
-    {linking && <LinkSheet host={r.host} session={r.session} onClose={() => setLinking(false)} />}
-    </>
+    <div ref={ref}>
+      <RowView
+        touch
+        role="button"
+        aria-label={r.session.name}
+        onClick={() => showScreen(rowTarget(r))}
+        selected={false}
+        nested={nested}
+        cell={cell}
+        glyph={<RowGlyph glyph={rowGlyph(r, pr?.state)} pr={prState} />}
+        badge={badge}
+        merged={prState === "merged"}
+        name={
+          <>
+            <span className="min-w-0 flex-1 truncate ui-text-14 text-[#cfcfcf]">{r.session.name}</span>
+            {/* Where the session runs, when not on its project's member (X68). */}
+            {r.on && (
+              <span aria-label={`on ${r.on}`} className="flex shrink-0 items-center text-muted">
+                <Server size={12} />
+              </span>
+            )}
+          </>
+        }
+      />
+    </div>
   );
 }
 
-function Group({ g, showSection, index }: { g: ProjectGroup; showSection: boolean; index: number }) {
+function Group({ g }: { g: ProjectGroup }) {
+  const style = useApp((s) => rowStyle(s.settings.sessionRows));
+  const { lines, sources } = useContext(TaskLines);
+  const ids = g.rows.map((r) => r.session.id);
+  const column = style === "number" && sources ? numberColumn(ids, lines, { heading: g.heading === "project" }) : null;
+  const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
+  const row = (r: SessionRow, nested: boolean) => <Row key={`${r.host}/${r.session.id}`} r={r} nested={nested} cell={cellOf(column, r.session.id)} />;
   return (
-    <div className="flex flex-col">
-      {showSection && <div className="eyebrow px-4 pt-4 pb-1">{g.section}</div>}
-      <div className="flex items-center gap-2 px-4 py-2 text-[13.5px] font-semibold">
-        <span className="flex h-5 w-5 items-center justify-center rounded-[6px] text-[11px] font-bold text-bg" style={{ background: AVATAR[index % AVATAR.length] }}>
-          {g.letter}
-        </span>
-        {g.project.name}
-        <span className="flex items-center gap-1 text-[12px] font-normal text-faint">
-          {g.remote ? <Server size={12} /> : <Laptop size={12} />}
-          {g.hostLabel}
-        </span>
-        <span className="flex-1" />
-        <BehindButton host={g.host} project={g.project} />
+    <div className="mb-1 flex flex-col">
+      {g.heading === "project" && g.project && (
+        <div className="flex h-[44px] items-center gap-2 pl-4 pr-3">
+          <ProjectMarkView src={g.avatar} />
+          <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
+          {g.on && <span className="shrink-0 font-mono ui-text-11 text-faint">on {g.on}</span>}
+          {column?.prefix && <span className="shrink-0 font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
+          <BaseChip host={g.host} project={g.project} />
+          <span className="flex-1" />
+        </div>
+      )}
+      {g.heading === "label" && (
+        <div className="flex h-[38px] items-center pl-4 pr-3">
+          <span className={cx("truncate ui-text-11.5 font-medium text-muted", g.kind === "status" && "uppercase tracking-[0.1em]")}>{g.label}</span>
+        </div>
+      )}
+      {!tasks && g.rows.map((r) => row(r, r.nested))}
+      {tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.rows.find((r) => r.session.id === id)!, true)} />}
+    </div>
+  );
+}
+
+function SectionBlock({ s, groups }: { s: SessionSection; groups: ProjectGroup[] }) {
+  return (
+    <div className="mb-3">
+      <div className="mx-2 flex h-[40px] items-center gap-1.5 rounded-lg bg-bg pl-2.5 pr-1.5">
+        <span className="truncate ui-text-14 font-semibold text-muted">{s.name}</span>
+        {s.where && <span className="truncate font-mono ui-text-11 text-faint">@{s.where}</span>}
       </div>
-      {g.rows.map((r) => (
-        <Row key={`${r.host}/${r.session.id}`} r={r} />
-      ))}
+      <div className="pt-1">
+        {groups.map((g) => (
+          <Group key={g.key} g={g} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -135,45 +135,59 @@ export function SessionsScreen() {
   const now = useNow();
   const [chip, setChip] = useState<ChipId>("all");
   const [query, setQuery] = useState<string | null>(null);
-  const all = sessionGroups(hosts, data, workspace, now);
-  const groups = filterGroups(all, chip, query ?? "");
+  const sections = sessionSections(hosts, data, workspace, now);
+  const all = sections.flatMap((s) => s.groups);
+  // Each row's task from its host's boards and those its account shares (X48, X76).
+  const rows = all.flatMap((g) => g.rows);
+  const lines = Object.fromEntries(
+    rows.flatMap((r) => {
+      const d = data[r.host];
+      const l = d ? taskLine(d, r.session, sessionBoards(hosts, data, r.host, r.session).map((b) => b.snapshot)) : null;
+      return l ? [[r.session.id, l]] : [];
+    }),
+  );
+  const sources = rows.some((r) => sessionBoards(hosts, data, r.host, r.session).length > 0);
+  const filtered = filterGroups(all, chip, query ?? "");
   return (
-    <div className="scroll h-full">
-      <Title
-        right={
-          <>
-            <button type="button" aria-label="Search sessions" onClick={() => setQuery(query === null ? "" : null)} className="flex h-9 w-9 items-center justify-center text-muted">
-              {query === null ? <Search size={20} /> : <X size={20} />}
+    <TaskLines.Provider value={{ lines, sources }}>
+      <div className="scroll h-full bg-window">
+        <Title
+          right={
+            <>
+              <button type="button" aria-label="Search sessions" onClick={() => setQuery(query === null ? "" : null)} className="flex h-9 w-9 items-center justify-center text-muted">
+                {query === null ? <Search size={20} /> : <X size={20} />}
+              </button>
+              <WorkspacePill />
+            </>
+          }
+        >
+          Sessions
+        </Title>
+        {query !== null && (
+          <div className="px-4 pt-3">
+            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Title, branch or project" className="h-10 w-full rounded-[10px] border border-border-strong bg-panel px-3 text-[15px] outline-none" />
+          </div>
+        )}
+        <div className="flex gap-2 overflow-x-auto px-4 pt-3 pb-3">
+          {chips(all).map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setChip(c.id)}
+              className={cx("flex h-8 flex-none items-center gap-1.5 rounded-full border px-3 text-[13px]", chip === c.id ? "border-fg bg-fg text-bg" : "border-border-strong bg-panel text-fg")}
+            >
+              {c.label} <span className={chip === c.id ? "text-[#555]" : "text-faint"}>{c.count}</span>
             </button>
-            <WorkspacePill />
-          </>
-        }
-      >
-        Sessions
-      </Title>
-      {query !== null && (
-        <div className="px-4 pt-3">
-          <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Title, branch or project" className="h-10 w-full rounded-[10px] border border-border-strong bg-panel px-3 text-[15px] outline-none" />
+          ))}
         </div>
-      )}
-      <div className="flex gap-2 overflow-x-auto px-4 pt-3 pb-1">
-        {chips(all).map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => setChip(c.id)}
-            className={cx("flex h-8 flex-none items-center gap-1.5 rounded-full border px-3 text-[13px]", chip === c.id ? "border-fg bg-fg text-bg" : "border-border-strong bg-panel text-fg")}
-          >
-            {c.label} <span className={chip === c.id ? "text-[#555]" : "text-faint"}>{c.count}</span>
-          </button>
-        ))}
+        <div className="flex flex-col pb-6">
+          {filtered.length === 0 && <div className="px-4 pt-3 text-[14px] text-muted">{rows.length ? "No sessions match." : "No sessions yet. Start one with New."}</div>}
+          {sections.map((s) => {
+            const groups = filtered.filter((g) => g.sectionKey === s.key);
+            return groups.length ? <SectionBlock key={s.key} s={s} groups={groups} /> : null;
+          })}
+        </div>
       </div>
-      <div className="flex flex-col pb-6">
-        {groups.length === 0 && <div className="px-4 pt-6 text-[14px] text-muted">{all.length ? "No sessions match." : "No sessions yet. Start one with New."}</div>}
-        {groups.map((g, i) => (
-          <Group key={g.key} g={g} index={i} showSection={i === 0 || groups[i - 1].sectionKey !== g.sectionKey} />
-        ))}
-      </div>
-    </div>
+    </TaskLines.Provider>
   );
 }

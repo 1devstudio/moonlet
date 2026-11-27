@@ -26,9 +26,10 @@ import { keepInSync, stopSync, useSync } from "../lib/syncStore";
 import { spawnedFrom } from "../lib/spawned";
 import { Menu, MenuItems, type MenuItem } from "./Menu";
 import { WorkspaceMark, WorkspaceSwitcher } from "./WorkspaceSwitcher";
-import { ModeSwitch, TaskGlyph, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
+import { ModeSwitch, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
+import { BADGE_TONE, cellOf, ProjectMarkView, RowGlyph, RowView, TaskGroupList } from "./SessionRowView";
 import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
-import { numberColumn, rowStyle, taskGroups, type RowStyle, type TaskGroup } from "../lib/sessionRows";
+import { numberColumn, rowStyle, taskGroups, type RowStyle } from "../lib/sessionRows";
 import { modeOf } from "../lib/mode";
 import { DesignSidebar } from "./design/DesignMode";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
@@ -36,7 +37,7 @@ import { designMark } from "../lib/sessionDesign";
 import { ProfileFooter } from "./Profiles";
 import { UsageMeter } from "./UsageMeter";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
-import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
+import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx } from "./ui";
 import { updateButton } from "../lib/updater";
 import { HostUpdateButton } from "./HostUpdate";
 import { sidebarNotice } from "../lib/hostUpdate";
@@ -67,52 +68,7 @@ const activeAt = (host: string, s: Session) => lastActive(sessionTerminals(useSt
 /** Project mark: the GitHub owner's avatar (X15), else a dotted glyph like Conductor's. */
 export function ProjectMark({ host, projectId }: { host: string; projectId: string }) {
   const src = useStore((s) => s.avatars[projKey(host, projectId)]);
-  const [failed, setFailed] = useState<string | null>(null);
-  if (src && failed !== src) {
-    return <img src={src} alt="" width={15} height={15} draggable={false} onError={() => setFailed(src)} className="h-[15px] w-[15px] shrink-0 rounded-[3px]" />;
-  }
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" className="shrink-0 text-[#4fd1c5]" fill="currentColor">
-      {[
-        [8, 2],
-        [3, 5],
-        [13, 5],
-        [3, 11],
-        [13, 11],
-        [8, 14],
-        [8, 8],
-      ].map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r={i === 6 ? 1.6 : 1.3} />
-      ))}
-    </svg>
-  );
-}
-
-/** Branch glyph tinted by PR state; a merged PR gets a merge glyph instead (the row's end badge). */
-function BranchIcon({ state }: { state?: string }) {
-  const merged = state === "merged";
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" className={cx("shrink-0", prTone(state))} fill="none" stroke="currentColor" strokeWidth="1.5">
-      <circle cx="4.5" cy="3.5" r="1.6" />
-      <circle cx="4.5" cy="12.5" r="1.6" />
-      {merged ? (
-        <>
-          <circle cx="11.5" cy="9" r="1.6" />
-          <path d="M4.5 5.1v5.8M4.5 5.1c0 2.4 2.2 3.9 5.4 3.9" />
-        </>
-      ) : (
-        <>
-          <circle cx="11.5" cy="5" r="1.6" />
-          <path d="M4.5 5.1v5.8M11.5 6.6c0 3-4.5 2.4-6.6 4.4" />
-        </>
-      )}
-    </svg>
-  );
-}
-
-/** A session row's leading glyph (see `sessionGlyph`). */
-function RowGlyph({ glyph, pr }: { glyph: ReturnType<typeof sessionGlyph>; pr?: string }) {
-  return glyph === "branch" ? <BranchIcon state={pr} /> : <StateGlyph state={glyph} size={15} />;
+  return <ProjectMarkView src={src} />;
 }
 
 function InlineInput({ initial, placeholder, onDone }: { initial: string; placeholder?: string; onDone: (value: string | null) => void }) {
@@ -308,102 +264,6 @@ interface RowMenuState {
   session?: Session;
   projectId?: string;
 }
-
-const BADGE_TONE = { muted: "text-muted", blocked: "text-blocked", agents: "text-faint", diff: "text-muted" };
-
-/**
- * One session row's look (X48), shared by the sidebar and the Settings
- * preview: the glyph, style A's number cell, the name and the badge on one
- * line. `nested` is style B's indented 34px row under a task line.
- */
-function RowView({
-  glyph,
-  cell,
-  name,
-  badge,
-  merged,
-  mergedNote,
-  selected,
-  picked,
-  nested,
-  ...rest
-}: {
-  glyph: ReactNode;
-  cell?: { text: string; outOfSync: boolean; width: number };
-  name: ReactNode;
-  badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
-  /** The session's PR is merged: a merge icon ends the row. */
-  merged?: boolean;
-  /** Why its host has not archived the merged session (X116): the icon's
-   *  tooltip, amber when it needs the user. */
-  mergedNote?: { text: string; warn: boolean } | null;
-  selected: boolean;
-  /** Picked with ⌘- or ⇧-click (X106): tinted. */
-  picked?: boolean;
-  nested?: boolean;
-} & React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      {...rest}
-      className={cx(
-        // Filled with the pane's tone when shown (X94); taller with a bigger font.
-        "group relative mx-2 flex cursor-default items-center gap-2.5 rounded-md pr-2 text-left transition-colors",
-        nested ? "h-ui-34 pl-[calc(0.5rem+20px)]" : "h-ui-38 pl-2",
-        picked ? "bg-selected" : selected ? "bg-bg" : "hover:bg-tab-hover",
-      )}
-    >
-      <span className="flex w-[15px] shrink-0 justify-center">{glyph}</span>
-      {cell && cell.width > 0 && (
-        <span style={{ width: `${Math.max(cell.width, 3)}ch` }} className={cx("shrink-0 text-right font-mono ui-text-11.5 tabular-nums", cell.outOfSync ? "text-accent-2" : "text-faint")}>
-          {cell.text}
-        </span>
-      )}
-      {name}
-      {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
-      {merged && (
-        <span role="img" aria-label={mergedNote?.text ?? "merged"} title={mergedNote?.text ?? "PR merged"} className={cx("shrink-0", mergedNote?.warn && "flex items-center gap-0.5 text-blocked")}>
-          {mergedNote?.warn && <CircleAlert size={11} />}
-          <BranchIcon state="merged" />
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** Style B's quiet line for a task, above its sessions (X48). */
-function TaskLineHeader({ g }: { g: TaskGroup }) {
-  return (
-    <div title={g.key ? `${g.key} · ${g.title}` : "Not linked to a task"} className="mx-2 flex h-[24px] items-center gap-[7px] px-2 ui-text-11.5 text-faint">
-      <span className="mx-[2px] flex shrink-0">
-        {g.column ? (
-          <TaskGlyph column={g.column} size={11} />
-        ) : (
-          <svg width="11" height="11" viewBox="0 0 14 14" aria-hidden="true">
-            <circle cx="7" cy="7" r="5.5" fill="none" stroke="#5e5e5e" strokeWidth="1.6" strokeDasharray="2 2" />
-          </svg>
-        )}
-      </span>
-      {g.key && <span className={cx("shrink-0 font-mono ui-text-11", g.outOfSync ? "text-accent-2" : "text-muted")}>{g.key}</span>}
-      <span className="min-w-0 flex-1 truncate">{g.outOfSync ? `${g.title} · out of sync` : g.title}</span>
-    </div>
-  );
-}
-
-/** Style B's task lines, each above its sessions with a guide line (X48). */
-function TaskGroupList({ tasks, row }: { tasks: TaskGroup[]; row: (id: string) => ReactNode }) {
-  return tasks.map((t) => (
-    <div key={t.key || "none"} className="flex flex-col">
-      <TaskLineHeader g={t} />
-      <div className="relative flex flex-col">
-        <span aria-hidden className="absolute bottom-[10px] left-[calc(1rem+7.5px)] top-0 w-px bg-border-strong" />
-        {t.ids.map(row)}
-      </div>
-    </div>
-  ));
-}
-
-/** Style A's cell for one row, or none. */
-const cellOf = (column: ReturnType<typeof numberColumn> | null, id: string) => (column ? { ...column.cells[id], width: column.width } : undefined);
 
 function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void; cell?: { text: string; outOfSync: boolean; width: number }; nested?: boolean; on?: string }) {
   const selected = useStore((st) => !st.showHistory && st.selected?.host === host && st.selected.session === s.id);

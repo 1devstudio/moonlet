@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarUrl } from "./projectAvatar";
+import { avatarUrl, identityAvatar } from "./projectAvatar";
 
 describe("avatarUrl", () => {
   it("uses the GitHub owner of an https remote", () => {
@@ -29,5 +29,18 @@ describe("avatarUrl", () => {
     expect(avatarUrl("https://github.com/-acme/api.git")).toBeNull();
     expect(avatarUrl(`https://github.com/${"a".repeat(40)}/api.git`)).toBeNull();
     expect(avatarUrl(`https://github.com/${"a".repeat(39)}/api.git`)).toBe(`https://github.com/${"a".repeat(39)}.png?size=64`);
+  });
+});
+
+describe("identityAvatar (X118)", () => {
+  it("uses the GitHub owner of a project's identity, from GitHub's avatar host", () => {
+    expect(identityAvatar("github.com/acme/storefront")).toBe("https://avatars.githubusercontent.com/acme?s=64");
+  });
+
+  it("has no avatar off GitHub or for an owner GitHub would not allow", () => {
+    expect(identityAvatar(null)).toBeNull();
+    expect(identityAvatar("gitlab.com/acme/api")).toBeNull();
+    expect(identityAvatar("github.com/-acme/api")).toBeNull();
+    expect(identityAvatar("github.com:8443/acme/api")).toBeNull();
   });
 });

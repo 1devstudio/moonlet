@@ -2,7 +2,8 @@
 // another Mac, and the phone's notification and Face ID settings.
 
 import { useEffect, useState } from "react";
-import { Laptop, QrCode, RotateCw, Server } from "lucide-react";
+import { Check, Laptop, QrCode, RotateCw, Server } from "lucide-react";
+import { ROW_STYLES, rowStyle } from "@desktop/lib/sessionRows";
 import { type NotifyKey, forgetMac, reconnect, showScreen, updateSettings, useApp } from "../lib/app";
 import { hostMeta, hostRoute, hostWord } from "../lib/hosts";
 import { HOST_COLOR } from "../lib/palette";
@@ -93,6 +94,23 @@ export function HostsScreen() {
           <Switch label="Require Face ID to allow" on={settings.faceId} onChange={(faceId) => updateSettings({ faceId })} />
         </div>
         <span className="text-[12.5px] leading-[1.45] text-faint">Allowing a tool, approving a plan, answering a question or letting an agent read a terminal asks for Face ID first. Notifications arrive once push notifications are set up for this app.</span>
+
+        {/* How Sessions shows each session's task, as Settings › Appearance does on the Mac (X48, X118). */}
+        <div className="eyebrow mt-3">Session rows</div>
+        <div role="radiogroup" aria-label="Session rows" className="flex flex-col rounded-[14px] border border-border bg-panel">
+          {ROW_STYLES.map((o) => {
+            const on = rowStyle(settings.sessionRows) === o.id;
+            return (
+              <button key={o.id} type="button" role="radio" aria-checked={on} onClick={() => updateSettings({ sessionRows: o.id })} className="flex min-h-[56px] w-full items-center gap-2.5 border-b border-border px-3.5 py-2 text-left last:border-b-0">
+                <span className="flex flex-1 flex-col gap-0.5">
+                  <span className="text-[14.5px]">{o.label}</span>
+                  <span className="text-[12.5px] text-muted">{o.hint}</span>
+                </span>
+                {on && <Check size={18} className="flex-none text-accent" />}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
