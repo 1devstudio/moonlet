@@ -7089,9 +7089,16 @@ async fn a_plan_a_sessions_agent_proposes_is_an_artifact_the_app_renames_and_edi
     assert_eq!((plan.kind.as_str(), plan.name.as_str(), plan.version), ("plan", "Add search to the product list", Some(1)));
     assert_eq!((plan.home.workspace.as_deref(), plan.home.session.as_deref(), plan.home.project.as_deref(), plan.home.archived), (Some(ws.as_str()), Some(session.id.as_str()), Some(project.id.as_str()), false));
 
-    let read: ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await.unwrap();
+    // Listed as soon as it is proposed; approved once the turn ends with the call done.
+    let mut read: ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await.unwrap();
+    for _ in 0..100 {
+        if read.versions.iter().all(|v| v.state != "pending") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        read = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await.unwrap();
+    }
     assert_eq!(read.text.as_deref(), Some("# Search for the product list\n\nAdd a search box.\n"));
-    // The turn ended with the call done, as an approved plan's does.
     assert_eq!(read.versions.iter().map(|v| (v.n, v.state.as_str())).collect::<Vec<_>>(), [(1, "approved")]);
 
     // An agent's CLI may neither rename nor edit it.
