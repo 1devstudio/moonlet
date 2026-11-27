@@ -4915,6 +4915,15 @@ impl Daemon {
         None
     }
 
+    /// Whether `pr` ends at the last commit of session `s`'s branch.
+    async fn ends_at_branch(&self, s: &moonlet_proto::types::Session, pr: Option<&moonlet_proto::types::PullRequest>) -> bool {
+        let Some(head) = pr.and_then(|p| p.head_oid.as_deref()) else { return false };
+        let repo = self.sessions.project(&s.project_id).map(|p| p.path).unwrap_or_else(|_| s.path.clone());
+        git::git_text(Path::new(&repo), &["rev-parse", "--verify", "-q", &format!("refs/heads/{}^{{commit}}", s.branch)])
+            .await
+            .is_ok_and(|tip| tip.trim() == head)
+    }
+
     /// Archives session `s` if its PR `pr` merged (or closed) and the Git
     /// settings say so, never losing work only on this host, and records
     /// what it did or why it waits (X116).
@@ -4941,6 +4950,15 @@ impl Daemon {
                 .filter(|a| matches!(a.state, AutoArchiveState::Waiting | AutoArchiveState::Refused))
                 .map(|_| None),
             Step::Wait { pr, merged, reason } => Some(record(AutoArchiveState::Waiting, reason, pr, merged)),
+            // Anyone can open and close a PR from a fork whose branch has
+            // this branch's name: a closed one counts only when it ends at
+            // this branch's last commit. A merge needs write access.
+            Step::Archive(plan) if !plan.merged && !self.ends_at_branch(&s, pr.as_ref()).await => Some(record(
+                AutoArchiveState::Refused,
+                "the closed PR does not end at this branch's last commit".into(),
+                plan.pr,
+                plan.merged,
+            )),
             Step::Archive(plan) => {
                 let merged_head = pr.as_ref().filter(|_| plan.merged).and_then(|p| p.head_oid.clone());
                 match git::unpushed(Path::new(&s.path), Some(&s.branch), merged_head.as_deref()).await {

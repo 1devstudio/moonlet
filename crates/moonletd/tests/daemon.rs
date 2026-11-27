@@ -2117,6 +2117,27 @@ async fn with_archiving_on_merge_off_the_daemon_checks_no_prs() {
     assert!(!session_once(&mut c, &s.id, |_| false).await.archived);
 }
 
+/// X116: a closed PR archives its session only when it ends at the
+/// session branch's last commit, so a PR from a fork that shares the
+/// branch's name cannot archive it.
+#[tokio::test]
+async fn a_closed_pr_that_does_not_end_at_the_branch_archives_nothing() {
+    let d = fake_gh_watch_daemon(GH_PR_IN_STATE_FILE, 100).await;
+    std::fs::write(d.home.path().join("bin/gh.log.state"), "CLOSED").unwrap();
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let _: serde_json::Value = c.request(methods::GIT_SET_SETTINGS, serde_json::json!({"archive_on_merge": true, "archive_on_close": true})).await.unwrap();
+
+    let refused = session_once(&mut c, &s.id, |s| s.auto_archive.is_some()).await;
+
+    assert!(!refused.archived);
+    assert_eq!(
+        serde_json::to_value(&refused.auto_archive).unwrap(),
+        serde_json::json!({"pr": 12, "state": "refused", "reason": "the closed PR does not end at this branch's last commit", "merged": false})
+    );
+}
+
 /// X116: a merged session with an uncommitted file is not archived and
 /// says why; once the file is gone, the next check archives it.
 #[tokio::test]
