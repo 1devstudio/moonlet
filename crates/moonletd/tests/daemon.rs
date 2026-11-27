@@ -5334,6 +5334,12 @@ async fn archiving_a_session_turns_its_designs_kept_in_moonlet_into_workspace_de
         "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">kept</body>\n",
     )
     .unwrap();
+    // A worktree design of the same slug is left in its branch: the one kept
+    // in moonlet is the session's (X114).
+    let shadow = std::path::Path::new(&session.path).join("docs/design/settings-page");
+    std::fs::create_dir_all(shadow.join("pages")).unwrap();
+    std::fs::write(shadow.join("design.toml"), "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n").unwrap();
+    std::fs::write(shadow.join("pages/index.html"), "<body data-mid=\"m1\">old</body>\n").unwrap();
     let _: serde_json::Value = c
         .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": session.id, "remove_worktree": true, "delete_branch": false, "delete_remote": false}))
         .await
@@ -5341,6 +5347,7 @@ async fn archiving_a_session_turns_its_designs_kept_in_moonlet_into_workspace_de
     assert!(!mine.exists());
     let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     let found = list.as_array().unwrap().iter().find(|d| d["slug"] == "settings-page").expect("the design, now the workspace's");
+    assert_eq!(list.as_array().unwrap().iter().filter(|d| d["name"] == "Settings page").count(), 1, "{list}");
     assert_eq!((&found["kind"], &found["session"]), (&serde_json::json!("workspace"), &serde_json::Value::Null));
     assert_eq!(
         std::fs::read_to_string(d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html")).unwrap(),
@@ -7405,8 +7412,10 @@ async fn artifacts_are_copied_and_moved_between_workspaces_and_references_follow
     let copied: String = c.request(methods::ARTIFACT_COPY, serde_json::json!({"id": id, "workspace": other.id})).await.unwrap();
     assert_eq!(copied, format!("design:workspace:{}:settings-page", other.id));
     let theirs: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": other.id})).await.unwrap();
-    let path = theirs.iter().find(|d| d["slug"] == "settings-page").unwrap()["path"].as_str().unwrap().to_string();
+    let theirs = theirs.iter().find(|d| d["slug"] == "settings-page").unwrap();
+    let path = theirs["path"].as_str().unwrap().to_string();
     assert_eq!(std::fs::read_to_string(std::path::Path::new(&path).join("pages/index.html")).unwrap(), "<p>v1</p>");
+    assert_eq!((&theirs["brief"], &theirs["system"]), (&serde_json::json!("b"), &serde_json::json!("moonlet-desktop")));
 
     // Moved: the reader now refers to it in the other workspace, under the next free slug.
     // Refused as busy while the design's own agent is in its first turn.
@@ -7448,6 +7457,58 @@ async fn artifacts_are_copied_and_moved_between_workspaces_and_references_follow
     assert!(cli.request::<_, serde_json::Value>(methods::ARTIFACT_COPY, serde_json::json!({"id": plan, "workspace": other.id})).await.is_err());
 }
 
+/// X114: sharing a design and stopping take its references along; a copy
+/// or move into the library, and a move into the workspace it is in, are
+/// refused.
+#[tokio::test]
+async fn sharing_a_design_takes_its_references_along_and_the_library_is_no_copy_target() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    assert_eq!(
+        c.request::<_, serde_json::Value>(methods::ARTIFACT_MOVE, serde_json::json!({"id": id, "workspace": ws})).await.map_err(|e| e.to_string()),
+        Err("invalid_params: it is in that workspace already".to_string())
+    );
+    for method in [methods::ARTIFACT_COPY, methods::ARTIFACT_MOVE] {
+        assert_eq!(
+            c.request::<_, serde_json::Value>(method, serde_json::json!({"id": id, "workspace": "library"})).await.map_err(|e| e.to_string()),
+            Err("invalid_params: share a design to put it in the library".to_string()),
+            "{method}"
+        );
+    }
+    // A merged design is read from its project: Design mode copies it.
+    assert_eq!(
+        c.request::<_, serde_json::Value>(methods::ARTIFACT_COPY, serde_json::json!({"id": "design:project:p1:settings-page", "workspace": ws})).await.map_err(|e| e.to_string()),
+        Err("invalid_params: a design merged into its project is read from the project".to_string())
+    );
+
+    // Shared, once its agent's first turn is over.
+    for _ in 0..100 {
+        match c.request::<_, String>(methods::DESIGN_SHARE, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await {
+            Ok(_) => break,
+            Err(e) if e.to_string().starts_with("busy") => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let used: std::collections::BTreeMap<String, Vec<String>> = c.request(methods::ARTIFACT_USED, serde_json::json!({})).await.unwrap();
+    assert_eq!((used.get("design:library:settings-page"), used.get(&id)), (Some(&vec![reader.id.clone()]), None));
+
+    let _: String = c.request(methods::DESIGN_UNSHARE, serde_json::json!({"workspace": "library", "slug": "settings-page", "into": ws})).await.unwrap();
+    let used: std::collections::BTreeMap<String, Vec<String>> = c.request(methods::ARTIFACT_USED, serde_json::json!({})).await.unwrap();
+    assert_eq!((used.get(&id), used.get("design:library:settings-page")), (Some(&vec![reader.id.clone()]), None));
+}
+
 /// X114: a session design moved to the workspace (X104) keeps the sessions
 /// that refer to it: they now refer to the workspace design.
 #[tokio::test]
@@ -7485,6 +7546,46 @@ async fn a_session_design_moved_to_the_workspace_keeps_its_references() {
     let used: std::collections::BTreeMap<String, Vec<String>> = c.request(methods::ARTIFACT_USED, serde_json::json!({})).await.unwrap();
     assert_eq!(used.get(&format!("design:workspace:{ws}:{slug}")), Some(&vec![reader.id.clone()]));
     assert_eq!(used.get(&id), None);
+}
+
+/// X114: an archive that keeps the worktree copies none of its designs; one
+/// that fails after removing the worktree keeps the copies, then the
+/// designs' only ones.
+#[tokio::test]
+async fn an_archive_copies_worktree_designs_only_when_the_worktree_goes_and_keeps_them_if_it_fails_after() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let maker: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Fix checkout button", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let made: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "session": maker.id, "name": "Checkout flow", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let dir = std::path::PathBuf::from(made["path"].as_str().unwrap());
+    std::fs::write(dir.join("pages/index.html"), "<p>cart</p>").unwrap();
+    let workspace_copies = |list: &[serde_json::Value]| list.iter().filter(|d| d["kind"] == "workspace" && d["name"] == "Checkout flow").cloned().collect::<Vec<_>>();
+
+    // The worktree stays: its designs stay there, with no copy.
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": maker.id, "remove_worktree": false})).await.unwrap();
+    let list: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert!(workspace_copies(&list).is_empty(), "{list:?}");
+    let _: serde_json::Value = c.request(methods::SESSION_UNARCHIVE, serde_json::json!({"id": maker.id})).await.unwrap();
+
+    // The branch cannot be deleted once the worktree is gone: the copy stays.
+    let lock = std::path::Path::new(&project.path).join(".git/refs/heads").join(format!("{}.lock", maker.branch));
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    std::fs::write(&lock, "").unwrap();
+    let failed = c.request::<_, serde_json::Value>(methods::SESSION_ARCHIVE, serde_json::json!({"id": maker.id, "delete_branch": true})).await;
+    assert!(failed.is_err(), "{failed:?}");
+    assert!(!std::path::Path::new(&maker.path).exists());
+    let list: Vec<serde_json::Value> = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let kept = workspace_copies(&list);
+    assert_eq!(kept.len(), 1, "{list:?}");
+    assert_eq!(std::fs::read_to_string(std::path::Path::new(kept[0]["path"].as_str().unwrap()).join("pages/index.html")).unwrap(), "<p>cart</p>");
 }
 
 /// X114: when a session is archived, the designs in its worktree become

@@ -270,3 +270,18 @@ export function startMessage(kind: "plan" | "design", typed: string): string {
 export function startPlaceholder(kind: "plan" | "design"): string {
   return `Anything to add? Leave empty to ${kind === "plan" ? "implement the plan" : "build the design"}.`;
 }
+
+/** Why an artifact cannot move to another workspace; null when it can.
+ *  Only a workspace's own moves (X114). */
+export function moveRefusal(info: Pick<ArtifactInfo, "id" | "kind" | "home">): string | null {
+  if (info.id.startsWith("design:library:")) return "A shared design moves with Stop sharing";
+  if (info.id.startsWith("design:project:")) return "A merged design stays in its project";
+  if (info.home.session) return `A session's ${info.kind} can only be copied`;
+  return null;
+}
+
+/** Why an artifact cannot be copied to another workspace; null when it can.
+ *  A merged design is read from its project: Design mode copies it (X65). */
+export function copyRefusal(info: Pick<ArtifactInfo, "id">): string | null {
+  return info.id.startsWith("design:project:") ? "Copy a merged design from Design mode" : null;
+}

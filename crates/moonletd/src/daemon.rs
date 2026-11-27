@@ -780,6 +780,31 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(store_error)
 }
 
+/// A session's worktree design copied into its workspace for an archive
+/// (X114): its slug in the session, and in the workspace.
+struct DesignCopy {
+    workspace: String,
+    from: String,
+    to: String,
+}
+
+/// Refuses the library as where an artifact is copied or moved (X114): a
+/// design goes there by being shared (X95), a plan never.
+fn refuse_library(workspace: &str) -> Result<(), RpcError> {
+    if workspace == LIBRARY {
+        return Err(RpcError::new("invalid_params", "share a design to put it in the library"));
+    }
+    Ok(())
+}
+
+/// The artifact id of design `slug` of workspace `workspace`, the library's
+/// when that is the library (X95).
+fn workspace_design_id(workspace: &str, slug: &str) -> String {
+    use moonlet_core::artifact::{DesignHome, design_id};
+    let home = if workspace == LIBRARY { DesignHome::Library } else { DesignHome::Workspace(workspace.to_string()) };
+    design_id(&home, slug)
+}
+
 /// The version a referrer is noted to have seen once its artifact is gone
 /// (X114), so it is told so once.
 const GONE: &str = "gone";
@@ -1518,6 +1543,7 @@ impl Daemon {
 
     /// Copies artifact `id` into workspace `workspace` as its own (X114).
     async fn copy_artifact_to(&self, id: &str, workspace: &str) -> Result<String, RpcError> {
+        refuse_library(workspace)?;
         self.workspace_exists(workspace)?;
         if moonlet_core::artifact::parse_id(id).is_some() {
             let plan = self.plans.plan(id).map_err(internal)?.ok_or_else(|| RpcError::new("invalid_params", format!("no artifact {id}")))?;
@@ -1529,30 +1555,37 @@ impl Daemon {
         let at = self.locate(&design_ref_of(id)?).await?;
         let (store, ws) = (self.design.clone(), workspace.to_string());
         let slug = blocking(move || store.copy_design_to(&at, &ws, now_ms())).await?;
-        Ok(format!("design:workspace:{workspace}:{slug}"))
+        Ok(moonlet_core::artifact::design_id(&moonlet_core::artifact::DesignHome::Workspace(workspace.to_string()), &slug))
     }
 
     /// Moves workspace artifact `id` into workspace `workspace`; the
     /// sessions that refer to it follow it (X114).
     async fn move_artifact_to(&self, id: &str, workspace: &str) -> Result<String, RpcError> {
+        refuse_library(workspace)?;
         self.workspace_exists(workspace)?;
         let session_owned = || RpcError::new("invalid_params", "a session's artifact can only be copied");
+        let there = || RpcError::new("invalid_params", "it is in that workspace already");
         let to = if let Some((home, _)) = moonlet_core::artifact::parse_id(id) {
-            if moonlet_core::artifact::workspace_of_home(home).is_none() {
-                return Err(session_owned());
+            match moonlet_core::artifact::workspace_of_home(home) {
+                None => return Err(session_owned()),
+                Some(from) if from == workspace => return Err(there()),
+                Some(_) => {}
             }
-            self.plans.move_to_workspace(id, workspace).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?
+            let to = self.plans.move_to_workspace(id, workspace).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+            self.refs.rename_id(id, &to).map_err(internal)?;
+            to
         } else {
             match design_ref_of(id)? {
+                m::DesignRef::Workspace { workspace: from, .. } if from == workspace => return Err(there()),
                 m::DesignRef::Workspace { workspace: from, slug } if from != LIBRARY => {
+                    // Its references follow it there (`move_design_to`).
                     let slug = self.move_design_to(&from, &slug, workspace).await?;
-                    format!("design:workspace:{workspace}:{slug}")
+                    moonlet_core::artifact::design_id(&moonlet_core::artifact::DesignHome::Workspace(workspace.to_string()), &slug)
                 }
                 m::DesignRef::Workspace { .. } => return Err(RpcError::new("invalid_params", "a shared design moves with Stop sharing")),
                 m::DesignRef::Session { .. } => return Err(session_owned()),
             }
         };
-        self.refs.rename_id(id, &to).map_err(internal)?;
         self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": to })));
         Ok(to)
     }
@@ -3864,10 +3897,13 @@ impl Daemon {
                 let (moved, ws, from) = (store.clone(), workspace.clone(), at.clone());
                 let slug = blocking(move || moved.adopt_session_design(&from, &ws, now_ms())).await?;
                 // The sessions that refer to it follow it (X114).
-                if let m::DesignRef::Session { session, slug: old } = &r {
-                    if let Err(e) = self.refs.rename_id(&format!("design:session:{session}:{old}"), &format!("design:workspace:{workspace}:{slug}")) {
-                        tracing::warn!("references to design {old} did not follow it to the workspace: {e:#}");
-                    }
+                if let m::DesignRef::Session { session, slug: old } = &r
+                    && let Err(e) = self.refs.rename_id(
+                        &moonlet_core::artifact::design_id(&moonlet_core::artifact::DesignHome::Session(session.clone()), old),
+                        &workspace_design_id(&workspace, &slug),
+                    )
+                {
+                    tracing::warn!("references to design {old} did not follow it to the workspace: {e:#}");
                 }
                 // Its edits by hand not kept yet go with it only once it moved:
                 // a refused move leaves them, and their wait, as they were.
@@ -4270,6 +4306,10 @@ impl Daemon {
         if let Err(e) = self.copies.moved(&Item::design(from, slug), &Item::design(into, &to)).await {
             tracing::warn!("cannot note where design {slug} moved: {e:#}");
         }
+        // The sessions that refer to it follow it (X114).
+        if let Err(e) = self.refs.rename_id(&workspace_design_id(from, slug), &workspace_design_id(into, &to)) {
+            tracing::warn!("references to design {slug} did not follow it: {e:#}");
+        }
         Ok(to)
     }
 
@@ -4390,7 +4430,7 @@ impl Daemon {
             match blocking(move || store.adopt_session_designs(&session, now_ms())).await {
                 Ok(done) => {
                     // The sessions that refer to them follow them (X114).
-                    let moved: Vec<(String, String, String)> = done.moved.iter().map(|(from, to)| (done.workspace.clone(), from.clone(), to.clone())).collect();
+                    let moved: Vec<DesignCopy> = done.moved.iter().map(|(from, to)| DesignCopy { workspace: done.workspace.clone(), from: from.clone(), to: to.clone() }).collect();
                     self.follow_design_copies(&id, &moved);
                     for (slug, error) in &done.left {
                         tracing::warn!("cannot move design {slug} of session {id} into its workspace: {error}");
@@ -4402,9 +4442,9 @@ impl Daemon {
     }
 
     /// Copies the designs in session `id`'s worktree into its workspace as
-    /// workspace designs (X114): `(workspace, slug, slug there)` for each
-    /// copied. One that cannot be copied is logged and stays in the branch.
-    async fn copy_worktree_designs(&self, id: &str) -> Vec<(String, String, String)> {
+    /// workspace designs (X114). One that cannot be copied is logged and
+    /// stays in the branch.
+    async fn copy_worktree_designs(&self, id: &str) -> Vec<DesignCopy> {
         let Ok((s, shelves)) = self.design_session(id) else { return Vec::new() };
         let Some(workspace) = s.workspace_id.clone() else { return Vec::new() };
         // Only the worktree's: those kept in moonlet move on their own (X101).
@@ -4421,7 +4461,7 @@ impl Daemon {
                     }
                 };
                 match store.copy_design_to(&at, &ws, now_ms()) {
-                    Ok(to) => copied.push((ws.clone(), d.slug.clone(), to)),
+                    Ok(to) => copied.push(DesignCopy { workspace: ws.clone(), from: d.slug.clone(), to }),
                     Err(e) => tracing::warn!("cannot make design {} of session {sid} a workspace design: {e:#}", d.slug),
                 }
             }
@@ -4435,9 +4475,9 @@ impl Daemon {
     }
 
     /// Removes copies made for an archive that then failed (X114).
-    async fn drop_design_copies(&self, copied: &[(String, String, String)]) {
-        for (ws, _, slug) in copied {
-            let (store, ws, slug) = (self.design.clone(), ws.clone(), slug.clone());
+    async fn drop_design_copies(&self, copied: &[DesignCopy]) {
+        for c in copied {
+            let (store, ws, slug) = (self.design.clone(), c.workspace.clone(), c.to.clone());
             let removed = blocking(move || {
                 let at = store.workspace_design(&ws, &slug)?;
                 store.remove_design(&at)
@@ -4451,9 +4491,10 @@ impl Daemon {
 
     /// The sessions that refer to session `session`'s designs now refer to
     /// their workspace designs (X114).
-    fn follow_design_copies(&self, session: &str, copied: &[(String, String, String)]) {
-        for (ws, from, to) in copied {
-            if let Err(e) = self.refs.rename_id(&format!("design:session:{session}:{from}"), &format!("design:workspace:{ws}:{to}")) {
+    fn follow_design_copies(&self, session: &str, copied: &[DesignCopy]) {
+        for DesignCopy { workspace: ws, from, to } in copied {
+            use moonlet_core::artifact::{DesignHome, design_id};
+            if let Err(e) = self.refs.rename_id(&design_id(&DesignHome::Session(session.to_string()), from), &design_id(&DesignHome::Workspace(ws.clone()), to)) {
                 tracing::warn!("references to design {from} did not follow it to the workspace: {e:#}");
             }
         }
@@ -8095,11 +8136,19 @@ impl Daemon {
                 // The designs in its worktree become workspace designs too,
                 // copied before the worktree goes; the committed ones stay in
                 // its branch (X114).
-                let copied = self.copy_worktree_designs(&id).await;
+                // Only when the worktree goes: one kept keeps its designs.
+                let worktree = self.sessions.session(&id).ok().map(|s| PathBuf::from(s.path));
+                let copied = if r.remove_worktree { self.copy_worktree_designs(&id).await } else { Vec::new() };
                 let done = match w.archive(r).await {
                     Ok(done) => done,
                     Err(e) => {
-                        self.drop_design_copies(&copied).await;
+                        // A worktree removed before the failure took its
+                        // designs with it: the copies are theirs now.
+                        if worktree.as_deref().is_some_and(Path::exists) {
+                            self.drop_design_copies(&copied).await;
+                        } else {
+                            self.follow_design_copies(&id, &copied);
+                        }
                         return Err(internal(e));
                     }
                 };

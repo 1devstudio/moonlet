@@ -2,6 +2,7 @@
 
 - **Status:** proposed (2026-10-23); to be built in [X64](../specs/X64-design-systems.md) and [X65](../specs/X65-design-mode.md)
 - **Changed by:** [X95](../specs/X95-design-library.md) (2026-11-09): design systems live in the account's library, `~/.moonlet/design/library/`, not per workspace, and a workspace design can be shared there. [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). A member without the app renders for its design agent with a helper of its own (WKWebView on a Mac, WPE WebKit on Linux).
+- **Changed by:** [X114](../specs/X114-artifacts.md) (2026-11-27): an archived session's worktree designs become workspace designs too, as its designs kept in moonlet do (X101); designs are artifacts sessions can refer to, read-only copies under `~/.moonlet/artifacts/refs/`.
 - **Builds on:** [ADR 0005](0005-workspace-project-session-terminal.md) (workspaces, projects, sessions) and [X22](../specs/X22-agent-opens-session.md) (the `moonlet` skill)
 
 ## Context

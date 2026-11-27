@@ -4,6 +4,7 @@
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X65 (Design mode: session designs, Build it), X95 (design library)
 - **Related ADRs:** [0013](../adr/0013-design-systems-and-designs.md)
+- **Changed by:** [X114](X114-artifacts.md) (2026-11-27): archiving a session makes the designs in its worktree workspace designs too, copied before the worktree is removed, and the sessions that refer to a design then refer to its workspace design.
 
 ## Summary
 

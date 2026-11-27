@@ -5,7 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ArrowUpFromLine, Check, Layers, MoreHorizontal, Paperclip, Pencil, Plus, Search, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ArtifactInfo, type ArtifactText } from "../lib/protocol";
-import { designFor, markParts, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
+import { copyRefusal, designFor, markParts, moveRefusal, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
 import { KindTile, useArtifactRows } from "./ArtifactChips";
 import { addChip, artifactDesigns, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
 import { loadDesigns, openSessionDesign, showDesign, useDesign } from "../lib/designStore";
@@ -160,7 +160,7 @@ function Header({ info, children, menu }: { info: ArtifactInfo; children?: React
 function ToWorkspaceDialog({ host, info, start, onClose }: { host: string; info: ArtifactInfo; start: "copy" | "move"; onClose: () => void }) {
   const here = useStore((s) => shownWorkspace(s)?.id);
   const workspaces = useStore((s) => s.workspaces[host]) ?? [];
-  const movable = canMove(info);
+  const movable = moveRefusal(info) === null;
   const [how, setHow] = useState<"copy" | "move">(movable ? start : "copy");
   const others = workspaces.filter((w) => w.id !== here);
   const [to, setTo] = useState(others[0]?.id ?? "");
@@ -200,6 +200,8 @@ function ToWorkspaceDialog({ host, info, start, onClose }: { host: string; info:
       }
     >
       <div className="flex flex-col gap-4">
+        <span id="to-workspace-how" className="sr-only">Copy or move</span>
+        <span id="to-workspace-where" className="sr-only">Workspace</span>
         <Segmented
           value={how}
           options={[
@@ -207,7 +209,7 @@ function ToWorkspaceDialog({ host, info, start, onClose }: { host: string; info:
             ...(movable ? [{ id: "move" as const, label: "Move" }] : []),
           ]}
           onChange={setHow}
-          labelledBy=""
+          labelledBy="to-workspace-how"
         />
         <p className="ui-text-12.5 text-muted">
           {how === "copy"
@@ -215,19 +217,14 @@ function ToWorkspaceDialog({ host, info, start, onClose }: { host: string; info:
             : "It leaves this workspace. Sessions that use it keep reading it."}
         </p>
         {others.length ? (
-          <RadioList value={to} options={others.map((w) => ({ id: w.id, label: w.name, description: "" }))} onChange={setTo} labelledBy="" />
+          <RadioList value={to} options={others.map((w) => ({ id: w.id, label: w.name, description: "" }))} onChange={setTo} labelledBy="to-workspace-where" />
         ) : (
           <p className="ui-text-12.5 text-faint">There is no other workspace on this host.</p>
         )}
-        {!movable && <p className="ui-text-12 text-faint">A session's {info.kind} can only be copied; Move is for a workspace's own.</p>}
+        {!movable && <p className="ui-text-12 text-faint">{moveRefusal(info)}.</p>}
       </div>
     </Dialog>
   );
-}
-
-/** Whether an artifact is a workspace's own, which moves (X114). */
-function canMove(info: ArtifactInfo): boolean {
-  return info.kind === "plan" ? !info.home.session : info.id.startsWith("design:workspace:");
 }
 
 /** A session design other sessions use (X114): it changes only in its
@@ -272,8 +269,8 @@ function UsedByBanner({ host, info, session, slug, workspace }: { host: string; 
 function useToWorkspace(host: string, info: ArtifactInfo) {
   const [open, setOpen] = useState<"copy" | "move" | null>(null);
   const items = [
-    { label: "Copy to workspace…", onSelect: () => setOpen("copy") },
-    { label: "Move to workspace…", disabled: canMove(info) ? undefined : `A session's ${info.kind} can only be copied`, onSelect: () => setOpen("move") },
+    { label: "Copy to workspace…", disabled: copyRefusal(info) ?? undefined, onSelect: () => setOpen("copy") },
+    { label: "Move to workspace…", disabled: moveRefusal(info) ?? undefined, onSelect: () => setOpen("move") },
   ];
   const dialog = open && <ToWorkspaceDialog host={host} info={info} start={open} onClose={() => setOpen(null)} />;
   return { items, dialog };
