@@ -57,6 +57,11 @@ describe("+ menu: entries (X29)", () => {
     expect(plusEntries({ variant: "composer", agents: 0, commands: true })).toEqual([["attach", "add-dir"], ["commands"]]);
     expect(plusEntries({ variant: "composer", agents: 0, commands: false })).toEqual([["attach", "add-dir"]]);
   });
+
+  it("offers Attach artifact after the files in a session's chat (X114)", () => {
+    expect(plusEntries({ variant: "chat", agents: 0, artifacts: true })).toEqual([["attach", "artifacts", "add-dir"], ["commands", "mcp"]]);
+    expect(plusEntries({ variant: "composer", agents: 0, artifacts: true })).toEqual([["attach", "artifacts", "add-dir"]]);
+  });
 });
 
 describe("+ menu: ⌘U attaches (X29)", () => {

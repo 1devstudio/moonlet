@@ -411,6 +411,8 @@ fn run_daemon(
         daemon.keep_session_copies();
         // The Mac's sleep hands its sessions to the central host (X73).
         power::spawn(daemon.clone());
+        // Copies of the artifacts sessions refer to follow their homes (X114).
+        daemon.follow_artifacts();
         // The session designs saved before a restart, watched again at once.
         daemon.watch_saved_session_designs();
         // Designs of sessions archived meanwhile become workspace designs (X101).

@@ -80,6 +80,12 @@ pub struct Daemon {
     design: moonlet_core::design::store::Store,
     /// The plans sessions' chats proposed (X114).
     plans: Arc<moonlet_core::artifact::Plans>,
+    /// The artifacts sessions refer to, and their copies (X114).
+    refs: Arc<moonlet_core::artifact::refs::Refs>,
+    /// One per session's reference (X114): its copy is built, noted and
+    /// put in place by one task at a time, so an older copy never lands
+    /// after a newer one.
+    ref_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Design systems and workspace designs on every member (X71).
     pub copies: Arc<crate::copies::DesignCopies>,
     /// Copies of every member's sessions on the central host (X72).
@@ -774,6 +780,23 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(store_error)
 }
 
+/// The version a referrer is noted to have seen once its artifact is gone
+/// (X114), so it is told so once.
+const GONE: &str = "gone";
+
+/// The design an artifact id names (X114), as the design RPCs take it. A
+/// design merged into its project is read from the project, never here.
+fn design_ref_of(id: &str) -> Result<m::DesignRef, RpcError> {
+    use moonlet_core::artifact::DesignHome;
+    match moonlet_core::artifact::parse_design_id(id) {
+        Some((DesignHome::Workspace(workspace), slug)) => Ok(m::DesignRef::Workspace { workspace, slug }),
+        Some((DesignHome::Library, slug)) => Ok(m::DesignRef::Workspace { workspace: moonlet_core::design::library::LIBRARY.to_string(), slug }),
+        Some((DesignHome::Session(session), slug)) => Ok(m::DesignRef::Session { session, slug }),
+        Some((DesignHome::Project(_), _)) => Err(RpcError::new("invalid_params", "a design merged into its project is read from the project")),
+        None => Err(RpcError::new("invalid_params", format!("no artifact {id}"))),
+    }
+}
+
 /// What the design store's error means to the caller: a design system the
 /// workspace does not have, a viewport that is none, a comment that names
 /// no element or pin, a page name that names no page, or a snapshot the
@@ -966,6 +989,8 @@ impl Daemon {
         // Every plan a session's chat proposes is a plan artifact (X114).
         let plans = Arc::new(moonlet_core::artifact::Plans::new(&moonlet_core::paths::home()));
         chats.keep_plans(plans.clone());
+        let refs = Arc::new(moonlet_core::artifact::refs::Refs::new(&moonlet_core::paths::home()));
+        sessions.set_refs(refs.clone());
         // A session's agent gets its design folder there (X101).
         sessions.set_design_store(moonlet_core::design::store::Store::new(&moonlet_core::paths::home()));
         // Profiles' skills too (X33), under the same rule as the default's.
@@ -1136,7 +1161,9 @@ impl Daemon {
             sessions,
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             plans,
+            refs,
             design_locks: Mutex::new(HashMap::new()),
+            ref_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
             hand_edits: Mutex::new(HashMap::new()),
             mine_since: Mutex::new(HashMap::new()),
@@ -1455,6 +1482,199 @@ impl Daemon {
         r
     }
 
+    /// What an artifact's copy is made from (X114): its name, its kind, its
+    /// copy's folder name, what is copied and the version it is.
+    async fn artifact_source(&self, id: &str) -> Result<ArtifactSource, RpcError> {
+        if let Some((_, key)) = moonlet_core::artifact::parse_id(id) {
+            let plan = self.plans.plan(id).map_err(internal)?.ok_or_else(|| RpcError::new("invalid_params", format!("no artifact {id}")))?;
+            let n = plan.latest().map(|v| v.n).ok_or_else(|| RpcError::new("invalid_params", "the plan has no version"))?;
+            let text = self.plans.text(id, n).map_err(internal)?;
+            let name = self.plan_info(&plan).name;
+            return Ok(ArtifactSource { name, kind: "plan", folder: format!("plan-{key}"), from: ArtifactFrom::Plan(text), version: format!("v{n}") });
+        }
+        let r = design_ref_of(id)?;
+        let at = self.locate(&r).await?;
+        let store = self.design.clone();
+        let info = blocking(move || store.design(&at)).await?;
+        Ok(ArtifactSource {
+            name: info.name.clone(),
+            kind: "design",
+            folder: format!("design-{}", info.slug),
+            from: ArtifactFrom::Design(PathBuf::from(&info.path)),
+            // A design's version is that of the copy made of it.
+            version: String::new(),
+        })
+    }
+
+    /// Whether artifact `id` is gone from its home (X114): a plan with no
+    /// record, a design with no folder; not one that cannot be read now.
+    async fn artifact_gone(&self, id: &str) -> bool {
+        if moonlet_core::artifact::parse_id(id).is_some() {
+            return matches!(self.plans.plan(id), Ok(None));
+        }
+        let Ok(r) = design_ref_of(id) else { return false };
+        // The design store's word for a design it does not have.
+        self.locate(&r).await.is_err_and(|e| e.message.contains("no design \""))
+    }
+
+    /// Refers session `session` to artifact `id`, live and read only
+    /// (X114): its copy in the session's reference folder, which the
+    /// session's agents get to read. Returns `{folder, line}`.
+    async fn attach_artifact(&self, session: &str, id: &str) -> Result<Value, RpcError> {
+        self.sessions.session(session).map_err(|_| RpcError::new("invalid_params", format!("no session \"{session}\"")))?;
+        let src = self.artifact_source(id).await?;
+        let folder = self.refs.add(session, id, &src.folder, moonlet_core::paths::now_ms()).map_err(internal)?;
+        let lock = lock_of(&self.ref_locks, &format!("{session}\n{id}"));
+        let held = lock.lock().await;
+        let staged = self.stage_copy(&src, &folder).await?;
+        let version = staged.version.clone();
+        self.commit_copy(staged, &folder).await?;
+        self.refs.see(session, id, &version).map_err(internal)?;
+        drop(held);
+        let dir = self.refs.session_dir(session).display().to_string();
+        for t in self.terminals.list() {
+            if t.session_id.as_deref() == Some(session)
+                && self.chats.is_chat(t.id)
+                && t.agent.as_deref() == Some("claude")
+                && let Err(e) = self.chats.refer_dir(t.id, &dir)
+            {
+                tracing::warn!(chat = t.id, "giving a chat its reference folder failed: {e:#}");
+            }
+        }
+        self.terminals.emit(Message::event(m::EV_ARTIFACT_CHANGED, serde_json::json!({ "id": id })));
+        let line = format!("Artifact \"{}\" ({}, live, read only): {}. It always holds the latest version; it changes only in its home.", src.name, src.kind, folder.display());
+        Ok(serde_json::json!({ "folder": folder, "line": line }))
+    }
+
+    /// Builds artifact `src`'s next copy beside `folder`, with the version
+    /// it holds (X114); [`Self::commit_copy`] puts it in place.
+    async fn stage_copy(&self, src: &ArtifactSource, folder: &Path) -> Result<moonlet_core::artifact::refs::Staged, RpcError> {
+        let folder = folder.to_path_buf();
+        match &src.from {
+            ArtifactFrom::Plan(text) => {
+                let (text, version) = (text.clone(), src.version.clone());
+                blocking(move || moonlet_core::artifact::refs::stage_plan(&folder, &text, &version)).await
+            }
+            ArtifactFrom::Design(path) => {
+                let path = path.clone();
+                blocking(move || moonlet_core::artifact::refs::stage_design(&path, &folder)).await
+            }
+        }
+    }
+
+    async fn commit_copy(&self, staged: moonlet_core::artifact::refs::Staged, folder: &Path) -> Result<(), RpcError> {
+        let folder = folder.to_path_buf();
+        blocking(move || moonlet_core::artifact::refs::commit(&staged, &folder)).await
+    }
+
+    /// Brings artifact `id`'s copies up to date in every session that
+    /// refers to it, and tells each whose agent has not seen this version
+    /// (X114).
+    async fn refresh_artifact(&self, id: &str) {
+        let referrers = self.refs.referrers(id);
+        if referrers.is_empty() {
+            return;
+        }
+        let src = match self.artifact_source(id).await {
+            Ok(s) => s,
+            Err(e) if self.artifact_gone(id).await => {
+                tracing::debug!(id, "an artifact referred to is gone: {e:?}");
+                // Its copy stays as it was; each referrer is told once.
+                for session in referrers {
+                    let Some(r) = self.refs.of(&session).into_iter().find(|r| r.id == id) else { continue };
+                    if self.refs.see(&session, id, GONE).unwrap_or(false) {
+                        let folder = self.refs.session_dir(&session).join(&r.name);
+                        self.chats.tell_session(&session, &format!("The artifact in {} was deleted in its home; that folder keeps its last copy.", folder.display()));
+                    }
+                }
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(id, "reading an artifact referred to failed: {e:?}");
+                return;
+            }
+        };
+        for session in referrers {
+            let lock = lock_of(&self.ref_locks, &format!("{session}\n{id}"));
+            let _held = lock.lock().await;
+            let Some(r) = self.refs.of(&session).into_iter().find(|r| r.id == id) else { continue };
+            let folder = self.refs.session_dir(&session).join(&r.name);
+            // The next copy is built first, so its version is that of what
+            // it holds; the session is told before it is put in place, so a
+            // message sent meanwhile never goes without the line, and its
+            // agent reads the copy only once the message arrives.
+            let staged = match self.stage_copy(&src, &folder).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(id, session, "updating an artifact's copy failed: {e:?}");
+                    continue;
+                }
+            };
+            // A version the session has seen is in its copy already: the
+            // staged one is thrown away, so the copy is never swapped for
+            // nothing while its agent may be reading it.
+            if !self.refs.see(&session, id, &staged.version).unwrap_or(false) {
+                if let Err(e) = blocking(move || moonlet_core::artifact::refs::discard(staged)).await {
+                    tracing::warn!(id, session, "throwing away an unneeded copy failed: {e:?}");
+                }
+                continue;
+            }
+            self.chats.tell_session(&session, &format!("{} changed since you last read it: {}", src.name, folder.display()));
+            if let Err(e) = self.commit_copy(staged, &folder).await {
+                tracing::warn!(id, session, "putting an artifact's copy in place failed: {e:?}");
+                // Not in place, so not seen: the next change copies it again.
+                let _ = self.refs.unsee(&session, id, r.seen.as_deref());
+            }
+        }
+    }
+
+    /// Brings every artifact's copies up to date (X114): a refresh finds a
+    /// copy that holds its latest version already, and leaves it.
+    async fn refresh_every_artifact(&self) {
+        for id in self.refs.ids() {
+            self.refresh_artifact(&id).await;
+        }
+    }
+
+    /// Keeps the copies of artifacts sessions refer to up to date as their
+    /// homes change (X114).
+    pub fn follow_artifacts(self: &Arc<Self>) {
+        let mut events = self.terminals.subscribe_events();
+        let d = self.clone();
+        tokio::spawn(async move {
+            // What changed while moonlet was not running is copied first.
+            d.refresh_every_artifact().await;
+            loop {
+                let msg = match events.recv().await {
+                    Ok(m) => m,
+                    // Changes were missed: every copy is checked again.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        d.refresh_every_artifact().await;
+                        continue;
+                    }
+                    Err(_) => return,
+                };
+                let Message::Event { name, data } = msg else { continue };
+                let id = match name.as_str() {
+                    m::EV_ARTIFACT_CHANGED => data["id"].as_str().map(String::from),
+                    m::EV_DESIGN_CHANGED => {
+                        use moonlet_core::artifact::{DesignHome, design_id};
+                        match (data["design"].as_str(), data["session"].as_str(), data["workspace"].as_str()) {
+                            (Some(slug), Some(session), _) => Some(design_id(&DesignHome::Session(session.into()), slug)),
+                            (Some(slug), None, Some(moonlet_core::design::library::LIBRARY)) => Some(design_id(&DesignHome::Library, slug)),
+                            (Some(slug), None, Some(ws)) => Some(design_id(&DesignHome::Workspace(ws.into()), slug)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(id) = id {
+                    d.refresh_artifact(&id).await;
+                }
+            }
+        });
+    }
+
     /// The artifact methods (X114); `None` for any other.
     fn artifact_call(&self, conn: &Arc<Conn>, method: &str, p: &Value) -> Option<HandlerResult> {
         use moonlet_proto::types::{ArtifactText, ArtifactVersion};
@@ -1555,7 +1775,7 @@ impl Daemon {
             },
             updated_at: plan.updated_at(),
             version: plan.latest().map(|v| v.n),
-            used_by: Vec::new(),
+            used_by: self.refs.referrers(&plan.id()).into_iter().filter(|s| *s != plan.session).collect(),
         }
     }
 
@@ -1596,6 +1816,11 @@ impl Daemon {
         }
         let s = &self.terminals;
         match method {
+            m::ARTIFACT_ATTACH => {
+                app_only(conn, "referring a session to an artifact")?;
+                let r: m::ArtifactAttach = params(p)?;
+                ok(self.attach_artifact(&r.session, &r.id).await?)
+            }
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
                 // Only the host itself: a paired device would end every
@@ -7739,6 +7964,10 @@ impl Daemon {
                 self.sync.archived(archiving);
                 self.jobs.forget(&id);
                 self.reads.clear_grant(&id);
+                // It refers to nothing any more, and its copies go (X114).
+                if let Err(e) = self.refs.forget_session(&id) {
+                    tracing::warn!(session = id, "ending an archived session's references failed: {e:#}");
+                }
                 // Its designs are watched again once it is unarchived.
                 self.prune_session_watches();
                 // Those it kept in moonlet become workspace designs (X101).
@@ -8082,3 +8311,17 @@ fn dirs_home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
+/// What an artifact's copy is made from (X114).
+struct ArtifactSource {
+    name: String,
+    kind: &'static str,
+    folder: String,
+    from: ArtifactFrom,
+    /// The version it is: a plan's `v<n>`, a design's last change.
+    version: String,
+}
+
+enum ArtifactFrom {
+    Plan(String),
+    Design(PathBuf),
+}

@@ -1,4 +1,7 @@
 import { sendOrBring } from "../lib/followStore";
+import { addChip, attachChips, chipsOf, useArtifacts } from "../lib/artifactStore";
+import { planArtifactId, withArtifactLines } from "../lib/artifacts";
+import { ArtifactChipRow } from "./ArtifactChips";
 import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1354,7 +1357,12 @@ function NewChat({ host, sessionId, self, cwd, visible, onMention }: { host: str
       <ContextChips
         label="Add plans:"
         rows={plans}
-        chip={(p) => <ContextChip key={p.key} icon={<ClipboardList size={12} />} title={p.title} onClick={() => void add(planContextFiles(cwd, p))} />}
+        chip={(p) => {
+          // A plan with a file is a plan artifact: it goes as a live reference (X114).
+          const artifact = planArtifactId(sessionId, p.key);
+          const pick = () => (artifact ? addChip(host, sessionId, { host, id: artifact, name: p.title, kind: "plan" }) : void add(planContextFiles(cwd, p)));
+          return <ContextChip key={p.key} icon={<ClipboardList size={12} />} title={p.title} onClick={pick} />;
+        }}
       />
     </div>
   );
@@ -1540,6 +1548,13 @@ export function AgentView({
       setRevise(null);
       const answer = planAnswer("keepPlanning", text);
       if (answer) void call(M.chatPermission, { ask: revise, ...answer });
+      return;
+    }
+    // The artifacts picked go with it: each referred to, its line first (X114).
+    if (wsId && chipsOf(useArtifacts.getState(), host, wsId).length) {
+      void attachChips(host, wsId)
+        .then((lines) => sendUser(withArtifactLines(text, lines), images))
+        .catch(errorToast);
       return;
     }
     void sendUser(text, images).catch(errorToast);
@@ -1911,7 +1926,12 @@ export function AgentView({
           onAttach={() => void attach()}
           onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
-          top={st && <AgentsStrip host={host} id={id} st={st} visible={visible} onSend={(text) => send(text, [])} />}
+          top={
+            <>
+              {wsId && <ArtifactChipRow host={host} session={wsId} />}
+              {st && <AgentsStrip host={host} id={id} st={st} visible={visible} onSend={(text) => send(text, [])} />}
+            </>
+          }
           layout={layout}
           designSlash={designSlash}
           refuse={copyRefusal}
@@ -1929,6 +1949,7 @@ export function AgentView({
               onAgent={(a) => editor.current?.mention(`agent-${a}`)}
               onOpen={refreshMcp}
               mcp={mcpActions}
+              artifacts={wsId ? { onPick: (r) => addChip(host, wsId, { host: r.host, id: r.info.id, name: r.info.name, kind: r.info.kind }) } : undefined}
             />
             {/* Straight to the agent: while a plan is revised, send() answers the plan. */}
             {st?.context && <ContextMeter usage={st.context} showPercent={layout.showPercent} onCompact={() => void call(M.chatSend, { text: "/compact", images: [] })} />}

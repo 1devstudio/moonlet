@@ -1794,6 +1794,7 @@ export const M = {
   artifactSearch: "artifact.search",
   artifactRename: "artifact.rename",
   artifactEdit: "artifact.edit",
+  artifactAttach: "artifact.attach",
 } as const;
 
 export const EV = {

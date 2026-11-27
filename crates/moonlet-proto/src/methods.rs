@@ -477,6 +477,12 @@ pub const ARTIFACT_RENAME: &str = "artifact.rename";
 /// chat with its next message. App only. Params: [`ArtifactEdit`]; the
 /// answer is the new version's number, or `null` when nothing changed.
 pub const ARTIFACT_EDIT: &str = "artifact.edit";
+/// Refers a session to an artifact, live and read only: its copy in the
+/// session's reference folder, given to the session's agents. App only
+/// (entry 7 lets an agent refer its own session). Params:
+/// [`ArtifactAttach`]; the answer is `{folder, line}`, the line the
+/// message sent with it carries.
+pub const ARTIFACT_ATTACH: &str = "artifact.attach";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -2474,6 +2480,12 @@ pub struct ArtifactRead {
     /// The version to read; the latest without one.
     #[serde(default)]
     pub version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactAttach {
+    pub session: String,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

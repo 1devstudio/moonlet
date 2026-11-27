@@ -30,6 +30,7 @@ moonlet is agent-first, but ⌘T and the tab strip's `+` opened a shell. They no
 - [x] A section with nothing in it is not shown.
 - [x] Clicking a chat chip writes `<worktree>/.moonlet/context/chat-<slug>-<terminal id>.md` with a heading and the chat's plain-text transcript (the same text as "Copy transcript"), and mentions it in the input. Clicking it again doesn't add the mention twice.
 - [x] Clicking a plan chip writes `<worktree>/.moonlet/context/plan-<slug>-<hash>.md` (an FNV-1a hash of the plan file's path, or of the text) with the plan's text, and mentions it in the input.
+  - Since [X114](X114-artifacts.md): a plan with a plan file is a plan artifact, so its chip attaches that artifact as a live reference instead of writing a file; only a plan without a plan file is still written here.
 - [x] Two chats or two plans with the same title, or titles with no `a-z`/`0-9`, still get files of their own.
 - [x] `<worktree>/.moonlet/context/.gitignore` holds `*`, so the files never show in Changes and are never committed.
 - [x] `fs.write` creates missing parent folders.

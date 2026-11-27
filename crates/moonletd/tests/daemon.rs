@@ -7163,3 +7163,212 @@ async fn plans_are_found_by_their_name_or_their_text() {
     let none: Vec<ArtifactMatch> = c.request(methods::ARTIFACT_SEARCH, search("fuzzy ranking")).await.unwrap();
     assert!(none.is_empty());
 }
+
+/// X114: what `<worktree>/claude-user` heard, once it has `until`.
+async fn heard_until(worktree: &std::path::Path, until: &str) -> String {
+    let mut heard = String::new();
+    for _ in 0..100 {
+        heard = std::fs::read_to_string(worktree.join("claude-user")).unwrap_or_default();
+        if heard.contains(until) {
+            return heard;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("never heard {until:?}: {heard}");
+}
+
+/// X114: another session refers to a plan live and read only: its agent
+/// gets a read-only copy in the session's reference folder, the plan lists
+/// it as using it, and when the plan changes the copy follows and the
+/// session's next message starts by saying so.
+#[tokio::test]
+async fn a_session_refers_to_another_sessions_plan_live_and_read_only() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let create = |name: &str| serde_json::json!({"project_id": project.id, "name": name, "agent": "claude", "workspace_id": ws});
+    let home: Session = c.request(methods::SESSION_CREATE, create("Add search to the product list")).await.unwrap();
+    let reader: Session = c.request(methods::SESSION_CREATE, create("Search results page")).await.unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": home.terminals[0], "text": "propose a plan"})).await.unwrap();
+    let id = format!("plan:{}:search-plan", home.id);
+    artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id)).await;
+
+    let attached: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let refs = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id);
+    let folder = refs.join("plan-search-plan");
+    assert_eq!(attached["folder"], serde_json::json!(folder));
+    assert_eq!(
+        attached["line"],
+        serde_json::json!(format!("Artifact \"Add search to the product list\" (plan, live, read only): {}. It always holds the latest version; it changes only in its home.", folder.display()))
+    );
+    assert_eq!(std::fs::read_to_string(folder.join("plan.md")).unwrap(), "# Search for the product list\n\nAdd a search box.\n");
+    let real = std::fs::canonicalize(&refs).unwrap().display().to_string();
+    assert!(add_dirs(&mut c, reader.terminals[0]).await.contains(&real));
+    let list = artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == id && !a.used_by.is_empty())).await;
+    assert_eq!(list.iter().find(|a| a.id == id).unwrap().used_by, [reader.id.clone()]);
+
+    // An agent's CLI may not refer a session to it (entry 7 allows its own).
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    assert!(cli.request::<_, serde_json::Value>(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.is_err());
+
+    // The plan changes in its home: the copy follows, and the reader is told.
+    let _: Option<u32> = c.request(methods::ARTIFACT_EDIT, serde_json::json!({"id": id, "text": "# Search for the product list\n\nAdd a search box.\nShow a count."})).await.unwrap();
+    // Up to 10 s: the change is heard through file events, slow under load.
+    for _ in 0..200 {
+        if std::fs::read_to_string(folder.join("plan.md")).unwrap_or_default().contains("Show a count.") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(std::fs::read_to_string(folder.join("plan.md")).unwrap(), "# Search for the product list\n\nAdd a search box.\nShow a count.\n");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "go on"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "go on").await;
+    let changed = heard.find(&format!("Add search to the product list changed since you last read it: {}", folder.display())).expect(&heard);
+    assert!(changed < heard.find("go on").unwrap(), "{heard}");
+}
+
+/// X114: a reference reaches the session's chats started after it; a
+/// referred design that is deleted keeps its last copy and is told once;
+/// and the session's references end when it is archived.
+#[tokio::test]
+async fn a_reference_reaches_later_chats_says_once_its_artifact_was_deleted_and_ends_with_its_session() {
+    use moonlet_proto::types::{Session, TerminalInfo};
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let refs = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id);
+    let folder = refs.join("design-settings-page");
+
+    // A chat started in the session afterwards reads the references too.
+    let later: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({"cwd": "", "session_id": reader.id, "kind": "agent", "agent": "claude", "chat": true}))
+        .await
+        .unwrap();
+    let real = std::fs::canonicalize(&refs).unwrap().display().to_string();
+    assert!(add_dirs(&mut c, later.id).await.contains(&real));
+
+    // The design is deleted: its copy stays, and the next message says so, once.
+    let _: bool = c.request(methods::DESIGN_REMOVE, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let gone = format!("The artifact in {} was deleted in its home; that folder keeps its last copy.", folder.display());
+    let mut heard = String::new();
+    for i in 0..200 {
+        let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": format!("go on {i}")})).await.unwrap();
+        heard = heard_until(std::path::Path::new(&reader.path), &format!("go on {i}")).await;
+        if heard.contains(&gone) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(heard.contains(&gone), "{heard}");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "last"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "last").await;
+    assert_eq!(heard.matches(&gone).count(), 1, "{heard}");
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v1</p>");
+
+    // Archived, the session refers to nothing, and its copies are gone.
+    let _: serde_json::Value = c.request(methods::SESSION_ARCHIVE, serde_json::json!({"id": reader.id})).await.unwrap();
+    assert!(!refs.exists());
+    assert!(!d.home.path().join(".moonlet/artifacts/refs").join(format!("{}.toml", reader.id)).exists());
+}
+
+/// X114: a design changed while moonlet was not running is copied again
+/// once it starts, and the referring session is told.
+#[tokio::test]
+async fn a_design_changed_while_moonlet_was_stopped_is_copied_again_at_start() {
+    use moonlet_proto::types::Session;
+    let mut d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+    let _: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let folder = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id).join("design-settings-page");
+    drop(c);
+
+    d.stop();
+    std::fs::write(design.join("pages/index.html"), "<p>v2</p>").unwrap();
+    d.start_again().await;
+
+    for _ in 0..200 {
+        if std::fs::read_to_string(folder.join("pages/index.html")).unwrap_or_default() == "<p>v2</p>" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v2</p>");
+    let mut c = d.client().await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "go on"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "go on").await;
+    assert!(heard.contains(&format!("Settings page changed since you last read it: {}", folder.display())), "{heard}");
+}
+
+/// X114: a session refers to a workspace design: its pages are copied read
+/// only into the session's reference folder, and a page changed in the
+/// design is changed in the copy and told with the session's next message.
+#[tokio::test]
+async fn a_session_refers_to_a_workspace_design_and_follows_its_pages() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>v1</p>").unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let id = format!("design:workspace:{ws}:settings-page");
+
+    let attached: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": id})).await.unwrap();
+    let folder = d.home.path().join(".moonlet/artifacts/refs").join(&reader.id).join("design-settings-page");
+    assert_eq!(attached["folder"], serde_json::json!(folder));
+    assert!(attached["line"].as_str().unwrap().starts_with("Artifact \"Settings page\" (design, live, read only): "));
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v1</p>");
+    assert!(folder.join("design.toml").is_file());
+
+    std::fs::write(design.join("pages/index.html"), "<p>v2</p>").unwrap();
+    // Up to 10 s: the change is heard through file events, slow under load.
+    for _ in 0..200 {
+        if std::fs::read_to_string(folder.join("pages/index.html")).unwrap_or_default() == "<p>v2</p>" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>v2</p>");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": reader.terminals[0], "text": "go on"})).await.unwrap();
+    let heard = heard_until(std::path::Path::new(&reader.path), "go on").await;
+    assert!(heard.contains(&format!("Settings page changed since you last read it: {}", folder.display())), "{heard}");
+
+    // A merged design is read from its project, not referred to.
+    let refused = c.request::<_, serde_json::Value>(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": "design:project:p1:x"})).await;
+    assert!(refused.is_err_and(|e| e.to_string().starts_with("invalid_params")));
+}

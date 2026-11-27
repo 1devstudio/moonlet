@@ -175,3 +175,21 @@ export function unreachableLine(hosts: Record<string, { label: string; status: s
   if (!away.length) return null;
   return `Not listed from ${away.join(", ")}: ${away.length === 1 ? "it" : "they"} can't be reached`;
 }
+
+/** A plan's artifact id from its plan file (X114), as the daemon keys it:
+ *  the file's name without `.md`, only letters, digits, `_` and `-`. None
+ *  for a plan without a file. */
+export function planArtifactId(session: string, planFile: string | null | undefined): string | null {
+  if (!planFile || !planFile.startsWith("/") || /\n/.test(planFile)) return null;
+  const name = planFile.slice(planFile.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  return stem ? `plan:${session}:${stem.replace(/[^A-Za-z0-9_-]/gu, "-")}` : null;
+}
+
+/** The message sent with artifacts attached: one line per artifact, in the
+ *  order attached, then what the user typed. */
+export function withArtifactLines(text: string, lines: string[]): string {
+  if (!lines.length) return text;
+  return text.trim() ? `${lines.join("\n")}\n\n${text}` : lines.join("\n");
+}
