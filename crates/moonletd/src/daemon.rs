@@ -4963,8 +4963,14 @@ impl Daemon {
                                 delete_branch: plan.delete_branch,
                                 delete_remote: plan.delete_remote,
                             };
+                            // Recorded first, so the change that archives it
+                            // already says why: the app's toast reads both at once.
+                            let archived = record(AutoArchiveState::Archived, String::new(), plan.pr, plan.merged);
+                            if let Err(e) = self.sessions.set_auto_archive(&s.id, archived.clone()) {
+                                tracing::warn!(session = %s.id, "cannot record its archive: {e:#}");
+                            }
                             match self.archive_session(req).await {
-                                Ok(_) => Some(record(AutoArchiveState::Archived, String::new(), plan.pr, plan.merged)),
+                                Ok(_) => Some(archived),
                                 Err(e) => Some(record(AutoArchiveState::Failed, format!("{e:#}"), plan.pr, plan.merged)),
                             }
                         }
