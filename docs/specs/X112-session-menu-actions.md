@@ -24,14 +24,15 @@ The work ships in three parts: the menu items that reuse existing actions (part 
 
 ### The menu (part 1)
 
-- [ ] The menu of a session lists, in groups: **Open**, **Open PR** (only with a PR), **Open in ›**; **Pin to top** or **Unpin from top**, **Mark as read** or **Mark as unread**, **Rename**, **Fork**; **Move to workspace ›**, **Move under ›**; **Link to task…** (as before), **Keep in sync** (as before); the Run only on… items (X73, as before); **Archive**. (`lib/sidebar.test.ts` lists a session's actions in groups; offers Open PR only with a PR)
-- [ ] A copy of another member's session (X88) keeps its short menu: **Open**, and **Archive** while its member is reachable. (`lib/sidebar.test.ts` a copy of another member's session keeps Open and Archive)
+- [ ] The menu of a session lists, in groups: **Open**, **Open PR** (only with a PR), **Open in ›**; **Pin to top** or **Unpin from top**, **Mark as read** or **Mark as unread**, **Rename**, **Fork**; **Move to workspace ›**, **Move under ›**; **Link to task…** (as before), **Keep in sync** (as before); the Run only on… items (X73, as before); **Archive**. (`lib/sidebar.test.ts` lists a session's actions in groups; offers Open PR only with a PR; `e2e/specs/session-menu.e2e.ts` lists the session's actions)
+- [ ] A copy of another member's session (X88) keeps its short menu: **Open**, and **Archive** while its member is reachable. (`lib/sidebar.test.ts` offers only Open for a session another member runs, and Archive while that member is reachable (X88))
 - [ ] An item with a keyboard shortcut that does the same to that row shows it on the right: **Open** shows ⌘1 to ⌘9 for the first nine sessions in sidebar order, the keys that open them. (`lib/sidebar.test.ts` Open shows the ⌘ key that opens the row, for the first nine)
-- [ ] **Open PR** opens the session's pull request in the browser, as the header's PR button does.
-- [ ] **Open in ›** lists the same apps as the header's ⋯ menu and opens the session's worktree, or its copy on this Mac when kept in sync (X60), in the picked one.
-- [ ] **Mark as unread** marks the session's first agent tab unread ("done"), so the row turns bold and the attention dot shows, without opening anything. It is offered when no tab of the session is unread and the session has an agent tab; otherwise **Mark as read** is offered, and does what it does for a selection (X106). (`lib/workspaceStore.test.ts` marks a session's first agent tab unread without opening it; `lib/sidebar.test.ts` offers Mark as unread on a read session with an agent and Mark as read on an unread one)
+- [ ] **Open PR** opens the session's pull request in the browser, as the header's PR button does. (`lib/sidebar.test.ts` offers Open PR only with a PR; the click is the header's `openUrl` call)
+- [ ] **Open in ›** lists the same apps as the header's ⋯ menu and opens the session's worktree, or its copy on this Mac when kept in sync (X60), in the picked one. (`lib/openIn.test.ts` opens a session kept in sync from its copy, with every app on this Mac; opens any other session where it is, with its host's apps)
+- [ ] **Mark as unread** marks the session's first agent tab unread ("done"), so the row turns bold and the attention dot shows, without opening anything. **Mark as read** is offered instead while a tab of the session is unread, and does what it does for a selection (X106). A read session with no agent tab offers neither. (`lib/workspaceStore.test.ts` marks a session's first agent tab unread without opening it; `lib/sidebar.test.ts` offers Mark as unread on a read session with an agent and Mark as read on an unread one)
 - [ ] **Rename** starts the row's inline rename, as a double-click does. (`e2e/specs/session-menu.e2e.ts` renames a session from its menu)
-- [ ] **Move to workspace ›** lists the workspaces as it does for a selection of that one session (X106).
+- [ ] **Move to workspace ›** lists the workspaces as it does for a selection of that one session (X106). (`lib/sessionPick.test.ts` move targets are the workspaces holding every picked project; a picked session another Mac runs disables Move to)
+- [ ] The menu opens at the pointer, moved up to fit the window. Taller than the window, it scrolls, and a submenu opens beside it, unclipped, on the right or, without room there, on the left. (`lib/menuPlace.test.ts` opens a right-click menu at the pointer, moved up to fit the window, and never above its top margin; opens a submenu right of its item, or left of it when the window has no room on the right)
 
 ### Pin to top and Move under (part 2)
 
@@ -52,7 +53,7 @@ The work ships in three parts: the menu items that reuse existing actions (part 
 
 ## UI
 
-The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the left, shortcuts in the hint column on the right, dividers between groups. A nested row uses the existing `nested` row style.
+The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the left, shortcuts in the hint column on the right, dividers between groups. **Archive** is red, as a menu's dangerous actions are, in a row's menu and in the menu of picked rows. A nested row uses the existing `nested` row style. Rename being an item, the menu's "Double-click a session to rename it" note goes.
 
 ## Protocol and RPCs
 
