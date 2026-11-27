@@ -608,6 +608,25 @@ mod tests {
         assert!(rules.contains("A session design's page links its own pinned copy, `../system/styles.css`"), "{rules}");
     }
 
+    /// X114: the moonlet skill tells an agent how to find the workspace's
+    /// plans and designs and refer its session to one.
+    #[test]
+    fn the_moonlet_skill_tells_how_to_find_and_attach_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        install(&p, Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"), true, true).unwrap();
+        let skill = std::fs::read_to_string(&p.claude_skill).unwrap();
+        for said in [
+            "\"$MOONLET_BIN\" artifact ls",
+            "\"$MOONLET_BIN\" artifact ls --search \"<words>\"",
+            "\"$MOONLET_BIN\" artifact show <id>",
+            "\"$MOONLET_BIN\" artifact attach <id>",
+            "never edit it there",
+        ] {
+            assert!(skill.contains(said), "{said}");
+        }
+    }
+
     /// X64: the moonlet-design skill and its card formats install, report and
     /// uninstall with the moonlet skill.
     #[test]

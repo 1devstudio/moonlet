@@ -7625,3 +7625,51 @@ async fn archiving_a_session_makes_its_worktree_designs_workspace_designs_and_re
     assert_eq!(used.get(&format!("design:workspace:{ws}:{}", kept["slug"].as_str().unwrap())), Some(&vec![reader.id.clone()]));
     assert_eq!(used.get(&id), None);
 }
+
+/// X114: an agent's CLI lists, searches and reads the workspace's artifacts,
+/// designs too when it asks, and refers its own session to one, never
+/// another session.
+#[tokio::test]
+async fn an_agents_cli_finds_artifacts_and_refers_its_own_session_to_one() {
+    use moonlet_proto::types::{ArtifactInfo, ArtifactText, Session};
+    let d = fake_claude_daemon(FAKE_PLANNER).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let home: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Add search to the product list", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let reader: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": home.terminals[0], "text": "propose a plan"})).await.unwrap();
+    let plan = format!("plan:{}:search-plan", home.id);
+    artifacts_until(&mut c, &ws, |l| l.iter().any(|a| a.id == plan)).await;
+
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let list: Vec<ArtifactInfo> = cli.request(methods::ARTIFACT_LIST, serde_json::json!({"workspace": ws, "designs": true})).await.unwrap();
+    let mut found: Vec<(String, String)> = list.iter().map(|a| (a.kind.clone(), a.id.clone())).collect();
+    found.sort();
+    assert_eq!(found, [("design".to_string(), format!("design:workspace:{ws}:settings-page")), ("plan".to_string(), plan.clone())]);
+    let read: ArtifactText = cli.request(methods::ARTIFACT_READ, serde_json::json!({"id": plan})).await.unwrap();
+    assert_eq!(read.text.as_deref(), Some("# Search for the product list\n\nAdd a search box.\n"));
+    let found: Vec<serde_json::Value> = cli.request(methods::ARTIFACT_SEARCH, serde_json::json!({"workspace": ws, "query": "search box"})).await.unwrap();
+    assert_eq!(found.len(), 1);
+
+    // Its own session, by its terminal: referred.
+    let attached: serde_json::Value = cli
+        .request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": plan, "terminal": reader.terminals[0]}))
+        .await
+        .unwrap();
+    assert!(attached["folder"].as_str().unwrap().ends_with(&format!("{}/plan-search-plan", reader.id)));
+    // Another session's terminal, or none: refused.
+    for terminal in [serde_json::json!(home.terminals[0]), serde_json::Value::Null] {
+        let refused = cli.request::<_, serde_json::Value>(methods::ARTIFACT_ATTACH, serde_json::json!({"session": reader.id, "id": plan, "terminal": terminal})).await;
+        assert!(refused.is_err_and(|e| e.to_string().starts_with("forbidden")), "{terminal}");
+    }
+}

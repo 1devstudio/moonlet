@@ -4,6 +4,7 @@
 //! `moonlet ls`, `moonlet pane run` and `moonlet agent start`; agents open sessions
 //! in other projects with `moonlet session new` (X22).
 
+mod artifact;
 mod design;
 mod exec;
 mod hook;
@@ -143,6 +144,12 @@ enum Cmd {
         #[command(subcommand)]
         action: DesignAction,
     },
+    /// The workspace's plans and designs (X114): list them, read one, and
+    /// refer your session to one, live and read only.
+    Artifact {
+        #[command(subcommand)]
+        action: ArtifactAction,
+    },
     /// Read the terminals of your session, with the user's approval (X31).
     Term {
         #[command(subcommand)]
@@ -169,6 +176,48 @@ enum WorkerAction {
     /// Remove a cloud machine, once its running commands end; says which
     /// those are.
     Down { name: String },
+}
+
+/// An artifact's kind (X114).
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ArtifactKindArg {
+    Plan,
+    Design,
+}
+
+impl ArtifactKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Design => "design",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum ArtifactAction {
+    /// The workspace's artifacts as JSON, newest change first.
+    Ls {
+        /// Only plans or only designs; both without it.
+        #[arg(long, value_enum)]
+        kind: Option<ArtifactKindArg>,
+        /// Only those whose name, or a plan's text, has this.
+        #[arg(long)]
+        search: Option<String>,
+        /// The workspace; the session's without it.
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// One artifact: a plan's latest text; a design as JSON.
+    Show {
+        id: String,
+        /// The design's workspace; the session's without it.
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Refer this session to an artifact: prints the folder of its read-only
+    /// copy, which always holds its latest version, and the line to read it by.
+    Attach { id: String },
 }
 
 #[derive(Subcommand)]
@@ -826,6 +875,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             }
         }
         Cmd::Design { action } => design_cmd(&socket, action).await?,
+        Cmd::Artifact { action } => artifact_cmd(&socket, action).await?,
         Cmd::Project {
             action: ProjectAction::Ls { json },
         } => {
@@ -1051,6 +1101,51 @@ fn own_system() -> Result<(String, String)> {
         Some(design::Located { workspace, system: Some(system), .. }) => Ok((workspace, system)),
         _ => bail!("no design system: run inside its folder"),
     }
+}
+
+async fn artifact_cmd(socket: &std::path::Path, action: ArtifactAction) -> Result<()> {
+    let mut c = connect(socket).await?;
+    match action {
+        ArtifactAction::Ls { kind, search, workspace } => {
+            let workspace = match workspace {
+                Some(w) => w,
+                None => here_session(&mut c).await.ok().and_then(|(s, _)| s.workspace_id).context("no workspace: run in a session's terminal or pass --workspace")?,
+            };
+            let list: Vec<moonlet_proto::types::ArtifactInfo> = c.request(methods::ARTIFACT_LIST, serde_json::json!({"workspace": workspace, "designs": true})).await?;
+            let found: Option<Vec<String>> = match search.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+                Some(q) => {
+                    let plans: Vec<moonlet_proto::types::ArtifactMatch> = c.request(methods::ARTIFACT_SEARCH, serde_json::json!({"workspace": workspace, "query": q})).await?;
+                    Some(plans.into_iter().map(|m| m.id).collect())
+                }
+                None => None,
+            };
+            let shown = artifact::shown(list, kind.map(ArtifactKindArg::as_str), search.as_deref(), found.as_deref());
+            println!("{}", serde_json::to_string_pretty(&shown)?);
+        }
+        ArtifactAction::Show { id, workspace } => {
+            if moonlet_core::artifact::parse_id(&id).is_some() {
+                let read: moonlet_proto::types::ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await?;
+                print!("{}", read.text.unwrap_or_default());
+            } else {
+                let workspace = match workspace {
+                    Some(w) => w,
+                    None => {
+                        let (session, _) = here_session(&mut c).await.map_err(|_| anyhow::anyhow!("no workspace: run in a session's terminal or pass --workspace"))?;
+                        session.workspace_id.context("this session is in no workspace")?
+                    }
+                };
+                let list: Vec<moonlet_proto::types::ArtifactInfo> = c.request(methods::ARTIFACT_LIST, serde_json::json!({"workspace": workspace, "designs": true})).await?;
+                let found = list.into_iter().find(|a| a.id == id).with_context(|| format!("no artifact {id} in this workspace"))?;
+                println!("{}", serde_json::to_string_pretty(&found)?);
+            }
+        }
+        ArtifactAction::Attach { id } => {
+            let (session, terminal) = here_session(&mut c).await.map_err(|_| anyhow::anyhow!("attach runs in a moonlet session's terminal"))?;
+            let out: serde_json::Value = c.request(methods::ARTIFACT_ATTACH, serde_json::json!({"session": session.id, "id": id, "terminal": terminal})).await?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+    }
+    Ok(())
 }
 
 async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()> {

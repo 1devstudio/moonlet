@@ -725,3 +725,63 @@ async fn a_sessions_agent_makes_a_session_design_with_design_new_here() {
     let nowhere = d.moonlet(&worktree, &["design", "new", "--here", "Checkout"]);
     assert!(String::from_utf8_lossy(&nowhere.stderr).contains("--here runs in a moonlet session"), "{}", String::from_utf8_lossy(&nowhere.stderr));
 }
+
+/// X114: a session's agent lists the workspace's artifacts with `moonlet
+/// artifact ls`, reads one with `show`, and refers its own session to one
+/// with `attach`, which prints the folder of its read-only copy and the
+/// line to read it by.
+#[tokio::test]
+async fn a_sessions_agent_finds_and_attaches_artifacts_with_moonlet_artifact() {
+    use moonlet_proto::types::{Section, Session};
+    let d = Daemon::with_fake_claude().await;
+    let ws = workspace_with_system(&d).await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# shop\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
+    let sec: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": ws, "name": "Shop"})).await.unwrap();
+    let project: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": sec.id, "path": repo})).await.unwrap();
+    let made: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = PathBuf::from(made["path"].as_str().unwrap());
+    std::fs::create_dir_all(design.join("pages")).unwrap();
+    std::fs::write(design.join("pages/index.html"), "<p>settings</p>").unwrap();
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Search results page", "agent": "none", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let (worktree, terminal) = (PathBuf::from(&session.path), session.terminals[0]);
+    let id = format!("design:workspace:{ws}:settings-page");
+
+    let list = json(&d.moonlet_as(&worktree, terminal, &["artifact", "ls"]));
+    let ids: Vec<&str> = list.as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, [id.as_str()]);
+    let plans = json(&d.moonlet_as(&worktree, terminal, &["artifact", "ls", "--kind", "plan"]));
+    assert_eq!(plans, serde_json::json!([]));
+
+    let shown = json(&d.moonlet_as(&worktree, terminal, &["artifact", "show", &id]));
+    assert_eq!((&shown["name"], &shown["kind"]), (&serde_json::json!("Settings page"), &serde_json::json!("design")));
+
+    let attached = json(&d.moonlet_as(&worktree, terminal, &["artifact", "attach", &id]));
+    let folder = PathBuf::from(attached["folder"].as_str().unwrap());
+    assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>settings</p>");
+    assert!(attached["line"].as_str().unwrap().starts_with("Artifact \"Settings page\" (design, live, read only): "));
+
+    // Outside a session, a design is shown from the workspace named.
+    let named = json(&d.moonlet(d.home.path(), &["artifact", "show", &id, "--workspace", &ws]));
+    assert_eq!(named["id"], serde_json::json!(id));
+    // A kind that is none is refused, naming the two.
+    let wrong = d.moonlet_as(&worktree, terminal, &["artifact", "ls", "--kind", "plans"]);
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("possible values: plan, design"), "{}", String::from_utf8_lossy(&wrong.stderr));
+
+    // Outside a session, attach says what it needs.
+    let lost = d.moonlet(d.home.path(), &["artifact", "attach", &id]);
+    assert!(!lost.status.success());
+    assert!(String::from_utf8_lossy(&lost.stderr).contains("session"), "{}", String::from_utf8_lossy(&lost.stderr));
+}

@@ -522,6 +522,11 @@ const LOCAL_METHODS: &[&str] = &[
     m::DESIGN_CHECK,
     m::DESIGN_SNAP,
     m::DESIGN_REMOVE,
+    // `moonlet artifact …` (X114): attach for the agent's own session only.
+    m::ARTIFACT_LIST,
+    m::ARTIFACT_SEARCH,
+    m::ARTIFACT_READ,
+    m::ARTIFACT_ATTACH,
     // This host's lists, read by scripts through `moonlet rpc`.
     m::WORKSPACE_LIST,
     m::REPO_LIST,
@@ -786,6 +791,11 @@ struct DesignCopy {
     workspace: String,
     from: String,
     to: String,
+}
+
+/// Artifacts as they are listed (X114): newest change first, by id on a tie.
+fn newest_first(list: &mut [moonlet_proto::types::ArtifactInfo]) {
+    list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
 }
 
 /// Refuses the library as where an artifact is copied or moved (X114): a
@@ -1754,10 +1764,6 @@ impl Daemon {
         let p = p.clone();
         let not_found = |e: anyhow::Error| RpcError::new("not_found", format!("{e:#}"));
         Some(match method {
-            m::ARTIFACT_LIST => (|| {
-                let r: m::ArtifactWorkspace = params(p)?;
-                ok(self.artifacts_of(&r.workspace))
-            })(),
             m::ARTIFACT_READ => (|| {
                 let r: m::ArtifactRead = params(p)?;
                 let plan = self.plans.plan(&r.id).map_err(internal)?.ok_or_else(|| RpcError::new("not_found", format!("no artifact {}", r.id)))?;
@@ -1824,8 +1830,46 @@ impl Daemon {
             *per_session.entry(p.session.as_str()).or_default() += 1;
         }
         let mut list: Vec<_> = plans.iter().map(|p| self.plan_info_of(p, per_session.get(p.session.as_str()).copied().unwrap_or(0) > 1)).collect();
-        list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+        newest_first(&mut list);
         list
+    }
+
+    /// A workspace's designs as artifacts (X114), for the CLI: its own, the
+    /// shared ones and its sessions'.
+    async fn design_artifacts(&self, workspace: &str) -> Result<Vec<moonlet_proto::types::ArtifactInfo>, RpcError> {
+        use moonlet_proto::types::{ArtifactHome, ArtifactInfo, DesignKind};
+        let (store, ws) = (self.design.clone(), workspace.to_string());
+        let mut designs = blocking(move || {
+            let mut designs = store.designs(&ws)?;
+            designs.extend(store.designs(LIBRARY)?.into_iter().map(|d| moonlet_proto::types::DesignInfo { shared: true, ..d }));
+            Ok(designs)
+        })
+        .await?;
+        designs.extend(self.session_designs_of_workspace(workspace).await);
+        let used = self.refs.all();
+        Ok(designs
+            .into_iter()
+            .filter(|d| d.kind != DesignKind::Project)
+            .map(|d| {
+                use moonlet_core::artifact::{DesignHome, design_id};
+                let home = match (&d.kind, &d.session, d.shared) {
+                    (DesignKind::Session, Some(s), _) => DesignHome::Session(s.clone()),
+                    (_, _, true) => DesignHome::Library,
+                    _ => DesignHome::Workspace(workspace.to_string()),
+                };
+                let id = design_id(&home, &d.slug);
+                let used_by = used.get(&id).cloned().unwrap_or_default().into_iter().filter(|s| Some(s) != d.session.as_ref()).collect();
+                ArtifactInfo {
+                    id,
+                    kind: "design".into(),
+                    name: d.name.clone(),
+                    home: ArtifactHome { workspace: Some(workspace.to_string()), session: d.session.clone(), project: d.project.clone(), archived: false },
+                    updated_at: d.updated_at,
+                    version: None,
+                    used_by,
+                }
+            })
+            .collect())
     }
 
     /// How the Artifacts list shows plan `plan` (X114).
@@ -1903,9 +1947,26 @@ impl Daemon {
         }
         let s = &self.terminals;
         match method {
+            m::ARTIFACT_LIST => {
+                let r: m::ArtifactWorkspace = params(p)?;
+                let mut list = self.artifacts_of(&r.workspace);
+                if r.designs {
+                    list.extend(self.design_artifacts(&r.workspace).await?);
+                    newest_first(&mut list);
+                }
+                ok(list)
+            }
             m::ARTIFACT_ATTACH => {
-                app_only(conn, "referring a session to an artifact")?;
                 let r: m::ArtifactAttach = params(p)?;
+                // An agent's CLI refers its own session only, named by its terminal.
+                if unproven_local(conn) {
+                    let of = r.terminal.and_then(|t| self.terminals.list().into_iter().find(|i| i.id == t)).and_then(|i| i.session_id);
+                    if of.as_deref() != Some(r.session.as_str()) {
+                        return Err(RpcError::new("forbidden", "an agent refers only its own session to an artifact"));
+                    }
+                } else {
+                    app_only(conn, "referring a session to an artifact")?;
+                }
                 ok(self.attach_artifact(&r.session, &r.id).await?)
             }
             m::ARTIFACT_COPY => {
