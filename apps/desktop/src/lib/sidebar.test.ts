@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, openShortcut, menuTop, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, clampSidebarWidth, compact, lastActive, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionGlyph, sessionMenu, openShortcut, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 import { taskGroups } from "./sessionRows";
 
@@ -421,14 +421,6 @@ describe("sessionMenu (X112 actions in a session's menu)", () => {
     expect(marks({ unread: false, agent: true })).toEqual(["mark-unread"]);
     expect(marks({ unread: true, agent: true })).toEqual(["mark-read"]);
     expect(marks({ unread: false, agent: false })).toEqual([]);
-  });
-});
-
-describe("menuTop (X112)", () => {
-  it("opens a right-click menu at the pointer, moved up to fit the window, and never above its top margin", () => {
-    expect(menuTop(200, 300, 900)).toBe(200);
-    expect(menuTop(800, 300, 900)).toBe(592);
-    expect(menuTop(100, 1000, 900)).toBe(8);
   });
 });
 

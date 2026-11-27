@@ -4,9 +4,10 @@ import { create } from "zustand";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { hostsApi, rpc } from "../lib/daemon";
 import { workspaceOpenIn, type OpenTarget } from "../lib/openIn";
+import { menuTop } from "../lib/menuPlace";
 import { copyOffers } from "../lib/centralCopies";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, menuTop, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, connectedHosts, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, openShortcut, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, markRead, markUnread, projKey, pullBaseEverywhere, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { clockLines, notSyncingLine } from "../lib/workspaces";
@@ -944,7 +945,8 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   const openIn = s ? workspaceOpenIn(targets, { kind: kind ?? (host !== "local" ? "ssh" : "local"), host, path: s.path }, copyPath) : null;
   const ctx = { linked: !!s && !!lines[s.id], sources, pr: pr?.url ?? null, unread, agent, openIn };
   const items = bulk ? bulkItems(pickedTargets()) : s ? sessionItems(host, s, ctx, sync) : m.projectId ? projectItems(host, m.projectId, sec) : [];
-  // Kept inside the window by its real height, which grew with X112.
+  // Kept inside the window by its real height, which grew with X112; taller
+  // than the window, it scrolls.
   const box = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(m.y);
   useLayoutEffect(() => {
@@ -953,8 +955,9 @@ function RowContextMenu({ m, onClose }: { m: RowMenuState; onClose: () => void }
   }, [m.y, items.length]);
   return (
     <div
-      className="fixed z-50 w-60 rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
+      className="fixed z-50 max-h-[calc(100vh-16px)] w-60 overflow-y-auto rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl"
       ref={box}
+      data-menu-panel
       style={{ left: Math.min(m.x, window.innerWidth - 250), top }}
       onMouseDown={(e) => e.stopPropagation()}
     >
