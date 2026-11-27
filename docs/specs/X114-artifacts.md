@@ -127,10 +127,12 @@ The design's pages are the reference.
 
 ## Test plan
 
-- Rust (`moonlet-core` `artifact/`): a plan's versions from proposals, approvals, rejections and a restart's kept ask; names from the session, several chats, an unnamed session, a rename; an edit by hand; search over names and text.
-- Rust (`moonletd/tests/daemon.rs`): a fake Claude proposing a plan makes an artifact listed by `artifact.list`; an attached plan's copy changes when the plan does, and the next message starts with the changed line; an agent's CLI may attach to its own session only.
-- Vitest (`lib/artifacts.test.ts`, `lib/atPicker.test.ts`): rows and their home and age lines, search snippets, the picker's sections and keys, the reference line.
-- e2e (`artifacts.e2e.ts`): open Artifacts, find a plan by its text, attach it in another session.
+- Rust (`crates/moonlet-core/src/artifact/`): a plan's versions from proposals, approvals, rejections and a restart's kept ask; names from the session, several chats, an unnamed session, a rename; an edit by hand; search over names and text; design ids; references, their staged copies and versions.
+- Rust (`crates/moonlet-core/src/chat/runtime.rs`): told lines before the next message and with a kept question's answer.
+- Rust (`crates/moonletd/tests/daemon.rs`): a fake Claude proposing a plan makes an artifact listed by `artifact.list`; an attached plan's or design's copy changes when it does, and the next message starts with the changed line; later chats, deletes, restarts and archives; copy, move, sharing and the archive rule; an agent's CLI may attach to its own session only.
+- Rust (`crates/moonlet-cli/`): `moonlet artifact ls`, `show` and `attach`.
+- Vitest (`apps/desktop/src/lib/artifacts.test.ts`, `atPicker.test.ts`, `artifactStore.test.ts`): rows and their home and age lines, search snippets, the picker's sections and keys, the chips, the reference line, starting a session and moving.
+- e2e (`apps/desktop/e2e/specs/artifacts.e2e.ts`): open Artifacts, find a plan by its text, attach it in another session, start a session from it, copy it to another workspace.
 
 ## Delivery
 
