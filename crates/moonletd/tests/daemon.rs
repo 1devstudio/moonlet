@@ -7214,7 +7214,8 @@ async fn a_session_refers_to_another_sessions_plan_live_and_read_only() {
 
     // The plan changes in its home: the copy follows, and the reader is told.
     let _: Option<u32> = c.request(methods::ARTIFACT_EDIT, serde_json::json!({"id": id, "text": "# Search for the product list\n\nAdd a search box.\nShow a count."})).await.unwrap();
-    for _ in 0..40 {
+    // Up to 10 s: the change is heard through file events, slow under load.
+    for _ in 0..200 {
         if std::fs::read_to_string(folder.join("plan.md")).unwrap_or_default().contains("Show a count.") {
             break;
         }
@@ -7257,7 +7258,8 @@ async fn a_session_refers_to_a_workspace_design_and_follows_its_pages() {
     assert!(folder.join("design.toml").is_file());
 
     std::fs::write(design.join("pages/index.html"), "<p>v2</p>").unwrap();
-    for _ in 0..60 {
+    // Up to 10 s: the change is heard through file events, slow under load.
+    for _ in 0..200 {
         if std::fs::read_to_string(folder.join("pages/index.html")).unwrap_or_default() == "<p>v2</p>" {
             break;
         }
