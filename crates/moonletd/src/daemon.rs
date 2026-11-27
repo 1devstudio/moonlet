@@ -1563,9 +1563,16 @@ impl Daemon {
                     continue;
                 }
             };
-            if self.refs.see(&session, id, &staged.version).unwrap_or(false) {
-                self.chats.tell_session(&session, &format!("{} changed since you last read it: {}", src.name, folder.display()));
+            // A version the session has seen is in its copy already: the
+            // staged one is thrown away, so the copy is never swapped for
+            // nothing while its agent may be reading it.
+            if !self.refs.see(&session, id, &staged.version).unwrap_or(false) {
+                if let Err(e) = blocking(move || moonlet_core::artifact::refs::discard(staged)).await {
+                    tracing::warn!(id, session, "throwing away an unneeded copy failed: {e:?}");
+                }
+                continue;
             }
+            self.chats.tell_session(&session, &format!("{} changed since you last read it: {}", src.name, folder.display()));
             if let Err(e) = self.commit_copy(staged, &folder).await {
                 tracing::warn!(id, session, "putting an artifact's copy in place failed: {e:?}");
             }

@@ -237,9 +237,26 @@ fn fresh(folder: &Path) -> Result<PathBuf> {
 
 /// Puts the copy built in `next` in place of `folder`.
 fn swap(next: &Path, folder: &Path) -> Result<()> {
-    remove_tree(folder)?;
+    // The old copy goes aside first, so the folder is missing only between
+    // two renames, never while a copy is deleted.
+    let old = folder.with_file_name(format!(
+        ".{}.old",
+        folder
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default()
+    ));
+    remove_tree(&old)?;
+    if folder.exists() {
+        std::fs::rename(folder, &old)?;
+    }
     std::fs::rename(next, folder)?;
-    Ok(())
+    remove_tree(&old)
+}
+
+/// Throws a staged copy away: the copy in place already holds its version.
+pub fn discard(staged: Staged) -> Result<()> {
+    remove_tree(&staged.next)
 }
 
 /// Removes `dir` and everything in it, read-only files too.
