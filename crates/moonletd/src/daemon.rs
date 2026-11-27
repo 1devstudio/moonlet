@@ -4935,7 +4935,7 @@ impl Daemon {
     }
 
     async fn auto_fix_step(&self, s: &moonlet_proto::types::Session, pr: &moonlet_proto::types::PullRequest) {
-        use moonlet_core::autofix::{ChecksStep, Record, checks_step, covered, review_message};
+        use moonlet_core::autofix::{ChecksStep, Record, after_step, checks_step, covered, review_message};
         let unit = std::env::var("MOONLET_TEST_PR_WATCH_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000u64);
         let now = now_ms();
         let mut rec = self
@@ -4946,6 +4946,11 @@ impl Daemon {
                 }
             })
             .expect("just set");
+        // What the step started from: the user may turn it off meanwhile.
+        let start = rec.clone();
+        let save = |rec: &Record| self.autofix.update(&s.id, |r| *r = Some(after_step(r.as_ref(), &start, rec.clone()))).expect("just set");
+        // Turned off while the step read GitHub: send nothing.
+        let still_on = || self.autofix.get(&s.id).is_none_or(|r| r.on != Some(false));
         let settings = git_settings::load(&git_settings::path());
         let show = |rec: &Record, on: bool, note: &str, last: Option<(String, u64)>| moonlet_proto::types::AutoFix {
             pr: rec.pr,
@@ -4984,18 +4989,19 @@ impl Daemon {
         }
         // Only the user's own PRs: a fork's PR can share the branch's name.
         let Some(viewer) = viewer.filter(|v| rec.author.as_deref() == Some(v.as_str())) else {
-            self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
+            let rec = save(&rec);
             let note = if rec.author.is_some() { "Only your own pull requests are auto-fixed" } else { "" };
             let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, note, None)));
             return;
         };
         let Some(chat) = self.session_claude_chat(&s.id) else {
-            self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
+            let rec = save(&rec);
             let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, "Needs a Claude chat in this session", None)));
             return;
         };
         let mut last = None;
         match checks_step(&mut rec, pr) {
+            ChecksStep::Send(_) if !still_on() => {}
             ChecksStep::Send(text) => match self.chats.send(chat, &text, &[]) {
                 Ok(()) => last = Some(("checks".to_string(), now)),
                 Err(e) => tracing::warn!(session = %s.id, "auto-fix could not send: {e:#}"),
@@ -5006,7 +5012,7 @@ impl Daemon {
             match review_message(pr.number, view, lines, &rec.sent, &viewer) {
                 // Those arriving together go as one message.
                 Some(_) if rec.new_since.is_none() => rec.new_since = Some(now),
-                Some((text, ids)) if now.saturating_sub(rec.new_since.unwrap_or(now)) >= 2 * unit => match self.chats.send(chat, &text, &[]) {
+                Some((text, ids)) if now.saturating_sub(rec.new_since.unwrap_or(now)) >= 2 * unit && still_on() => match self.chats.send(chat, &text, &[]) {
                     Ok(()) => {
                         rec.sent.extend(ids);
                         rec.new_since = None;
@@ -5022,8 +5028,8 @@ impl Daemon {
                 }
             }
         }
-        self.autofix.update(&s.id, |r| *r = Some(rec.clone()));
-        let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, true, "", last)));
+        let rec = save(&rec);
+        let _ = self.sessions.set_auto_fix(&s.id, Some(show(&rec, rec.on != Some(false), "", last)));
     }
 
     /// The Claude chat of session `id` that last worked (X117).
