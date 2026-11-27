@@ -7,7 +7,7 @@ import { designsOf, loadDesigns, projectDesignsIn, sessionDesignsIn, type useDes
 import { LIBRARY } from "./designLibrary";
 import type { Design } from "./protocol";
 import { EV, M, type ArtifactInfo, type ArtifactMatch } from "./protocol";
-import type { ArtifactKind, ListInput } from "./artifacts";
+import { withArtifactLines, type ArtifactKind, type ListInput } from "./artifacts";
 
 /** An artifact picked to go with a session's next message (X114). */
 export interface ArtifactChip {
@@ -139,4 +139,20 @@ export function workspaceListInput(
     projectName: (host, id) => (projects[host] ?? []).find((p) => p.id === id)?.name,
     now: Date.now(),
   };
+}
+
+/** A session started from an artifact (X114): referred to it, then its
+ *  first message, the artifact's line before `text`, to its agent's chat
+ *  once that is there. */
+export async function startWithArtifact(host: string, session: string, chip: ArtifactChip, text: string): Promise<void> {
+  if (chip.host !== host) throw new Error(`${chip.name} is on another host: a session refers to the artifacts of its own host for now`);
+  const { line } = await rpc<{ line: string }>(host, M.artifactAttach, { session, id: chip.id });
+  let chat: number | undefined;
+  for (let i = 0; i < 50 && chat === undefined; i++) {
+    const terms = await rpc<{ id: number; chat?: boolean; session_id?: string }[]>(host, M.terminalList, {});
+    chat = terms.find((t) => t.chat && t.session_id === session)?.id;
+    if (chat === undefined) await new Promise((r) => setTimeout(r, 200));
+  }
+  if (chat === undefined) throw new Error("The session's agent did not start, so the artifact was not sent to it");
+  await rpc(host, M.chatSend, { id: chat, text: withArtifactLines(text, [line]), images: [] });
 }

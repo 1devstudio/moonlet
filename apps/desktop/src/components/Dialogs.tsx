@@ -208,7 +208,7 @@ export function Dialogs() {
     case "new-workspace":
       return <NewWorkspaceDialog />;
     case "new-session":
-      return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} task={dialog.task} worktree={dialog.worktree} design={dialog.design} />;
+      return <Composer host={dialog.host} project={dialog.project} workspace={dialog.workspace} task={dialog.task} worktree={dialog.worktree} design={dialog.design} artifact={dialog.artifact} />;
     case "link-task":
       return <LinkTaskDialog host={dialog.host} sessionId={dialog.session} />;
     case "add-board":

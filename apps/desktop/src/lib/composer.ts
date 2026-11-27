@@ -128,7 +128,7 @@ export function attachments(f: AttachFacts): Attachment[] {
 }
 
 /** Non-empty parts, trimmed, a blank line apart. */
-const paragraphs = (...parts: string[]) =>
+export const paragraphs = (...parts: string[]) =>
   parts
     .map((p) => p.trim())
     .filter(Boolean)
