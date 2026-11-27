@@ -23,7 +23,7 @@ async function press(key: string, code: string, mods: { metaKey?: boolean; shift
 
 describe("Git settings", () => {
   after(() => {
-    rpc(w, "git.set_settings", { draft_prs: false, branch_prefix: "moonlet/", archive_branch: "merged" });
+    rpc(w, "git.set_settings", { draft_prs: false, branch_prefix: "moonlet/", archive_branch: "merged", archive_on_merge: false, archive_on_close: false });
   });
 
   it("is a page of the App group", async () => {
@@ -103,6 +103,25 @@ describe("Git settings", () => {
     await expect($(sel.confirmButton("Push, then archive"))).toBeDisabled();
     await $(sel.confirmButton("Archive anyway")).click();
     await expect($(sel.sessionRow("Unpushed"))).not.toBeExisting({ wait: 15_000 });
+  });
+
+  it("keeps archiving when a pull request merges, and closed ones only under it (X116)", async () => {
+    const onMerge = sel.settingsSwitch("Archive when its pull request merges");
+    const onClose = sel.settingsSwitch("Also when its pull request is closed without merging");
+    await openSettings("Git");
+    await expect($(onMerge)).toHaveAttribute("aria-checked", "false");
+    await expect($(onClose)).toBeDisabled();
+    await $(onMerge).click();
+    await browser.waitUntil(() => rpc<{ archive_on_merge: boolean }>(w, "git.settings", {}).archive_on_merge, { timeoutMsg: "the daemon never got archive_on_merge" });
+    await expect($(onClose)).toBeEnabled();
+    await $(onClose).click();
+    await browser.waitUntil(() => rpc<{ archive_on_close: boolean }>(w, "git.settings", {}).archive_on_close, { timeoutMsg: "the daemon never got archive_on_close" });
+    await closeSettings();
+    await openSettings("Git");
+    await expect($(onMerge)).toHaveAttribute("aria-checked", "true");
+    await expect($(onClose)).toHaveAttribute("aria-checked", "true");
+    rpc(w, "git.set_settings", { archive_on_merge: false, archive_on_close: false });
+    await closeSettings();
   });
 
   it("starts Create pull request as a draft", async () => {

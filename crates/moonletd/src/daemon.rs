@@ -232,6 +232,9 @@ pub struct Daemon {
     pub relay: Arc<crate::relay::Relay>,
     /// Every session's routed commands, with their output (X62).
     jobs: Arc<crate::jobs::Jobs>,
+    /// Sessions whose archive when their PR merged is being looked at
+    /// (X116), so the daemon's check and the app's poll do not race.
+    auto_archiving: Mutex<std::collections::HashSet<String>>,
     /// Board snapshots the app shares, and the phone's requests to it (X76).
     task_snapshots: Arc<TaskSnapshots>,
     task_relay: TaskRelay,
@@ -1190,6 +1193,7 @@ impl Daemon {
             awake,
             relay,
             jobs,
+            auto_archiving: Default::default(),
             clones,
             terminals,
             chats,
@@ -4773,6 +4777,201 @@ impl Daemon {
     /// writes could go with them; none does on a design with edits waiting
     /// (the first message comes as the design is made, and a queued one
     /// after the turn's snapshot). Runs for the daemon's life.
+    /// Archives a session as `session.archive` does: its copies, routed
+    /// commands, reads and designs follow.
+    async fn archive_session(&self, r: m::SessionArchive) -> anyhow::Result<moonlet_proto::types::SessionArchived> {
+        let id = r.id.clone();
+        // Its live copies go once it is archived, never holding the
+        // archive up; what they need is read first (X60).
+        let archiving = self.sync.archiving(&id).await;
+        // The designs in its worktree become workspace designs too,
+        // copied before the worktree goes; the committed ones stay in
+        // its branch (X114).
+        // Only when the worktree goes: one kept keeps its designs.
+        let worktree = self.sessions.session(&id).ok().map(|s| PathBuf::from(s.path));
+        let copied = if r.remove_worktree { self.copy_worktree_designs(&id).await } else { Vec::new() };
+        let done = match self.sessions.archive(r).await {
+            Ok(done) => done,
+            Err(e) => {
+                // A worktree removed before the failure took its
+                // designs with it: the copies are theirs now.
+                if worktree.as_deref().is_some_and(Path::exists) {
+                    self.drop_design_copies(&copied).await;
+                } else {
+                    self.follow_design_copies(&id, &copied);
+                }
+                return Err(e);
+            }
+        };
+        self.follow_design_copies(&id, &copied);
+        self.sync.archived(archiving);
+        self.jobs.forget(&id);
+        self.reads.clear_grant(&id);
+        // It refers to nothing any more, and its copies go (X114).
+        if let Err(e) = self.refs.forget_session(&id) {
+            tracing::warn!(session = id, "ending an archived session's references failed: {e:#}");
+        }
+        // Its designs are watched again once it is unarchived.
+        self.prune_session_watches();
+        // Those it kept in moonlet become workspace designs (X101).
+        self.adopt_session_designs().await;
+        Ok(done)
+    }
+
+    /// Archives this host's sessions once their PR merges, or closes, when
+    /// the Git settings say so (X116). Looks every minute: an open PR is
+    /// asked about every 5 minutes, a session with no PR or a closed one
+    /// every 15, and a merged one is answered from what was saved (X108).
+    /// With the setting off it asks nothing. Runs for the daemon's life.
+    pub fn follow_prs_to_archive(self: &Arc<Self>) {
+        // Tests shorten the minute.
+        let unit = std::env::var("MOONLET_TEST_PR_WATCH_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60_000u64);
+        let d = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(unit));
+            loop {
+                tick.tick().await;
+                if !git_settings::load(&git_settings::path()).archive_on_merge {
+                    continue;
+                }
+                let known = d.sessions.known_prs();
+                let now = now_ms();
+                let due: Vec<(moonlet_proto::types::Session, Option<moonlet_proto::types::PullRequest>, bool)> = d
+                    .sessions
+                    .list_sessions()
+                    .into_iter()
+                    .filter(|s| !s.archived && s.owner.is_none())
+                    .map(|s| {
+                        let saved = known.get(&s.id);
+                        let pr = saved.and_then(|k| k.pr.clone());
+                        let every = match pr.as_ref().map(|p| p.state.as_str()) {
+                            Some("merged") => None,
+                            Some("open") => Some(5 * unit),
+                            _ => Some(15 * unit),
+                        };
+                        let ask = every.is_some_and(|e| saved.is_none_or(|k| now.saturating_sub(k.checked_at) >= e));
+                        (s, pr, ask)
+                    })
+                    .collect();
+                // A few at a time, as the app's background polls.
+                let queue = Arc::new(Mutex::new(due));
+                let mut workers = tokio::task::JoinSet::new();
+                for _ in 0..4 {
+                    let d = d.clone();
+                    let queue = queue.clone();
+                    workers.spawn(async move {
+                        loop {
+                            let next = queue.lock().unwrap().pop();
+                            let Some((s, saved, ask)) = next else { return };
+                            let pr = if ask {
+                                match d.sessions.pr_status(Path::new(&s.path)).await {
+                                    Ok(pr) => pr,
+                                    // Offline or no gh: tried again next time.
+                                    Err(e) => {
+                                        tracing::debug!(session = %s.id, "PR check failed: {e:#}");
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                saved
+                            };
+                            d.check_auto_archive(s, pr).await;
+                        }
+                    });
+                }
+                while workers.join_next().await.is_some() {}
+            }
+        });
+    }
+
+    /// Why session `id` cannot be archived now, if something in it still
+    /// runs (X116).
+    fn busy_reason(&self, id: &str) -> Option<&'static str> {
+        use moonlet_proto::types::AgentState;
+        let tabs: Vec<_> = self.terminals.list().into_iter().filter(|t| t.session_id.as_deref() == Some(id)).collect();
+        if tabs.iter().any(|t| matches!(t.agent_state, AgentState::Working | AgentState::Blocked)) {
+            return Some("archives when the agent is done");
+        }
+        let chats: std::collections::HashSet<_> = tabs.iter().filter(|t| t.chat).map(|t| t.id).collect();
+        if self
+            .chats
+            .summaries()
+            .into_iter()
+            .any(|(c, st)| chats.contains(&c) && (!st.queued.is_empty() || !st.pending.is_empty()))
+        {
+            return Some("archives when its chat has no queued messages or questions");
+        }
+        if self
+            .jobs
+            .list(id)
+            .iter()
+            .any(|j| matches!(j.state, m::JobState::Waiting { .. } | m::JobState::Running { .. } | m::JobState::BringingBack))
+        {
+            return Some("archives when its heavy command ends");
+        }
+        None
+    }
+
+    /// Archives session `s` if its PR `pr` merged (or closed) and the Git
+    /// settings say so, never losing work only on this host, and records
+    /// what it did or why it waits (X116).
+    async fn check_auto_archive(&self, s: moonlet_proto::types::Session, pr: Option<moonlet_proto::types::PullRequest>) {
+        use moonlet_core::auto_archive::{Step, lost_work, step};
+        use moonlet_proto::types::{AutoArchive, AutoArchiveState};
+        if !self.auto_archiving.lock().unwrap().insert(s.id.clone()) {
+            return;
+        }
+        let settings = git_settings::load(&git_settings::path());
+        // The latest record: another check may have changed it.
+        let Some(s) = self.sessions.list_sessions().into_iter().find(|x| x.id == s.id) else {
+            self.auto_archiving.lock().unwrap().remove(&s.id);
+            return;
+        };
+        let record = |state, reason: String, plan_pr: u64, merged| Some(AutoArchive { pr: plan_pr, state, reason, merged });
+        let busy = if settings.archive_on_merge { self.busy_reason(&s.id) } else { None };
+        let next = match step(&settings, &s, pr.as_ref(), busy) {
+            // A wait or refusal no longer holds: the setting went off, or
+            // the PR was reopened. What was done stays recorded.
+            Step::Nothing => s
+                .auto_archive
+                .as_ref()
+                .filter(|a| matches!(a.state, AutoArchiveState::Waiting | AutoArchiveState::Refused))
+                .map(|_| None),
+            Step::Wait { pr, merged, reason } => Some(record(AutoArchiveState::Waiting, reason, pr, merged)),
+            Step::Archive(plan) => {
+                let merged_head = pr.as_ref().filter(|_| plan.merged).and_then(|p| p.head_oid.clone());
+                match git::unpushed(Path::new(&s.path), Some(&s.branch), merged_head.as_deref()).await {
+                    Err(e) => Some(record(AutoArchiveState::Waiting, format!("cannot read its unpushed work: {e:#}"), plan.pr, plan.merged)),
+                    Ok(work) => match lost_work(&plan, &work) {
+                        Some(lost) => Some(record(AutoArchiveState::Refused, lost, plan.pr, plan.merged)),
+                        None => {
+                            let req = m::SessionArchive {
+                                id: s.id.clone(),
+                                remove_worktree: plan.remove_worktree,
+                                delete_branch: plan.delete_branch,
+                                delete_remote: plan.delete_remote,
+                            };
+                            match self.archive_session(req).await {
+                                Ok(_) => Some(record(AutoArchiveState::Archived, String::new(), plan.pr, plan.merged)),
+                                Err(e) => Some(record(AutoArchiveState::Failed, format!("{e:#}"), plan.pr, plan.merged)),
+                            }
+                        }
+                    },
+                }
+            }
+        };
+        // None: the record stays as it is.
+        if let Some(next) = next
+            && let Err(e) = self.sessions.set_auto_archive(&s.id, next)
+        {
+            tracing::warn!(session = %s.id, "cannot record its archive: {e:#}");
+        }
+        self.auto_archiving.lock().unwrap().remove(&s.id);
+    }
+
     /// Moves the designs of each merged workspace into the one it merged
     /// into (X71), after any design system still kept per workspace moved
     /// into the library (X95): now, and whenever the workspaces
@@ -5207,6 +5406,7 @@ impl Daemon {
                 // Its place in the sidebar, as the account keeps it (X112).
                 pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                 parent: text("parent"),
+                auto_archive: None,
             })
             .map_err(internal)?;
         if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
@@ -5552,6 +5752,7 @@ impl Daemon {
                 // Its place in the sidebar, as the account keeps it (X112).
                 pinned_top: record.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                 parent: text("parent"),
+                auto_archive: None,
             })
             .map_err(internal)
     }
@@ -7784,6 +7985,7 @@ impl Daemon {
                     pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
                     pinned_top: r.get("pinned_top").and_then(Value::as_bool).unwrap_or(false),
                     parent: text("parent"),
+                auto_archive: None,
                     owner: Some({
                         // The central host is never linked here as a worker:
                         // this Mac's link to it says.
@@ -7811,7 +8013,7 @@ impl Daemon {
     }
 
     /// Workspaces, projects, sessions, git and files.
-    async fn handle_project(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+    async fn handle_project(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
         let w = &self.sessions;
         match method {
             m::PROFILE_LIST => ok(self.profile_infos()),
@@ -8188,45 +8390,7 @@ impl Daemon {
                 }
                 ok(list)
             }
-            m::SESSION_ARCHIVE => {
-                let r: m::SessionArchive = params(p)?;
-                let id = r.id.clone();
-                // Its live copies go once it is archived, never holding the
-                // archive up; what they need is read first (X60).
-                let archiving = self.sync.archiving(&id).await;
-                // The designs in its worktree become workspace designs too,
-                // copied before the worktree goes; the committed ones stay in
-                // its branch (X114).
-                // Only when the worktree goes: one kept keeps its designs.
-                let worktree = self.sessions.session(&id).ok().map(|s| PathBuf::from(s.path));
-                let copied = if r.remove_worktree { self.copy_worktree_designs(&id).await } else { Vec::new() };
-                let done = match w.archive(r).await {
-                    Ok(done) => done,
-                    Err(e) => {
-                        // A worktree removed before the failure took its
-                        // designs with it: the copies are theirs now.
-                        if worktree.as_deref().is_some_and(Path::exists) {
-                            self.drop_design_copies(&copied).await;
-                        } else {
-                            self.follow_design_copies(&id, &copied);
-                        }
-                        return Err(internal(e));
-                    }
-                };
-                self.follow_design_copies(&id, &copied);
-                self.sync.archived(archiving);
-                self.jobs.forget(&id);
-                self.reads.clear_grant(&id);
-                // It refers to nothing any more, and its copies go (X114).
-                if let Err(e) = self.refs.forget_session(&id) {
-                    tracing::warn!(session = id, "ending an archived session's references failed: {e:#}");
-                }
-                // Its designs are watched again once it is unarchived.
-                self.prune_session_watches();
-                // Those it kept in moonlet become workspace designs (X101).
-                self.adopt_session_designs().await;
-                ok(done)
-            }
+            m::SESSION_ARCHIVE => ok(self.archive_session(params(p)?).await.map_err(internal)?),
             m::SESSION_UNARCHIVE => {
                 let r: m::IdRef = params(p)?;
                 ok(w.unarchive(&r.id).await.map_err(internal)?)
@@ -8468,7 +8632,14 @@ impl Daemon {
             }
             m::GH_PR_STATUS => {
                 let r: m::GitPath = params(p)?;
-                ok(w.pr_status(&path(&r.path)).await.map_err(internal)?)
+                let pr = w.pr_status(&path(&r.path)).await.map_err(internal)?;
+                // What the app's poll found archives at once (X116).
+                if let Some(s) = w.list_sessions().into_iter().find(|s| !s.archived && Path::new(&s.path) == path(&r.path)) {
+                    let d = self.clone();
+                    let found = pr.clone();
+                    tokio::spawn(async move { d.check_auto_archive(s, found).await });
+                }
+                ok(pr)
             }
             m::GH_PR_STACK => {
                 let r: m::PrStackParams = params(p)?;

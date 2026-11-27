@@ -16,6 +16,8 @@ export const DEFAULT_GIT_SETTINGS: GitSettings = {
   draft_prs: false,
   fetch_minutes: 5,
   fast_forward_base: false,
+  archive_on_merge: false,
+  archive_on_close: false,
 };
 
 /** A host's Git settings: what its daemon keeps, else the defaults (not

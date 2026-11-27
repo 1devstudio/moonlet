@@ -2031,6 +2031,117 @@ async fn fake_gh_home_daemon(script: &str) -> HomeDaemon {
     HomeDaemon::start_with(home, Some(&path), vec![("GH_LOG".into(), log)]).await
 }
 
+/// [`fake_gh_home_daemon`] whose own PR checks (X116) run every
+/// `unit_ms` instead of every minute.
+async fn fake_gh_watch_daemon(script: &str, unit_ms: u64) -> HomeDaemon {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    write_script(&bin.join("gh"), script);
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
+        std::fs::write(home.path().join(rc), &first).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let log = bin.join("gh.log").display().to_string();
+    let env = vec![("GH_LOG".into(), log), ("MOONLET_TEST_PR_WATCH_MS".into(), unit_ms.to_string())];
+    HomeDaemon::start_with(home, Some(&path), env).await
+}
+
+/// A fake `gh` whose PR #12, made after the session, is in the state the
+/// file `$GH_LOG.state` holds (`OPEN` while there is none).
+const GH_PR_IN_STATE_FILE: &str = "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+     state=OPEN; [ -f \"$GH_LOG.state\" ] && state=$(cat \"$GH_LOG.state\")\n\
+     pr=\"{\\\"number\\\":12,\\\"url\\\":\\\"https://github.com/acme/web/pull/12\\\",\\\"state\\\":\\\"$state\\\",\\\"title\\\":\\\"Gift cards\\\",\\\"isDraft\\\":false,\\\"reviewDecision\\\":\\\"\\\",\\\"statusCheckRollup\\\":[],\\\"headRefOid\\\":\\\"4b825dc\\\",\\\"createdAt\\\":\\\"2099-01-01T00:00:00Z\\\"}\"\n\
+     case \"$1 $2\" in\n\
+     \"pr list\") echo \"[$pr]\";;\n\
+     \"pr view\") echo \"$pr\";;\n\
+     *) exit 1;;\n\
+     esac\n";
+
+/// Session `id` as `session.list` has it, once `done` holds for it, within
+/// 15 s.
+async fn session_once(c: &mut Client, id: &str, done: impl Fn(&moonlet_proto::types::Session) -> bool) -> moonlet_proto::types::Session {
+    let until = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let list: Vec<moonlet_proto::types::Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+        let s = list.into_iter().find(|s| s.id == id).expect("the session is listed");
+        if done(&s) || std::time::Instant::now() > until {
+            return s;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// X116: with "Archive when its pull request merges" on, the daemon checks
+/// a session's open PR by itself, and archives the session once it merged,
+/// as the Git settings say: worktree removed.
+#[tokio::test]
+async fn a_session_is_archived_by_the_daemon_once_its_pr_merges() {
+    let d = fake_gh_watch_daemon(GH_PR_IN_STATE_FILE, 100).await;
+    let mut c = d.client().await;
+    let _: serde_json::Value = c.request(methods::GIT_SET_SETTINGS, serde_json::json!({"archive_on_merge": true})).await.unwrap();
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let until = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let known: serde_json::Value = c.request(methods::GH_PR_KNOWN, serde_json::json!({})).await.unwrap();
+        if known[&s.id]["pr"]["state"] == "open" {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "the daemon never looked the PR up: {:?}", gh_pr_calls(&d));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!session_once(&mut c, &s.id, |_| false).await.archived, "an open PR's session stays");
+
+    std::fs::write(d.home.path().join("bin/gh.log.state"), "MERGED").unwrap();
+    let after = session_once(&mut c, &s.id, |s| s.archived).await;
+
+    assert!(after.archived, "{after:?}");
+    assert_eq!(
+        serde_json::to_value(&after.auto_archive).unwrap(),
+        serde_json::json!({"pr": 12, "state": "archived", "merged": true})
+    );
+    assert!(!std::path::Path::new(&s.path).exists(), "the worktree folder is removed");
+}
+
+/// X116: with the setting off, the daemon asks GitHub nothing by itself.
+#[tokio::test]
+async fn with_archiving_on_merge_off_the_daemon_checks_no_prs() {
+    let d = fake_gh_watch_daemon(GH_PR_IN_STATE_FILE, 50).await;
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(gh_pr_calls(&d), Vec::<String>::new());
+    assert!(!session_once(&mut c, &s.id, |_| false).await.archived);
+}
+
+/// X116: a merged session with an uncommitted file is not archived and
+/// says why; once the file is gone, the next check archives it.
+#[tokio::test]
+async fn a_merged_session_with_work_only_here_waits_until_the_work_is_gone() {
+    let d = fake_gh_watch_daemon(GH_PR_IN_STATE_FILE, 100).await;
+    std::fs::write(d.home.path().join("bin/gh.log.state"), "MERGED").unwrap();
+    let mut c = d.client().await;
+    let p = home_project(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Gift cards").await;
+    let draft = std::path::Path::new(&s.path).join("notes.md");
+    std::fs::write(&draft, "todo").unwrap();
+    let _: serde_json::Value = c.request(methods::GIT_SET_SETTINGS, serde_json::json!({"archive_on_merge": true})).await.unwrap();
+
+    let refused = session_once(&mut c, &s.id, |s| s.auto_archive.is_some()).await;
+    assert!(!refused.archived);
+    assert_eq!(
+        serde_json::to_value(&refused.auto_archive).unwrap(),
+        serde_json::json!({"pr": 12, "state": "refused", "reason": "1 uncommitted file", "merged": true})
+    );
+
+    std::fs::remove_file(&draft).unwrap();
+    let after = session_once(&mut c, &s.id, |s| s.archived).await;
+    assert!(after.archived, "{after:?}");
+}
+
 /// The `gh pr …` and `gh api …` lines the fake `gh` of
 /// [`fake_gh_home_daemon`] was run with.
 fn gh_pr_calls(d: &HomeDaemon) -> Vec<String> {
