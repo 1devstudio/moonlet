@@ -316,7 +316,7 @@ impl ChatManager {
     }
 
     pub fn create(&self, req: ChatCreate) -> Result<TerminalInfo> {
-        self.create_from(req, None)
+        self.create_from(req, None, false)
     }
 
     /// A chat that goes on from `history`, another member's chat of the same
@@ -324,10 +324,17 @@ impl ChatManager {
     /// conversation with the chat's next message. What it had running or
     /// asking is over: it starts idle.
     pub fn create_continuing(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
-        self.create_from(req, Some(history))
+        self.create_from(req, Some(history), false)
     }
 
-    fn create_from(&self, req: ChatCreate, history: Option<ChatState>) -> Result<TerminalInfo> {
+    /// [`Self::create_continuing`] for a fork of a session (X112): the
+    /// agent's first start makes a new conversation from `history`'s, so the
+    /// chat it came from goes on with its own.
+    pub fn create_forking(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
+        self.create_from(req, Some(history), true)
+    }
+
+    fn create_from(&self, req: ChatCreate, history: Option<ChatState>, fork: bool) -> Result<TerminalInfo> {
         let adapter = adapter_for(&req.agent).with_context(|| format!("{} has no structured mode", req.agent))?;
         check_mode(req.mode.as_deref())?;
         let cwd = crate::terminal::expand_home(&req.cwd);
@@ -338,13 +345,13 @@ impl ChatManager {
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
         let continuing = history.is_some();
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None, chrome: self.host_wants_chrome() };
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None, chrome: self.host_wants_chrome(), fork_of: history.as_ref().filter(|_| fork).and_then(|h| h.agent_session.clone()) };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);
         let now = now_ms();
         let (state, kept, held) = match history {
-            Some(h) => continued_state(ChatState { add_dirs, ..h }),
+            Some(h) => continued_state(ChatState { add_dirs, fork_of: if fork { h.agent_session.clone() } else { h.fork_of.clone() }, ..h }),
             None => (ChatState { status: "idle".into(), add_dirs, ..Default::default() }, Vec::new(), Vec::new()),
         };
         let info = self.terms.register_chat(TerminalInfo {

@@ -7632,6 +7632,10 @@ impl Daemon {
                 ok(m::SessionHistory { chats: w.history(&r.id).map_err(internal)? })
             }
             m::SESSION_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
+            m::SESSION_FORK => {
+                let r: m::SessionFork = params(p)?;
+                ok(w.fork_session(&r.id).await.map_err(internal)?)
+            }
             m::SESSION_PROCESSES => {
                 processes_manager(conn)?;
                 let r: m::IdRef = params(p)?;

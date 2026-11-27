@@ -1,6 +1,6 @@
 # X112 — Session menu actions
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** Sidebar
 - **Related ADRs:** none
@@ -24,7 +24,7 @@ The work ships in three parts: the menu items that reuse existing actions (part 
 
 ### The menu (part 1)
 
-- [ ] The menu of a session lists, in groups: **Open**, **Open PR** (only with a PR), **Open in ›**; **Pin to top** or **Unpin from top**, **Mark as read** or **Mark as unread**, **Rename**, **Fork**; **Move to workspace ›**, **Move under ›**; **Link to task…** (as before), **Keep in sync** (as before); the Run only on… items (X73, as before); **Archive**. (`lib/sidebar.test.ts` lists a session's actions in groups; offers Open PR only with a PR; `e2e/specs/session-menu.e2e.ts` lists the session's actions)
+- [ ] The menu of a session lists, in groups: **Open**, **Open PR** (only with a PR), **Open in ›**; **Pin to top** or **Unpin from top**, **Mark as read** or **Mark as unread**, **Rename**, **Fork**; **Move to workspace ›**, **Move under ›**; **Link to task…** (as before), **Keep in sync** (as before); the Run only on… items (X73, as before); **Archive**. (`lib/sidebar.test.ts` lists a session's actions in groups; offers Open PR only with a PR; offers Pin to top, or Unpin from top on a pinned session, and Move under; `e2e/specs/session-menu.e2e.ts` lists the session's actions)
 - [ ] A copy of another member's session (X88) keeps its short menu: **Open**, and **Archive** while its member is reachable. (`lib/sidebar.test.ts` offers only Open for a session another member runs, and Archive while that member is reachable (X88))
 - [ ] An item with a keyboard shortcut that does the same to that row shows it on the right: **Open** shows ⌘1 to ⌘9 for the first nine sessions in sidebar order, the keys that open them. (`lib/sidebar.test.ts` Open shows the ⌘ key that opens the row, for the first nine)
 - [ ] **Open PR** opens the session's pull request in the browser, as the header's PR button does. (`lib/sidebar.test.ts` offers Open PR only with a PR; the click is the header's `openUrl` call)
@@ -36,24 +36,26 @@ The work ships in three parts: the menu items that reuse existing actions (part 
 
 ### Pin to top and Move under (part 2)
 
-- [ ] **Pin to top** sets `pinned_top` on the session; pinned sessions come first in their group, in the group's own order. **Unpin from top** clears it.
-- [ ] **Move under ›** lists the other top-level, unarchived sessions of the same project and workspace, and **Move to top level** for a session that has a parent. A session that has sessions under it is not offered there and cannot be moved under another: nesting is one level deep.
-- [ ] A session with a parent shows right after its parent, indented, when both are in the same group. When its parent is archived, in another group, or gone, it shows as a top-level row.
-- [ ] `session.update` takes `pinned_top` and `parent` (`null` to clear). A parent is refused when it is the session itself, not in the same project, archived, has a parent of its own, or the session has sessions under it.
-- [ ] Both fields reach every member of the account with the session's record (X72), so the phone and other Macs show the same order.
+- [ ] **Pin to top** sets `pinned_top` on the session; pinned top-level sessions come first in their group, in the group's own order (nesting wins: a pinned nested session stays right after its parent). **Unpin from top** clears it. (`session.rs` a_session_is_pinned_to_the_top_and_nested_under_another; `lib/sidebar.test.ts` puts sessions pinned to the top first in their group, each part in the group's order (X112))
+- [ ] **Move under ›** lists the other top-level, unarchived sessions of the same project and workspace on the session's own host (not another member's session listed through its copy, X88), and **Move to top level** for a session that has a parent. A session that has sessions under it is not offered there and cannot be moved under another: nesting is one level deep. (`lib/sidebar.test.ts` moveUnderTargets: lists the other top-level sessions of its project and workspace, newest first; ticks the parent of a nested session and offers Move to top level; is disabled for a session with sessions under it; is disabled when no other session of its project is there to go under; leaves out another member's session, listed here through its copy (X88))
+- [ ] A session with a parent shows right after its parent, indented, when both are in the same group. When its parent is archived, in another group, or gone, it shows as a top-level row. (`lib/sidebar.test.ts` shows a nested session right after its parent, and as a top row when its parent is not in the group (X112); keeps a pinned nested session right after its unpinned parent (X112))
+- [ ] `session.update` takes `pinned_top` and `parent` (`null` to clear). A parent is refused when it is the session itself, not in the same project or workspace, archived, has a parent of its own, or the session has sessions under it. (`session.rs` a_session_is_not_nested_under_itself_another_project_or_a_nested_one)
+- [ ] Both fields reach every member of the account with the session's record (X72), so the phone and other Macs show the same order. (`session/account.rs` a_pin_to_the_top_and_a_parent_reach_every_member; `tests/central_copies.rs` a_members_pin_to_the_top_and_parent_show_on_the_central_host)
 
 ### Fork (part 3)
 
-- [ ] `session.fork {id}` makes a new session in the same project and workspace, named "<name> 2" (the next free number), on a new branch made from the source session's branch HEAD, with the source's base branch as its base.
-- [ ] The new worktree has the source worktree's uncommitted changes: edited, deleted and new (untracked, not ignored) files. Staged and unstaged edits all land as unstaged edits. The source worktree and its index are not touched. Gitignored files are copied as for any new session (the project's copied files).
-- [ ] Each chat tab of the source is a chat tab of the fork with the same conversation shown. Its agent's first start passes `--resume <conversation> --fork-session`, so the two go on separately. The conversation's transcript is copied to where Claude looks for the new worktree's conversations, under the workspace's Claude profile (X33).
-- [ ] A TUI agent tab of the source opens as a new, empty agent of the same kind in the fork. Other tabs are not copied; with no tab to open the fork gets one shell.
-- [ ] A failure while making the fork removes its worktree and branch, and says why.
-- [ ] Fork is not offered on a copy of another member's session.
+- [ ] `session.fork {id}` makes a new session in the same project and workspace, named "<name> 2" (the next free number; a fork of a fork counts on, "<name> 3", while a number that is part of the name stays, "Bump to Node 18 2"), on a new branch made from the source session's branch HEAD, with the source's base branch as its base. (`session.rs` a_fork_takes_the_next_free_number; a_fork_starts_from_its_sessions_head_with_its_uncommitted_changes)
+- [ ] The new worktree has the source worktree's uncommitted changes: edited, deleted and new (untracked, not ignored) files. Staged and unstaged edits all land as unstaged edits. The source worktree and its index are not touched. (`session.rs` a_fork_starts_from_its_sessions_head_with_its_uncommitted_changes; `e2e/specs/session-menu.e2e.ts` forks a session from its menu, with its uncommitted files, and opens the fork)
+- [ ] Each Claude chat tab of the source is a chat tab of the fork with the same conversation shown. Its agent's first start passes `--resume <conversation> --fork-session`, so the two go on separately. The conversation's transcript is copied to where Claude looks for the new worktree's conversations, under the workspace's Claude profile (X33). (`session.rs` a_forks_chat_goes_on_from_its_sessions_conversation_as_a_new_one)
+- [ ] A fork's chat that moves to another member (X73) before its first message still makes a new conversation there: the conversation it came from travels with its state (`fork_of`), so the two sessions never write to one. (`session.rs` a_forks_chat_moved_before_its_first_message_still_forks)
+- [ ] A chat of another agent (Codex) opens as a new, empty chat of that agent: only a Claude conversation can go on as a new one. (`session.rs` a_forks_codex_chat_starts_afresh_as_a_codex_chat)
+- [ ] A TUI agent tab of the source opens as a new, empty agent of the same kind in the fork. Other tabs are not copied; with no tab to open the fork gets one shell. A tab that cannot open once the fork is made is left out (and logged), rather than failing a session that exists. (`session.rs` a_forks_terminal_agent_starts_afresh_and_an_archived_session_is_not_forked)
+- [ ] A failure while making the fork (copying its changes or transcripts) removes its worktree and branch, and says why. (`session.rs` a_fork_whose_changes_cannot_be_copied_leaves_no_worktree_or_branch)
+- [ ] Fork is not offered on a copy of another member's session, and an archived session is not forked. (`lib/sidebar.test.ts` offers only Open for a session another member runs, and Archive while that member is reachable (X88); `session.rs` a_forks_terminal_agent_starts_afresh_and_an_archived_session_is_not_forked)
 
 ## UI
 
-The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the left, shortcuts in the hint column on the right, dividers between groups. **Archive** is red, as a menu's dangerous actions are, in a row's menu and in the menu of picked rows. A nested row uses the existing `nested` row style. Rename being an item, the menu's "Double-click a session to rename it" note goes.
+The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the left, shortcuts in the hint column on the right, dividers between groups. **Archive** is red, as a menu's dangerous actions are, in a row's menu and in the menu of picked rows. A nested row uses the existing `nested` row style. Rename being an item, the menu's "Double-click a session to rename it" note goes. Fork says "Forked <name> as <fork>" in a toast as it opens the fork.
 
 ## Protocol and RPCs
 
@@ -64,6 +66,7 @@ The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the le
 
 - `Session.pinned_top` and `Session.parent`, in the daemon's session state and in the account log's session records (part 2).
 - Mark as unread lives in the app only, as unread marks do.
+- A fork's gitignored files come from the project's checkout, as any new session's do (X74), not from the source worktree.
 
 ## Security considerations
 
@@ -74,6 +77,7 @@ The menu keeps today's look (`RowContextMenu` in `Sidebar.tsx`): icons on the le
 - Delete (Archive stays the only way to remove a session).
 - Forking a TUI agent's conversation: the daemon does not know which conversation a terminal's agent has.
 - Nesting deeper than one level, and collapsing nested sessions.
+- Nesting in the task-lines row style (X48), which already indents sessions under their task: there, sessions keep their task lines.
 - Letter keys while the menu is open.
 
 ## Test plan

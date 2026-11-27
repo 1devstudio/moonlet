@@ -1366,8 +1366,17 @@ impl SessionManager {
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation with its next
     /// message: no agent runs until then.
-    pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
+    pub fn continue_chat(&self, ws: &Session, history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
+        self.continue_chat_as(ws, history, false)
+    }
+
+    /// [`Self::continue_chat`]; with `fork`, its agent's first start makes a
+    /// new conversation from the one it resumes (X112), and the two go on
+    /// separately.
+    fn continue_chat_as(&self, ws: &Session, mut history: moonlet_proto::types::ChatState, fork: bool) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
+        // A fork's chat that moved here before its first message still forks.
+        let fork = fork || (history.fork_of.is_some() && history.fork_of == history.agent_session);
         // Another member's word: a conversation id that is not one starts
         // a new conversation, and a mode that turns every check off, or
         // that this host does not know, is never taken from it; it is set
@@ -1379,7 +1388,9 @@ impl SessionManager {
             history.mode = None;
         }
         let repo = self.project(&ws.project_id)?;
-        let info = chats.create_continuing(
+        let create = if fork { crate::chat::runtime::ChatManager::create_forking } else { crate::chat::runtime::ChatManager::create_continuing };
+        let info = create(
+            &chats,
             crate::chat::runtime::ChatCreate {
                 cwd: ws.path.clone(),
                 agent: "claude".into(),
@@ -1621,6 +1632,22 @@ impl SessionManager {
         F: std::future::Future<Output = Result<()>> + Send + 'static,
         G: std::future::Future<Output = ()> + Send + 'static,
     {
+        self.create_session_with(req, prepare, on_saved, None).await
+    }
+
+    /// [`Self::create_session_prepared`], or with `fork` a fork's (X112):
+    /// its base and the tabs it opens instead of the request's agent.
+    async fn create_session_with<F, G>(
+        &self,
+        req: SessionCreate,
+        prepare: impl FnOnce(Session) -> F,
+        on_saved: impl FnOnce(Session) -> G,
+        fork: Option<ForkTabs>,
+    ) -> Result<Session>
+    where
+        F: std::future::Future<Output = Result<()>> + Send + 'static,
+        G: std::future::Future<Output = ()> + Send + 'static,
+    {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
         // Directories widen what the agent may write (X29): only the user
@@ -1765,7 +1792,9 @@ impl SessionManager {
             project_id: repo.id.clone(),
             name,
             branch,
-            base: if req.existing_branch || adopted.is_some() {
+            base: if let Some(f) = &fork {
+                f.base.clone()
+            } else if req.existing_branch || adopted.is_some() {
                 repo.base_branch.clone()
             } else {
                 from.trim_start_matches("origin/").to_string()
@@ -1832,7 +1861,42 @@ impl SessionManager {
             Err(_) => bail!("the session was removed before its terminals started"),
         }
 
-        if let Some(agent) = &agent
+        if let Some(fork) = fork {
+            // A fork's chats go on from their session's conversations, and
+            // its agents in terminals start afresh (X112).
+            let mut opened = 0;
+            for history in fork.chats {
+                match self.continue_chat_as(&ws, history, true) {
+                    Ok(_) => opened += 1,
+                    Err(e) => tracing::warn!(session = %ws.id, "cannot fork a chat: {e:#}"),
+                }
+            }
+            for agent in &fork.fresh_chats {
+                let chat = TerminalCreate { kind: TerminalKind::Agent, title: Some(agent.clone()), agent: Some(agent.clone()), chat: true, cols: req.cols, rows: req.rows, ..Default::default() };
+                match self.spawn_in(&ws, chat) {
+                    Ok(_) => opened += 1,
+                    Err(e) => tracing::warn!(session = %ws.id, "cannot open a {agent} chat in the fork: {e:#}"),
+                }
+            }
+            // The fork is saved by now: a tab that cannot open is left out,
+            // as a chat is, rather than failing a session that exists.
+            for agent in &fork.agents {
+                match self.spawn_in(&ws, self.agent_session(&ws, &repo, agent, None, false, req.cols, req.rows)) {
+                    Ok(_) => opened += 1,
+                    Err(e) => tracing::warn!(session = %ws.id, "cannot start {agent} in the fork: {e:#}"),
+                }
+            }
+            if opened == 0 {
+                self.spawn_in(
+                    &ws,
+                    TerminalCreate {
+                        cols: req.cols,
+                        rows: req.rows,
+                        ..Default::default()
+                    },
+                )?;
+            }
+        } else if let Some(agent) = &agent
             && !req.tui
             && self.chat_runtime(Some(agent)).is_some()
         {
@@ -1896,6 +1960,83 @@ impl SessionManager {
             )?;
         }
         self.session(&ws.id)
+    }
+
+    /// Where Claude Code keeps session `id`'s conversations: its
+    /// workspace's profile folder (X33), else the folder the terminals'
+    /// environment names, else `~/.claude`.
+    fn claude_dir(&self, id: &str) -> PathBuf {
+        if let Some(p) = self.config_dir(id) {
+            return PathBuf::from(p);
+        }
+        let env = self.terminals.base_env();
+        if let Some(d) = env.get(crate::profiles::CONFIG_DIR_VAR).filter(|d| !d.is_empty()) {
+            return expand_home(d);
+        }
+        env.get("HOME").map(PathBuf::from).or_else(dirs::home_dir).unwrap_or_default().join(".claude")
+    }
+
+    /// Fork (X112): a new session of the same project and workspace that
+    /// starts where session `id` is: a new branch from its HEAD, with its
+    /// uncommitted changes, and its chats going on from their conversations
+    /// as new ones. Its agents in terminals start afresh; its other tabs are
+    /// not copied.
+    pub async fn fork_session(&self, id: &str) -> Result<Session> {
+        let src = self.session(id)?;
+        if src.owner.is_some() {
+            bail!("that session runs on another member: fork it there");
+        }
+        if src.archived {
+            bail!("the session is archived");
+        }
+        let repo = self.project(&src.project_id)?;
+        let head = String::from_utf8_lossy(&git::git(Path::new(&src.path), &["rev-parse", "HEAD"]).await?).trim().to_string();
+        let taken: Vec<String> = self.list_sessions().into_iter().filter(|s| s.project_id == src.project_id).map(|s| s.name).collect();
+        let infos: Vec<TerminalInfo> = self.terminals.list().into_iter().filter(|t| src.terminals.contains(&t.id)).collect();
+        // Only a Claude chat's conversation can go on as a new one; a chat of
+        // another agent starts afresh as that agent's.
+        let claude = |t: &&TerminalInfo| t.agent.as_deref() == Some("claude");
+        let chats: Vec<moonlet_proto::types::ChatState> = infos
+            .iter()
+            .filter(|t| t.chat)
+            .filter(claude)
+            .filter_map(|t| self.chats.get().and_then(|c| c.state(t.id).ok()))
+            .collect();
+        let fresh_chats: Vec<String> = infos.iter().filter(|t| t.chat && !claude(t)).filter_map(|t| t.agent.clone()).collect();
+        let agents: Vec<String> = infos.iter().filter(|t| !t.chat && t.kind == TerminalKind::Agent).filter_map(|t| t.agent.clone()).collect();
+        let req = SessionCreate {
+            name: Some(fork_name(&src.name, &taken)),
+            from: Some(head),
+            workspace_id: src.workspace_id.clone(),
+            agent: Some("none".into()),
+            model: src.model.clone(),
+            effort: src.effort.clone(),
+            mode: src.mode.clone(),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&src.project_id)
+        };
+        // Before anything starts in it: the session's uncommitted changes,
+        // and its chats' transcripts where Claude Code looks for the fork's.
+        let (patterns, _, _) = self.copied_files(&repo.identity);
+        let from = PathBuf::from(&src.path);
+        let projects = self.claude_dir(&src.id).join("projects");
+        let conversations: Vec<String> = chats.iter().filter_map(|c| c.agent_session.clone()).collect();
+        let prepare = move |ws: Session| async move {
+            let to = PathBuf::from(&ws.path);
+            let theirs = crate::sync::snapshot(&from, u64::MAX, &patterns).await?;
+            let ours = crate::sync::snapshot(&to, u64::MAX, &patterns).await?;
+            if theirs.tree != ours.tree {
+                crate::sync::apply(&to, &ours.tree, &theirs.tree).await?;
+            }
+            let (here, there) = (projects.join(crate::transcript::project_folder(&from)), projects.join(crate::transcript::project_folder(&to)));
+            for id in &conversations {
+                copy_transcript(&here, &there, id)?;
+            }
+            Ok(())
+        };
+        let fork = ForkTabs { base: src.base.clone(), chats, fresh_chats, agents };
+        self.create_session_with(req, prepare, |_| async {}, Some(fork)).await
     }
 
     pub async fn run_script(
@@ -2441,6 +2582,66 @@ async fn track_removed_sessions(mgr: std::sync::Weak<SessionManager>) {
             Err(_) => return,
         }
     }
+}
+
+/// What a fork opens instead of a new session's agent (X112): its
+/// session's base, its chats to go on from, and the agents its terminals ran.
+struct ForkTabs {
+    base: String,
+    /// Claude chats, to go on from their conversations as new ones.
+    chats: Vec<moonlet_proto::types::ChatState>,
+    /// The agents of its other chats, started afresh.
+    fresh_chats: Vec<String>,
+    /// The agents its terminals ran, started afresh.
+    agents: Vec<String>,
+}
+
+/// A fork's name (X112): `name` with the next number not in `taken`. A
+/// fork of a fork counts on ("Fix cart 2" gives "Fix cart 3" while "Fix
+/// cart" is taken); a number that is part of the name stays ("Bump to Node
+/// 18" gives "Bump to Node 18 2").
+fn fork_name(name: &str, taken: &[String]) -> String {
+    let (stem, from) = match name.rsplit_once(' ') {
+        Some((stem, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && taken.iter().any(|t| t == stem) => (stem, n.parse::<u64>().unwrap_or(1) + 1),
+        _ => (name, 2),
+    };
+    (from..).map(|n| format!("{stem} {n}")).find(|c| !taken.contains(c)).unwrap()
+}
+
+/// Copies conversation `id`'s transcript, `<id>.jsonl` and its `<id>/`
+/// folder, from project folder `from` to `to` (X112), where Claude Code
+/// looks for the fork's conversations. A conversation not saved yet has
+/// nothing to copy.
+fn copy_transcript(from: &Path, to: &Path, id: &str) -> Result<()> {
+    if !crate::transcript::is_uuid(id) {
+        return Ok(());
+    }
+    let file = from.join(format!("{id}.jsonl"));
+    if !file.is_file() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(to)?;
+    std::fs::copy(&file, to.join(format!("{id}.jsonl")))?;
+    let dir = from.join(id);
+    if dir.is_dir() {
+        copy_tree(&dir, &to.join(id))?;
+    }
+    Ok(())
+}
+
+/// Copies folder `from` into `to`, files and folders only: links are left out.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let kind = e.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&e.path(), &to.join(e.file_name()))?;
+        } else if kind.is_file() {
+            std::fs::copy(e.path(), to.join(e.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
@@ -4550,6 +4751,176 @@ mod tests {
 
     fn place(mgr: &SessionManager, id: &str, pinned_top: Option<bool>, parent: Option<Option<&str>>) -> Result<Session> {
         mgr.update(SessionUpdate { id: id.into(), pinned_top, parent: parent.map(|p| p.map(Into::into)), ..Default::default() })
+    }
+
+    /// X112: a fork is named after its session with the next free number.
+    /// A fork of a fork counts on ("Fix cart 2" gives "Fix cart 3"); a
+    /// number that is part of the name stays ("Bump to Node 18 2").
+    #[test]
+    fn a_fork_takes_the_next_free_number() {
+        let taken = ["Fix cart", "Fix cart 2", "Bump to Node 18"].map(String::from);
+        assert_eq!(fork_name("Fix cart", &taken), "Fix cart 3");
+        assert_eq!(fork_name("Fix cart 2", &taken), "Fix cart 3");
+        assert_eq!(fork_name("Bump to Node 18", &taken), "Bump to Node 18 2");
+        assert_eq!(fork_name("Spike", &taken), "Spike 2");
+    }
+
+    fn sh_git(dir: &str, args: &[&str]) -> String {
+        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// X112: a fork starts where its session is: on a new branch from its
+    /// HEAD, with its edited, deleted and new files, its base as its base,
+    /// in its workspace. The session's own worktree and index stay as they
+    /// were.
+    #[tokio::test]
+    async fn a_fork_starts_from_its_sessions_head_with_its_uncommitted_changes() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(spawn_req(&r.id, "Fix cart", None, None)).await.unwrap();
+        let at = src.path.as_str();
+        std::fs::write(Path::new(at).join("cart.rs"), "fn cart() {}\n").unwrap();
+        sh_git(at, &["add", "cart.rs"]);
+        sh_git(at, &["commit", "-qm", "Add the cart"]);
+        std::fs::write(Path::new(at).join("cart.rs"), "fn cart() { total() }\n").unwrap();
+        sh_git(at, &["add", "cart.rs"]);
+        std::fs::write(Path::new(at).join("notes.md"), "staged? no, new\n").unwrap();
+        std::fs::remove_file(Path::new(at).join("old.md")).unwrap();
+        let status_before = sh_git(at, &["status", "--porcelain"]);
+
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+
+        assert_eq!(fork.name, "Fix cart 2");
+        assert_ne!(fork.branch, src.branch);
+        assert_eq!((fork.base.as_str(), fork.workspace_id.as_deref(), fork.project_id.as_str()), (src.base.as_str(), src.workspace_id.as_deref(), src.project_id.as_str()));
+        let to = fork.path.as_str();
+        assert_eq!(sh_git(to, &["log", "-1", "--format=%s"]).trim(), "Add the cart");
+        assert_eq!(std::fs::read_to_string(Path::new(to).join("cart.rs")).unwrap(), "fn cart() { total() }\n");
+        assert_eq!(std::fs::read_to_string(Path::new(to).join("notes.md")).unwrap(), "staged? no, new\n");
+        assert!(!Path::new(to).join("old.md").exists());
+        // Staged or not, every change lands unstaged in the fork.
+        assert_eq!(sh_git(to, &["diff", "--cached", "--name-only"]), "");
+        assert_eq!(sh_git(at, &["status", "--porcelain"]), status_before);
+    }
+
+    /// X112: an agent in a terminal starts afresh in the fork, as the same
+    /// agent; the daemon does not know its conversation. An archived session
+    /// is not forked.
+    #[tokio::test]
+    async fn a_forks_terminal_agent_starts_afresh_and_an_archived_session_is_not_forked() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let mut req = spawn_req(&r.id, "Fix cart", None, None);
+        req.agent = Some("fake".into());
+        let src = mgr.create_session(req).await.unwrap();
+
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+
+        let kinds: Vec<(TerminalKind, Option<String>)> = mgr.terminals.list().into_iter().filter(|t| fork.terminals.contains(&t.id)).map(|t| (t.kind, t.agent)).collect();
+        assert!(kinds.contains(&(TerminalKind::Agent, Some("fake".into()))), "{kinds:?}");
+        assert!(!kinds.iter().any(|(k, _)| *k == TerminalKind::Shell), "{kinds:?}");
+
+        mgr.archive(SessionArchive { id: src.id.clone(), remove_worktree: true, delete_branch: false, delete_remote: false }).await.unwrap();
+        assert_eq!(mgr.fork_session(&src.id).await.unwrap_err().to_string(), "the session is archived");
+    }
+
+    /// X112: a fork whose changes cannot be copied is not made: its
+    /// worktree and branch go again, and the error says why. Here a link
+    /// named `.gitmodules`, which git refuses to add to the snapshot.
+    #[tokio::test]
+    async fn a_fork_whose_changes_cannot_be_copied_leaves_no_worktree_or_branch() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(spawn_req(&r.id, "Fix cart", None, None)).await.unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", Path::new(&src.path).join(".gitmodules")).unwrap();
+        let repo_dir = repo.path().display().to_string();
+        let (branches, worktrees) = (sh_git(&repo_dir, &["branch", "--list"]), sh_git(&repo_dir, &["worktree", "list"]));
+
+        let err = mgr.fork_session(&src.id).await.unwrap_err().to_string();
+
+        assert!(err.contains(".gitmodules"), "{err}");
+        assert_eq!(sh_git(&repo_dir, &["branch", "--list"]), branches);
+        assert_eq!(sh_git(&repo_dir, &["worktree", "list"]), worktrees);
+        assert_eq!(mgr.list_sessions().len(), 1);
+    }
+
+    /// X112: a fork's chat that moves to another member before its first
+    /// message (X73), which continues it from its state, still makes a new
+    /// conversation: the two sessions never write to one.
+    #[tokio::test]
+    async fn a_forks_chat_moved_before_its_first_message_still_forks() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let id = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+        let history = moonlet_proto::types::ChatState { status: "done".into(), agent_session: Some(id.into()), ..Default::default() };
+        mgr.continue_chat(&src, history).unwrap();
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+        // What the member it moves to gets: the chat's state.
+        let moved = chats.state(fork.terminals[0]).unwrap();
+        let there = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+
+        let chat = mgr.continue_chat(&there, moved).unwrap();
+
+        chats.send(chat.id, "go on", &[]).unwrap();
+        let args = nth_line(&Path::new(&there.path).join("claude-args"), 1).await;
+        assert!(args.contains(&format!("--resume {id} --fork-session")), "{args}");
+    }
+
+    /// X112: only a Claude chat goes on from its conversation; a chat of
+    /// another agent, Codex, starts afresh in the fork as that agent's chat.
+    #[tokio::test]
+    async fn a_forks_codex_chat_starts_afresh_as_a_codex_chat() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let src = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        mgr.spawn_in(&src, TerminalCreate { kind: TerminalKind::Agent, title: Some("codex".into()), agent: Some("codex".into()), chat: true, cols: 80, rows: 24, ..Default::default() }).unwrap();
+
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+
+        let tabs: Vec<(Option<String>, bool)> = mgr.terminals.list().into_iter().filter(|t| fork.terminals.contains(&t.id)).map(|t| (t.agent, t.chat)).collect();
+        assert_eq!(tabs, vec![(Some("codex".to_string()), true)]);
+        assert_eq!(chats.state(fork.terminals[0]).unwrap().agent_session, None, "a fresh chat, on no conversation");
+    }
+
+    /// X112: a fork's chat shows its session's conversation, and its agent's
+    /// first start resumes that conversation as a new one, from the
+    /// transcript copied where Claude Code looks for the fork's. Shells and
+    /// the like are not copied.
+    #[tokio::test]
+    async fn a_forks_chat_goes_on_from_its_sessions_conversation_as_a_new_one() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
+        set_profile(&mgr, &mgr.list_workspaces()[0].id, Some(&work.id));
+        let src = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let id = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+        let history = moonlet_proto::types::ChatState {
+            status: "done".into(),
+            agent_session: Some(id.into()),
+            items: vec![crate::chat::item("u1", "user", "add a cart")],
+            ..Default::default()
+        };
+        mgr.continue_chat(&src, history).unwrap();
+        let projects = Path::new(&folder(&home, "claude-work")).join("projects");
+        let theirs = projects.join(crate::transcript::project_folder(Path::new(&src.path)));
+        std::fs::create_dir_all(theirs.join(id).join("subagents")).unwrap();
+        std::fs::write(theirs.join(format!("{id}.jsonl")), "{\"type\":\"user\"}\n").unwrap();
+        std::fs::write(theirs.join(id).join("subagents").join("a1.jsonl"), "{}\n").unwrap();
+
+        let fork = mgr.fork_session(&src.id).await.unwrap();
+
+        assert_eq!(fork.terminals.len(), 1, "only the chat comes along");
+        let chat = fork.terminals[0];
+        assert!(chats.state(chat).unwrap().items.iter().any(|i| i.kind == "user" && i.text == "add a cart"));
+        let ours = projects.join(crate::transcript::project_folder(Path::new(&fork.path)));
+        assert_eq!(std::fs::read_to_string(ours.join(format!("{id}.jsonl"))).unwrap(), "{\"type\":\"user\"}\n");
+        assert!(ours.join(id).join("subagents").join("a1.jsonl").is_file());
+        chats.send(chat, "go on", &[]).unwrap();
+        let args = nth_line(&Path::new(&fork.path).join("claude-args"), 1).await;
+        assert!(args.contains(&format!("--resume {id} --fork-session")), "{args}");
     }
 
     /// X112: Pin to top and Move under are kept with the session, and
