@@ -200,7 +200,12 @@ function UsedBy({ host, info }: { host: string; info: ArtifactInfo }) {
       <SideTitle>Used by</SideTitle>
       {info.used_by.length === 0 && <p className="ui-text-12 text-faint">No other session uses it.</p>}
       {info.used_by.map((id) => (
-        <button key={id} onClick={() => selectSession(host, id)} className="flex w-full truncate rounded-md px-2 py-1.5 text-left ui-text-12.5 text-fg hover:bg-tab-hover">
+        <button
+          key={id}
+          onClick={() => {
+            useStore.setState({ showArtifacts: false });
+            selectSession(host, id);
+          }} className="flex w-full truncate rounded-md px-2 py-1.5 text-left ui-text-12.5 text-fg hover:bg-tab-hover">
           {sessions?.find((x) => x.id === id)?.name ?? id}
         </button>
       ))}
