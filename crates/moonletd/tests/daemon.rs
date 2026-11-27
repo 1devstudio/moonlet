@@ -1320,6 +1320,59 @@ async fn claude_models_are_empty_when_claude_does_not_answer() {
     assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
 }
 
+/// X115: a fake `claude` that answers `get_usage` with a session limit
+/// at 49% in the default profile and 91% in `claude-work`, and counts its
+/// starts in `claude-starts`.
+const USAGE_CLAUDE: &str = r#"#!/bin/sh
+echo started >> "$HOME/claude-starts"
+read line
+id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+case "$line" in *'"get_usage"'*) ;; *) exit 1 ;; esac
+case "$CLAUDE_CONFIG_DIR" in
+  */claude-work) p=91; s=warning ;;
+  *) p=49; s=normal ;;
+esac
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"subscription_type":"max","rate_limits_available":true,"rate_limits":{"limits":[{"kind":"session","group":"session","percent":%s,"severity":"%s","resets_at":"2026-11-27T13:40:00+00:00","scope":null,"is_active":true},{"kind":"weekly_scoped","group":"weekly","percent":2,"severity":"normal","resets_at":"2026-12-02T04:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}}}}\n' "$id" "$p" "$s"
+sleep 20
+"#;
+
+/// X115: the usage limits come from Claude Code's `get_usage` answer, in
+/// the workspace's Claude profile, and an answer is reused for a minute.
+#[tokio::test]
+async fn claude_usage_comes_from_claude_codes_get_usage_reply() {
+    use moonlet_proto::types::{ClaudeProfile, ClaudeUsage, Workspace};
+    let d = fake_claude_daemon(USAGE_CLAUDE).await;
+    let mut c = d.client().await;
+    let u: Option<ClaudeUsage> = c.request(methods::CLAUDE_USAGE, serde_json::json!({})).await.unwrap();
+    let u = u.expect("usage");
+    assert_eq!(u.plan.as_deref(), Some("max"));
+    assert_eq!(
+        u.limits.iter().map(|l| (l.kind.as_str(), l.model.as_deref(), l.percent, l.severity.as_str(), l.resets_at.as_deref())).collect::<Vec<_>>(),
+        [("session", None, 49, "normal", Some("2026-11-27T13:40:00+00:00")), ("weekly_scoped", Some("Fable"), 2, "normal", Some("2026-12-02T04:00:00+00:00"))]
+    );
+
+    // Asked again within the minute, the answer is the one held.
+    let again: Option<ClaudeUsage> = c.request(methods::CLAUDE_USAGE, serde_json::json!({})).await.unwrap();
+    assert_eq!(again.unwrap().at, u.at);
+    assert_eq!(std::fs::read_to_string(d.home.path().join("claude-starts")).unwrap(), "started\n");
+
+    // Another profile is another account, with its own limits.
+    let p: ClaudeProfile = c.request(methods::PROFILE_CREATE, serde_json::json!({"name": "Work", "path": d.home.path().join("claude-work")})).await.unwrap();
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme", "color": "blue", "claude_profile": p.id})).await.unwrap();
+    let work: Option<ClaudeUsage> = c.request(methods::CLAUDE_USAGE, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    let work = work.unwrap();
+    assert_eq!((work.limits[0].percent, work.limits[0].severity.as_str()), (91, "warning"));
+}
+
+/// X115: a Claude that cannot say gives no usage, not an error.
+#[tokio::test]
+async fn claude_usage_is_null_when_claude_cannot_say() {
+    let d = fake_claude_daemon("#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n").await;
+    let mut c = d.client().await;
+    let u: serde_json::Value = c.request(methods::CLAUDE_USAGE, serde_json::json!({})).await.unwrap();
+    assert_eq!(u, serde_json::Value::Null);
+}
+
 /// X111: a fake `claude` that answers `initialize` with the user's
 /// `review` and one model, and leaves `ran-here` in the folder it starts in.
 const COMMANDS_CLAUDE: &str = r#"#!/bin/sh
