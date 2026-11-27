@@ -3,12 +3,11 @@
 // message refers to, and the picker that adds one.
 
 import { useEffect, useMemo, useState } from "react";
-import { FileText, ListChecks, PenTool, Pencil, Radio, RefreshCw, Search, X } from "lucide-react";
+import { FileText, ListChecks, PenTool, Pencil, Radio, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { AtKind, AtRow, AtSection, AtTab } from "../lib/atPicker";
 import { artifactRows, type ArtifactRow, type SentArtifacts } from "../lib/artifacts";
-import { artifactDesigns, artifactKey, chipsOf, loadArtifactDesigns, loadPlans, removeChip, useArtifacts } from "../lib/artifactStore";
+import { artifactKey, chipsOf, loadArtifactDesigns, loadPlans, removeChip, useArtifacts, workspaceListInput } from "../lib/artifactStore";
 import { useDesign } from "../lib/designStore";
-import type { Design } from "../lib/protocol";
 import { shownWorkspace, useStore } from "../lib/store";
 import { connectedHosts } from "../lib/sidebar";
 import { cx } from "./ui";
@@ -37,12 +36,8 @@ export function useArtifactRows(): { rows: ArtifactRow[]; workspace: string | nu
   const workspace = shown?.id ?? null;
   const rows = useMemo(() => {
     if (!workspace) return [];
-    const byHost = (f: (host: string) => Design[] | undefined) => Object.fromEntries(hosts.map((h) => [h, f(h)]));
-    const designs = byHost((h) => artifactDesigns(design, h, workspace));
-    const projectName = (host: string, id: string) => (projects[host] ?? []).find((p) => p.id === id)?.name;
-    const planLists = Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]]));
     const found = Object.fromEntries(hosts.map((h) => [h, matches[artifactKey(h, workspace)]]));
-    return artifactRows({ plans: planLists, designs, workspace, projectName, now: Date.now() }, kind, query, found);
+    return artifactRows(workspaceListInput(design, plans, projects, hosts, workspace), kind, query, found);
   }, [workspace, hosts, plans, matches, query, kind, design, projects]);
   return { rows, workspace, hosts };
 }
@@ -54,12 +49,7 @@ export function currentArtifactRows(): ArtifactRow[] {
   const workspace = shownWorkspace(st)?.id;
   if (!workspace) return [];
   const hosts = connectedHosts(st.hosts).split(",").filter(Boolean);
-  const design = useDesign.getState();
-  const { plans } = useArtifacts.getState();
-  const designs = Object.fromEntries(hosts.map((h) => [h, artifactDesigns(design, h, workspace)]));
-  const projectName = (host: string, id: string) => (st.projects[host] ?? []).find((p) => p.id === id)?.name;
-  const planLists = Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]]));
-  return artifactRows({ plans: planLists, designs, workspace, projectName, now: Date.now() }, "all", "", {});
+  return artifactRows(workspaceListInput(useDesign.getState(), useArtifacts.getState().plans, st.projects, hosts, workspace), "all", "", {});
 }
 
 /** Lists the shown workspace's plans and designs afresh on every host. */
@@ -216,7 +206,7 @@ export function SentArtifactsView({ sent }: { sent: SentArtifacts }) {
     <div className="flex flex-col items-end gap-1 self-end">
       {sent.notes.map((n, i) => (
         <span key={i} className="flex max-w-[560px] items-center gap-2 ui-text-12 text-muted">
-          {n.kind === "changed" ? <RefreshCw size={13} className="shrink-0 text-accent" /> : <Pencil size={13} className="shrink-0 text-faint" />}
+          {n.kind === "changed" ? <RefreshCw size={13} className="shrink-0 text-accent" /> : n.kind === "deleted" ? <Trash2 size={13} className="shrink-0 text-faint" /> : <Pencil size={13} className="shrink-0 text-faint" />}
           {n.text}
         </span>
       ))}

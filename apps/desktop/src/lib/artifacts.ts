@@ -198,29 +198,37 @@ export function withArtifactLines(text: string, lines: string[]): string {
  *  to, and the notes of what changed, before what the user typed. */
 export interface SentArtifacts {
   refs: { name: string; kind: "plan" | "design"; folder: string }[];
-  notes: { text: string; kind: "changed" | "edited" }[];
+  notes: { text: string; kind: "changed" | "edited" | "deleted" }[];
   rest: string;
 }
 
 /** The artifact lines a message starts with, from `withArtifactLines` and
- *  the daemon's notes, and what follows them; null for a message with none. */
-const REF_LINE = /^Artifact "(.+)" \((plan|design), live, read only\): (.+)\. It always holds the latest version; it changes only in its home\.$/;
-const CHANGED_LINE = /^(.+ changed since you last read it): .+$/;
-const EDITED_LINE = /^(The plan was edited by hand): .+$/;
+ *  the daemon's notes, and what follows them; null for a message with none.
+ *  The agent gets the daemon's notes, a blank line, the artifact lines, a
+ *  blank line, then what the user typed (`deliver` in chat/runtime.rs). */
+const REF_LINE = /^Artifact "(.+)" \((plan|design), live, read only\): (\/.+)\. It always holds the latest version; it changes only in its home\.$/;
+const CHANGED_LINE = /^(.+ changed since you last read it): \/.+$/;
+const EDITED_LINE = /^(The plan was edited by hand): \/.+$/;
+const DELETED_LINE = /^The artifact in \/.+ was deleted in its home; that folder keeps its last copy\.$/;
+
+function readLine(l: string, out: SentArtifacts): boolean {
+  const ref = REF_LINE.exec(l);
+  if (ref) out.refs.push({ name: ref[1], kind: ref[2] as "plan" | "design", folder: ref[3] });
+  else if (EDITED_LINE.test(l)) out.notes.push({ kind: "edited", text: EDITED_LINE.exec(l)![1] });
+  else if (CHANGED_LINE.test(l)) out.notes.push({ kind: "changed", text: CHANGED_LINE.exec(l)![1] });
+  else if (DELETED_LINE.test(l)) out.notes.push({ kind: "deleted", text: "An artifact was deleted in its home; its last copy stays" });
+  else return false;
+  return true;
+}
 
 export function sentArtifacts(text: string): SentArtifacts | null {
   const lines = text.split("\n");
   const out: SentArtifacts = { refs: [], notes: [], rest: "" };
   let i = 0;
-  for (; i < lines.length; i++) {
-    const l = lines[i];
-    const ref = REF_LINE.exec(l);
-    const changed = CHANGED_LINE.exec(l);
-    const edited = EDITED_LINE.exec(l);
-    if (ref) out.refs.push({ name: ref[1], kind: ref[2] as "plan" | "design", folder: ref[3] });
-    else if (edited) out.notes.push({ kind: "edited", text: edited[1] });
-    else if (changed) out.notes.push({ kind: "changed", text: changed[1] });
-    else break;
+  while (i < lines.length && readLine(lines[i], out)) {
+    i++;
+    // A blank line between the notes and the artifact lines.
+    if (lines[i] === "" && i + 1 < lines.length && readLine(lines[i + 1], { refs: [], notes: [], rest: "" })) i++;
   }
   if (i === 0) return null;
   // The lines end with a blank line before what the user typed.

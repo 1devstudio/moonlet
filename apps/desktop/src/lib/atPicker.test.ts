@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atRows, atSections, nextAtTab } from "./atPicker";
+import { atKey, atRows, atSections, nextAtTab, withoutToken } from "./atPicker";
 import type { ArtifactRow } from "./artifacts";
 
 const row = (kind: "plan" | "design", id: string, name: string, home: string, usedBy: string | null = null): ArtifactRow => ({
@@ -30,7 +30,7 @@ const files = [
 
 describe("atSections", () => {
   it("lists plans, designs and files that match, at most five of each, with where each lives", () => {
-    const sections = atSections({ files, artifacts }, "sett", "all");
+    const { sections } = atSections({ files, artifacts }, "sett", "all");
     expect(sections.map((s) => [s.kind, s.total, s.rows.map((r) => r.label)])).toEqual([
       ["plan", 1, ["Notification settings"]],
       ["design", 2, ["Settings page", "Account settings"]],
@@ -42,13 +42,13 @@ describe("atSections", () => {
   });
 
   it("narrowed to one section, lists all of its matches", () => {
-    const sections = atSections({ files, artifacts }, "sett", "file");
+    const { sections } = atSections({ files, artifacts }, "sett", "file");
     expect(sections.map((s) => [s.kind, s.rows.length])).toEqual([["file", 7]]);
   });
 
   it("leaves out a section with nothing found, and lists everything for a bare @", () => {
-    expect(atSections({ files, artifacts }, "checkout", "all").map((s) => s.kind)).toEqual(["plan"]);
-    expect(atSections({ files, artifacts }, "", "all").map((s) => [s.kind, s.total])).toEqual([
+    expect(atSections({ files, artifacts }, "checkout", "all").sections.map((s) => s.kind)).toEqual(["plan"]);
+    expect(atSections({ files, artifacts }, "", "all").sections.map((s) => [s.kind, s.total])).toEqual([
       ["plan", 2],
       ["design", 2],
       ["file", 7],
@@ -56,9 +56,42 @@ describe("atSections", () => {
   });
 });
 
+describe("atSections totals", () => {
+  it("counts each section's matches whichever section is shown, for the tabs", () => {
+    expect(atSections({ files, artifacts }, "sett", "file").totals).toEqual({ plan: 1, design: 2, file: 7 });
+  });
+
+  it("shows at most 200 rows of a section narrowed to, and counts them all", () => {
+    const many = Array.from({ length: 250 }, (_, i) => `src/settings/s${i}.ts`);
+    const found = atSections({ files: many, artifacts: [] }, "sett", "file");
+    expect(found.sections[0].rows).toHaveLength(200);
+    expect(found.totals.file).toBe(250);
+  });
+});
+
+describe("withoutToken", () => {
+  it("takes the typed @word out, also past the caret, and keeps one space", () => {
+    expect(withoutToken("Build it from @sett now", 19, { start: 14 })).toEqual({ text: "Build it from now", caret: 14 });
+    expect(withoutToken("@settings", 9, { start: 0 })).toEqual({ text: "", caret: 0 });
+    expect(withoutToken("see @sett", 9, { start: 4 })).toEqual({ text: "see ", caret: 4 });
+  });
+});
+
+describe("atKey", () => {
+  it("Tab narrows, Enter picks a row, Esc closes, even with no row", () => {
+    expect(atKey("Tab", false, 3)).toBe("next");
+    expect(atKey("Tab", true, 3)).toBe("back");
+    expect(atKey("Enter", false, 3)).toBe("pick");
+    expect(atKey("Enter", false, 0)).toBeNull();
+    expect(atKey("Enter", true, 3)).toBeNull();
+    expect(atKey("Escape", false, 0)).toBe("close");
+    expect(atKey("a", false, 3)).toBeNull();
+  });
+});
+
 describe("atRows", () => {
   it("is the rows in the order shown, for the arrow keys", () => {
-    const rows = atRows(atSections({ files, artifacts }, "checkout", "all"));
+    const rows = atRows(atSections({ files, artifacts }, "checkout", "all").sections);
     expect(rows.map((r) => r.label)).toEqual(["Checkout retries"]);
   });
 });

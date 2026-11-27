@@ -7,7 +7,7 @@ import { designsOf, loadDesigns, projectDesignsIn, sessionDesignsIn, type useDes
 import { LIBRARY } from "./designLibrary";
 import type { Design } from "./protocol";
 import { EV, M, type ArtifactInfo, type ArtifactMatch } from "./protocol";
-import type { ArtifactKind } from "./artifacts";
+import type { ArtifactKind, ListInput } from "./artifacts";
 
 /** An artifact picked to go with a session's next message (X114). */
 export interface ArtifactChip {
@@ -121,4 +121,22 @@ export function artifactDesigns(d: ReturnType<typeof useDesign.getState>, host: 
 export function loadArtifactDesigns(host: string, workspace: string): void {
   void loadDesigns(host, workspace).catch(() => {});
   void loadDesigns(host, LIBRARY).catch(() => {});
+}
+
+/** What the Artifacts list is made from for `workspace` on `hosts`: each
+ *  host's plans and designs, and its projects' names. */
+export function workspaceListInput(
+  d: ReturnType<typeof useDesign.getState>,
+  plans: ArtifactState["plans"],
+  projects: Record<string, readonly { id: string; name: string }[] | undefined>,
+  hosts: readonly string[],
+  workspace: string,
+): ListInput {
+  return {
+    plans: Object.fromEntries(hosts.map((h) => [h, plans[artifactKey(h, workspace)]])),
+    designs: Object.fromEntries(hosts.map((h) => [h, artifactDesigns(d, h, workspace)])),
+    workspace,
+    projectName: (host, id) => (projects[host] ?? []).find((p) => p.id === id)?.name,
+    now: Date.now(),
+  };
 }

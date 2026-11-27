@@ -2,7 +2,8 @@ import { sendOrBring } from "../lib/followStore";
 import { addChip, attachChips, chipsOf, useArtifacts } from "../lib/artifactStore";
 import { planArtifactId, sentArtifacts, withArtifactLines } from "../lib/artifacts";
 import { ArtifactChipRow, AtMenu, SentArtifactsView, currentArtifactRows, loadArtifacts } from "./ArtifactChips";
-import { atRows, atSections, nextAtTab, type AtRow, type AtTab } from "../lib/atPicker";
+import { atKey, atRows, atSections, nextAtTab, withoutToken, type AtRow, type AtTab } from "../lib/atPicker";
+import { useDesign } from "../lib/designStore";
 import type { ArtifactRow } from "../lib/artifacts";
 import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1061,6 +1062,8 @@ function ChatEditor({
   const [atTab, setAtTab] = useState<AtTab>("all");
   const atOn = !!onPickArtifact && token?.kind === "@" && dismissed !== token.start;
   const plansNow = useArtifacts((s) => (atOn ? s.plans : null));
+  const designsNow = useDesign((s) => (atOn ? s.designs : null));
+  const sessionDesignsNow = useDesign((s) => (atOn ? s.sessionDesigns : null));
   useEffect(() => {
     if (atOn) loadArtifacts();
     else setAtTab("all");
@@ -1068,11 +1071,10 @@ function ChatEditor({
   const at = useMemo(() => {
     if (!atOn || !token) return null;
     const input = { files: files ?? [], artifacts: currentArtifactRows() };
-    const totals = Object.fromEntries(atSections(input, token.query, "all").map((x) => [x.kind, x.total]));
-    const sections = atSections(input, token.query, atTab);
+    const { sections, totals } = atSections(input, token.query, atTab);
     return { sections, rows: atRows(sections), totals };
-    // plansNow: a listing that lands shows at once.
-  }, [atOn, token?.query, files, atTab, plansNow]); // eslint-disable-line react-hooks/exhaustive-deps
+    // plansNow, designsNow: a listing that lands shows at once.
+  }, [atOn, token?.query, files, atTab, plansNow, designsNow, sessionDesignsNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const menu = useMemo((): { rows: SlashRow[]; footer: string | null } => {
     if (!token || dismissed === token.start) return { rows: [], footer: null };
@@ -1114,9 +1116,8 @@ function ChatEditor({
   const pickAt = (row: AtRow) => {
     if (!token) return;
     if (row.kind === "file") return accept("@" + row.value);
-    const rest = text.slice(caret).replace(/^\S*/, "");
-    const head = text.slice(0, token.start);
-    set(head + rest.replace(/^ /, head.endsWith(" ") || head === "" ? "" : " "), head.length);
+    const r = withoutToken(text, caret, token);
+    set(r.text, r.caret);
     if (row.artifact) onPickArtifact?.(row.artifact);
   };
 
@@ -1140,14 +1141,13 @@ function ChatEditor({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     const el = e.currentTarget;
-    if (at && e.key === "Tab") {
+    const atDoes = at ? atKey(e.key, e.shiftKey, at.rows.length) : null;
+    if (atDoes) {
       e.preventDefault();
-      setAtTab((t) => nextAtTab(t, e.shiftKey));
-      return;
-    }
-    if (at && e.key === "Enter" && !e.shiftKey && at.rows[sel]) {
-      e.preventDefault();
-      pickAt(at.rows[sel]);
+      if (atDoes === "next" || atDoes === "back") setAtTab((t) => nextAtTab(t, atDoes === "back"));
+      else if (atDoes === "pick") pickAt(at!.rows[Math.min(sel, at!.rows.length - 1)]);
+      // Closed, rows or none: Esc never goes on to stop the agent.
+      else setDismissed(token?.start ?? null);
       return;
     }
     if (options.length) {

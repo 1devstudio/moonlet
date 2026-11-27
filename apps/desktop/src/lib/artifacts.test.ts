@@ -241,4 +241,27 @@ describe("sentArtifacts", () => {
     expect(sentArtifacts("Artifact lines are explained in the README")).toBeNull();
     expect(sentArtifacts("Fix the bug")).toBeNull();
   });
+
+  it("reads the daemon's notes, a blank line, then the artifact lines, as the agent gets them", () => {
+    const text = [
+      "Add search changed since you last read it: /refs/s1/plan-search",
+      "The artifact in /refs/s1/design-settings-page was deleted in its home; that folder keeps its last copy.",
+      "",
+      'Artifact "Add search" (plan, live, read only): /refs/s1/plan-search. It always holds the latest version; it changes only in its home.',
+      "",
+      "Build the results page.",
+    ].join("\n");
+    expect(sentArtifacts(text)).toEqual({
+      refs: [{ name: "Add search", kind: "plan", folder: "/refs/s1/plan-search" }],
+      notes: [
+        { kind: "changed", text: "Add search changed since you last read it" },
+        { kind: "deleted", text: "An artifact was deleted in its home; its last copy stays" },
+      ],
+      rest: "Build the results page.",
+    });
+  });
+
+  it("takes a note only when it names a folder", () => {
+    expect(sentArtifacts("The tests changed since you last read it: see above\n\nok")).toBeNull();
+  });
 });
