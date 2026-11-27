@@ -7797,6 +7797,10 @@ impl Daemon {
                 let r: m::ClaudeModels = params(p)?;
                 ok(self.chats.claude_models(r.workspace.as_deref()).await)
             }
+            m::CLAUDE_USAGE => {
+                let r: m::ClaudeUsageAsk = params(p)?;
+                ok(self.chats.claude_usage(r.workspace.as_deref(), r.refresh).await)
+            }
             m::CLAUDE_COMMANDS => {
                 let r: m::ClaudeCommands = params(p)?;
                 let project = w.project(&r.project_id).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;

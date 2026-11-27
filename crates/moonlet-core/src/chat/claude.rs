@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use moonlet_proto::types::{AsideAnswer, ChatImage, ChatState, ClaudeModel, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
+use moonlet_proto::types::{AsideAnswer, ChatImage, ChatState, ClaudeModel, ClaudeUsage, UsageLimit, ContextCategory, ContextUsage, McpServer, NamedItem, PermissionAsk, QueuedMessage, Subagent, SubagentTool};
 use serde_json::{Value, json};
 
 use super::{Adapter, ChatConfig, Out, SignIns, clip, finish_turn, item, summarize, tool_item, update, upsert, user_text};
@@ -389,6 +389,30 @@ pub fn models(reply: &Value) -> Vec<ClaudeModel> {
             },
         })
         .collect()
+}
+
+/// The account's usage limits, from Claude Code's answer to `get_usage`
+/// (X115); `None` when the account has none, as with an API key.
+pub fn usage(reply: &Value, at: u64) -> Option<ClaudeUsage> {
+    if reply["rate_limits_available"] != true {
+        return None;
+    }
+    let text = |v: &Value| v.as_str().map(String::from);
+    let limits = reply["rate_limits"]["limits"].as_array()?;
+    let limits = limits
+        .iter()
+        .filter_map(|l| {
+            Some(UsageLimit {
+                kind: text(&l["kind"])?,
+                group: text(&l["group"]).unwrap_or_default(),
+                model: text(&l["scope"]["model"]["display_name"]),
+                percent: l["percent"].as_f64().map_or(0, |p| p.clamp(0.0, 100.0).round() as u32),
+                severity: text(&l["severity"]).unwrap_or_default(),
+                resets_at: text(&l["resets_at"]),
+            })
+        })
+        .collect();
+    Some(ClaudeUsage { plan: text(&reply["subscription_type"]), limits, at })
 }
 
 /// An aside's answer from its Claude's `--output-format json` result, or
@@ -1184,6 +1208,40 @@ mod tests {
         let outs = a.on_line(INIT_REPLY.replace(r#""models":[{"value":"haiku","displayName":"Haiku"}],"#, "").as_str(), &mut st);
         assert!(outs.contains(&Out::State));
         assert!(st.models.is_empty());
+    }
+
+    /// X115: captured from Claude Code 2.1.332 on a Team plan, its
+    /// `rate_limits` trimmed to the parts moonlet reads and a few others.
+    const USAGE_REPLY: &str = include_str!("fixtures/claude-usage.json");
+
+    #[test]
+    fn the_get_usage_reply_gives_the_accounts_limits() {
+        let v: Value = serde_json::from_str(USAGE_REPLY).unwrap();
+        let reply = &v["response"]["response"];
+        let limit = |kind: &str, group: &str, model: Option<&str>, percent, resets: &str| UsageLimit {
+            kind: kind.into(),
+            group: group.into(),
+            model: model.map(String::from),
+            percent,
+            severity: "normal".into(),
+            resets_at: Some(resets.into()),
+        };
+        assert_eq!(
+            usage(reply, 1_795_780_000_000),
+            Some(ClaudeUsage {
+                plan: Some("team".into()),
+                limits: vec![
+                    limit("session", "session", None, 49, "2026-11-27T13:40:00.332942+00:00"),
+                    limit("weekly_all", "weekly", None, 33, "2026-12-02T04:00:00.332971+00:00"),
+                    limit("weekly_scoped", "weekly", Some("Fable"), 2, "2026-12-02T04:00:00.333264+00:00"),
+                ],
+                at: 1_795_780_000_000,
+            })
+        );
+
+        // An account without limits, as with an API key, has no usage.
+        let none = json!({"subscription_type": null, "rate_limits_available": false, "rate_limits": null});
+        assert_eq!(usage(&none, 1), None);
     }
 
     #[test]

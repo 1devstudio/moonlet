@@ -1628,6 +1628,37 @@ pub struct ChatImage {
     pub data: String,
 }
 
+/// A Claude account's usage limits, from Claude Code's answer to
+/// `get_usage` (X115): what `/usage` shows.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeUsage {
+    /// The subscription, such as `pro`, `max` or `team`.
+    pub plan: Option<String>,
+    /// The limits, in Claude Code's order.
+    pub limits: Vec<UsageLimit>,
+    /// When Claude Code answered, in ms since the epoch.
+    pub at: u64,
+}
+
+/// One usage limit (X115), such as the 5-hour session or a model's week.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageLimit {
+    /// Claude Code's kind: `session`, `weekly_all`, `weekly_scoped`.
+    pub kind: String,
+    /// Claude Code's group: `session` or `weekly`.
+    pub group: String,
+    /// The model a scoped limit counts, such as "Fable".
+    pub model: Option<String>,
+    /// How much of it is used, 0 to 100.
+    pub percent: u32,
+    /// Claude Code's `normal`, `warning` or `critical`.
+    pub severity: String,
+    /// When it resets, ISO 8601.
+    pub resets_at: Option<String>,
+}
+
 /// A model Claude Code offers, from its answer to `initialize` (X105).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]

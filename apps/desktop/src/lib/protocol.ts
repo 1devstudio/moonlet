@@ -217,6 +217,32 @@ export interface ClaudeModel {
   efforts: string[];
 }
 
+/** A Claude account's usage limits, from Claude Code's `get_usage` (X115). */
+export interface ClaudeUsage {
+  /** The subscription, such as `pro`, `max` or `team`. */
+  plan: string | null;
+  /** The limits, in Claude Code's order. */
+  limits: UsageLimit[];
+  /** When Claude Code answered (ms). */
+  at: number;
+}
+
+/** One usage limit (X115), such as the 5-hour session or a model's week. */
+export interface UsageLimit {
+  /** `session`, `weekly_all` or `weekly_scoped`. */
+  kind: string;
+  /** `session` or `weekly`. */
+  group: string;
+  /** The model a scoped limit counts, such as "Fable". */
+  model: string | null;
+  /** 0 to 100. */
+  percent: number;
+  /** `normal`, `warning` or `critical`. */
+  severity: string;
+  /** When it resets, ISO 8601. */
+  resets_at: string | null;
+}
+
 /** The agent's context window, from Claude's `get_context_usage` (X34). */
 export interface ContextUsage {
   used: number;
@@ -1599,6 +1625,8 @@ export const M = {
   powerSetSettings: "power.set_settings",
   /** The models Claude Code offers in a workspace's Claude profile (X105): `{workspace?}` → `ClaudeModel[]`. */
   claudeModels: "claude.models",
+  /** A Claude profile's usage limits (X115): `{workspace?, refresh?}` → `ClaudeUsage | null`. */
+  claudeUsage: "claude.usage",
   /** Claude's slash commands for a project (X111): `{project_id, workspace?}` → names without `/`. */
   claudeCommands: "claude.commands",
   gitUnpushed: "git.unpushed",

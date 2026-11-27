@@ -33,6 +33,7 @@ import { DesignSidebar } from "./design/DesignMode";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { designMark } from "../lib/sessionDesign";
 import { ProfileFooter } from "./Profiles";
+import { UsageMeter } from "./UsageMeter";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
@@ -1388,7 +1389,10 @@ export function Sidebar() {
         <MuteButton />
         <ProfileFooter />
         <UpdateButton />
-        {mode === "design" && <span className="ml-auto shrink-0 font-mono ui-text-11.5 text-faint">~/.moonlet/design</span>}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {mode === "design" && <span className="shrink-0 font-mono ui-text-11.5 text-faint">~/.moonlet/design</span>}
+          <UsageMeter />
+        </div>
       </div>
       )}
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}

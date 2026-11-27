@@ -243,6 +243,9 @@ pub const POWER_SET_SETTINGS: &str = "power.set_settings";
 /// The models Claude Code offers in a workspace's Claude profile (X105):
 /// [`ClaudeModels`] → `Vec<ClaudeModel>`, empty when Claude cannot say.
 pub const CLAUDE_MODELS: &str = "claude.models";
+/// [`ClaudeUsageAsk`] → `Option<ClaudeUsage>`: the account's usage limits
+/// in a workspace's Claude profile (X115), null when Claude cannot say.
+pub const CLAUDE_USAGE: &str = "claude.usage";
 /// [`ClaudeCommands`] → `Vec<String>`: the slash commands Claude Code offers
 /// in a project's folder (X111), empty when Claude cannot say.
 pub const CLAUDE_COMMANDS: &str = "claude.commands";
@@ -3035,6 +3038,17 @@ pub struct ChatAside {
 pub struct ClaudeModels {
     #[serde(default)]
     pub workspace: Option<String>,
+}
+
+/// `claude.usage` params (X115): the workspace whose Claude profile to ask
+/// in, none for the default one; `refresh` asks Claude again unless its
+/// answer is only seconds old.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClaudeUsageAsk {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// `claude.commands` params (X111): the project whose folder Claude starts

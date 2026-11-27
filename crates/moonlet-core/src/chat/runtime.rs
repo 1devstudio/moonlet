@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use moonlet_proto::methods::{self, ChatItemEvent, ChatStateEvent};
-use moonlet_proto::types::{AgentState, ArchivedChat, AsideAnswer, ChatImage, ChatState, ClaudeModel, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
+use moonlet_proto::types::{AgentState, ArchivedChat, AsideAnswer, ChatImage, ChatState, ClaudeModel, ClaudeUsage, PermissionAsk, StateSource, TerminalInfo, TerminalKind, ToolCall};
 use moonlet_proto::{Message, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -189,6 +189,11 @@ pub struct ChatManager {
     commands: Mutex<HashMap<Option<String>, HeldCommands>>,
     /// One Claude at a time is started to ask for models or commands (X105).
     probing: tokio::sync::Mutex<()>,
+    /// Each profile's usage limits, by Claude profile folder, as Claude
+    /// Code last answered `get_usage`, with when (X115).
+    usage: Mutex<HashMap<Option<String>, (Instant, Option<ClaudeUsage>)>>,
+    /// One Claude at a time is started to ask for usage (X115).
+    usage_probing: tokio::sync::Mutex<()>,
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
     leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
@@ -270,6 +275,10 @@ const PROBE_RETRY: Duration = Duration::from_secs(60);
 /// How long a profile's slash commands are kept before Claude is asked
 /// again, so a command or skill added since shows within minutes (X111).
 const COMMANDS_FRESH: Duration = Duration::from_secs(5 * 60);
+/// How long a profile's usage limits are reused, so every window and poll
+/// starts at most one Claude a minute (X115); a refresh, 5 s.
+const USAGE_FRESH: Duration = Duration::from_secs(60);
+const USAGE_REFRESH: Duration = Duration::from_secs(5);
 
 /// The tool call an ask is about: the same tool with the same input.
 fn asks_for(ask: &PermissionAsk, tool: &ToolCall) -> bool {
@@ -297,7 +306,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), until_login: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), until_login: Default::default(), rest_after: rest_after().into(), models: Default::default(), models_failed: Default::default(), commands: Default::default(), probing: Default::default(), usage: Default::default(), usage_probing: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -1470,8 +1479,7 @@ impl ChatManager {
     /// `initialize`, and keeps both its models (X105) and its slash
     /// commands (X111) for the profile.
     async fn ask_profile(&self, env: &BTreeMap<String, String>, profile: Option<String>) {
-        let home = env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"));
-        let reply = probe(env, &home).await.ok();
+        let reply = probe(env, &probe_home(env), serde_json::json!({"subtype": "initialize"})).await.ok();
         let models = reply.as_ref().map(super::claude::models).unwrap_or_default();
         let commands = reply.as_ref().map(super::claude::commands).unwrap_or_default();
         if models.is_empty() {
@@ -1503,6 +1511,30 @@ impl ChatManager {
             self.ask_profile(&env, profile.clone()).await;
         }
         known().unwrap_or_default()
+    }
+
+    /// The usage limits of `workspace`'s Claude profile (X115), from a
+    /// Claude started only to answer `get_usage`; `None` when it cannot say.
+    /// `refresh` asks again unless the answer held is seconds old.
+    pub async fn claude_usage(&self, workspace: Option<&str>, refresh: bool) -> Option<ClaudeUsage> {
+        let (env, profile) = self.profile_env(workspace);
+        let fresh = if refresh { USAGE_REFRESH } else { USAGE_FRESH };
+        let known = || {
+            let held = self.usage.lock().unwrap();
+            held.get(&profile).filter(|(at, _)| at.elapsed() < fresh).map(|(_, u)| u.clone())
+        };
+        if let Some(u) = known() {
+            return u;
+        }
+        // An ask made while another Claude answers gets that answer.
+        let _one = self.usage_probing.lock().await;
+        if let Some(u) = known() {
+            return u;
+        }
+        let reply = probe(&env, &probe_home(&env), serde_json::json!({"subtype": "get_usage"})).await.ok();
+        let u = reply.and_then(|r| super::claude::usage(&r, crate::paths::now_ms()));
+        self.usage.lock().unwrap().insert(profile, (Instant::now(), u.clone()));
+        u
     }
 
     /// The slash commands Claude Code would offer in the project folder
@@ -1863,9 +1895,16 @@ fn require_folder(cwd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Starts `claude` in `cwd` only to ask it `initialize`, and gives its
-/// answer (X105, X111). No message is sent, so no conversation is made.
-async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json::Value> {
+/// Where a probe Claude starts: the profile's home, else `/`, so no
+/// project's files are read.
+fn probe_home(env: &BTreeMap<String, String>) -> PathBuf {
+    env.get("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Starts `claude` in `cwd` only to send it one control `request`, such as
+/// `initialize` (X105, X111) or `get_usage` (X115), and gives its answer.
+/// No message is sent, so no conversation is made.
+async fn probe(env: &BTreeMap<String, String>, cwd: &Path, request: serde_json::Value) -> Result<serde_json::Value> {
     let exe = crate::paths::find_program("claude", env).context("claude not found on PATH")?;
     let mut child = tokio::process::Command::new(&exe)
         .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
@@ -1889,7 +1928,7 @@ async fn probe(env: &BTreeMap<String, String>, cwd: &Path) -> Result<serde_json:
         }
     }
     let group = Group(child.id().and_then(|p| i32::try_from(p).ok()));
-    let ask = serde_json::json!({"type": "control_request", "request_id": "probe-1", "request": {"subtype": "initialize"}});
+    let ask = serde_json::json!({"type": "control_request", "request_id": "probe-1", "request": request});
     let mut stdin = child.stdin.take().context("no stdin")?;
     stdin.write_all(format!("{ask}\n").as_bytes()).await?;
     stdin.flush().await?;
