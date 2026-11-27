@@ -41,18 +41,21 @@ const NO_CHIPS: ArtifactChip[] = [];
 
 export const chipsOf = (s: ArtifactState, host: string, session: string): ArtifactChip[] => s.chips[chipKey(host, session)] ?? NO_CHIPS;
 
-/** Picks an artifact for a session's next message; once is enough. */
+const sameChip = (a: Pick<ArtifactChip, "host" | "id">, b: Pick<ArtifactChip, "host" | "id">) => a.host === b.host && a.id === b.id;
+
+/** Picks an artifact for a session's next message; once is enough. The
+ *  same id listed from two Macs is two artifacts. */
 export function addChip(host: string, session: string, chip: ArtifactChip) {
   useArtifacts.setState((s) => {
     const have = chipsOf(s, host, session);
-    if (have.some((c) => c.id === chip.id)) return s;
+    if (have.some((c) => sameChip(c, chip))) return s;
     return { chips: { ...s.chips, [chipKey(host, session)]: [...have, chip] } };
   });
 }
 
 /** Takes an artifact out of a session's next message: it refers to nothing. */
-export function removeChip(host: string, session: string, id: string) {
-  useArtifacts.setState((s) => ({ chips: { ...s.chips, [chipKey(host, session)]: chipsOf(s, host, session).filter((c) => c.id !== id) } }));
+export function removeChip(host: string, session: string, chip: Pick<ArtifactChip, "host" | "id">) {
+  useArtifacts.setState((s) => ({ chips: { ...s.chips, [chipKey(host, session)]: chipsOf(s, host, session).filter((c) => !sameChip(c, chip)) } }));
 }
 
 /** Refers the session to every artifact picked for its message, and gives

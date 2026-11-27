@@ -200,6 +200,8 @@ describe("planArtifactId", () => {
   it("is the session and the plan file's name, as the daemon keys a plan", () => {
     expect(planArtifactId("a1b2c3d4e5f6", "/Users/me/.claude/plans/search-plan.md")).toBe("plan:a1b2c3d4e5f6:search-plan");
     expect(planArtifactId("a1b2c3d4e5f6", "/tmp/plans/my plan.v2.md")).toBe("plan:a1b2c3d4e5f6:my-plan-v2");
+    // One dash per character, as the daemon's key has, whatever its length in UTF-16.
+    expect(planArtifactId("a1b2c3d4e5f6", "/tmp/plans/plan 📋.md")).toBe("plan:a1b2c3d4e5f6:plan--");
     expect(planArtifactId("a1b2c3d4e5f6", null)).toBeNull();
     expect(planArtifactId("a1b2c3d4e5f6", "# A plan's text, not a file")).toBeNull();
   });

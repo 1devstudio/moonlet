@@ -119,5 +119,10 @@ describe("artifacts", () => {
       timeout: 15_000,
       timeoutMsg: "the plan never listed the session using it",
     });
+    // The message its agent got starts with the plan's live line.
+    const chat = rpc<{ id: number; chat: boolean; session_id?: string }[]>(w, "terminal.list", {}).find((t) => t.chat && t.session_id === readerId)!.id;
+    const sent = () => rpc<{ items: { kind: string; text: string }[] }>(w, "chat.state", { id: chat }).items.filter((i) => i.kind === "user").at(-1)?.text ?? "";
+    await browser.waitUntil(() => sent().endsWith("Build the results page from the plan"), { timeout: 15_000, timeoutMsg: "the message never reached the session's agent" });
+    expect(sent()).toMatch(new RegExp(`^Artifact "${SESSION}" \\(plan, live, read only\\): /.+/artifacts/refs/${readerId}/plan-search-products\\. It always holds the latest version; it changes only in its home\\.\\n\\nBuild the results page from the plan$`));
   });
 });

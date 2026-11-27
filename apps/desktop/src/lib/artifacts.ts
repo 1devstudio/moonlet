@@ -184,7 +184,7 @@ export function planArtifactId(session: string, planFile: string | null | undefi
   const name = planFile.slice(planFile.lastIndexOf("/") + 1);
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
-  return stem ? `plan:${session}:${stem.replace(/[^A-Za-z0-9_-]/g, "-")}` : null;
+  return stem ? `plan:${session}:${stem.replace(/[^A-Za-z0-9_-]/gu, "-")}` : null;
 }
 
 /** The message sent with artifacts attached: one line per artifact, in the

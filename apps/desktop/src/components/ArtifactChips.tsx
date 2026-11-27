@@ -53,14 +53,14 @@ export function ArtifactChipRow({ host, session }: { host: string; session: stri
   return (
     <div className="flex flex-wrap gap-1.5 px-2 pb-1.5 pt-2">
       {chips.map((c) => (
-        <span key={c.id} title={`${c.name}: a live reference, read only`} className="inline-flex h-6 max-w-[320px] items-center gap-1.5 rounded-md border border-border-strong bg-panel-2 pl-2 pr-1 ui-text-12 text-fg">
+        <span key={c.host + c.id} title={`${c.name}: a live reference, read only`} className="inline-flex h-6 max-w-[320px] items-center gap-1.5 rounded-md border border-border-strong bg-panel-2 pl-2 pr-1 ui-text-12 text-fg">
           <KindTile kind={c.kind} size={16} />
           <span className="truncate">{c.name}</span>
           <span className="inline-flex items-center gap-0.5 ui-text-11 text-done">
             <Radio size={11} />
             live
           </span>
-          <button title="Remove" className="grid h-[18px] w-[18px] place-items-center rounded text-faint hover:bg-hover hover:text-fg" onClick={() => removeChip(host, session, c.id)}>
+          <button title="Remove" className="grid h-[18px] w-[18px] place-items-center rounded text-faint hover:bg-hover hover:text-fg" onClick={() => removeChip(host, session, c)}>
             <X size={12} />
           </button>
         </span>
