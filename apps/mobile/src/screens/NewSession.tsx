@@ -216,6 +216,16 @@ export function NewSessionScreen() {
     };
   }, [presetKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [latest] = useState(latestOnly);
+  // Opened from a project's + in Sessions (X118): that project, once.
+  const newIn = useApp((s) => s.newIn);
+  useEffect(() => {
+    if (!newIn) return;
+    // Projects still loading: wait for them rather than lose the pick.
+    const i = choices.findIndex((c) => c.host === newIn.host && c.project.id === newIn.project);
+    if (i < 0) return;
+    setPick(i);
+    useApp.setState({ newIn: null });
+  }, [newIn, choices.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!choice) return;

@@ -124,3 +124,12 @@ describe("the tab bar", () => {
     expect(TABS).toEqual(["inbox", "sessions", "new", "tasks", "hosts"]);
   });
 });
+
+describe("newSessionIn (X118)", () => {
+  it("opens New session for a project, from its + in Sessions", async () => {
+    const { newSessionIn } = await import("./app");
+    useApp.setState({ tab: "sessions", screen: { kind: "session", host: "mac", id: "x", tab: "chat" } });
+    newSessionIn("mac", "storefront");
+    expect(useApp.getState()).toMatchObject({ tab: "new", screen: null, newFrom: null, newIn: { host: "mac", project: "storefront" } });
+  });
+});

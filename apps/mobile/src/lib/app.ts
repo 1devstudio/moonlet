@@ -110,6 +110,8 @@ export interface Settings {
   notNow?: Record<string, true>;
   /** How Sessions shows each session's task (X48, X118): A, `"number"`, by default; B, `"task"`. */
   sessionRows?: string;
+  /** Sections and groups folded in Sessions, by the desktop's keys (X118). */
+  collapsed?: Record<string, true>;
 }
 
 const SETTINGS = "mobile.settings";
@@ -135,6 +137,8 @@ interface AppState {
   ready: boolean;
   /** The task, and maybe its worktree, New session starts from (X76). */
   newFrom: { board: string; task: string; worktree?: { path: string; branch: string; project?: string } } | null;
+  /** The project New session opens on, from its + in Sessions (X118). */
+  newIn: { host: string; project: string } | null;
   /** Sign-ins opened while the user was last active here (X75). */
   signIns: SignIn[];
 }
@@ -146,6 +150,7 @@ export const useApp = create<AppState>(() => ({
   tab: "inbox",
   screen: null,
   newFrom: null,
+  newIn: null,
   settings: loadJson<Settings>(SETTINGS, { workspace: null, notifyOff: ["checks"], faceId: true }),
   ready: false,
   signIns: [],
@@ -174,10 +179,13 @@ export function taskBack() {
   set({ screen: s?.kind === "task" ? (s.from ?? null) : null });
 }
 
-export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" && { newFrom: null }) });
+export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" && { newFrom: null, newIn: null }) });
+
+/** New session on `project` of `host`, from the project's + in Sessions (X118). */
+export const newSessionIn = (host: string, project: string) => set({ tab: "new", screen: null, newFrom: null, newIn: { host, project } });
 
 /** New session, started from a task on a board (X76), in its worktree without a session if given. */
-export const startFromTask = (from: NonNullable<AppState["newFrom"]>) => set({ tab: "new", screen: null, newFrom: from });
+export const startFromTask = (from: NonNullable<AppState["newFrom"]>) => set({ tab: "new", screen: null, newFrom: from, newIn: null });
 export const showScreen = (screen: Screen | null) => {
   set({ screen });
   // A session another member owns opens under its copy host (X72).

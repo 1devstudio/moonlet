@@ -5,7 +5,7 @@
 
 import { dropRelisted, ownerLine, sessionHost } from "./copies";
 import { planOf } from "@desktop/lib/chat";
-import { arrangeShared, type Group, groupHeading, lastActive, nestedIn, sectionParts, sessionBadge, sessionGlyph, shownSections } from "@desktop/lib/sidebar";
+import { arrangeShared, type Group, groupCollapseKey, groupHeading, lastActive, nestedIn, sectionCollapseKey, sectionParts, sessionBadge, sessionGlyph, shownSections } from "@desktop/lib/sidebar";
 import { identityAvatar } from "@desktop/lib/projectAvatar";
 import { splitKey } from "@desktop/lib/sessionRows";
 import type { AgentState, Project, PullRequest, Section, Session } from "@desktop/lib/protocol";
@@ -61,6 +61,8 @@ export interface ProjectGroup {
   host: string;
   /** The group's project, for a project group. */
   project: Project | null;
+  /** The phone's key for folding it, the desktop's (`groupCollapseKey`). */
+  foldKey: string;
   /** The member the project comes from when not the section's first (X68). */
   on: string | null;
   /** The project's GitHub owner avatar, else null for the dotted mark (X15). */
@@ -74,6 +76,8 @@ export interface SessionSection {
   name: string;
   /** The member the section's settings go to: the first holding it. */
   host: string;
+  /** The phone's key for folding it, the desktop's (`sectionCollapseKey`). */
+  foldKey: string;
   /** The one member holding it, while the phone has several Macs (X68). */
   where: string | null;
   sec: Section;
@@ -150,12 +154,13 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
           label: g.label,
           host: g.host,
           project,
+          foldKey: groupCollapseKey(holding[0], sec.id, g.key),
           on: g.on && "host" in g.on ? hosts[g.on.host].label : null,
           avatar: identityAvatar(project?.identity?.origin ?? null),
           rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, ownerLine(e.session) ?? (e.host === g.host ? null : hosts[e.host].label), nested(e.session), taskOf)),
         });
       }
-      out.push({ key: sectionKey, name: sec.name, host: holding[0], where: list.length > 1 && holding.length === 1 ? hosts[holding[0]].label : null, sec, groups });
+      out.push({ key: sectionKey, name: sec.name, host: holding[0], foldKey: sectionCollapseKey(holding[0], sec.id), where: list.length > 1 && holding.length === 1 ? hosts[holding[0]].label : null, sec, groups });
     }
   }
   return out;
@@ -176,6 +181,13 @@ export function rowGlyph(r: SessionRow, prState: string | undefined): ReturnType
  * input`, its subagents, or the diff stat once loaded. */
 export function rowBadge(r: SessionRow, git: { additions: number; deletions: number } | undefined, prState: string | undefined): ReturnType<typeof sessionBadge> {
   return sessionBadge({ creating: r.creating, state: r.state, merged: prState?.toLowerCase() === "merged", git, agents: r.subagents });
+}
+
+/** The phone's folds after a tap on what `key` folds: folded, or open again (X118). */
+export function foldsAfterTap(folds: Record<string, true>, key: string): Record<string, true> {
+  if (!folds[key]) return { ...folds, [key]: true };
+  const { [key]: _, ...rest } = folds;
+  return rest;
 }
 
 export type ChipId = "all" | "needs" | "working" | "review";

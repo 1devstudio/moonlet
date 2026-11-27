@@ -571,8 +571,11 @@ pub(crate) const PHONE_METHODS: &[&str] = &[
     m::CLAUDE_MODELS,
     m::PRESENCE_ACTIVE,
     // Sessions: new session, linking a task, archive, continue here, and
-    // another member's sessions through the central host (X72).
+    // another member's sessions through the central host (X72); a session's
+    // Fork and a section's view from Sessions (X118).
     m::SESSION_CREATE,
+    m::SESSION_FORK,
+    m::SECTION_UPDATE,
     m::SESSION_UPDATE,
     m::SESSION_ARCHIVE,
     m::SESSION_CONTINUE_HERE,

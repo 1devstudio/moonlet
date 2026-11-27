@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { chips, filterGroups, rowBadge, rowGlyph, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
+import { chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
 import { MIN, NOW, ask, chat, data, project, session, terminal, workspace } from "./fixtures";
 
 const section = (id: string, name: string, project_ids: string[]): Section => ({
@@ -162,6 +162,15 @@ describe("sessionSections (X118)", () => {
     expect(rowGlyph(by("Dark mode for account pages"), undefined)).toBe("working");
     expect(rowGlyph(by("Bump Node to 22"), "OPEN")).toBe("branch");
     expect(rowGlyph(by("Bump Node to 22"), "MERGED")).toBe("idle");
+  });
+
+  it("folds a section or a project under the desktop's keys, and opens it again on a second tap", () => {
+    const w = world();
+    const [dev] = sessionSections(w.hosts, w.data, { host: "mac", id: "personal" });
+    expect([dev.foldKey, dev.groups[0].foldKey]).toEqual(["ws:mac/dev", "mac/dev/proj:storefront"]);
+    const once = foldsAfterTap({}, "mac/dev/proj:storefront");
+    expect(once).toEqual({ "mac/dev/proj:storefront": true });
+    expect(foldsAfterTap(once, "mac/dev/proj:storefront")).toEqual({});
   });
 });
 
