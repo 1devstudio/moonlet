@@ -1337,6 +1337,11 @@ pub struct DaemonInfo {
     pub started_at: u64,
     #[serde(alias = "sessions")]
     pub terminals: usize,
+    /// Started by the launch daemon at system start, outside any login
+    /// session: it cannot read the Keychain, and a daemon started at login
+    /// takes its terminals over (X113).
+    #[serde(default)]
+    pub started_at_boot: bool,
 }
 
 // ------------------------------------------------------------ chat (X6)
