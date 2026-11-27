@@ -82,9 +82,6 @@ const TONE: Record<CardRow["meta"]["tone"], string> = {
   faint: "text-faint",
 };
 
-// Drawn with the session rows (X118), which the phone shares.
-export { TaskGlyph };
-
 /** Keeps the shown workspace's tasks fresh while Tasks mode is open: now,
  *  every minute, and when the window comes to the front (at most every 15 s). */
 function useTaskSync() {

@@ -13,7 +13,7 @@ import { trackerName, trackerOf } from "../../lib/tasks";
 import { composerTask, findTask, moveTask, searchOf, searchTrackers, setTaskQuery, showBoard, trackerSearchOf, useTasks } from "../../lib/tasksStore";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, IconButton, Kbd, StateGlyph } from "../ui";
-import { TaskGlyph } from "./TasksMode";
+import { TaskGlyph } from "../SessionRowView";
 
 const MARK = "rounded-[2px] bg-accent/[0.28] text-fg";
 const NONE_FOUND: Found[] = [];

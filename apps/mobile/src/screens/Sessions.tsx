@@ -2,7 +2,7 @@
 // desktop sidebar draws them, with chips for what needs the user, what works
 // and what waits.
 
-import { createContext, useContext, useState } from "react";
+import { useState } from "react";
 import { ArrowDown, Loader2, Search, Server, ShieldAlert, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
@@ -11,15 +11,10 @@ import { numberColumn, rowStyle, taskGroups } from "@desktop/lib/sessionRows";
 import { cellOf, ProjectMarkView, RowGlyph, RowView, TaskGroupList, type RowCell } from "@desktop/components/SessionRowView";
 import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, type SessionSection, chips, filterGroups, rowBadge, rowGlyph, rowTarget, sessionSections, taskLine } from "../lib/sessionList";
-import { sessionBoards } from "../lib/board";
+import { type ChipId, type ProjectGroup, type SessionRow, type SessionSection, chips, filterGroups, rowBadge, rowGlyph, rowTarget, sessionSections } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
 import { Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
-import { useNow } from "../lib/now";
-
-/** Each shown session's task line (X48), and whether any board is shared. */
-const TaskLines = createContext<{ lines: Record<string, NonNullable<ReturnType<typeof taskLine>>>; sources: boolean }>({ lines: {}, sources: false });
 
 const CHIP_TONE = { behind: "text-accent", pulling: "text-muted", diverged: "text-error" } as const;
 
@@ -84,11 +79,13 @@ function Row({ r, cell, nested }: { r: SessionRow; cell?: RowCell; nested: boole
 
 function Group({ g }: { g: ProjectGroup }) {
   const style = useApp((s) => rowStyle(s.settings.sessionRows));
-  const { lines, sources } = useContext(TaskLines);
-  const ids = g.rows.map((r) => r.session.id);
+  // Rows come from several hosts: their task lines are keyed by host and id.
+  const lines = Object.fromEntries(g.rows.flatMap((r) => (r.task ? [[r.key, r.task]] : [])));
+  const sources = g.rows.some((r) => r.sources);
+  const ids = g.rows.map((r) => r.key);
   const column = style === "number" && sources ? numberColumn(ids, lines, { heading: g.heading === "project" }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
-  const row = (r: SessionRow, nested: boolean) => <Row key={`${r.host}/${r.session.id}`} r={r} nested={nested} cell={cellOf(column, r.session.id)} />;
+  const row = (r: SessionRow, nested: boolean) => <Row key={r.key} r={r} nested={nested} cell={cellOf(column, r.key)} />;
   return (
     <div className="mb-1 flex flex-col">
       {g.heading === "project" && g.project && (
@@ -107,7 +104,7 @@ function Group({ g }: { g: ProjectGroup }) {
         </div>
       )}
       {!tasks && g.rows.map((r) => row(r, r.nested))}
-      {tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.rows.find((r) => r.session.id === id)!, true)} />}
+      {tasks && <TaskGroupList tasks={tasks} row={(key) => row(g.rows.find((r) => r.key === key)!, true)} />}
     </div>
   );
 }
@@ -132,24 +129,13 @@ export function SessionsScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
   const workspace = useShownWorkspace();
-  const now = useNow();
   const [chip, setChip] = useState<ChipId>("all");
   const [query, setQuery] = useState<string | null>(null);
-  const sections = sessionSections(hosts, data, workspace, now);
+  const sections = sessionSections(hosts, data, workspace);
   const all = sections.flatMap((s) => s.groups);
-  // Each row's task from its host's boards and those its account shares (X48, X76).
   const rows = all.flatMap((g) => g.rows);
-  const lines = Object.fromEntries(
-    rows.flatMap((r) => {
-      const d = data[r.host];
-      const l = d ? taskLine(d, r.session, sessionBoards(hosts, data, r.host, r.session).map((b) => b.snapshot)) : null;
-      return l ? [[r.session.id, l]] : [];
-    }),
-  );
-  const sources = rows.some((r) => sessionBoards(hosts, data, r.host, r.session).length > 0);
   const filtered = filterGroups(all, chip, query ?? "");
   return (
-    <TaskLines.Provider value={{ lines, sources }}>
       <div className="scroll h-full bg-window">
         <Title
           right={
@@ -184,10 +170,10 @@ export function SessionsScreen() {
           {filtered.length === 0 && <div className="px-4 pt-3 text-[14px] text-muted">{rows.length ? "No sessions match." : "No sessions yet. Start one with New."}</div>}
           {sections.map((s) => {
             const groups = filtered.filter((g) => g.sectionKey === s.key);
-            return groups.length ? <SectionBlock key={s.key} s={s} groups={groups} /> : null;
+            // A section shows under All with nothing searched even without rows, as on the Mac.
+            return groups.length || (chip === "all" && !query) ? <SectionBlock key={s.key} s={s} groups={groups} /> : null;
           })}
         </div>
       </div>
-    </TaskLines.Provider>
   );
 }

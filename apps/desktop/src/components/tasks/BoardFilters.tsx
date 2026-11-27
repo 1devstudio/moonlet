@@ -10,7 +10,8 @@ import { chipOf, type FieldChoice, filterMenuKey, type FilterField, type FilterV
 import { Menu } from "../Menu";
 import { radioProps, Switch } from "../settings/controls";
 import { Button, cx, IconButton, Kbd, selectCls } from "../ui";
-import { PriorityBars, TaskGlyph } from "./TasksMode";
+import { PriorityBars } from "./TasksMode";
+import { TaskGlyph } from "../SessionRowView";
 
 export type Panel = "filter" | "display" | null;
 

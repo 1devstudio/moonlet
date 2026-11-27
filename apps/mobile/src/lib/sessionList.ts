@@ -6,7 +6,6 @@
 import { dropRelisted, ownerLine, sessionHost } from "./copies";
 import { planOf } from "@desktop/lib/chat";
 import { arrangeShared, type Group, groupHeading, lastActive, nestedIn, sectionParts, sessionBadge, sessionGlyph, shownSections } from "@desktop/lib/sidebar";
-import { agentCount } from "@desktop/lib/subagents";
 import { identityAvatar } from "@desktop/lib/projectAvatar";
 import { splitKey } from "@desktop/lib/sessionRows";
 import type { AgentState, Project, PullRequest, Section, Session } from "@desktop/lib/protocol";
@@ -19,17 +18,16 @@ import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
 import { hostWorkspaces, workspaceChoices } from "./workspaceChoices";
+import { sessionBoards } from "./board";
 
 export interface SessionRow {
+  /** `host/session`: rows come from several hosts, whose ids may meet. */
+  key: string;
   host: string;
   session: Session;
   state: AgentState;
-  /** `needs you`, `plan`, `3m` while working, `done`, `failed`, or nothing. */
-  word: string;
   /** The waiting plan's chat and ask, if any. */
   plan: { terminal: number; ask: string } | null;
-  /** `2 agents` while the session's chats run subagents (X42), else empty. */
-  agents: string;
   /** The host's name when the session is on another member than its
    * group's project (X68), else null. */
   on: string | null;
@@ -41,7 +39,13 @@ export interface SessionRow {
   subagents: number;
   /** Its project's name, which search looks in. */
   project: string;
+  /** Its task's line for the row styles (X48), from the Mac's boards. */
+  task: TaskLine | null;
+  /** A board of its workspace is shared with the phone: rows show task columns, and Link to task… is offered. */
+  sources: boolean;
 }
+
+export type TaskLine = { key: string; title: string; column: Category; outOfSync: boolean };
 
 /** One group of a section as the desktop sidebar draws it (X118): a
  * project's, a status's or a task's, or the whole ungrouped section. */
@@ -55,10 +59,6 @@ export interface ProjectGroup {
   /** The project's name, the status's or the task's. */
   label: string;
   host: string;
-  hostLabel: string;
-  remote: boolean;
-  /** The section's name. */
-  section: string;
   /** The group's project, for a project group. */
   project: Project | null;
   /** The member the project comes from when not the section's first (X68). */
@@ -80,6 +80,8 @@ export interface SessionSection {
   groups: ProjectGroup[];
 }
 
+type TaskOf = (host: string, s: Session) => { task: TaskLine | null; sources: boolean };
+
 function waitingPlan(d: HostData, s: Session): SessionRow["plan"] {
   for (const t of Object.values(d.terminals)) {
     if (t.session_id !== s.id) continue;
@@ -89,29 +91,18 @@ function waitingPlan(d: HostData, s: Session): SessionRow["plan"] {
   return null;
 }
 
-function workingFor(d: HostData, s: Session, now: number): string {
-  const started = Object.values(d.terminals)
-    .filter((t) => t.session_id === s.id)
-    .map((t) => d.chats[t.id]?.turn_started_at)
-    .find((x): x is number => typeof x === "number");
-  if (!started) return "working";
-  const m = Math.max(1, Math.floor((now - started) / 60_000));
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
-}
-
-function row(host: string, d: HostData, s: Session, now: number, on: string | null = null, nested = false): SessionRow {
+function row(host: string, d: HostData, s: Session, on: string | null, nested: boolean, task: TaskOf): SessionRow {
   const state = sessionState(d, s);
   const plan = state === "blocked" ? waitingPlan(d, s) : null;
-  const word = plan ? "plan" : { blocked: "needs you", working: workingFor(d, s, now), done: "done", error: "failed", idle: "" }[state];
   const running = Object.values(d.terminals).reduce((n, t) => n + (t.session_id === s.id ? (t.subagents ?? 0) : 0), 0);
   const creating = Object.values(d.terminals).some((t) => t.session_id === s.id && t.kind === "setup" && !t.exit);
-  return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "", on, nested, creating, subagents: running, project: d.projects.find((p) => p.id === s.project_id)?.name ?? "" };
+  return { host, session: s, state, plan, on, nested, creating, subagents: running, project: d.projects.find((p) => p.id === s.project_id)?.name ?? "", key: `${host}/${s.id}`, ...task(host, s) };
 }
 
 /** The shown workspace's sections, or every workspace's for null, each
  * shared section once, grouped as its view says (X32, X118), each project
  * once by identity with every member's sessions (X68). */
-export function sessionSections(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null, now: number): SessionSection[] {
+export function sessionSections(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null): SessionSection[] {
   const live = Object.fromEntries(Object.values(hosts).flatMap((h) => (h.status === "connected" && data[h.id] ? [[h.id, h]] : [])));
   const list = hostWorkspaces(live, data);
   const of = {
@@ -121,6 +112,18 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
     // shows once (X72).
     sessions: dropRelisted(Object.fromEntries(list.map((h) => [h.host, h.sessions]))),
   };
+  // Each session's task from its host's boards and those its account shares (X48, X76), once.
+  const tasks = new Map<string, { task: TaskLine | null; sources: boolean }>();
+  const taskOf: TaskOf = (h, s) => {
+    const k = `${h}/${s.id}`;
+    let t = tasks.get(k);
+    if (!t) {
+      const boards = data[h] ? sessionBoards(hosts, data, h, s) : [];
+      t = { task: data[h] ? taskLine(data[h], s, boards.map((b) => b.snapshot)) : null, sources: boards.length > 0 };
+      tasks.set(k, t);
+    }
+    return t;
+  };
   const out: SessionSection[] = [];
   for (const ref of shown ? [shown] : workspaceChoices(list).map((c) => c.ref)) {
     for (const { ws, sec, hosts: holding } of shownSections(ref, list)) {
@@ -129,7 +132,7 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
         stateOf: (h, s) => sessionState(data[h], s),
         activeAt: (h, s) => lastActive(Object.values(data[h].terminals).filter((t) => t.session_id === s.id), s),
         archiving: () => false,
-        taskOf: () => null,
+        taskOf: (h, s) => taskOf(h, s).task,
       });
       const groups: ProjectGroup[] = [];
       for (const g of shared) {
@@ -138,7 +141,6 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
         const project = g.kind === "project" ? (data[g.host].projects.find((p) => p.id === g.projectId) ?? null) : null;
         if (g.kind === "project" && !project) continue;
         if (g.kind !== "project" && !g.sessions.length) continue;
-        const h = hosts[g.host];
         const nested = nestedIn(g.sessions, (e) => e.session);
         groups.push({
           key: `${sectionKey}:${g.key}`,
@@ -147,13 +149,10 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
           heading: groupHeading(g),
           label: g.label,
           host: g.host,
-          hostLabel: h.label,
-          remote: !!h.via,
-          section: sec.name,
           project,
           on: g.on && "host" in g.on ? hosts[g.on.host].label : null,
           avatar: identityAvatar(project?.identity?.origin ?? null),
-          rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, now, ownerLine(e.session) ?? (e.host === g.host ? null : hosts[e.host].label), nested(e.session))),
+          rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, ownerLine(e.session) ?? (e.host === g.host ? null : hosts[e.host].label), nested(e.session), taskOf)),
         });
       }
       out.push({ key: sectionKey, name: sec.name, host: holding[0], where: list.length > 1 && holding.length === 1 ? hosts[holding[0]].label : null, sec, groups });
@@ -163,8 +162,8 @@ export function sessionSections(hosts: Record<string, InboxHost>, data: Record<s
 }
 
 /** The groups of `sessionSections`, one after another. */
-export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null, now: number): ProjectGroup[] {
-  return sessionSections(hosts, data, shown, now).flatMap((s) => s.groups);
+export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null): ProjectGroup[] {
+  return sessionSections(hosts, data, shown).flatMap((s) => s.groups);
 }
 
 /** A row's leading glyph, as the desktop's (`sessionGlyph`): the agent's
@@ -209,7 +208,7 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
           (!q || [r.session.name, r.session.branch, r.project].some((x) => x.toLowerCase().includes(q))),
       ),
     }))
-    .filter((g, i) => g.rows.length || (chip === "all" && !q && groups[i].rows.length === 0));
+    .filter((g) => g.rows.length || (chip === "all" && !q));
 }
 
 /** Where a tap on a row goes: a waiting plan's sheet, else the session's Chat, whatever the agent's state. */
@@ -265,7 +264,7 @@ function boardTask(d: HostData, s: Session, pr: PullRequest | null | undefined, 
  * whole key, title and state, from the boards the Mac shares only, as the
  * desktop's come from its board. The phone does not know when a task is
  * out of sync. */
-export function taskLine(d: HostData, s: Session, shared: TaskSnapshot[] = []): { key: string; title: string; column: Category; outOfSync: boolean } | null {
+export function taskLine(d: HostData, s: Session, shared: TaskSnapshot[] = []): TaskLine | null {
   const found = boardTask(d, s, undefined, shared);
   if (!found) return null;
   const own = found.task.column;
