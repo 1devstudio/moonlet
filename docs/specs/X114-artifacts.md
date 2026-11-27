@@ -77,7 +77,7 @@ A session's agent writes plans, and a session or Design mode makes designs, but 
 
 ### The CLI (entry 7)
 
-- [ ] `moonlet artifact ls [--kind plan|design] [--search <text>] [--workspace <id>]` lists the workspace's artifacts as JSON, designs too (`artifact.list` with `designs`); `moonlet artifact show <id>` prints one (a plan's latest text; a design's record); `moonlet artifact attach <id>` refers the agent's own session to it and prints its folder and line. An agent's CLI may run these, attach only for the session its terminal is in; it may not rename, edit, copy or move. (`moonlet-cli` `artifact.rs` ls_shows_the_kind_asked_for_and_what_a_search_finds; `moonlet-cli/tests/design_e2e.rs` a_sessions_agent_finds_and_attaches_artifacts_with_moonlet_artifact; `moonletd/tests/daemon.rs` an_agents_cli_finds_artifacts_and_refers_its_own_session_to_one, a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does)
+- [ ] `moonlet artifact ls [--kind plan|design] [--search <text>] [--workspace <id>]` lists the workspace's artifacts as JSON, designs too (`artifact.list` with `designs`); `moonlet artifact show <id> [--workspace <id>]` prints one (a plan's latest text; a design's record), the workspace the session's without `--workspace`; `moonlet artifact attach <id>` refers the agent's own session to it and prints its folder and line. An agent's CLI may run these, attach only for the session its terminal is in; it may not rename, edit, copy or move. A kind that is neither is refused, naming the two. (`moonlet-cli` `artifact.rs` ls_shows_the_kind_asked_for_and_what_a_search_finds; `moonlet-cli/tests/design_e2e.rs` a_sessions_agent_finds_and_attaches_artifacts_with_moonlet_artifact; `moonletd/tests/daemon.rs` an_agents_cli_finds_artifacts_and_refers_its_own_session_to_one, a_local_connection_that_proves_nothing_reaches_only_what_the_cli_does)
 - [ ] The moonlet skill tells the agent how to find and attach artifacts, and never to edit a copy. (`hooks.rs` the_moonlet_skill_tells_how_to_find_and_attach_artifacts)
 
 ## UI
@@ -94,20 +94,21 @@ The design's pages are the reference.
 
 ## Protocol and RPCs
 
-- `artifact.list {workspace}` → `ArtifactInfo[]`: `{id, kind: "plan"|"design", name, home: {workspace, session?, project?, archived?, merged?}, updated_at, version?, used_by: string[], design?: DesignInfo}`.
-- `artifact.search {workspace, query}` → `ArtifactMatch[]`: `{id, snippet?, field: "name"|"text"|"brief"|"label"}`.
-- `artifact.read {id, version?}` → `{info, text?, versions?: [{n, state, at, path}]}`.
-- `artifact.rename {id, name}`, `artifact.edit {id, text}` → the new version. App only.
-- `artifact.attach {session, id}` → `{folder}`; `artifact.refs {session}` → `ArtifactRef[]`.
+- `artifact.list {workspace, designs?}` → `ArtifactInfo[]`, newest change first: `{id, kind: "plan"|"design", name, home: {workspace?, session?, project?, archived}, updated_at, version?, used_by: string[]}`. Plans only, unless `designs` (the CLI's): the app lists designs from Design mode's own lists, as artifacts with the same ids (`designArtifactId`), a merged design's home `merged` there.
+- `artifact.search {workspace, query}` → `ArtifactMatch[]`: `{id, field: "name"|"text", snippet?}`, plans only; the app searches designs itself.
+- `artifact.read {id, version?}` → `{info, text?, version?, versions: [{n, state: "pending"|"approved"|"rejected"|"edited", at}]}`.
+- `artifact.rename {id, name?}` (none: named after its session again), `artifact.edit {id, text}` → the new version. App only.
+- `artifact.attach {session, id, terminal?}` → `{folder, line}`.
 - `artifact.copy {id, workspace}`, `artifact.move {id, workspace}` → the copy's id, or its id there. App only.
 - `artifact.used {}` → `{id: [session]}`: every artifact this host's sessions refer to.
-- Event `artifact.changed {id}` after a plan's new version, a rename, or a design's change.
+- Event `artifact.changed {id}` after a plan's new version, a rename, a copy, a move or an attach; a design's change is `design.changed` (X65).
 - Allowed to an agent's CLI (`LOCAL_METHODS`): `artifact.list`, `artifact.search`, `artifact.read`, `artifact.attach` (its own session only: `terminal` names the caller's terminal, which must be in `session`).
+- `moonlet artifact ls [--kind plan|design] [--search <text>] [--workspace <id>]`, `moonlet artifact show <id> [--workspace <id>]`, `moonlet artifact attach <id>`.
 
 ## Data and config
 
 - `~/.moonlet/artifacts/plans/<session id>/<key>/plan.toml`: `{session, key, chat title, renamed?, created_at}`, and `v<n>.md` with `versions` in `plan.toml`: `{n, state, at}`.
-- `~/.moonlet/artifacts/refs/<session id>.toml`: the session's references, `{id, attached_at, told_version}`; its copies in `~/.moonlet/artifacts/refs/<session id>/<slug>/`.
+- `~/.moonlet/artifacts/refs/<session id>.toml`: the session's references, `{id, name, attached_at, seen}` (`name`: its copy's folder; `seen`: the version its agent was last given or told of, `gone` once told it was deleted); its copies in `~/.moonlet/artifacts/refs/<session id>/<name>/`, removed with the file when the session is archived.
 - A workspace's own plans (copies from another workspace) in `~/.moonlet/artifacts/plans/w-<workspace id>/<key>/`.
 
 ## Security considerations

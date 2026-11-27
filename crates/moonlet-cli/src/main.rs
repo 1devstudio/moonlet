@@ -178,13 +178,29 @@ enum WorkerAction {
     Down { name: String },
 }
 
+/// An artifact's kind (X114).
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ArtifactKindArg {
+    Plan,
+    Design,
+}
+
+impl ArtifactKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Design => "design",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ArtifactAction {
     /// The workspace's artifacts as JSON, newest change first.
     Ls {
-        /// `plan` or `design`; both without it.
-        #[arg(long)]
-        kind: Option<String>,
+        /// Only plans or only designs; both without it.
+        #[arg(long, value_enum)]
+        kind: Option<ArtifactKindArg>,
         /// Only those whose name, or a plan's text, has this.
         #[arg(long)]
         search: Option<String>,
@@ -193,7 +209,12 @@ enum ArtifactAction {
         workspace: Option<String>,
     },
     /// One artifact: a plan's latest text; a design as JSON.
-    Show { id: String },
+    Show {
+        id: String,
+        /// The design's workspace; the session's without it.
+        #[arg(long)]
+        workspace: Option<String>,
+    },
     /// Refer this session to an artifact: prints the folder of its read-only
     /// copy, which always holds its latest version, and the line to read it by.
     Attach { id: String },
@@ -1098,16 +1119,21 @@ async fn artifact_cmd(socket: &std::path::Path, action: ArtifactAction) -> Resul
                 }
                 None => None,
             };
-            let shown = artifact::shown(list, kind.as_deref(), search.as_deref(), found.as_deref());
+            let shown = artifact::shown(list, kind.map(ArtifactKindArg::as_str), search.as_deref(), found.as_deref());
             println!("{}", serde_json::to_string_pretty(&shown)?);
         }
-        ArtifactAction::Show { id } => {
-            if id.starts_with("plan:") {
+        ArtifactAction::Show { id, workspace } => {
+            if moonlet_core::artifact::parse_id(&id).is_some() {
                 let read: moonlet_proto::types::ArtifactText = c.request(methods::ARTIFACT_READ, serde_json::json!({"id": id})).await?;
                 print!("{}", read.text.unwrap_or_default());
             } else {
-                let (session, _) = here_session(&mut c).await.map_err(|_| anyhow::anyhow!("a design is shown in a session's terminal: attach it to read its pages"))?;
-                let workspace = session.workspace_id.context("this session is in no workspace")?;
+                let workspace = match workspace {
+                    Some(w) => w,
+                    None => {
+                        let (session, _) = here_session(&mut c).await.map_err(|_| anyhow::anyhow!("no workspace: run in a session's terminal or pass --workspace"))?;
+                        session.workspace_id.context("this session is in no workspace")?
+                    }
+                };
                 let list: Vec<moonlet_proto::types::ArtifactInfo> = c.request(methods::ARTIFACT_LIST, serde_json::json!({"workspace": workspace, "designs": true})).await?;
                 let found = list.into_iter().find(|a| a.id == id).with_context(|| format!("no artifact {id} in this workspace"))?;
                 println!("{}", serde_json::to_string_pretty(&found)?);

@@ -793,6 +793,11 @@ struct DesignCopy {
     to: String,
 }
 
+/// Artifacts as they are listed (X114): newest change first, by id on a tie.
+fn newest_first(list: &mut [moonlet_proto::types::ArtifactInfo]) {
+    list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+}
+
 /// Refuses the library as where an artifact is copied or moved (X114): a
 /// design goes there by being shared (X95), a plan never.
 fn refuse_library(workspace: &str) -> Result<(), RpcError> {
@@ -1825,7 +1830,7 @@ impl Daemon {
             *per_session.entry(p.session.as_str()).or_default() += 1;
         }
         let mut list: Vec<_> = plans.iter().map(|p| self.plan_info_of(p, per_session.get(p.session.as_str()).copied().unwrap_or(0) > 1)).collect();
-        list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+        newest_first(&mut list);
         list
     }
 
@@ -1846,11 +1851,13 @@ impl Daemon {
             .into_iter()
             .filter(|d| d.kind != DesignKind::Project)
             .map(|d| {
-                let id = match (&d.kind, &d.session, d.shared) {
-                    (DesignKind::Session, Some(s), _) => format!("design:session:{s}:{}", d.slug),
-                    (_, _, true) => format!("design:library:{}", d.slug),
-                    _ => format!("design:workspace:{workspace}:{}", d.slug),
+                use moonlet_core::artifact::{DesignHome, design_id};
+                let home = match (&d.kind, &d.session, d.shared) {
+                    (DesignKind::Session, Some(s), _) => DesignHome::Session(s.clone()),
+                    (_, _, true) => DesignHome::Library,
+                    _ => DesignHome::Workspace(workspace.to_string()),
                 };
+                let id = design_id(&home, &d.slug);
                 let used_by = used.get(&id).cloned().unwrap_or_default().into_iter().filter(|s| Some(s) != d.session.as_ref()).collect();
                 ArtifactInfo {
                     id,
@@ -1945,7 +1952,7 @@ impl Daemon {
                 let mut list = self.artifacts_of(&r.workspace);
                 if r.designs {
                     list.extend(self.design_artifacts(&r.workspace).await?);
-                    list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+                    newest_first(&mut list);
                 }
                 ok(list)
             }

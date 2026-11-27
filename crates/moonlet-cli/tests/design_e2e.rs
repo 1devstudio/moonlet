@@ -772,6 +772,14 @@ async fn a_sessions_agent_finds_and_attaches_artifacts_with_moonlet_artifact() {
     assert_eq!(std::fs::read_to_string(folder.join("pages/index.html")).unwrap(), "<p>settings</p>");
     assert!(attached["line"].as_str().unwrap().starts_with("Artifact \"Settings page\" (design, live, read only): "));
 
+    // Outside a session, a design is shown from the workspace named.
+    let named = json(&d.moonlet(d.home.path(), &["artifact", "show", &id, "--workspace", &ws]));
+    assert_eq!(named["id"], serde_json::json!(id));
+    // A kind that is none is refused, naming the two.
+    let wrong = d.moonlet_as(&worktree, terminal, &["artifact", "ls", "--kind", "plans"]);
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("possible values: plan, design"), "{}", String::from_utf8_lossy(&wrong.stderr));
+
     // Outside a session, attach says what it needs.
     let lost = d.moonlet(d.home.path(), &["artifact", "attach", &id]);
     assert!(!lost.status.success());

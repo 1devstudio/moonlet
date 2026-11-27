@@ -80,9 +80,12 @@ The plans agents propose and the designs made in moonlet are **artifacts**, list
 
 ```bash
 "$MOONLET_BIN" artifact ls                           # the workspace's plans and designs, as JSON
+"$MOONLET_BIN" artifact ls --kind plan               # only plans (or --kind design)
 "$MOONLET_BIN" artifact ls --search "<words>"        # by name, or by a plan's text
-"$MOONLET_BIN" artifact show <id>                    # a plan's latest text
+"$MOONLET_BIN" artifact show <id>                    # a plan's latest text; a design's record as JSON
 "$MOONLET_BIN" artifact attach <id>                  # refer this session to it
 ```
 
-`attach` prints the folder of a read-only copy and a line naming it. The copy always holds the artifact's latest version; read the plan or the design's pages there, and never edit it there: moonlet writes it over from its home. When it changes, your next message starts by saying so.
+Outside a session's terminal, add `--workspace <id>` to `ls` and `show`. Each artifact in `ls` has `id` (`plan:…` or `design:…`), `kind`, `name`, `home` (`workspace`, and `session` or `project` when it has one), `updated_at` (ms) and `used_by` (the other sessions that refer to it).
+
+`attach` prints JSON with `folder`, the read-only copy, and `line`, the line naming it. The copy always holds the artifact's latest version; read the plan or the design's pages there, and never edit it there: moonlet writes it over from its home. When it changes, your next message starts by saying so.
