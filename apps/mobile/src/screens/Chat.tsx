@@ -8,7 +8,7 @@ import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChat
 import { CLAUDE_MODES, agentEfforts, chatModelPatch } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
-import { askerName } from "@desktop/lib/subagents";
+import { askerName, stripDismissAt, stripRetry } from "@desktop/lib/subagents";
 import { type Screen, showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
@@ -16,7 +16,7 @@ import { ageText, askHeadline } from "../lib/cards";
 import { asideStep, blockKey, chatFooter, queuedActions, sessionChat } from "../lib/chatView";
 import { errorText, useBusy } from "../lib/busy";
 import { type What, cancelHeld, dismissFailed, heldKey, sendFor, useHeld, useHeldLine } from "../lib/held";
-import { AgentDetail, AskerLine, ChatBlockView } from "../components/chat";
+import { AgentDetail, AgentsList, AgentsStrip, AskerLine, ChatBlockView } from "../components/chat";
 import { Markdown } from "../components/Markdown";
 import { ModelChoices } from "../components/ModelChoices";
 import { Sheet } from "../components/Sheet";
@@ -291,6 +291,9 @@ function Composer({ host, terminal, running }: { host: string; terminal: number;
   );
 }
 
+// Where × hid each chat's agents strip, by chat key, for as long as the app runs.
+const stripDismissed = new Map<string, number>();
+
 function Ring({ percent }: { percent: number }) {
   const c = 2 * Math.PI * 7;
   return (
@@ -313,8 +316,10 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
   const st = useChat((s) => s.chats[chatKey(host, terminal)]);
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
-  // The subagent whose sheet is open, by its key (X42).
+  // The subagent whose sheet is open, by its key (X42), or the list of them.
   const [agentOpen, setAgentOpen] = useState<string | null>(null);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [dismissedAt, setDismissedAt] = useState(() => stripDismissed.get(chatKey(host, terminal)) ?? 0);
   // Ask aside (X49): the queued message Claude is asked to give back, then the aside.
   const [unqueuing, setUnqueuing] = useState<QueuedMessage | null>(null);
   const [aside, setAside] = useState<Aside | null>(null);
@@ -379,6 +384,21 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
         {st.status === "working" && !ask && <div className="text-[13px] text-muted italic">Working…</div>}
         {waitingForLogin(st.status, hostLabel) && <div className="text-[13px] text-muted">{waitingForLogin(st.status, hostLabel)}</div>}
       </main>
+      <AgentsStrip
+        st={st}
+        dismissedAt={dismissedAt}
+        onAgents={() => setAgentsOpen(true)}
+        onDismiss={() => {
+          const at = stripDismissAt(st);
+          stripDismissed.set(chatKey(host, terminal), at);
+          setDismissedAt(at);
+        }}
+        onRetry={() => {
+          const text = stripRetry(st);
+          if (text) void sendFor(host, terminal, M.chatSend, { id: terminal, text, images: [] }, "message").catch((e) => setQueueNote(errorText(e)));
+        }}
+        onReview={from.kind === "session" ? () => showScreen({ ...from, tab: "changes" }) : undefined}
+      />
       {ask && <HeldLine host={host} terminal={terminal} what="answer" onTakeBack={() => {}} />}
       <FailedAnswer host={host} terminal={terminal} />
       {ask &&
@@ -421,6 +441,11 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
           }}
           onClose={() => setAside(null)}
         />
+      )}
+      {agentsOpen && !agentOpen && (
+        <Sheet label="Agents" onClose={() => setAgentsOpen(false)}>
+          <AgentsList chat={agents} onOpen={setAgentOpen} />
+        </Sheet>
       )}
       {agentOpen && (
         <Sheet label="Agent" onClose={() => setAgentOpen(null)}>
