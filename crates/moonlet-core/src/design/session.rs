@@ -968,15 +968,14 @@ fn make_side(at: &DesignAt) -> Result<()> {
     )
 }
 
-/// A file of a design system a page needs to render: the stylesheets at
-/// its top (`styles.css`, `components.css`, and any they import, such as
-/// `base.css`), the component stylesheets, its tokens and its fonts. Never
-/// a proposal waiting for the user (X64).
+/// A file of a design system a page needs to render: its own styles (every
+/// stylesheet at its top, imported or not, its tokens and its fonts) and the
+/// component stylesheets. Never a proposal waiting for the user (X64).
 fn is_style(path: &str) -> bool {
-    let css = path.ends_with(".css") && !path.ends_with(".proposed.css");
-    let top_css = css && !path.contains('/');
-    let component_css = css && path.starts_with("components/");
-    top_css || path.starts_with("tokens/") || path.starts_with("fonts/") || component_css
+    let component_css = path.starts_with("components/")
+        && path.ends_with(".css")
+        && !path.ends_with(".proposed.css");
+    super::anchor::is_system_style(path) || component_css
 }
 
 /// Copies the design system in `system_dir` into the design: its styles
