@@ -344,6 +344,7 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
           <RowGlyph glyph={glyph} pr={pr?.state} />
         )}
       badge={renaming ? null : badge}
+      pinned={!!s.pinned_top}
       merged={!renaming && pr?.state === "merged"}
       mergedNote={autoArchiveNote(s.auto_archive, hostLabel)}
       name={

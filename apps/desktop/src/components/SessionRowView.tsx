@@ -3,7 +3,7 @@
 // phone's Sessions draw the same rows from what each one loads.
 
 import { useState, type ReactNode } from "react";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, MessageCircleQuestion, Pin } from "lucide-react";
 import type { Column } from "../lib/tasks";
 import { glyphShape } from "../lib/taskDetails";
 import type { sessionGlyph } from "../lib/sidebar";
@@ -96,12 +96,13 @@ export function RowView({
   picked,
   nested,
   touch,
+  pinned,
   ...rest
 }: {
   glyph: ReactNode;
   cell?: RowCell;
   name: ReactNode;
-  badge?: { text: string; tone: keyof typeof BADGE_TONE } | null;
+  badge?: { text: string; tone: keyof typeof BADGE_TONE; icon?: true } | null;
   /** The session's PR is merged: a merge icon ends the row. */
   merged?: boolean;
   /** Why its host has not archived the merged session (X116): the icon's
@@ -112,6 +113,8 @@ export function RowView({
   picked?: boolean;
   nested?: boolean;
   touch?: boolean;
+  /** Pinned to the top (X112): a pin starts the row (X119). */
+  pinned?: boolean;
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -123,6 +126,12 @@ export function RowView({
         picked ? "bg-selected" : selected ? "bg-bg" : touch ? "active:bg-tab-hover" : "hover:bg-tab-hover",
       )}
     >
+      {/* Turned 45° so it reads apart from X73's upright "runs only on" pin. */}
+      {pinned && (
+        <span role="img" aria-label="Pinned to top" title="Pinned to top" className="-mr-1 flex shrink-0 text-muted">
+          <Pin size={12} className="rotate-45" />
+        </span>
+      )}
       <span className="flex w-[15px] shrink-0 justify-center">{glyph}</span>
       {cell && cell.width > 0 && (
         <span style={{ width: `${Math.max(cell.width, 3)}ch` }} className={cx("shrink-0 text-right font-mono ui-text-11.5 tabular-nums", cell.outOfSync ? "text-accent-2" : "text-faint")}>
@@ -130,7 +139,14 @@ export function RowView({
         </span>
       )}
       {name}
-      {badge && <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>}
+      {badge &&
+        (badge.icon ? (
+          <span role="img" aria-label={badge.text} title={badge.text} className={cx("flex shrink-0", BADGE_TONE[badge.tone])}>
+            <MessageCircleQuestion size={13} />
+          </span>
+        ) : (
+          <span className={cx("shrink-0 font-mono ui-text-11.5 tabular-nums", BADGE_TONE[badge.tone])}>{badge.text}</span>
+        ))}
       {merged && (
         <span role="img" aria-label={mergedNote?.text ?? "merged"} title={mergedNote?.text ?? "PR merged"} className={cx("shrink-0", mergedNote?.warn && "flex items-center gap-0.5 text-blocked")}>
           {mergedNote?.warn && <CircleAlert size={11} />}

@@ -155,7 +155,7 @@ describe("sessionSections (X118)", () => {
     const rows = sessionGroups(w.hosts, w.data, null).flatMap((g) => g.rows);
     const by = (name: string) => rows.find((r) => r.session.name === name)!;
     expect(rowBadge(by("Fix checkout button on mobile"), undefined, undefined)).toEqual({ text: "creating", tone: "muted" });
-    expect(rowBadge(by("Add search to the product list"), { additions: 5, deletions: 0 }, undefined)).toEqual({ text: "needs input", tone: "blocked" });
+    expect(rowBadge(by("Add search to the product list"), { additions: 5, deletions: 0 }, undefined)).toEqual({ text: "needs input", tone: "blocked", icon: true });
     expect(rowBadge(by("Dark mode for account pages"), undefined, undefined)).toEqual({ text: "2 agents", tone: "agents" });
     expect(rowBadge(by("Bump Node to 22"), { additions: 1412, deletions: 38 }, undefined)).toEqual({ text: "+1.4k -38", tone: "diff" });
     expect(rowBadge(by("Bump Node to 22"), { additions: 1412, deletions: 38 }, "MERGED")).toBeNull();

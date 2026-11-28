@@ -106,6 +106,7 @@ function Row({ r, cell, nested }: { r: SessionRow; cell?: RowCell; nested: boole
         cell={cell}
         glyph={<RowGlyph glyph={rowGlyph(r, pr?.state)} pr={prState} />}
         badge={badge}
+        pinned={!!r.session.pinned_top}
         merged={prState === "merged"}
         name={
           <>
