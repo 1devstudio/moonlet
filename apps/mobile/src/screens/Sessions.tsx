@@ -11,7 +11,7 @@ import { numberColumn, rowStyle, taskGroups } from "@desktop/lib/sessionRows";
 import { cellOf, ProjectMarkView, RowGlyph, RowView, TaskGroupList, type RowCell } from "@desktop/components/SessionRowView";
 import { newSessionIn, showScreen, updateSettings, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, type SessionSection, chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowTarget, sessionSections } from "../lib/sessionList";
+import { type ChipId, type ProjectGroup, type SessionRow, type SessionSection, chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowPinned, rowTarget, sessionSections } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
 import { Title, cx } from "../components/ui";
 import { WorkspacePill } from "../components/WorkspacePill";
@@ -106,7 +106,7 @@ function Row({ r, cell, nested }: { r: SessionRow; cell?: RowCell; nested: boole
         cell={cell}
         glyph={<RowGlyph glyph={rowGlyph(r, pr?.state)} pr={prState} />}
         badge={badge}
-        pinned={!!r.session.pinned_top}
+        pinnedTop={rowPinned(r)}
         merged={prState === "merged"}
         name={
           <>

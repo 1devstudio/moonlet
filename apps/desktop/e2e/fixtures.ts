@@ -391,6 +391,8 @@ export const sel = {
   /** A button in the open confirm modal, by its visible text. */
   confirmButton: (text: string) => `//div[@role="dialog"][@aria-modal="true"]//button[normalize-space()=${lit(text)}]`,
   sessionRow: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]`,
+  /** The row's needs-input icon, found by its label (X119). */
+  needsInput: (name: string) => `//div[@role="button"][.//span[normalize-space()=${lit(name)}]]//span[@aria-label="needs input"]`,
   /** The settings page (X43). */
   settings: '[role="region"][aria-label="Settings"]',
   /** An entry of the settings nav, by its label; `current` only while its page is open. */

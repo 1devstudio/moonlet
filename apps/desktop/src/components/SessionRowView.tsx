@@ -96,7 +96,7 @@ export function RowView({
   picked,
   nested,
   touch,
-  pinned,
+  pinnedTop,
   ...rest
 }: {
   glyph: ReactNode;
@@ -113,8 +113,9 @@ export function RowView({
   picked?: boolean;
   nested?: boolean;
   touch?: boolean;
-  /** Pinned to the top (X112): a pin starts the row (X119). */
-  pinned?: boolean;
+  /** Pinned to the top (X112): a pin starts the row (X119). Not X73's
+   *  `pinned`, the host a session runs only on. */
+  pinnedTop?: boolean;
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -127,7 +128,7 @@ export function RowView({
       )}
     >
       {/* Turned 45° so it reads apart from X73's upright "runs only on" pin. */}
-      {pinned && (
+      {pinnedTop && (
         <span role="img" aria-label="Pinned to top" title="Pinned to top" className="-mr-1 flex shrink-0 text-muted">
           <Pin size={12} className="rotate-45" />
         </span>

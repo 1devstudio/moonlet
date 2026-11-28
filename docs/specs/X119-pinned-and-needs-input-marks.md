@@ -18,14 +18,14 @@ X112 added **Pin to top**, but a pinned row looks like any other row: only its p
 
 ## Behaviour and acceptance criteria
 
-- [ ] A row's badge for an agent that needs input is an icon: `sessionBadge` returns `{ text: "needs input", tone: "blocked", icon: true }`, and every other badge has no icon. (`lib/sidebar.test.ts` lets needs input and creating win over agents; mobile `lib/sessionList.test.ts` shows a waiting session's needs input as an icon)
-- [ ] The icon (lucide `message-circle-question`, 13px, `text-blocked`) carries the badge's text as its accessible name and tooltip. (`e2e/specs/agents.e2e.ts` and `e2e/specs/agent-reads-terminal.e2e.ts` find the row's `needs input` by its label)
-- [ ] A session pinned to the top starts its row with a pin (lucide `Pin`, 12px, `text-muted`, turned 45° so it reads apart from X73's upright host pin), labelled "Pinned to top"; Unpin from top removes it. (`e2e/specs/session-menu.e2e.ts` pins a session from its menu and its row shows the pin; unpins it and the pin goes)
-- [ ] The phone's Sessions rows show the same pin for a session pinned to the top. (shared `RowView`; the phone passes `pinned` from the session record, `apps/mobile/src/screens/Sessions.tsx`)
+- [x] A row's badge for an agent that needs input is an icon: `sessionBadge` returns `{ text: "needs input", tone: "blocked", icon: true }`, and every other badge has no icon. (`sidebar.test.ts` › sessionBadge › "lets needs input and creating win over agents"; mobile `sessionList.test.ts` "gives each row what its glyph and badge need, as the desktop draws them")
+- [x] The icon (lucide `message-circle-question`, 13px, `text-blocked`) carries the badge's text as its accessible name and tooltip. (`agents.e2e.ts` "lists the agents, and the one that asks shows a dot and its ask"; `agent-reads-terminal.e2e.ts` "marks the session as needing the user while it is not in view"; both find it by its label with `sel.needsInput`)
+- [x] A session pinned to the top starts its row with a pin (lucide `Pin`, 12px, `text-muted`, turned 45° so it reads apart from X73's upright host pin), labelled "Pinned to top"; Unpin from top removes it. (`session-menu.e2e.ts` "pins a session to the top from its menu, and its row starts with a pin (X119)")
+- [x] The phone's Sessions rows show the same pin for a session pinned to the top: the shared `RowView` gets `pinnedTop` from `rowPinned`. (mobile `sessionList.test.ts` "starts a session pinned to the top with the desktop's pin, and no other row (X119)")
 
 ## UI
 
-The pin sits before the glyph slot, its right margin trimmed by 4px, so a pinned row's glyph and name sit about 18px further right than its unpinned neighbours. Colours follow the row's other marks: the design pen, X73's host pin and the not-ready triangle are all `text-muted`.
+The pin sits before the glyph slot, its right margin trimmed by `-mr-1` (about 3.4px at the app's 13.5px rem), so a pinned row's glyph and name sit about 17px further right than its unpinned neighbours. Colours follow the row's other marks: the design pen, X73's host pin and the not-ready triangle are all `text-muted`.
 
 Pages not chosen: **B** (a hairline under the last pinned row, no icon) and **C** (B plus an Unpin button on hover). The user picked page A and asked for the pin at the far left.
 

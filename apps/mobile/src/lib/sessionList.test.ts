@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
+import { chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowPinned, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
 import { MIN, NOW, ask, chat, data, project, session, terminal, workspace } from "./fixtures";
 
 const section = (id: string, name: string, project_ids: string[]): Section => ({
@@ -162,6 +162,13 @@ describe("sessionSections (X118)", () => {
     expect(rowGlyph(by("Dark mode for account pages"), undefined)).toBe("working");
     expect(rowGlyph(by("Bump Node to 22"), "OPEN")).toBe("branch");
     expect(rowGlyph(by("Bump Node to 22"), "MERGED")).toBe("idle");
+  });
+
+  it("starts a session pinned to the top with the desktop's pin, and no other row (X119)", () => {
+    const w = world();
+    w.data.mac.sessions = w.data.mac.sessions.map((s) => (s.name === "Dark mode for account pages" ? { ...s, pinned_top: true } : s));
+    const rows = sessionGroups(w.hosts, w.data, null).flatMap((g) => g.rows);
+    expect(rows.filter(rowPinned).map((r) => r.session.name)).toEqual(["Dark mode for account pages"]);
   });
 
   it("folds a section or a project under the desktop's keys, and opens it again on a second tap", () => {

@@ -121,7 +121,7 @@ describe("agents tab", () => {
     // One agent runs, the other waits for the user.
     expect([...pulses].sort()).toEqual(["moonlet-pulse", "none"]);
     // Needs input is an icon labelled with its text (X119).
-    await expect($(`${sel.sessionRow(SESSION)}//span[@aria-label="needs input"]`)).toBeDisplayed();
+    await expect($(sel.needsInput(SESSION))).toBeDisplayed();
     // The conversation shows the launch and names the agent that asks.
     await expect($('//span[normalize-space()="Launched 2 agents"]')).toBeDisplayed();
     await expect($('//div[contains(@class, "moonlet-card-in")][.//span[normalize-space()="Write hello file"]][.//span[normalize-space()="Allow Write?"]]')).toBeDisplayed();
