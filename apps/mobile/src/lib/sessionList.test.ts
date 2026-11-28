@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
+import { chips, filterGroups, foldsAfterTap, rowBadge, rowGlyph, rowPinned, rowTarget, sessionGroups, sessionSections, sessionTask, suggestedTask, taskChip, taskLine } from "./sessionList";
 import { MIN, NOW, ask, chat, data, project, session, terminal, workspace } from "./fixtures";
 
 const section = (id: string, name: string, project_ids: string[]): Section => ({
@@ -155,13 +155,20 @@ describe("sessionSections (X118)", () => {
     const rows = sessionGroups(w.hosts, w.data, null).flatMap((g) => g.rows);
     const by = (name: string) => rows.find((r) => r.session.name === name)!;
     expect(rowBadge(by("Fix checkout button on mobile"), undefined, undefined)).toEqual({ text: "creating", tone: "muted" });
-    expect(rowBadge(by("Add search to the product list"), { additions: 5, deletions: 0 }, undefined)).toEqual({ text: "needs input", tone: "blocked" });
+    expect(rowBadge(by("Add search to the product list"), { additions: 5, deletions: 0 }, undefined)).toEqual({ text: "needs input", tone: "blocked", icon: true });
     expect(rowBadge(by("Dark mode for account pages"), undefined, undefined)).toEqual({ text: "2 agents", tone: "agents" });
     expect(rowBadge(by("Bump Node to 22"), { additions: 1412, deletions: 38 }, undefined)).toEqual({ text: "+1.4k -38", tone: "diff" });
     expect(rowBadge(by("Bump Node to 22"), { additions: 1412, deletions: 38 }, "MERGED")).toBeNull();
     expect(rowGlyph(by("Dark mode for account pages"), undefined)).toBe("working");
     expect(rowGlyph(by("Bump Node to 22"), "OPEN")).toBe("branch");
     expect(rowGlyph(by("Bump Node to 22"), "MERGED")).toBe("idle");
+  });
+
+  it("starts a session pinned to the top with the desktop's pin, and no other row (X119)", () => {
+    const w = world();
+    w.data.mac.sessions = w.data.mac.sessions.map((s) => (s.name === "Dark mode for account pages" ? { ...s, pinned_top: true } : s));
+    const rows = sessionGroups(w.hosts, w.data, null).flatMap((g) => g.rows);
+    expect(rows.filter(rowPinned).map((r) => r.session.name)).toEqual(["Dark mode for account pages"]);
   });
 
   it("folds a section or a project under the desktop's keys, and opens it again on a second tap", () => {

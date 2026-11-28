@@ -116,14 +116,14 @@ describe("an agent reads a terminal", () => {
   it("marks the session as needing the user while it is not in view", async () => {
     await $(sel.sessionRow(OTHER)).click();
     const result = read();
-    await expect($(`${sel.sessionRow(SESSION)}//span[normalize-space()="needs input"]`)).toBeDisplayed({ wait: 15_000 });
+    await expect($(sel.needsInput(SESSION))).toBeDisplayed({ wait: 15_000 });
     await expect(modal()).not.toBeExisting();
 
     await $(sel.sessionRow(SESSION)).click();
     await expect(modal()).toBeDisplayed();
     await $(sel.confirmButton("Allow")).click();
     expect((await result).code).toBe(0);
-    await expect($(`${sel.sessionRow(SESSION)}//span[normalize-space()="needs input"]`)).not.toBeExisting();
+    await expect($(sel.needsInput(SESSION))).not.toBeExisting();
   });
 
   it("stops asking once allowed for the session, until the ⋯ menu asks again", async () => {

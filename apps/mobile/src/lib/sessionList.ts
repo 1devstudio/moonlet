@@ -177,6 +177,11 @@ export function rowGlyph(r: SessionRow, prState: string | undefined): ReturnType
   return sessionGlyph(r.state, prState?.toLowerCase());
 }
 
+/** The row starts with the desktop's pin: the session is pinned to the top (X112, X119). */
+export function rowPinned(r: SessionRow): boolean {
+  return !!r.session.pinned_top;
+}
+
 /** A row's badge, as the desktop's (`sessionBadge`): `creating`, `needs
  * input`, its subagents, or the diff stat once loaded. */
 export function rowBadge(r: SessionRow, git: { additions: number; deletions: number } | undefined, prState: string | undefined): ReturnType<typeof sessionBadge> {
