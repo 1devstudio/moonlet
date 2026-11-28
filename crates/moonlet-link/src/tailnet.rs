@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use moonlet_proto::methods::DeviceKind;
 use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, read_frame, write_frame};
-use moonlet_proto::types::DaemonUpdated;
+use moonlet_proto::types::{DaemonRestarted, DaemonUpdated};
 use serde_json::json;
 use tokio::net::TcpStream;
 
@@ -117,6 +117,31 @@ pub fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
 /// speaks; this exchange never changes. A daemon from before X69 closes the
 /// connection instead of answering, which gives `too_old`.
 pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<DaemonUpdated, RpcError> {
+    let params = json!({ "version": version });
+    before_hello(addrs, token, moonlet_proto::methods::DAEMON_UPDATE, params, UPDATE_TIMEOUT, "updated").await
+}
+
+/// Asks a paired daemon to restart itself (X120), keeping every session:
+/// in place of `hello`, as [`update`]. A daemon from before X120 closes the
+/// connection, which gives `too_old`.
+pub async fn restart(addrs: &[String], token: &str) -> Result<DaemonRestarted, RpcError> {
+    before_hello(addrs, token, moonlet_proto::methods::DAEMON_RESTART, json!({}), RESTART_TIMEOUT, "restarted").await
+}
+
+/// How long a restart, which only starts a process, takes to be answered.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Sends `method` in place of `hello` and reads its answer. A daemon that
+/// does not know it closes the connection: `too_old`, which says it "can't
+/// be `done_verb` from here".
+async fn before_hello<T: serde::de::DeserializeOwned>(
+    addrs: &[String],
+    token: &str,
+    method: &str,
+    params: serde_json::Value,
+    limit: Duration,
+    done_verb: &str,
+) -> Result<T, RpcError> {
     let unreachable = |e: anyhow::Error| RpcError::new("unreachable", format!("{e:#}"));
     let mut stream = dial(addrs).await.map_err(unreachable)?;
     let auth = Message::Auth {
@@ -133,23 +158,19 @@ pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Daem
     let Message::Authed { daemon_version, host, .. } = authed else {
         return Err(RpcError::new("unreachable", "the host did not authenticate"));
     };
-    let request = Message::Request {
-        id: 1,
-        method: moonlet_proto::methods::DAEMON_UPDATE.into(),
-        params: json!({ "version": version }),
-    };
+    let request = Message::Request { id: 1, method: method.into(), params };
     write_frame(&mut stream, &Frame::Json(request)).await.map_err(|e| unreachable(e.into()))?;
     let too_old = || {
         RpcError::new(
             "too_old",
             format!(
-                "{} runs moonlet {}, which can't be updated from here",
+                "{} runs moonlet {}, which can't be {done_verb} from here",
                 host.as_deref().unwrap_or("The host"),
                 daemon_version.as_deref().unwrap_or(BEFORE_X57)
             ),
         )
     };
-    let answer = tokio::time::timeout(UPDATE_TIMEOUT, async {
+    let answer = tokio::time::timeout(limit, async {
         loop {
             match read_frame(&mut stream).await {
                 Ok(Some(Frame::Json(Message::Response { id: 1, result, error }))) => {
@@ -160,7 +181,7 @@ pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Daem
                     };
                 }
                 Ok(Some(_)) => {}
-                // A daemon from before X69 closes cleanly instead of answering.
+                // A daemon that does not know `method` closes cleanly instead of answering.
                 Ok(None) => return Err(too_old()),
                 Err(e) => return Err(RpcError::new("unreachable", format!("the connection to the host broke: {e}"))),
             }
@@ -259,6 +280,32 @@ mod tests {
         assert_eq!(
             (e.code.as_str(), e.message.as_str()),
             ("too_old", "studio-mini runs moonlet 0.1.33, which can't be updated from here")
+        );
+    }
+
+    /// A daemon from before X120 closes the connection on a restart too.
+    #[tokio::test]
+    async fn a_host_from_before_the_restart_request_is_too_old() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _auth = read_frame(&mut s).await.unwrap();
+            let authed = Message::Authed {
+                device_id: "d1".into(),
+                token: None,
+                protocol: Some(7),
+                daemon_version: Some("0.2.1".into()),
+                host: Some("studio-mini".into()),
+                os: Some("macos".into()),
+            };
+            write_frame(&mut s, &Frame::Json(authed)).await.unwrap();
+            let _request = read_frame(&mut s).await.unwrap();
+        });
+        let e = restart(&[addr], "token").await.unwrap_err();
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("too_old", "studio-mini runs moonlet 0.2.1, which can't be restarted from here")
         );
     }
 

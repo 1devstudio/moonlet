@@ -1415,6 +1415,13 @@ pub struct DaemonUpdated {
     pub to: String,
 }
 
+/// `daemon.restart`'s answer (X120): the pid of the daemon that answered,
+/// which a fresh one replaces.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DaemonRestarted {
+    pub pid: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DaemonInfo {
     pub version: String,

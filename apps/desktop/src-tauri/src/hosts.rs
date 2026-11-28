@@ -439,6 +439,12 @@ impl HostManager {
         moonlet_link::tailnet::update(&saved.addrs, &saved.token, version).await
     }
 
+    /// Asks tailnet host `id` to restart its daemon (X120), as [`Self::update`].
+    pub async fn restart(&self, id: &str) -> Result<moonlet_proto::types::DaemonRestarted, RpcError> {
+        let saved = self.token_of(id)?;
+        moonlet_link::tailnet::restart(&saved.addrs, &saved.token).await
+    }
+
     /// Tailnet host `id` with its token, which the app has unless the
     /// Keychain did not give it this start.
     fn token_of(&self, id: &str) -> Result<TailnetHost, RpcError> {

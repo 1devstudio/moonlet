@@ -1541,14 +1541,33 @@ impl Daemon {
         worker_link: bool,
         p: Value,
     ) -> Result<(moonlet_proto::types::DaemonUpdated, crate::update::Handoff), RpcError> {
-        if worker_link || client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
-            return Err(RpcError::new("forbidden", "update moonlet from the app"));
-        }
-        if device.is_some_and(|d| self.mobile.kind_of(d) != Some(moonlet_proto::methods::DeviceKind::Desktop)) {
-            return Err(RpcError::new("forbidden", "update moonlet from a Mac"));
-        }
+        self.manages_daemon(client, device, worker_link, "update moonlet")?;
         let r: m::DaemonUpdate = params(p)?;
         crate::update::update(self, &r.version).await
+    }
+
+    /// `daemon.restart` (X120), from the same callers as `daemon.update`.
+    pub fn restart_from(
+        self: &Arc<Self>,
+        client: Option<&str>,
+        device: Option<&str>,
+        worker_link: bool,
+    ) -> Result<(moonlet_proto::types::DaemonRestarted, crate::update::Handoff), RpcError> {
+        self.manages_daemon(client, device, worker_link, "restart moonletd")?;
+        crate::update::restart(self)
+    }
+
+    /// Whether the caller may update or restart this daemon (X69, X120): the
+    /// app, or a paired Mac; never an agent's CLI, a worker's link, a phone
+    /// or a cloud machine. `what` starts the refusal ("update moonlet").
+    fn manages_daemon(&self, client: Option<&str>, device: Option<&str>, worker_link: bool, what: &str) -> Result<(), RpcError> {
+        if worker_link || client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
+            return Err(RpcError::new("forbidden", format!("{what} from the app")));
+        }
+        if device.is_some_and(|d| self.mobile.kind_of(d) != Some(moonlet_proto::methods::DeviceKind::Desktop)) {
+            return Err(RpcError::new("forbidden", format!("{what} from a Mac")));
+        }
+        Ok(())
     }
 
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
@@ -2090,6 +2109,15 @@ impl Daemon {
                 }
                 let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), conn.worker_link, p).await?;
                 // The connection's writer sends the reply after this returns.
+                handoff.start_after(crate::update::REPLY_GRACE);
+                ok(reply)
+            }
+            m::DAEMON_RESTART => {
+                // On the local socket, the app that proved it is (X75).
+                if conn.phone.is_none() && !conn.app {
+                    return Err(RpcError::new("forbidden", "restart moonletd from the app"));
+                }
+                let (reply, handoff) = self.restart_from(Some(&conn.client), conn.phone.as_deref(), conn.worker_link)?;
                 handoff.start_after(crate::update::REPLY_GRACE);
                 ok(reply)
             }

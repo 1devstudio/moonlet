@@ -14,6 +14,8 @@ pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 pub const DAEMON_UPGRADE: &str = "daemon.upgrade";
 /// Installs a newer moonlet release on this host, then upgrades into it (X69).
 pub const DAEMON_UPDATE: &str = "daemon.update";
+/// Hands every session to a fresh process of this daemon's own binary (X120).
+pub const DAEMON_RESTART: &str = "daemon.restart";
 /// Hands every PTY to the calling daemon, which receives them on the
 /// returned socket, then exits; only a daemon started at system start
 /// does, for the daemon its user's login starts (X113).

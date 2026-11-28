@@ -12,9 +12,11 @@ import { EV, M, type DeviceKind, type ExecStatus, type HostInfo, type LinkInfo, 
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { HostUpdateButton } from "../HostUpdate";
+import { HostRestartButton, HostUpdateButton } from "../HostUpdate";
 import { failureShown, olderHosts, olderHostsText, updateAllLabel } from "../../lib/hostUpdate";
 import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
+import { rowFailure } from "../../lib/hostRestart";
+import { useHostRestarts } from "../../lib/hostRestartStore";
 import { centralHeavyHostId, centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { removeMacMessage, type CopiedFiles } from "../../lib/copiedFiles";
@@ -27,6 +29,8 @@ function HostRow({ host, sessions, central, children }: { host: HostInfo; sessio
   const update = useHostUpdates((s) => s.updates[host.id]);
   const shown = failureShown(update, host, appVersion);
   const failed = shown?.phase === "failed" ? shown : null;
+  const restart = useHostRestarts((s) => s.restarts[host.id]);
+  const failure = rowFailure(failed?.text ?? null, restart);
   const command = failed ? failed.command : updateCommand(host, appVersion);
   return (
     <div data-setting={`host-${host.id}`} className="flex items-center gap-3.5 px-4 py-3.5">
@@ -39,7 +43,7 @@ function HostRow({ host, sessions, central, children }: { host: HostInfo; sessio
           {host.kind === "tailnet" && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Tailnet</span>}
           {central && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Central host</span>}
         </span>
-        <Status line={failed ? { tone: "error", text: failed.text } : hostLine(host, sessions, appVersion)} />
+        <Status line={failure ? { tone: "error", text: failure } : hostLine(host, sessions, appVersion)} />
         {command && (
           <div className="flex items-center gap-1.5">
             <code className="min-w-0 flex-1 truncate rounded bg-raised px-1.5 py-0.5 font-mono ui-text-11" title={command}>
@@ -607,6 +611,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
             <Fragment key={h.id}>
               <HostRow host={h} sessions={open(h.id)} central={h.id === central}>
                 <HostUpdateButton host={h} />
+                <HostRestartButton host={h} />
                 {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
                 {hostActions(h).map((a) =>
                   a === "install" || a === "reinstall" ? (
