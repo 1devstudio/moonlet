@@ -720,8 +720,8 @@ async fn a_paired_mac_may_restart_its_host_but_a_phone_and_an_agent_may_not() {
     host.next_daemon(pid).await;
 }
 
-/// One update, upgrade or restart at a time: a second restart asked while
-/// the first waits to hand over is refused, and only one new daemon comes.
+/// One update, upgrade or restart at a time: a restart or an update asked
+/// while a restart waits to hand over is refused.
 #[tokio::test]
 async fn a_second_restart_during_one_is_busy() {
     let key = Key::new();

@@ -10,14 +10,14 @@ export const restartOffer = (h: HostInfo) => h.kind === "tailnet" && h.status ==
 export const RESTART_BACK_MS = 60_000;
 
 /** A restart running or failed on one host. `from`: the pid that answered
- * `daemon.restart`, which a fresh daemon replaces. */
-export type HostRestart = { phase: "restarting"; from: number; since: number } | { phase: "failed"; text: string };
+ * `daemon.restart`, which a fresh daemon replaces; null until it answers. */
+export type HostRestart = { phase: "restarting"; from: number | null; since: number } | { phase: "failed"; text: string };
 
 /** The next state of restart `r` now that host `h` is as it is and its
  * `daemon.info` answered `info` (null: it did not), and whether to ask the
  * host to connect again. `next` null: a fresh daemon answers. */
 export function followRestart(r: HostRestart, h: HostInfo, info: { pid: number } | null, now: number): { next: HostRestart | null; reconnect: boolean } {
-  if (r.phase !== "restarting") return { next: r, reconnect: false };
+  if (r.phase !== "restarting" || r.from === null) return { next: r, reconnect: false };
   if (info && info.pid !== r.from) return { next: null, reconnect: false };
   if (now - r.since > RESTART_BACK_MS) {
     const text = info
@@ -30,3 +30,9 @@ export function followRestart(r: HostRestart, h: HostInfo, info: { pid: number }
 
 /** The toast once a fresh daemon answers on `h`. */
 export const restartedText = (h: HostInfo) => `${h.label} restarted. Its sessions kept running.`;
+
+/** The failure a host's row shows: an update's (X69) first, then a restart's;
+ * null for none. */
+export function rowFailure(updateFailure: string | null, r: HostRestart | undefined): string | null {
+  return updateFailure ?? (r?.phase === "failed" ? r.text : null);
+}

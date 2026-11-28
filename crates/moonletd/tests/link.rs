@@ -1376,6 +1376,12 @@ async fn a_members_link_credential_is_refused_the_apps_methods_whatever_it_says_
         .await
         .unwrap_err();
     assert_eq!(e.code, "forbidden");
+    // Nor a restart (X120).
+    let e = moonlet_link::tailnet::restart(std::slice::from_ref(&addr), &token).await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "restart moonletd from the app"));
+    let mut s = raw(&addr, &token, "moonlet-app").await;
+    let Some(Message::Response { error: Some(e), .. }) = ask(&mut s, 1, "daemon.restart", json!({})).await else { panic!("no refusal") };
+    assert_eq!(e.code, "forbidden");
     // Nor piped to an SSH host's daemon, which would take it for the app.
     assert!(!authenticates_to(&addr, &token, Some("devbox")).await);
     // The link itself still does its work.

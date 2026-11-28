@@ -31,6 +31,8 @@ function message(e: unknown): string {
 /** Restarts `h`'s daemon, then follows it until a fresh one answers. */
 export async function restartHost(h: HostInfo) {
   if (useHostRestarts.getState().restarts[h.id]?.phase === "restarting") return;
+  // Restarting from the click: the host can take 30 s to answer.
+  put(h.id, { phase: "restarting", from: null, since: Date.now() });
   let from: number;
   try {
     ({ pid: from } = await hostsApi.restart(h.id));

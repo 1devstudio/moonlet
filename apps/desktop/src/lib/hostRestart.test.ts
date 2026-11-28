@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostInfo } from "./protocol";
-import { followRestart, restartOffer } from "./hostRestart";
+import { followRestart, restartOffer, rowFailure } from "./hostRestart";
 
 const host = (patch: Partial<HostInfo>): HostInfo => ({
   id: "studio-mini",
@@ -47,5 +47,15 @@ describe("following a restart (X120)", () => {
       phase: "failed",
       text: "studio-mini did not come back after the restart",
     });
+  });
+});
+
+describe("the failure a host's row shows (X69, X120)", () => {
+  it("shows an update's failure first, then a restart's, else none", () => {
+    const restartFailed = { phase: "failed" as const, text: "studio-mini did not come back after the restart" };
+    expect(rowFailure("the download took longer than 5 minutes", restartFailed)).toBe("the download took longer than 5 minutes");
+    expect(rowFailure(null, restartFailed)).toBe("studio-mini did not come back after the restart");
+    expect(rowFailure(null, { phase: "restarting", from: 4242, since: 1_000 })).toBeNull();
+    expect(rowFailure(null, undefined)).toBeNull();
   });
 });

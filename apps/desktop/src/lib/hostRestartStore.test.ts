@@ -7,6 +7,7 @@ import { restartHost, useHostRestarts } from "./hostRestartStore";
 const app = vi.hoisted(() => ({
   hosts: {} as Record<string, HostInfo>,
   restart: (() => Promise.resolve({ pid: 4242 })) as () => Promise<unknown>,
+  asked: 0,
   pid: null as number | null,
   reconnected: [] as string[],
   toasts: [] as { text: string; kind: string }[],
@@ -24,7 +25,7 @@ vi.mock("./daemon", () => {
     rpc: (_host: string, method: string) =>
       method === "daemon.info" && app.pid !== null ? Promise.resolve({ pid: app.pid }) : Promise.reject(new DaemonError({ code: "unreachable", message: "gone" })),
     hostsApi: {
-      restart: () => app.restart(),
+      restart: () => (app.asked++, app.restart()),
       reconnect: (id: string) => (app.reconnected.push(id), Promise.resolve()),
     },
   };
@@ -52,6 +53,7 @@ beforeEach(() => {
   app.hosts = {};
   app.restart = () => Promise.resolve({ pid: 4242 });
   app.pid = 4242;
+  app.asked = 0;
   app.reconnected = [];
   app.toasts = [];
   useHostRestarts.setState({ restarts: {} });
@@ -89,5 +91,22 @@ describe("restarting a host from the app (X120)", () => {
       phase: "failed",
       text: "studio-mini runs moonlet 0.2.1, which can't be restarted from here",
     });
+  });
+
+  it("is restarting from the click: the old failure goes, and a second click asks nothing while the host answers", async () => {
+    const mini = host({});
+    app.hosts = { [mini.id]: mini };
+    useHostRestarts.setState({ restarts: { [mini.id]: { phase: "failed", text: "the host did not answer" } } });
+    let answer: (v: { pid: number }) => void = () => {};
+    app.restart = () => new Promise((resolve) => (answer = resolve));
+
+    const first = restartHost(mini);
+    expect(useHostRestarts.getState().restarts["studio-mini"]?.phase).toBe("restarting");
+    await restartHost(mini);
+    expect(app.asked).toBe(1);
+
+    answer({ pid: 4242 });
+    await first;
+    expect(useHostRestarts.getState().restarts["studio-mini"]).toMatchObject({ phase: "restarting", from: 4242 });
   });
 });

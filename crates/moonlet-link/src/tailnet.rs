@@ -133,14 +133,14 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Sends `method` in place of `hello` and reads its answer. A daemon that
 /// does not know it closes the connection: `too_old`, which says it "can't
-/// be `done` from here".
+/// be `done_verb` from here".
 async fn before_hello<T: serde::de::DeserializeOwned>(
     addrs: &[String],
     token: &str,
     method: &str,
     params: serde_json::Value,
     limit: Duration,
-    done: &str,
+    done_verb: &str,
 ) -> Result<T, RpcError> {
     let unreachable = |e: anyhow::Error| RpcError::new("unreachable", format!("{e:#}"));
     let mut stream = dial(addrs).await.map_err(unreachable)?;
@@ -164,7 +164,7 @@ async fn before_hello<T: serde::de::DeserializeOwned>(
         RpcError::new(
             "too_old",
             format!(
-                "{} runs moonlet {}, which can't be {done} from here",
+                "{} runs moonlet {}, which can't be {done_verb} from here",
                 host.as_deref().unwrap_or("The host"),
                 daemon_version.as_deref().unwrap_or(BEFORE_X57)
             ),
@@ -280,6 +280,32 @@ mod tests {
         assert_eq!(
             (e.code.as_str(), e.message.as_str()),
             ("too_old", "studio-mini runs moonlet 0.1.33, which can't be updated from here")
+        );
+    }
+
+    /// A daemon from before X120 closes the connection on a restart too.
+    #[tokio::test]
+    async fn a_host_from_before_the_restart_request_is_too_old() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _auth = read_frame(&mut s).await.unwrap();
+            let authed = Message::Authed {
+                device_id: "d1".into(),
+                token: None,
+                protocol: Some(7),
+                daemon_version: Some("0.2.1".into()),
+                host: Some("studio-mini".into()),
+                os: Some("macos".into()),
+            };
+            write_frame(&mut s, &Frame::Json(authed)).await.unwrap();
+            let _request = read_frame(&mut s).await.unwrap();
+        });
+        let e = restart(&[addr], "token").await.unwrap_err();
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("too_old", "studio-mini runs moonlet 0.2.1, which can't be restarted from here")
         );
     }
 
