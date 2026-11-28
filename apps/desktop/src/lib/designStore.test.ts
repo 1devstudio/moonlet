@@ -5,6 +5,7 @@ import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
 import { cardUrl } from "./designView";
 import { pageRevReader, startFromProjectDesign } from "./designStore";
+import { adoptDesign, createDesign, syncSystem } from "./designStore";
 import { moveToWorkspace, openDesign, shareDesign, unshareDesign, shownDesignPlace } from "./designStore";
 import { cardRevOf, cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
@@ -58,6 +59,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 
 beforeEach(async () => {
   calls.length = 0;
+  useStore.setState((st) => ({ settings: { ...st.settings, defaultMode: "manual" } }));
   for (const k of Object.keys(answers)) delete answers[k];
   useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
@@ -294,13 +296,45 @@ describe("every workspace's design systems (X64, X65)", () => {
   });
 });
 
+describe("a Design mode agent's permission mode", () => {
+  it("is the default mode for new Claude sessions from Settings, on every call that starts one", async () => {
+    useStore.setState((st) => ({ settings: { ...st.settings, defaultMode: "auto" } }));
+    for (const m of ["design.create", "design.copy", "design.system.create", "design.system.sync"]) answers[m] = () => ({ ...design(), agent_error: null });
+    answers["design.adopt"] = () => "settings-page";
+    answers["design.list"] = () => [design()];
+    answers["design.systems"] = () => [system()];
+    await createDesign("local", "w-1devstudio", { name: "Settings page", system: "moonlet-desktop", brief: "b" });
+    await startFromProjectDesign("local", "w-1devstudio", design({ kind: "project", project: "p-moon", path: "docs/design/settings-page" }));
+    await createSystem("local", "w-1devstudio", { name: "moonlet desktop", projects: ["p-moonlet"], cover: "core" });
+    await syncSystem("local", "w-1devstudio", "moonlet-desktop");
+    await moveToWorkspace("local", "local", "w-1devstudio", "s7", "settings-page");
+    await adoptDesign("local", "s7", "settings-page");
+    const modes = calls.filter((c) => c.method !== "design.list" && c.method !== "design.systems" && c.method !== "design.check").map((c) => [c.method, (c.params as { mode?: string }).mode]);
+    expect(modes).toEqual([
+      ["design.create", "auto"],
+      ["design.copy", "auto"],
+      ["design.system.create", "auto"],
+      ["design.system.sync", "auto"],
+      ["design.adopt", "auto"],
+      ["design.adopt", "auto"],
+    ]);
+  });
+
+  it("is Manual when Settings names no mode Claude knows", async () => {
+    useStore.setState((st) => ({ settings: { ...st.settings, defaultMode: "yolo" } }));
+    answers["design.system.sync"] = () => ({ agent: 7 });
+    await syncSystem("local", "w-1devstudio", "moonlet-desktop");
+    expect(calls.find((c) => c.method === "design.system.sync")?.params).toEqual({ workspace: "w-1devstudio", slug: "moonlet-desktop", mode: "manual" });
+  });
+});
+
 describe("the New design system dialog (X64)", () => {
   it("builds a system from the picked projects with what to cover, and lists it", async () => {
     answers["design.system.create"] = () => ({ slug: "moonlet-desktop", agent: 7, agent_error: null });
     answers["design.systems"] = () => [system()];
     const created = await createSystem("local", "w-1devstudio", { name: "moonlet desktop", projects: ["p-moonlet"], cover: "all" });
     expect(created).toEqual({ slug: "moonlet-desktop", agent: 7, agent_error: null });
-    expect(calls.find((c) => c.method === "design.system.create")?.params).toEqual({ workspace: "w-1devstudio", name: "moonlet desktop", sources: [{ project: "p-moonlet" }], cover: "all" });
+    expect(calls.find((c) => c.method === "design.system.create")?.params).toEqual({ workspace: "w-1devstudio", name: "moonlet desktop", sources: [{ project: "p-moonlet" }], cover: "all", mode: "manual" });
     expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.map((s) => s.slug)).toEqual(["moonlet-desktop"]);
   });
 
@@ -979,7 +1013,7 @@ describe("shared designs (X95)", () => {
     answers["design.adopt"] = () => "settings-page";
     answers["design.list"] = () => [design({ slug: "settings-page", name: "Settings page" })];
     await moveToWorkspace("local", "local", "w-1devstudio", "s7", "settings-page");
-    expect(calls.find((c) => c.method === "design.adopt")?.params).toEqual({ session: "s7", slug: "settings-page" });
+    expect(calls.find((c) => c.method === "design.adopt")?.params).toEqual({ session: "s7", slug: "settings-page", mode: "manual" });
     expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.name).toBe("Settings page");
     expect(shownDesignPlace(useDesign.getState(), "local", "w-1devstudio")).toBe("w-1devstudio");
   });
@@ -988,7 +1022,7 @@ describe("shared designs (X95)", () => {
     answers["design.adopt"] = () => "settings-page";
     answers["design.list"] = () => [design({ slug: "settings-page", name: "Settings page" })];
     await moveToWorkspace("studio-mini", "local", "w-1devstudio", "s7", "settings-page");
-    expect(calls.find((c) => c.method === "design.adopt")).toEqual(expect.objectContaining({ host: "studio-mini", params: { session: "s7", slug: "settings-page" } }));
+    expect(calls.find((c) => c.method === "design.adopt")).toEqual(expect.objectContaining({ host: "studio-mini", params: { session: "s7", slug: "settings-page", mode: "manual" } }));
     expect(designsOf(useDesign.getState(), "studio-mini", "w-1devstudio")?.map((d) => d.name)).toEqual(["Settings page"]);
     expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
   });

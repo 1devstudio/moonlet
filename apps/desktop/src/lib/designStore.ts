@@ -16,6 +16,7 @@ import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
 import { designOpenAction, isDesignModeChange, workspaceDesigns } from "./design";
+import { resolveMode } from "./agents";
 import { changedPages, changesOwnSystem, reloadsPage } from "./designCanvas";
 import { changesBuilt } from "./designBuild";
 import { pageOfPath } from "./designPage";
@@ -237,7 +238,7 @@ export function projectDesignsIn(s: DesignState, host: string, workspace: string
  *  shows, from `design.copy`'s answer: it shows also when the designs
  *  cannot be listed again after it, which a toast says. */
 export async function startFromProjectDesign(host: string, workspace: string, d: Design): Promise<DesignCreated> {
-  const made = await rpc<DesignCreated>(host, M.designCopy, { workspace, from: { project: d.project, path: d.path }, name: d.name });
+  const made = await rpc<DesignCreated>(host, M.designCopy, { workspace, from: { project: d.project, path: d.path }, name: d.name, mode: agentMode() });
   const unlisted = await loadDesigns(host, workspace, true).then(
     () => null,
     (e: unknown) => e,
@@ -370,9 +371,15 @@ export async function unshareDesign(host: string, workspace: string, slug: strin
  *  and takes it out of the session. Shown when `on` is the host the
  *  sidebar shows (`shown`); another member's lists it once copied (X71). */
 export async function moveToWorkspace(on: string, shown: string, workspace: string, session: string, slug: string): Promise<void> {
-  const moved = await rpc<string>(on, M.designAdopt, { session, slug });
+  const moved = await adoptDesign(on, session, slug);
   await loadDesigns(on, workspace, true);
   if (on === shown) showDesign(on, workspace, moved);
+}
+
+/** Makes session `session`'s design `slug` a workspace design on `host`,
+ *  whose own agent starts (X104): its new slug. */
+export function adoptDesign(host: string, session: string, slug: string): Promise<string> {
+  return rpc<string>(host, M.designAdopt, { session, slug, mode: agentMode() });
 }
 
 /** The visual editor's say over a page changed on disk: true when it
@@ -720,9 +727,15 @@ function onDesignOpen(host: string, ev: DesignOpen) {
   }
 }
 
+/** The permission mode a Design mode agent starts in: the default mode for
+ *  new Claude sessions from Settings, as a session's. */
+function agentMode(): string {
+  return resolveMode(useStore.getState().settings.defaultMode);
+}
+
 /** **Create design**: makes the design and starts its agent with the brief (X65). */
 export async function createDesign(host: string, workspace: string, n: { name: string; system: string; brief: string }): Promise<DesignCreated> {
-  const created = await rpc<DesignCreated>(host, M.designCreate, { workspace, name: n.name, system: n.system, brief: n.brief });
+  const created = await rpc<DesignCreated>(host, M.designCreate, { workspace, name: n.name, system: n.system, brief: n.brief, mode: agentMode() });
   await loadDesigns(host, workspace, true).catch(() => {});
   return created;
 }
@@ -1006,9 +1019,15 @@ export interface NewSystem {
   cover: DesignCover;
 }
 
+/** **Sync**: asks a design system's sync agent to sync it again, starting
+ *  one when it has none (X64). */
+export async function syncSystem(host: string, workspace: string, slug: string): Promise<void> {
+  await rpc(host, M.designSystemSync, { workspace, slug, mode: agentMode() });
+}
+
 /** **Build design system**: makes the system and starts its sync agent. */
 export async function createSystem(host: string, workspace: string, n: NewSystem): Promise<DesignSystemCreated> {
-  const created = await rpc<DesignSystemCreated>(host, M.designSystemCreate, { workspace, name: n.name, sources: n.projects.map((project) => ({ project })), cover: n.cover });
+  const created = await rpc<DesignSystemCreated>(host, M.designSystemCreate, { workspace, name: n.name, sources: n.projects.map((project) => ({ project })), cover: n.cover, mode: agentMode() });
   await loadSystems(host, workspace).catch(() => {});
   return created;
 }

@@ -3375,6 +3375,74 @@ async fn until_contains(read: impl Fn() -> String, needle: &str) -> String {
     read()
 }
 
+/// A design's agent starts in the permission mode the app sends, its
+/// default mode for new Claude sessions; a mode Claude does not know is
+/// refused before the design is made.
+#[tokio::test]
+async fn a_new_design_starts_its_agent_in_the_mode_the_app_gives() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let err = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Bad mode", "system": "moonlet-desktop", "brief": "b", "mode": "yolo"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "invalid_params: unknown permission mode: yolo");
+    // An agent's own `design new` never picks one: it could widen its own.
+    let mut agent = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let err = agent
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Wider", "system": "moonlet-desktop", "brief": "b", "mode": "bypassPermissions"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "forbidden: only the moonlet app picks a design agent's permission mode");
+    let created: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "A left nav", "mode": "auto"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created["agent_error"], serde_json::Value::Null);
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    let args = dir.join("claude-args");
+    let args = until_contains(move || std::fs::read_to_string(&args).unwrap_or_default(), "--permission-mode").await;
+    assert!(args.contains("--permission-mode auto "), "{args}");
+}
+
+/// A design system's sync agent starts in the mode the app gives too; its
+/// chat, still open at the next sync, switches to the mode that sync gives.
+#[tokio::test]
+async fn a_design_system_sync_starts_its_agent_in_the_mode_the_app_gives() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let system = d.home.path().join(".moonlet/design/library/systems/moonlet-desktop");
+    let (args, user) = (system.join("claude-args"), system.join("claude-user"));
+    let read = |p: &std::path::Path| {
+        let p = p.to_path_buf();
+        move || std::fs::read_to_string(&p).unwrap_or_default()
+    };
+    let first: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws, "slug": "moonlet-desktop", "mode": "manual"}))
+        .await
+        .unwrap();
+    until_contains(read(&user), "the design system").await;
+    assert!(read(&args)().contains("--permission-mode manual "), "{}", read(&args)());
+    let second: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws, "slug": "moonlet-desktop", "mode": "auto"}))
+        .await
+        .unwrap();
+    assert_eq!(second["agent"], first["agent"]);
+    let args = until_contains(read(&args), "--permission-mode auto ").await;
+    assert!(args.contains("--permission-mode auto "), "{args}");
+}
+
 /// X65: a new workspace design starts its agent: Claude Code in the design's
 /// folder, its design system's folder added read only and denied to every
 /// editing tool, with the brief, the README and the design rules as its first

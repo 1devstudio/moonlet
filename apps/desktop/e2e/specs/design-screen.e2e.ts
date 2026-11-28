@@ -5,7 +5,7 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { fill, rpc, sel, SESSION, world } from "../fixtures";
+import { closeSettings, fill, openSettings, rpc, sel, SESSION, world } from "../fixtures";
 
 const w = world();
 const FAKE = join(w.root, "bin", "claude");
@@ -190,6 +190,35 @@ describe("A design's screen", () => {
     await expect(chat()).toBeDisplayed();
     await toast.$(sel.button("Open")).click();
     await expect($('//section[@aria-label="Design · Onboarding"]')).toBeDisplayed();
+    await $('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Settings page"]]').click();
+    await expect(chat()).toBeDisplayed();
+  });
+
+  it("starts a new design's agent in the default permission mode from Settings", async () => {
+    const commandOf = (slug: string) => {
+      const agent = rpc<{ slug: string; agent: number }[]>(w, "design.list", { workspace: workspaceId() }).find((d) => d.slug === slug)?.agent;
+      return rpc<{ id: number; command: string[] }[]>(w, "terminal.list", {}).find((t) => t.id === agent)?.command.join(" ") ?? "";
+    };
+    // The design an agent started, with no mode from the app: Accept edits.
+    expect(commandOf("onboarding")).toContain("--permission-mode acceptEdits");
+    await openSettings("Agents");
+    await $(sel.settingsOption("Default permission mode", "Auto")).click();
+    await expect($(sel.settingsOption("Default permission mode", "Auto"))).toHaveAttribute("aria-checked", "true");
+    await closeSettings();
+    try {
+      await $('//nav//button[starts-with(normalize-space(), "New design")][.//kbd]').click();
+      const dialog = $('//div[@role="dialog"][@aria-label="New design"]');
+      await expect(dialog).toBeDisplayed();
+      await fill('//div[@role="dialog"]//input[@placeholder="Settings page"]', "Pricing");
+      await fill('//div[@role="dialog"]//textarea[@aria-label="Brief"]', "Three plans side by side");
+      await dialog.$(sel.button("Create design")).click();
+      await expect($('//section[@aria-label="Design · Pricing"]')).toBeDisplayed();
+      expect(commandOf("pricing")).toContain("--permission-mode auto");
+    } finally {
+      await openSettings("Agents");
+      await $(sel.settingsOption("Default permission mode", "Manual")).click();
+      await closeSettings();
+    }
     await $('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Settings page"]]').click();
     await expect(chat()).toBeDisplayed();
   });
