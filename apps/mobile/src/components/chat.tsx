@@ -25,6 +25,9 @@ import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGro
 import type { ChatItem, ChatState, ToolCall } from "@desktop/lib/protocol";
 import { useNow } from "../lib/now";
 import { AGENT_STATE, type AgentRow, agentCount, agentKey, agentRows, isActive, launchedRows, modelLabel } from "@desktop/lib/subagents";
+import { useStripView } from "@desktop/lib/useStripView";
+import { AgentsStripSummary } from "@desktop/components/AgentsStripSummary";
+import { dismissStrip, useStripDismissedAt } from "../lib/agentsStrip";
 import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
 import { Btn, StateGlyph, cx } from "./ui";
@@ -186,6 +189,65 @@ function LaunchedCard({ tools, chat, onOpen }: { tools: ChatItem[]; chat: Agents
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** The top row of the chat's input, as on the desktop (X42): the agents
+ * launched since the user's last message. Ended agents' dots pop and hide,
+ * and the row folds away once all are done. `chat` is the chat's key, under
+ * which × hides it. */
+export function AgentsStrip({ st, chat, onAgents, onRetry, onReview }: { st: ChatState; chat: string; onAgents: () => void; onRetry: () => void; onReview?: () => void }) {
+  // Shown whenever it is drawn: the phone draws it only in the open chat.
+  const view = useStripView(st, true, useStripDismissedAt(chat));
+  if (!view) return null;
+  return (
+    <div aria-label="Agents" aria-hidden={view.collapsed} inert={view.collapsed} className={cx("agents-strip above-input flex-none", view.collapsed && "collapsed")}>
+      <div className="flex h-full items-center gap-2.5 pr-2 pl-4 text-[13px]">
+        <AgentsStripSummary view={view} />
+        <span className="ml-auto shrink-0 font-mono text-[12px] text-faint tabular-nums">{view.clock}</span>
+        {view.button === "review" && onReview && (
+          <button type="button" onClick={onReview} className="h-8 shrink-0 px-1 text-accent">
+            Review changes
+          </button>
+        )}
+        {view.button === "retry" && (
+          <button type="button" onClick={onRetry} className="h-8 shrink-0 px-1 text-accent">
+            Retry
+          </button>
+        )}
+        {view.dismissible ? (
+          <button type="button" aria-label="Hide agents" onClick={() => dismissStrip(chat, st)} className="flex h-8 w-8 shrink-0 items-center justify-center text-muted">
+            <X size={15} />
+          </button>
+        ) : (
+          <button type="button" onClick={onAgents} className="flex h-8 shrink-0 items-center gap-0.5 pr-1 pl-2 text-muted">
+            Agents
+            <ChevronRight size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Every agent of the chat, each opening its detail (X42). */
+export function AgentsList({ chat, onOpen }: { chat: AgentsOf; onOpen: (key: string) => void }) {
+  const rows = useAgentRows(chat);
+  if (!rows.length) return <p className="m-0 px-4 pb-2 text-[14px] text-muted">No agents yet</p>;
+  return (
+    <div className="scroll flex flex-col px-2 pb-2">
+      {rows.map((r) => (
+        <button key={agentKey(r.chat, r.agent.id)} type="button" onClick={() => onOpen(agentKey(r.chat, r.agent.id))} className="flex min-h-12 w-full flex-col justify-center gap-0.5 rounded-[10px] px-2.5 py-2 text-left">
+          <span className="flex w-full items-center gap-2.5">
+            <StateGlyph state={AGENT_STATE[r.state].glyph} size={12} />
+            <span className="min-w-0 flex-1 truncate text-[14.5px]">{r.agent.description}</span>
+            <span className={cx("shrink-0 text-[12.5px]", AGENT_STATE[r.state].text)}>{AGENT_STATE[r.state].label}</span>
+            <span className="w-10 shrink-0 text-right font-mono text-[12px] text-faint tabular-nums">{r.elapsed}</span>
+          </span>
+          {r.line && <span className={cx("truncate pl-[22px] text-[13px]", r.line.tone === "error" ? "text-error" : "text-muted")}>{r.line.text}</span>}
+        </button>
+      ))}
     </div>
   );
 }

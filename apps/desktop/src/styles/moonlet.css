@@ -338,6 +338,17 @@ body:not(.kbd-nav) button:focus {
 .agents-strip.collapsed > div {
   transform: translateY(-6px);
 }
+/* The phone's strip sits on top of its input (X40): taller for touch, with
+   the line above it, as the composer draws its own below. */
+.agents-strip.above-input {
+  height: 40px;
+  border-bottom: none;
+  border-top: 1px solid var(--color-border);
+}
+.agents-strip.above-input.collapsed {
+  height: 0;
+  border-color: transparent;
+}
 .agents-dot {
   flex: none;
   width: calc(6px * var(--ui-scale, 1));

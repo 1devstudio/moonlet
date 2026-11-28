@@ -9,12 +9,9 @@ import { unpushedParams } from "@desktop/lib/gitSettings";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { sessionTask } from "../lib/sessionList";
-import { agentStrip, sessionChat } from "../lib/chatView";
 import { sessionBoards } from "../lib/board";
 import { taskId } from "@desktop/lib/tasks";
 import { LinkSheet } from "../components/LinkSheet";
-import { useNow } from "../lib/now";
-import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
@@ -148,7 +145,6 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const dot = pr ? checksDot(pr.checks) : null;
   const jobs = useSessionJobs(host, id);
   const [menu, setMenu] = useState(false);
-  const now = useNow();
   const [archiving, setArchiving] = useState(false);
   const [linking, setLinking] = useState(false);
   const hosts = useApp((s) => s.hosts);
@@ -179,9 +175,6 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const project = d.projects.find((p) => p.id === session.project_id);
   // The task the session works on and where it is (X46, X76).
   const task = sessionTask(d, session, pr, sessionBoards(hosts, data, host, session).map((b) => b.snapshot));
-  // Its subagents at a glance (X76).
-  const chat = sessionChat(d, session.id);
-  const strip = chat !== null && d.chats[chat] ? agentStrip(d.chats[chat], now) : null;
   const badge: Partial<Record<SessionTab, ReactNode>> = {
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
@@ -225,17 +218,6 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           <MoreHorizontal size={20} />
         </button>
       </header>
-      {strip && (
-        <div aria-label={`${strip.bars.length} subagents`} className="flex flex-none items-center gap-1.5 px-4 pb-2">
-          <div className="flex flex-1 gap-1">
-            {strip.bars.map((b, i) => (
-              <span key={i} className="h-1 flex-1 rounded-full" style={{ background: { done: STATE_COLOR.done, running: STATE_COLOR.working, needs: STATE_COLOR.blocked, failed: STATE_COLOR.error, stopped: STATE_COLOR.idle }[b] }} />
-            ))}
-          </div>
-          <span className="font-mono text-[12px] text-faint">{strip.progress}</span>
-          <span className={cx("text-[12px]", strip.word.endsWith("needs you") ? "text-blocked" : "text-muted")}>{strip.word}</span>
-        </div>
-      )}
       {/* The design's segmented tabs; Chat carries a dot while the session needs the user. */}
       <nav className={cx("mx-4 mb-2 grid flex-none rounded-[12px] border border-border bg-panel p-[3px]", tabs.length > 4 ? "grid-cols-5" : "grid-cols-4")}>
         {tabs.map((id) => ({ id, label: TAB_LABEL[id] })).map((t) => (
