@@ -6,6 +6,7 @@
 @source "../../desktop/src/components/ShowEarlier.tsx";
 @source "../../desktop/src/components/SessionRowView.tsx";
 @source "../../desktop/src/lib/subagents.ts";
+@source "../../desktop/src/components/AgentsStripSummary.tsx";
 
 /* A phone screen: the app fills it, respects the notch and the home bar,
    and only the content scrolls. */

@@ -1,7 +1,7 @@
 // The phone's conversation rows (X40): the desktop's chat model (X6, X14)
 // drawn for touch.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Ban,
   Bot,
@@ -24,7 +24,10 @@ import {
 import { type ChatBlock, diffStat, planOf, thinkingPreview, toolCommand, toolGroupLabel, toolGroupStatus } from "@desktop/lib/chat";
 import type { ChatItem, ChatState, ToolCall } from "@desktop/lib/protocol";
 import { useNow } from "../lib/now";
-import { AGENT_STATE, type AgentRow, agentCount, agentKey, agentRows, isActive, launchedRows, modelLabel, stripClockRuns, stripView } from "@desktop/lib/subagents";
+import { AGENT_STATE, type AgentRow, agentCount, agentKey, agentRows, isActive, launchedRows, modelLabel } from "@desktop/lib/subagents";
+import { useStripView } from "@desktop/lib/useStripView";
+import { AgentsStripSummary } from "@desktop/components/AgentsStripSummary";
+import { dismissStrip, useStripDismissedAt } from "../lib/agentsStrip";
 import { DIFF_LINE } from "../lib/palette";
 import { Markdown } from "./Markdown";
 import { Btn, StateGlyph, cx } from "./ui";
@@ -192,76 +195,29 @@ function LaunchedCard({ tools, chat, onOpen }: { tools: ChatItem[]; chat: Agents
 
 /** The top row of the chat's input, as on the desktop (X42): the agents
  * launched since the user's last message. Ended agents' dots pop and hide,
- * and the row folds away once all are done. */
-export function AgentsStrip({
-  st,
-  dismissedAt,
-  onAgents,
-  onDismiss,
-  onRetry,
-  onReview,
-}: {
-  st: ChatState;
-  dismissedAt: number;
-  onAgents: () => void;
-  onDismiss: () => void;
-  onRetry: () => void;
-  onReview?: () => void;
-}) {
-  // `steppedAt` moves the animation along between the clock's ticks.
-  const [steppedAt, setSteppedAt] = useState(0);
-  const now = Math.max(useNow(stripClockRuns(st, true) ? 1000 : 30_000), steppedAt);
-  const view = stripView(st, now, dismissedAt);
-  const wake = view?.wake ?? null;
-  useEffect(() => {
-    if (wake === null) return;
-    // At least `wake`: a timer can fire a little before the wall clock gets there.
-    const t = setTimeout(() => setSteppedAt(Math.max(Date.now(), wake)), Math.max(0, wake - Date.now()));
-    return () => clearTimeout(t);
-  }, [wake]);
+ * and the row folds away once all are done. `chat` is the chat's key, under
+ * which × hides it. */
+export function AgentsStrip({ st, chat, onAgents, onRetry, onReview }: { st: ChatState; chat: string; onAgents: () => void; onRetry: () => void; onReview?: () => void }) {
+  // Shown whenever it is drawn: the phone draws it only in the open chat.
+  const view = useStripView(st, true, useStripDismissedAt(chat));
   if (!view) return null;
   return (
-    <div
-      aria-label="Agents"
-      aria-hidden={view.collapsed}
-      inert={view.collapsed}
-      className={cx("agents-strip flex-none", view.collapsed && "collapsed")}
-      // A line above, none below: the composer draws its own.
-      style={{ height: view.collapsed ? 0 : 40, borderBottomWidth: 0, borderTop: `1px solid ${view.collapsed ? "transparent" : "var(--color-border)"}` }}
-    >
+    <div aria-label="Agents" aria-hidden={view.collapsed} inert={view.collapsed} className={cx("agents-strip above-input flex-none", view.collapsed && "collapsed")}>
       <div className="flex h-full items-center gap-2.5 pr-2 pl-4 text-[13px]">
-        <span role="img" aria-label={view.label} className="-mr-1 flex shrink-0 items-center">
-          {view.dots.map((d) => (
-            <span key={d.key} className={cx("agents-dot", AGENT_STATE[d.state].dot, d.state === "running" && "pulse", d.phase !== "on" && d.phase)} />
-          ))}
-        </span>
-        <span className="min-w-0 truncate text-muted">
-          {view.finished && (
-            <span className="agents-fade-in inline-flex items-center gap-2 text-fg">
-              <Check size={14} strokeWidth={2.2} className="shrink-0 text-done" />
-              {view.title}
-            </span>
-          )}
-          {view.counts.map((c) => (
-            <span key={c.state} className={cx(c.state === "done" && "agents-done-count", c.state === "done" && view.flash && "text-done")}>
-              {`${c.lead ? "" : " · "}${c.text}`}
-            </span>
-          ))}
-          {view.alert && <span className={cx("agents-fade-in", view.alert.tone === "blocked" ? "text-blocked" : "text-error")}>{`${view.alert.lead ? "" : " · "}${view.alert.text}`}</span>}
-        </span>
+        <AgentsStripSummary view={view} />
         <span className="ml-auto shrink-0 font-mono text-[12px] text-faint tabular-nums">{view.clock}</span>
         {view.button === "review" && onReview && (
-          <button type="button" onClick={onReview} className="h-8 shrink-0 px-1 text-accent-2">
+          <button type="button" onClick={onReview} className="h-8 shrink-0 px-1 text-accent">
             Review changes
           </button>
         )}
         {view.button === "retry" && (
-          <button type="button" onClick={onRetry} className="h-8 shrink-0 px-1 text-accent-2">
+          <button type="button" onClick={onRetry} className="h-8 shrink-0 px-1 text-accent">
             Retry
           </button>
         )}
         {view.dismissible ? (
-          <button type="button" aria-label="Hide agents" onClick={onDismiss} className="flex h-8 w-8 shrink-0 items-center justify-center text-muted">
+          <button type="button" aria-label="Hide agents" onClick={() => dismissStrip(chat, st)} className="flex h-8 w-8 shrink-0 items-center justify-center text-muted">
             <X size={15} />
           </button>
         ) : (
