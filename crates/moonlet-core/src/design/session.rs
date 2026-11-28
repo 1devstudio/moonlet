@@ -968,17 +968,14 @@ fn make_side(at: &DesignAt) -> Result<()> {
     )
 }
 
-/// A file of a design system a page needs to render: `styles.css`,
-/// `components.css` and the component stylesheets it imports, its tokens and
-/// its fonts. Never a proposal waiting for the user (X64).
+/// A file of a design system a page needs to render: its own styles (every
+/// stylesheet at its top, imported or not, its tokens and its fonts) and the
+/// component stylesheets. Never a proposal waiting for the user (X64).
 fn is_style(path: &str) -> bool {
     let component_css = path.starts_with("components/")
         && path.ends_with(".css")
         && !path.ends_with(".proposed.css");
-    matches!(path, "styles.css" | "components.css")
-        || path.starts_with("tokens/")
-        || path.starts_with("fonts/")
-        || component_css
+    super::anchor::is_system_style(path) || component_css
 }
 
 /// Copies the design system in `system_dir` into the design: its styles
@@ -1088,6 +1085,38 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn a_stylesheet_at_the_systems_top_that_its_styles_import_is_pinned_too() {
+        // The moonlet system's components.css starts with `@import "base.css";`:
+        // without it a page's icons fill black and its text loses the font.
+        let (home, store) = store_with_synced_system();
+        let system = home.path().join("design/library/systems/moonlet-desktop");
+        std::fs::write(
+            system.join("components.css"),
+            "@import \"base.css\";\n@import \"components/buttons/button/button.css\";\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("base.css"), ".icon { fill: none; }\n").unwrap();
+        std::fs::write(system.join("base.proposed.css"), ".icon { fill: red; }\n").unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                worktree.path(),
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        let pinned = files(&worktree.path().join("docs/design/settings-page/system"));
+        assert_eq!(pinned.get("base.css").map(String::as_str), Some(".icon { fill: none; }\n"));
+        // A proposal waiting for the user is still left out (X64).
+        assert!(!pinned.contains_key("base.proposed.css"));
     }
 
     #[test]

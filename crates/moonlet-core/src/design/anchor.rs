@@ -42,8 +42,8 @@ impl CardAnchor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Anchor {
     pub cards: BTreeMap<String, CardAnchor>,
-    /// `styles.css`, `components.css`, `tokens/` and `fonts/`: a change here
-    /// keeps every card's grade.
+    /// The system-wide styles ([`is_system_style`]): a change here keeps
+    /// every card's grade.
     #[serde(default)]
     pub style_sha: String,
     /// `README.md` and `guidelines/`.
@@ -148,6 +148,14 @@ pub fn read(root: &Path) -> Option<Anchor> {
 /// The anchor as it would be written now.
 /// `exceptions` holds each card's settings in `config.toml`, by card path:
 /// a change to them changes the card's `source_key`.
+/// A file of a design system's own styles, not one card's: every stylesheet
+/// at its top (`styles.css`, `components.css`, `base.css`, ...), its tokens
+/// and its fonts. Never a proposal waiting for the user (X64).
+pub(crate) fn is_system_style(path: &str) -> bool {
+    let top_css = !path.contains('/') && path.ends_with(".css") && !path.ends_with(".proposed.css");
+    top_css || path.starts_with("tokens/") || path.starts_with("fonts/")
+}
+
 pub fn compute(
     root: &Path,
     sources: &[PathBuf],
@@ -185,12 +193,7 @@ pub fn compute(
         }
         sha16(&bytes)
     };
-    let style_sha = set_sha(&|p| {
-        p == "styles.css"
-            || p == "components.css"
-            || p.starts_with("tokens/")
-            || p.starts_with("fonts/")
-    });
+    let style_sha = set_sha(&is_system_style);
     let aux_sha = set_sha(&|p| p == "README.md" || p.starts_with("guidelines/"));
     let files = all.iter().map(|(p, b)| (p.clone(), sha16(b))).collect();
     Ok(Anchor {
@@ -676,6 +679,26 @@ mod tests {
                 s("components/forms/kbd/kbd.html", &[], false, false, true),
             ]
         );
+    }
+
+    #[test]
+    fn a_change_to_a_stylesheet_at_the_systems_top_is_a_style_change() {
+        // base.css is pinned beside a session design's pages like styles.css,
+        // so its change counts as one too.
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[
+                ("styles.css", "@import \"components.css\";\n"),
+                ("components.css", "@import \"base.css\";\n"),
+                ("base.css", ".icon { fill: none; }\n"),
+            ],
+        );
+        let sources = [project.path().to_path_buf()];
+        let before = compute(system.path(), &sources, &BTreeMap::new()).unwrap().style_sha;
+        files(system.path(), &[("base.css", ".icon { fill: red; }\n")]);
+        let after = compute(system.path(), &sources, &BTreeMap::new()).unwrap().style_sha;
+        assert_ne!(before, after);
     }
 
     #[test]
