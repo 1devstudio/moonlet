@@ -352,10 +352,12 @@ pub const FS_UNWATCH: &str = "fs.unwatch";
 /// `{workspace}` → the workspace's design systems.
 pub const DESIGN_SYSTEMS: &str = "design.systems";
 /// [`DesignSystemCreate`] → `{slug, agent, agent_error}`: the new system,
-/// and the chat of the sync agent it starts (or why it could not start).
+/// and the chat of the sync agent it starts (or why it could not start). Takes an optional `mode`, the
+/// agent's permission mode (the app's only; Accept edits without).
 pub const DESIGN_SYSTEM_CREATE: &str = "design.system.create";
 /// [`DesignSystemRef`] → `{agent}`: asks the system's sync agent to sync it
-/// again, starting one when it has none.
+/// again, starting one when it has none. Takes an optional `mode`, the
+/// agent's permission mode (the app's only; Accept edits without).
 pub const DESIGN_SYSTEM_SYNC: &str = "design.system.sync";
 /// [`DesignSystemRef`]: deletes a design system.
 pub const DESIGN_SYSTEM_REMOVE: &str = "design.system.remove";
@@ -397,7 +399,8 @@ pub const DESIGN_CARDS: &str = "design.cards";
 /// `{workspace}` → the workspace's designs, each with its pages and its agent.
 pub const DESIGN_LIST: &str = "design.list";
 /// [`DesignCreate`] → the new workspace design, with `agent_error` (why its
-/// agent did not start, or null): its folder made and its agent started.
+/// agent did not start, or null): its folder made and its agent started. Takes an optional `mode`, the
+/// agent's permission mode (the app's only; Accept edits without).
 pub const DESIGN_CREATE: &str = "design.create";
 /// [`DesignRef`]: stops a design's agent and deletes its folder.
 pub const DESIGN_REMOVE: &str = "design.remove";
@@ -433,7 +436,8 @@ pub const DESIGN_HISTORY: &str = "design.history";
 /// anchor recorded, and the cards that changed (X65 entry 12).
 pub const DESIGN_SYSTEM_UPDATE: &str = "design.system.update";
 /// [`DesignCopy`] → [`crate::types::DesignCreated`]: a project design
-/// copied into a new workspace design, whose agent starts (X65 entry 12).
+/// copied into a new workspace design, whose agent starts (X65 entry 12). Takes an optional `mode`, the
+/// agent's permission mode (the app's only; Accept edits without).
 pub const DESIGN_COPY: &str = "design.copy";
 /// [`DesignSnapshotRef`] → the **Restored snapshot** entry: snapshot `n`
 /// made the design's `pages/` and `assets/`. Refused with `busy` while the
@@ -459,7 +463,8 @@ pub const DESIGN_SHARE: &str = "design.share";
 pub const DESIGN_UNSHARE: &str = "design.unshare";
 /// Makes a session design a workspace design of its session's workspace
 /// and takes it out of the session (X104): app only. Its params are a
-/// [`DesignRef`] naming the session; the answer is its slug there.
+/// [`DesignRef`] naming the session; the answer is its slug there. Takes an optional `mode`, the
+/// agent's permission mode (the app's only; Accept edits without).
 pub const DESIGN_ADOPT: &str = "design.adopt";
 
 // Artifacts (X114)

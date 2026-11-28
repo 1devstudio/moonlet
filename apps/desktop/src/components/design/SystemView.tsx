@@ -12,7 +12,7 @@ import { cardGroups, cardUrl, changedBanner, fixMessage, fixState, headerLine, l
 import { canvasScale, fitBox, sizeText } from "../../lib/designViewport";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
-import { askAgent, cardRev, cardRevsOf, cardsOf, loadCards, openCard, shownCard, stopAgent, useDesign } from "../../lib/designStore";
+import { askAgent, syncSystem, cardRev, cardRevsOf, cardsOf, loadCards, openCard, shownCard, stopAgent, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -105,7 +105,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
   // Hidden as the user left it, but open while the agent asks something.
   const showAgent = agent !== null && agentShown(hidden, sys);
   const stop = () => agent !== null && void stopAgent(host, agent).catch(errorToast);
-  const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
+  const sync = () => void syncSystem(host, workspace, sys.slug).catch(errorToast);
   // Another member's (X71): read only here, its agent runs there.
   const copy = !!sys.owner;
   const remove = async () => {

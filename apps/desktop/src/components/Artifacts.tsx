@@ -8,7 +8,7 @@ import { M, type ArtifactInfo, type ArtifactText } from "../lib/protocol";
 import { copyRefusal, designFor, markParts, moveRefusal, planReadOnly, stateLabel, unreachableLine, versionLine, type ArtifactKind } from "../lib/artifacts";
 import { KindTile, useArtifactRows } from "./ArtifactChips";
 import { addChip, artifactDesigns, loadArtifactDesigns, loadPlans, searchPlans, useArtifacts, watchArtifacts } from "../lib/artifactStore";
-import { loadDesigns, openSessionDesign, showDesign, useDesign } from "../lib/designStore";
+import { adoptDesign, loadDesigns, openSessionDesign, showDesign, useDesign } from "../lib/designStore";
 import { LIBRARY } from "../lib/designLibrary";
 import { placeOfDesign } from "../lib/designPlace";
 import { pageUrl, projectPageUrl } from "../lib/designView";
@@ -235,7 +235,7 @@ function UsedByBanner({ host, info, session, slug, workspace }: { host: string; 
   if (hidden || info.used_by.length === 0) return null;
   const move = async () => {
     try {
-      const moved = await rpc<string>(host, M.designAdopt, { session, slug });
+      const moved = await adoptDesign(host, session, slug);
       await loadDesigns(host, workspace, true);
       void loadPlans(host, workspace).catch(() => {});
       useArtifacts.setState({ shown: { host, id: `design:workspace:${workspace}:${moved}` } });

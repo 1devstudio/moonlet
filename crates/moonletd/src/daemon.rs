@@ -1448,6 +1448,24 @@ impl Daemon {
             }
     }
 
+    /// The permission mode a call starting a Design mode agent gives as
+    /// `mode`: the app's default mode for new Claude sessions. None without
+    /// it, when the agent starts in Accept edits. Only the app names one, so
+    /// an agent's own `design` command never widens what the new agent may do.
+    fn design_agent_mode(&self, conn: &Conn, p: &Value) -> Result<Option<String>, RpcError> {
+        let Some(mode) = p.get("mode").filter(|m| !m.is_null()) else {
+            return Ok(None);
+        };
+        if !self.is_app(conn) {
+            return Err(RpcError::new("forbidden", "only the moonlet app picks a design agent's permission mode"));
+        }
+        let Some(mode) = mode.as_str() else {
+            return Err(RpcError::new("invalid_params", "mode is a string"));
+        };
+        moonlet_core::chat::check_mode(Some(mode)).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+        Ok(Some(mode.to_string()))
+    }
+
     pub fn on_connect(&self, conn: &Conn) {
         if self.is_app(conn) {
             // Under the lock, so phones hear opens and closes in their order.
@@ -3586,6 +3604,7 @@ impl Daemon {
                 ok(list)
             }
             m::DESIGN_SYSTEM_CREATE => {
+                let mode = self.design_agent_mode(conn, &p)?;
                 let r: m::DesignSystemCreate = params(p)?;
                 let projects = self.sessions.list_projects();
                 let mut sources = Vec::new();
@@ -3610,7 +3629,7 @@ impl Daemon {
                 let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, cover, now_ms())).await?;
                 let (agent, agent_error) = match start {
                     // The system exists either way; the app shows why its agent did not start.
-                    true => match self.start_sync_agent(&workspace, &slug).await {
+                    true => match self.start_sync_agent(&workspace, &slug, mode).await {
                         Ok(id) => (Some(id), None),
                         Err(e) => (None, Some(format!("{e:#}"))),
                     },
@@ -3619,8 +3638,9 @@ impl Daemon {
                 ok(serde_json::json!({"slug": slug, "agent": agent, "agent_error": agent_error}))
             }
             m::DESIGN_SYSTEM_SYNC => {
+                let mode = self.design_agent_mode(conn, &p)?;
                 let r: m::DesignSystemRef = params(p)?;
-                let agent = self.start_sync_agent(&r.workspace, &r.slug).await.map_err(internal)?;
+                let agent = self.start_sync_agent(&r.workspace, &r.slug, mode).await.map_err(internal)?;
                 ok(serde_json::json!({"agent": agent}))
             }
             m::DESIGN_SYSTEM_REMOVE => {
@@ -3843,6 +3863,7 @@ impl Daemon {
                 ok(list)
             }
             m::DESIGN_CREATE => {
+                let mode = self.design_agent_mode(conn, &p)?;
                 let r: m::DesignCreate = params(p)?;
                 // A shared design is the user's choice (X95), as Share is.
                 if r.workspace == LIBRARY {
@@ -3879,7 +3900,7 @@ impl Daemon {
                 };
                 let at = self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug: slug.clone() }).await?;
                 // The design exists either way; the app shows why its agent did not start.
-                let agent_error = self.start_design_agent(&at, None).await.err().map(|e| format!("{e:#}"));
+                let agent_error = self.start_design_agent(&at, None, mode).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
                 let name = design.name.clone();
                 let created = moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error };
@@ -3903,6 +3924,7 @@ impl Daemon {
                 ok(blocking(move || store.update_session_system(&at, &workspace)).await?)
             }
             m::DESIGN_COPY => {
+                let mode = self.design_agent_mode(conn, &p)?;
                 let r: m::DesignCopy = params(p)?;
                 let Some(project) = self.workspace_projects(&r.workspace).into_iter().find(|p| p.id == r.from.project) else {
                     return Err(RpcError::new("invalid_params", format!("no project \"{}\" in the workspace", r.from.project)));
@@ -3923,7 +3945,7 @@ impl Daemon {
                 let slug = blocking(move || made.create_from_project(&ws, &name, &from, now_ms())).await?;
                 let at = self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug }).await?;
                 // The design exists either way; the app shows why its agent did not start.
-                let agent_error = self.start_design_agent(&at, Some(intro)).await.err().map(|e| format!("{e:#}"));
+                let agent_error = self.start_design_agent(&at, Some(intro), mode).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
                 ok(moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error })
             }
@@ -3953,6 +3975,7 @@ impl Daemon {
                 // The user's choice, never an agent's: an agent could move its
                 // session's designs out of the branch.
                 app_only(conn, "moving a design to the workspace")?;
+                let mode = self.design_agent_mode(conn, &p)?;
                 let r: m::DesignRef = params(p)?;
                 if !matches!(r, m::DesignRef::Session { .. }) {
                     return Err(RpcError::new("invalid_params", "only a session design moves to the workspace"));
@@ -3998,7 +4021,7 @@ impl Daemon {
                     brief.trim()
                 );
                 let at = self.locate(&m::DesignRef::Workspace { workspace, slug: slug.clone() }).await?;
-                if let Err(e) = self.start_design_agent(&at, Some(intro)).await {
+                if let Err(e) = self.start_design_agent(&at, Some(intro), mode).await {
                     tracing::warn!("the agent of design {slug} moved to the workspace did not start: {e:#}");
                 }
                 ok(slug)
@@ -4124,8 +4147,9 @@ impl Daemon {
     /// Asks a design system's sync agent to build it, or to sync it again
     /// (X64). Its chat is reused while it exists; otherwise a new one starts,
     /// with the sources read only, in the Claude profile of the workspace
-    /// that holds its first source (X95).
-    async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
+    /// that holds its first source (X95). A new chat starts in `mode`, or
+    /// Accept edits without; a reused one keeps its own.
+    async fn start_sync_agent(&self, workspace: &str, slug: &str, mode: Option<String>) -> anyhow::Result<u32> {
         use moonlet_core::design::{agent, anchor, store};
         // One start or sync at a time per system, so two never make two agents.
         let lock = self.design_lock(workspace, slug);
@@ -4147,7 +4171,10 @@ impl Daemon {
             let synced = dir.join(anchor::FILE).is_file();
             let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
             let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
-            let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+            let mut launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+            if let Some(mode) = mode {
+                launch.mode = mode;
+            }
             // The cards as they are now: what the user changed before this
             // sync is not among the changes it records.
             store.begin_sync(&ws, &sl)?;
@@ -4214,8 +4241,9 @@ impl Daemon {
     /// folder read only, and the brief with the design system's README and the
     /// design rules as its first message.
     /// `intro`, when given, is the first message's opening in place of the
-    /// brief, such as what a copied design starts from.
-    async fn start_design_agent(&self, at: &DesignAt, intro: Option<String>) -> anyhow::Result<u32> {
+    /// brief, such as what a copied design starts from. It starts in `mode`,
+    /// or Accept edits without.
+    async fn start_design_agent(&self, at: &DesignAt, intro: Option<String>, mode: Option<String>) -> anyhow::Result<u32> {
         use moonlet_core::design::agent;
         use moonlet_proto::types::{DesignAgent, DesignAgentKind};
         let lock = self.lock_of(at, DesignLock::Agent);
@@ -4236,7 +4264,10 @@ impl Daemon {
             let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
             let readme = store.readme(&ws, &config.system)?;
             let source = store.record(&ws, &config.system)?.sources.first().map(|s| s.project.clone());
-            let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
+            let mut launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
+            if let Some(mode) = mode {
+                launch.mode = mode;
+            }
             Ok((launch, config.name, source))
         })
         .await
