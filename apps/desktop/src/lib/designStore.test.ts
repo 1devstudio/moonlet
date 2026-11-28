@@ -320,7 +320,7 @@ describe("a Design mode agent's permission mode", () => {
     ]);
   });
 
-  it("is Ask before edits when Settings names no mode Claude knows", async () => {
+  it("is Manual when Settings names no mode Claude knows", async () => {
     useStore.setState((st) => ({ settings: { ...st.settings, defaultMode: "yolo" } }));
     answers["design.system.sync"] = () => ({ agent: 7 });
     await syncSystem("local", "w-1devstudio", "moonlet-desktop");

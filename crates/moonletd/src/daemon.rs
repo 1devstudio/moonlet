@@ -4171,10 +4171,7 @@ impl Daemon {
             let synced = dir.join(anchor::FILE).is_file();
             let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
             let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
-            let mut launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
-            if let Some(mode) = mode {
-                launch.mode = mode;
-            }
+            let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
             // The cards as they are now: what the user changed before this
             // sync is not among the changes it records.
             store.begin_sync(&ws, &sl)?;
@@ -4187,6 +4184,10 @@ impl Daemon {
         let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
         if let Some(id) = self.agent_of(workspace, slug) {
             if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
+                // In the mode this sync gives, from this message on.
+                if let Some(mode) = mode.filter(|m| self.chats.state(id).ok().and_then(|s| s.mode).as_deref() != Some(m.as_str())) {
+                    self.chats.settings(id, None, None, Some(mode))?;
+                }
                 self.chats.send(id, &launch.prompt, &[])?;
                 return Ok(id);
             }
@@ -4199,7 +4200,7 @@ impl Daemon {
             name,
         };
         let profile = record.sources.first().and_then(|s| self.workspace_holding(&s.project));
-        self.agent_chat(&launch, tag, profile, |id| match id {
+        self.agent_chat(&launch, mode, tag, profile, |id| match id {
             Some(id) => self.design.set_agent(workspace, slug, id, &fingerprint),
             None => self.design.clear_agent(workspace, slug),
         })
@@ -4264,10 +4265,7 @@ impl Daemon {
             let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
             let readme = store.readme(&ws, &config.system)?;
             let source = store.record(&ws, &config.system)?.sources.first().map(|s| s.project.clone());
-            let mut launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
-            if let Some(mode) = mode {
-                launch.mode = mode;
-            }
+            let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
             Ok((launch, config.name, source))
         })
         .await
@@ -4275,12 +4273,12 @@ impl Daemon {
         let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.clone(), slug: slug.clone(), name };
         // A shared design has no workspace (X95): its system's first source's.
         let profile = if workspace == LIBRARY { source.and_then(|p| self.workspace_holding(&p)) } else { Some(workspace.clone()) };
-        self.agent_chat(&launch, tag, profile, |id| self.design.set_design_agent(at, id))
+        self.agent_chat(&launch, mode, tag, profile, |id| self.design.set_design_agent(at, id))
     }
 
     /// Starts the chat of a Design mode agent (X64, X65): Claude Code, with
     /// no session, in the Claude profile of workspace `profile` (the default
-    /// one without), started as `launch` says and tagged so. `record` saves the chat as its
+    /// one without), started as `launch` says, in `mode` when given, and tagged so. `record` saves the chat as its
     /// system's or design's agent (`Some`), or forgets it (`None`); then the
     /// chat gets `launch.prompt` as its first message. When saving the record
     /// or sending that message fails, the chat is stopped and removed and the
@@ -4288,6 +4286,7 @@ impl Daemon {
     fn agent_chat(
         &self,
         launch: &moonlet_core::design::agent::Launch,
+        mode: Option<String>,
         tag: moonlet_proto::types::DesignAgent,
         profile: Option<String>,
         record: impl Fn(Option<u32>) -> anyhow::Result<()>,
@@ -4297,7 +4296,7 @@ impl Daemon {
             agent: "claude".into(),
             model: None,
             effort: None,
-            mode: Some(launch.mode.clone()),
+            mode: Some(mode.unwrap_or_else(|| launch.mode.clone())),
             name: launch.title.clone(),
             title: Some(launch.title.clone()),
             session_id: None,
