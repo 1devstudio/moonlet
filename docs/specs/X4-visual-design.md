@@ -30,7 +30,7 @@ moonlet's look matches the reference: a neutral near-black UI with Claude's oran
 - **Sidebar:**
   - **Nav rows** with icons: Workspaces (home), History (archived), + New Workspace.
   - **Groups:** one per repo (remote ones suffixed with the host). Headers are uppercase, letter-spaced, 11.5px, with a chevron and a count on the right.
-  - **Workspace row**, one line: status glyph, then the name, then on the right either a muted mono diffstat (`+46 −1`) or a state word (`creating`, `needs input`, `failed`).
+  - **Workspace row**, one line: status glyph, then the name, then on the right either a muted mono diffstat (`+46 −1`) or a state word (`creating`, `failed`); needs input is a yellow question icon since X119.
   - **Selected row:** `raised` background tinted toward orange, with a 2px orange bar on the left edge.
   - **Status glyphs:**
 

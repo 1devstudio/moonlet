@@ -358,7 +358,7 @@ describe("sessionBadge", () => {
   });
 
   it("lets needs input and creating win over agents", () => {
-    expect(sessionBadge({ ...base, agents: 5, state: "blocked" })).toEqual({ text: "needs input", tone: "blocked" });
+    expect(sessionBadge({ ...base, agents: 5, state: "blocked" })).toEqual({ text: "needs input", tone: "blocked", icon: true });
     expect(sessionBadge({ ...base, agents: 5, creating: true })).toEqual({ text: "creating", tone: "muted" });
   });
 

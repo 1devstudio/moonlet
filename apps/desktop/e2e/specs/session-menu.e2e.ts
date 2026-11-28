@@ -45,6 +45,17 @@ describe("Session menu (X112)", () => {
     });
   });
 
+  it("pins a session to the top from its menu, and its row starts with a pin (X119)", async () => {
+    const pin = `${sel.sessionRow("Menu row renamed")}//span[@aria-label="Pinned to top"]`;
+    await expect($(pin)).not.toBeExisting();
+    await rightClick(sel.sessionRow("Menu row renamed"));
+    await $(sel.button("Pin to top")).click();
+    await expect($(pin)).toBeDisplayed({ wait: 10_000 });
+    await rightClick(sel.sessionRow("Menu row renamed"));
+    await $(sel.button("Unpin from top")).click();
+    await expect($(pin)).not.toBeExisting({ wait: 10_000 });
+  });
+
   it("forks a session from its menu, with its uncommitted files, and opens the fork", async () => {
     type Listed = { id: string; name: string; path: string; branch: string };
     const src = rpc<Listed[]>(w, "session.list", {}).find((s) => s.id === id)!;

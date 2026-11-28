@@ -380,16 +380,17 @@ export function sessionGlyph(state: AgentState | null, pr: string | undefined): 
 }
 
 /** The chip at the end of a session row, most urgent first; running
- *  subagents (X42) come after needs input. */
+ *  subagents (X42) come after needs input. `icon` draws it as an icon. */
 export function sessionBadge(o: {
   creating: boolean;
   state: AgentState | null;
   merged: boolean;
   git?: { additions: number; deletions: number };
   agents: number;
-}): { text: string; tone: "muted" | "blocked" | "agents" | "diff" } | null {
+}): { text: string; tone: "muted" | "blocked" | "agents" | "diff"; icon?: true } | null {
   if (o.creating) return { text: "creating", tone: "muted" };
-  if (o.state === "blocked") return { text: "needs input", tone: "blocked" };
+  // An icon, its text the label, keeps the badge column narrow (X119).
+  if (o.state === "blocked") return { text: "needs input", tone: "blocked", icon: true };
   if (o.agents) return { text: agentCount(o.agents), tone: "agents" };
   // A merged PR's row ends in its merge icon, beside any badge above, instead of the diff.
   if (o.merged) return null;
