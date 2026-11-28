@@ -1255,8 +1255,8 @@ export function Sidebar() {
       {picking && mode === "sessions" && !showHistory && !showArtifacts ? (
         <PickBar />
       ) : (
-      <div className="flex h-[54px] shrink-0 items-center gap-1 px-3 pb-[20px]">
-        {/* Centred on the chat's bar under the input (AgentView): 6 px main gap + 14 px padding + half its 34 px row. */}
+      <div className="flex h-[48px] shrink-0 items-center gap-1 px-3 pb-[14px]">
+        {/* Centred on the chat's bar under the input (AgentView): 6 px main gap + 8 px padding + half its 34 px row. */}
         <IconButton title="Settings (⌘,)" onClick={() => useStore.setState({ settingsPage: { page: "general" } })}>
           <Settings size={14} />
         </IconButton>
