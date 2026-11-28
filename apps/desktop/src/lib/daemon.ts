@@ -104,6 +104,8 @@ export const hostsApi = {
   bundleVersion: () => invoke<string | null>("bundle_version"),
   /** Updates a tailnet host to `version` (X69): `{from, to}` once it hands over. */
   update: (id: string, version: string) => invoke<{ from: string; to: string }>("host_update", { id, version }),
+  /** Restarts a tailnet host's daemon, keeping its sessions (X120): the pid of the daemon that answered. */
+  restart: (id: string) => invoke<{ pid: number }>("host_restart", { id }),
   /** Makes a tailnet host this Mac's central host, or clears it; the app passes the token on (X41). */
   setCentral: (id: string | null) => invoke<LinkInfo>("host_set_central", { id }),
   sshHosts: () => invoke<string[]>("ssh_hosts"),

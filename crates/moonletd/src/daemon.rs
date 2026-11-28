@@ -1551,6 +1551,22 @@ impl Daemon {
         crate::update::update(self, &r.version).await
     }
 
+    /// `daemon.restart` (X120), from the same callers as `daemon.update`.
+    pub fn restart_from(
+        self: &Arc<Self>,
+        client: Option<&str>,
+        device: Option<&str>,
+        worker_link: bool,
+    ) -> Result<(moonlet_proto::types::DaemonRestarted, crate::update::Handoff), RpcError> {
+        if worker_link || client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
+            return Err(RpcError::new("forbidden", "restart moonletd from the app"));
+        }
+        if device.is_some_and(|d| self.mobile.kind_of(d) != Some(moonlet_proto::methods::DeviceKind::Desktop)) {
+            return Err(RpcError::new("forbidden", "restart moonletd from a Mac"));
+        }
+        crate::update::restart(self)
+    }
+
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         let r = Box::pin(self.handle_call(conn, method, p)).await;
         log_call(conn, method, &r);
@@ -2090,6 +2106,15 @@ impl Daemon {
                 }
                 let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), conn.worker_link, p).await?;
                 // The connection's writer sends the reply after this returns.
+                handoff.start_after(crate::update::REPLY_GRACE);
+                ok(reply)
+            }
+            m::DAEMON_RESTART => {
+                // On the local socket, the app that proved it is (X75).
+                if conn.phone.is_none() && !conn.app {
+                    return Err(RpcError::new("forbidden", "restart moonletd from the app"));
+                }
+                let (reply, handoff) = self.restart_from(Some(&conn.client), conn.phone.as_deref(), conn.worker_link)?;
                 handoff.start_after(crate::update::REPLY_GRACE);
                 ok(reply)
             }

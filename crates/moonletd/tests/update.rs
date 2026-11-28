@@ -631,3 +631,109 @@ fn the_release_check_leaves_the_users_folders_alone() {
     assert!(home.path().join(".jaunt").is_dir());
     assert!(!home.path().join(".moonlet").exists());
 }
+
+/// X120: a restart hands every session to a fresh process of the same
+/// binary, as an update does to a new one.
+#[tokio::test]
+async fn the_app_restarts_its_host_and_every_session_carries_on() {
+    let key = Key::new();
+    let releases = release(&key).await;
+    let host = Host::start(&releases, &key).await;
+    let mut app = host.app().await;
+    let before: DaemonInfo = app.request(methods::DAEMON_INFO, ()).await.unwrap();
+    let session: TerminalInfo = app
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: host.home.path().display().to_string(),
+                command: vec!["/bin/sleep".into(), "600".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let reply: Value = app.request("daemon.restart", json!({})).await.unwrap();
+    assert_eq!(reply, json!({ "pid": before.pid }));
+
+    let after = host.next_daemon(before.pid).await;
+    assert_eq!(after.version, env!("CARGO_PKG_VERSION"));
+    let mut c = Client::connect(&host.socket, "test").await.unwrap();
+    let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let same = list.iter().find(|t| t.id == session.id).expect("the session is still there");
+    assert_eq!(same.pid, session.pid);
+    assert!(same.exit.is_none());
+}
+
+/// A Mac asks before `hello` (X120), through the same client the app uses;
+/// a phone may not.
+#[tokio::test]
+async fn a_mac_restarts_its_host_before_hello_but_a_phone_may_not() {
+    let key = Key::new();
+    let releases = release(&key).await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+
+    let (addr, phone) = host.pair("phone").await;
+    let e = moonlet_link::tailnet::restart(std::slice::from_ref(&addr), &phone).await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "restart moonletd from a Mac"));
+    assert_eq!(host.pid().await, pid);
+
+    let (addr, mac) = host.pair("desktop").await;
+    let reply = moonlet_link::tailnet::restart(&[addr], &mac).await.unwrap();
+    assert_eq!(reply.pid, pid);
+    host.next_daemon(pid).await;
+}
+
+/// Asks `daemon.restart` on a tailnet connection and returns the reply.
+async fn restart_over(s: &mut TcpStream, id: u64) -> Message {
+    send(s, Message::Request { id, method: "daemon.restart".into(), params: json!({}) }).await;
+    loop {
+        match next(s).await.expect("connection closed") {
+            m @ Message::Response { id: rid, .. } if rid == id => return m,
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_paired_mac_may_restart_its_host_but_a_phone_and_an_agent_may_not() {
+    let key = Key::new();
+    let releases = release(&key).await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+
+    let mut phone = host.paired("phone").await;
+    assert_eq!(refused(&restart_over(&mut phone, 1).await), ("forbidden".into(), "a phone does not do that".into()));
+    let mut cli = Client::connect(&host.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, Value>("daemon.restart", json!({})).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
+    let mut worker = Client::connect(&host.socket, "moonletd-worker").await.unwrap();
+    let e = worker.request::<_, Value>("daemon.restart", json!({})).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app does that");
+    assert_eq!(host.pid().await, pid);
+
+    let mut mac = host.paired("desktop").await;
+    let reply = restart_over(&mut mac, 2).await;
+    let Message::Response { result: Some(r), error: None, .. } = reply else { panic!("{reply:?}") };
+    assert_eq!(r, json!({ "pid": pid }));
+    host.next_daemon(pid).await;
+}
+
+/// One update, upgrade or restart at a time: a second restart asked while
+/// the first waits to hand over is refused, and only one new daemon comes.
+#[tokio::test]
+async fn a_second_restart_during_one_is_busy() {
+    let key = Key::new();
+    let releases = release(&key).await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+    let mut app = host.app().await;
+    let _: Value = app.request("daemon.restart", json!({})).await.unwrap();
+    // The handoff waits 300 ms for the reply to go out; this asks within it.
+    let e = app.request::<_, Value>("daemon.restart", json!({})).await.unwrap_err();
+    assert_eq!(e.to_string(), "busy: an update or upgrade is already in progress");
+    let e = app.request::<_, Value>("daemon.update", json!({ "version": "9.9.9" })).await.unwrap_err();
+    assert!(e.to_string().starts_with("busy"), "{e}");
+    host.next_daemon(pid).await;
+}

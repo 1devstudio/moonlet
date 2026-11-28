@@ -90,6 +90,12 @@ async fn host_update(hosts: Hosts<'_>, id: String, version: String) -> Result<mo
     hosts.update(&id, &version).await
 }
 
+/// Restarts a tailnet host's daemon, keeping its sessions (X120).
+#[tauri::command]
+async fn host_restart(hosts: Hosts<'_>, id: String) -> Result<moonlet_proto::types::DaemonRestarted, RpcError> {
+    hosts.restart(&id).await
+}
+
 /// Registers the binary channel that receives this host's PTY output.
 #[tauri::command]
 fn host_subscribe(
@@ -627,6 +633,7 @@ pub fn run() {
             host_set_central,
             host_reconnect,
             host_update,
+            host_restart,
             bundle_version,
             host_subscribe,
             rpc,

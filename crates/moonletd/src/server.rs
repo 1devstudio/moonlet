@@ -347,6 +347,23 @@ where
             }
             return Ok(());
         }
+        // And a restart, the same way (X120).
+        Some(Frame::Json(Message::Request { id, method, .. }))
+            if method == moonlet_proto::methods::DAEMON_RESTART && phone.is_some() =>
+        {
+            let device = phone.as_deref().unwrap_or_default();
+            let (reply, handoff) = match daemon.restart_from(None, Some(device), worker_link) {
+                Ok((v, handoff)) => (Message::ok(id, v), Some(handoff)),
+                Err(e) => (Message::err(id, e), None),
+            };
+            let _ = tx.send(Frame::Json(reply));
+            drop(tx);
+            let _ = writer_task.await;
+            if let Some(handoff) = handoff {
+                handoff.start();
+            }
+            return Ok(());
+        }
         _ => bail!("expected hello"),
     };
     let _ = tx.send(Frame::Json(Message::Welcome {

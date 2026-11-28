@@ -19,7 +19,7 @@ use moonlet_proto::RpcError;
 use serde_json::Value;
 
 use crate::daemon::Daemon;
-use moonlet_proto::types::DaemonUpdated;
+use moonlet_proto::types::{DaemonRestarted, DaemonUpdated};
 
 /// Where releases are published, one folder per tag.
 const RELEASES: &str = "https://github.com/1devstudio/moonlet/releases/download";
@@ -408,26 +408,27 @@ pub fn clean_leftovers() {
     }
 }
 
-/// A handoff to an installed release, started once the reply is on its way:
-/// the old daemon exits after it, cutting off any reply not yet written.
+/// A handoff to an installed release, or to this daemon's own binary for a
+/// restart (X120), started once the reply is on its way: the old daemon
+/// exits after it, cutting off any reply not yet written.
 #[must_use = "a handoff the caller never starts leaves the update claimed"]
 pub struct Handoff {
     daemon: Arc<Daemon>,
-    installed: Installed,
+    binary: PathBuf,
+    installed: Option<Installed>,
 }
 
 impl Handoff {
     /// Hands every session to the new `moonletd`; keeps the install when it
     /// takes over, undoes it when it doesn't.
     pub fn start(self) {
-        let Handoff { daemon, installed } = self;
-        let binary = installed.binary();
+        let Handoff { daemon, binary, installed } = self;
         tokio::spawn(async move {
             match crate::upgrade::hand_off_claimed(daemon, Some(binary)).await {
-                Ok(()) => installed.keep(),
+                Ok(()) => installed.into_iter().for_each(Installed::keep),
                 Err(e) => {
-                    tracing::error!("update failed, still serving: {e:#}");
-                    installed.undo();
+                    tracing::error!("update or restart failed, still serving: {e:#}");
+                    installed.into_iter().for_each(Installed::undo);
                 }
             }
         });
@@ -474,12 +475,43 @@ pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<(DaemonUpdate
         }
     };
     tracing::info!(from, to = version, binary = %installed.binary().display(), "updating");
-    Ok((DaemonUpdated { from: from.into(), to: version.into() }, Handoff { daemon: daemon.clone(), installed }))
+    let binary = installed.binary();
+    Ok((DaemonUpdated { from: from.into(), to: version.into() }, Handoff { daemon: daemon.clone(), binary, installed: Some(installed) }))
+}
+
+/// `daemon.restart` (X120): answers this daemon's pid, with the handoff to
+/// a fresh process of its own binary for the caller to start.
+pub fn restart(daemon: &Arc<Daemon>) -> Result<(DaemonRestarted, Handoff), RpcError> {
+    let exe = std::env::current_exe().map_err(|e| err("unsupported", format!("moonletd cannot find its binary: {e}")))?;
+    let binary = own_binary(&exe);
+    if !daemon.begin_upgrade() {
+        return Err(err("busy", "an update or upgrade is already in progress"));
+    }
+    tracing::info!(binary = %binary.display(), "restarting");
+    Ok((DaemonRestarted { pid: std::process::id() }, Handoff { daemon: daemon.clone(), binary, installed: None }))
+}
+
+/// The path of this daemon's binary from what the OS says it runs: on
+/// Linux, once an update renamed a new binary over it, `/proc/self/exe`
+/// reads `<path> (deleted)`, and the binary now at `<path>` is the one to
+/// restart into.
+pub fn own_binary(exe: &Path) -> PathBuf {
+    let s = exe.to_string_lossy();
+    match s.strip_suffix(" (deleted)") {
+        Some(path) => PathBuf::from(path),
+        None => exe.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_binary_drops_linuxs_deleted_mark() {
+        assert_eq!(own_binary(Path::new("/home/alex/.moonlet/bin/moonletd (deleted)")), PathBuf::from("/home/alex/.moonlet/bin/moonletd"));
+        assert_eq!(own_binary(Path::new("/Applications/moonlet.app/Contents/MacOS/moonletd")), PathBuf::from("/Applications/moonlet.app/Contents/MacOS/moonletd"));
+    }
 
     #[test]
     fn versions_are_three_numbers() {
