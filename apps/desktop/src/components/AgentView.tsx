@@ -1933,7 +1933,7 @@ export function AgentView({
         </FileLinks.Provider>
       </ScrollArea>
       {/* 4 px above the composer, 14 below (X94). */}
-      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-[14px] pt-[4px]", PAD_X[layout.padX])}>
+      <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-[4px] pt-[4px]", PAD_X[layout.padX])}>
         {replies && !working && (
           <div role="group" aria-label="Suggested replies" className="mb-2 flex flex-wrap items-center gap-1.5">
             {replies.map((r, i) => (
